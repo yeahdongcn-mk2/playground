@@ -1,0 +1,30 @@
+{
+  "name": "playground-arcade",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "A small web arcade with a reusable game shell and a playable Snake game.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:unit": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:prod": "node scripts/verify-production.mjs",
+    "screenshots": "node scripts/capture-screenshots.mjs"
+  },
+  "dependencies": {
+    "phaser": "^4.2.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1",
+    "@types/node": "^26.6.6",
+    "jsdom": "^30.1.3",
+    "typescript": "~7.0.2",
+    "vite": "^8.3.5",
+    "vitest": "^5.1.0"
+  }
+}
