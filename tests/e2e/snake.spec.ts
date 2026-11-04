@@ -216,5 +216,10 @@ test.describe('snake on a phone viewport', () => {
     await expect.poll(() => readStatus(page)).toBe('paused');
     await dpad.locator('.dpad-button--center').click();
     await expect.poll(() => readStatus(page)).toBe('running');
+
+    // Focus stays on the D-pad after a tap; arrow keys must still steer.
+    await dpad.locator('[data-direction="up"]').click();
+    await page.keyboard.press('ArrowRight');
+    await expect.poll(async () => (await readState(page)).direction).toBe('right');
   });
 });

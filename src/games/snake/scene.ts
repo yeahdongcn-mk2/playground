@@ -116,11 +116,18 @@ export class SnakeScene extends Phaser.Scene {
       this.handledKeyEvents.add(event);
 
       // Let focused buttons/links behave natively (Space/Enter activation)
-      // instead of also steering the game.
-      if (
-        event.target instanceof HTMLElement &&
-        event.target.closest('button, a, input, select, textarea, [contenteditable="true"]')
-      ) {
+      // instead of also steering the game. Game controls still accept arrows.
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      const interactive = target?.closest(
+        'button, a, input, select, textarea, [contenteditable="true"]',
+      );
+      const gameControl = target?.closest(
+        '[data-direction], .dpad-button--center, [data-action="primary"], [data-action="pause"], [data-action="restart"]',
+      );
+      if (interactive && !gameControl) {
+        return;
+      }
+      if (gameControl && (event.code === 'Space' || event.code === 'Enter')) {
         return;
       }
 

@@ -161,7 +161,7 @@ hashchange
 | --- | --- | --- |
 | 大厅首屏 JS（gzip） | < 50 KB | 7.67 KB |
 | 大厅首屏 CSS（gzip） | < 20 KB | 4.61 KB |
-| 2D 游戏 chunk（gzip） | < 450 KB | 363.17 KB |
+| 2D 游戏 chunk（gzip） | < 450 KB | 363.24 KB |
 | 3D 游戏 chunk（gzip） | < 800 KB | 待首个 3D 游戏 |
 | 交互帧率 | 60 FPS（目标） | 20×20 网格，棋盘与游戏两层 Graphics |
 | 首局可玩时间（本地） | < 500 ms | 引擎 chunk 懒加载后立即进入 |
