@@ -140,13 +140,7 @@ export async function mountBlankGame(
 
   let resolveReady: (() => void) | null = null;
   let readyTimer = 0;
-  const ready = new Promise<void>((resolve, reject) => {
-    resolveReady = resolve;
-    readyTimer = window.setTimeout(() => {
-      reject(new Error('The 2D runtime did not become ready in time.'));
-    }, READY_TIMEOUT_MS);
-  });
-
+  let ready: Promise<void> | null = null;
   let scene: BlankScene | null = null;
   let runtime: Phaser2DRuntime | null = null;
   try {
@@ -157,6 +151,17 @@ export async function mountBlankGame(
     if (signal.aborted) {
       throw abortError();
     }
+
+    // Start the boot timeout only after the chunks have arrived: a slow network
+    // should not reject a promise that has no handler yet.
+    ready = new Promise<void>((resolve, reject) => {
+      resolveReady = resolve;
+      readyTimer = window.setTimeout(() => {
+        reject(new Error('The 2D runtime did not become ready in time.'));
+      }, READY_TIMEOUT_MS);
+    });
+    void ready.catch(() => {});
+    const readyPromise = ready;
 
     scene = new SceneClass(
       {
@@ -179,7 +184,7 @@ export async function mountBlankGame(
       ariaLabel: '空白游戏画布：用方向键或拖动指针移动光标',
     });
 
-    await waitForReady(ready, signal);
+    await waitForReady(readyPromise, signal);
     if (signal.aborted) {
       throw abortError();
     }

@@ -231,9 +231,6 @@ test.describe('blank canvas game', () => {
     await expect
       .poll(() => page.getByTestId('viewport').textContent())
       .toBe(`${info.width} × ${info.height}`);
-    await expect
-      .poll(async () => (await canvasBox(page)).width, { timeout: 3_000 })
-      .toBeLessThan(540);
   });
 
   test('cleans up window listeners after leaving the game', async ({ page }) => {

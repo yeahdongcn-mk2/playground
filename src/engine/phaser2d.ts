@@ -52,38 +52,51 @@ export function createPhaser2DGame(config: Phaser2DConfig): Phaser2DRuntime {
   }) as typeof document.addEventListener;
   document.addEventListener = patchedDocumentAdd;
 
-  const game = new Phaser.Game({
-    type: Phaser.AUTO,
-    parent,
-    width,
-    height,
-    backgroundColor: config.backgroundColor ?? '#070b14',
-    banner: false,
-    autoFocus: false,
-    scale: {
-      mode: Phaser.Scale.RESIZE,
-      autoCenter: Phaser.Scale.CENTER_BOTH,
-      width,
-      height,
-      autoRound: true,
-      expandParent: false,
-    },
-    input: {
-      activePointers: config.activePointers ?? 3,
-    },
-    render: {
-      antialias: true,
-      roundPixels: false,
-      powerPreference: 'high-performance',
-    },
-    scene: [config.scene],
-  });
-
   const restoreDocumentAdd = (): void => {
     if (document.addEventListener === patchedDocumentAdd) {
       document.addEventListener = originalDocumentAdd;
     }
   };
+
+  let game: Phaser.Game;
+  try {
+    game = new Phaser.Game({
+      type: Phaser.AUTO,
+      parent,
+      width,
+      height,
+      backgroundColor: config.backgroundColor ?? '#070b14',
+      banner: false,
+      autoFocus: false,
+      scale: {
+        mode: Phaser.Scale.RESIZE,
+        autoCenter: Phaser.Scale.CENTER_BOTH,
+        width,
+        height,
+        autoRound: true,
+        expandParent: false,
+      },
+      input: {
+        activePointers: config.activePointers ?? 3,
+      },
+      render: {
+        antialias: true,
+        roundPixels: false,
+        powerPreference: 'high-performance',
+      },
+      scene: [config.scene],
+    });
+  } catch (error) {
+    restoreDocumentAdd();
+    for (const { type, listener } of capturedVisibility) {
+      originalDocumentRemove.call(document, type, listener);
+    }
+    capturedVisibility.length = 0;
+    window.onblur = previousOnBlur;
+    window.onfocus = previousOnFocus;
+    throw error;
+  }
+
   if (game.isRunning) {
     restoreDocumentAdd();
   } else {
