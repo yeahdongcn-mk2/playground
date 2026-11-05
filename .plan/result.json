@@ -1,9 +1,15 @@
 {
-  "branch": "agent/plan-yeahdongcn-mk2/playground#19-t0",
+  "branch": "agent/plan-yeahdongcn-mk2/playground#19-t1",
   "files": [
-    "src/games/tetris/engine.ts",
-    "src/games/tetris/engine.test.ts",
+    "src/games/tetris/index.ts",
+    "src/games/tetris/palette.ts",
+    "src/games/tetris/scene.ts",
+    "src/games/tetris/tetris-view.ts",
+    "src/games/tetris/tetris.css",
+    "src/games/registry.ts",
+    "src/app/hub.ts",
+    "src/styles/app.css",
     ".plan/result.json"
   ],
-  "note": "新增不依赖 DOM/Phaser 的俄罗斯方块纯规则引擎与 38 个单元测试，构建、typecheck、82 个单测与 lint 全部通过。"
+  "note": "按框架契约接入俄罗斯方块：Phaser 场景/视图/样式、注册表与大厅卡片、键盘与触屏操作、HUD/暂停/结束/重开；typecheck、lint、82 个单测、构建、预算检查与 39 个现有 e2e 全部通过。"
 }

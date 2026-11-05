@@ -159,14 +159,14 @@ npm run build</code></pre>
 
 function renderGameCard(game: GameModule, playHistory: PlayHistoryReader, now: number): string {
   const meta = game.meta;
-  const isSnake = meta.id === 'snake';
+  const art = cardArtFor(meta.id);
   return `
     <a class="game-card" href="${gameHref(meta.id)}" data-testid="game-card-${escapeHtml(meta.id)}"
       style="--game-accent: ${escapeHtml(meta.accent)}">
-      <div class="game-card-art${isSnake ? ' game-card-art--snake' : ''}"
+      <div class="game-card-art${art === 'default' ? '' : ` game-card-art--${art}`}"
         aria-hidden="true">
         <span class="game-card-engine">${escapeHtml(engineLabel(meta.engine))}</span>
-        ${renderCardArt(isSnake)}
+        ${renderCardArt(art)}
       </div>
       <div class="game-card-body">
         <p class="game-card-genre">${escapeHtml(meta.genre)} · ${escapeHtml(meta.controls.join(' · '))}</p>
@@ -202,8 +202,20 @@ function renderLastPlayed(gameId: string, lastPlayed: number | null, now: number
         </p>`;
 }
 
-function renderCardArt(isSnake: boolean): string {
-  if (isSnake) {
+type CardArt = 'snake' | 'tetris' | 'default';
+
+function cardArtFor(gameId: string): CardArt {
+  if (gameId === 'snake') {
+    return 'snake';
+  }
+  if (gameId === 'tetris') {
+    return 'tetris';
+  }
+  return 'default';
+}
+
+function renderCardArt(art: CardArt): string {
+  if (art === 'snake') {
     return `
       <svg class="snake-card-art" viewBox="0 0 220 132" aria-hidden="true">
         <defs>
@@ -221,6 +233,42 @@ function renderCardArt(isSnake: boolean): string {
         <circle cx="178" cy="40" r="9" fill="#fb7185" />
         <circle cx="175" cy="37" r="2.4" fill="#fff" opacity="0.7" />
         <circle cx="186" cy="34" r="3.2" fill="#4ade80" />
+      </svg>
+      <span class="mini-grid"></span>
+    `;
+  }
+  if (art === 'tetris') {
+    return `
+      <svg class="tetris-card-art" viewBox="0 0 220 132" aria-hidden="true">
+        <g stroke="rgba(255,255,255,0.2)" stroke-width="1">
+          <g fill="#c084fc">
+            <rect x="84" y="14" width="20" height="20" rx="4" />
+            <rect x="106" y="14" width="20" height="20" rx="4" />
+            <rect x="128" y="14" width="20" height="20" rx="4" />
+            <rect x="106" y="36" width="20" height="20" rx="4" />
+          </g>
+          <g fill="#38bdf8">
+            <rect x="40" y="96" width="20" height="20" rx="4" />
+            <rect x="62" y="96" width="20" height="20" rx="4" />
+          </g>
+          <g fill="#fb923c">
+            <rect x="84" y="96" width="20" height="20" rx="4" />
+          </g>
+          <g fill="#4ade80">
+            <rect x="106" y="96" width="20" height="20" rx="4" />
+            <rect x="128" y="96" width="20" height="20" rx="4" />
+          </g>
+          <g fill="#f87171">
+            <rect x="150" y="96" width="20" height="20" rx="4" />
+          </g>
+          <g fill="#60a5fa">
+            <rect x="84" y="74" width="20" height="20" rx="4" />
+            <rect x="106" y="74" width="20" height="20" rx="4" />
+          </g>
+          <g fill="#facc15">
+            <rect x="128" y="74" width="20" height="20" rx="4" />
+          </g>
+        </g>
       </svg>
       <span class="mini-grid"></span>
     `;

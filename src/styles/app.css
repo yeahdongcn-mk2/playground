@@ -608,6 +608,25 @@ ol {
   color: var(--lime);
 }
 
+.game-card-art--tetris {
+  background:
+    radial-gradient(circle at 50% 48%, rgba(192, 132, 252, 0.18), transparent 62%),
+    linear-gradient(140deg, #0a1526, #060b13);
+}
+
+.tetris-card-art {
+  position: relative;
+  z-index: 1;
+  width: 66%;
+  max-width: 220px;
+  filter: drop-shadow(0 12px 26px rgba(192, 132, 252, 0.18));
+}
+
+.game-card-art--tetris .game-card-engine {
+  border-color: rgba(192, 132, 252, 0.3);
+  color: #d8b4fe;
+}
+
 .mini-grid {
   position: absolute;
   inset: 0;
