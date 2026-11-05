@@ -17,6 +17,7 @@
     "test:watch": "vitest",
     "test:e2e": "npm run build && playwright test",
     "screenshots": "npm run build && node scripts/capture-screenshots.mjs",
+    "screenshots:snake": "node scripts/capture-snake-screenshots.mjs",
     "screenshots:baseline": "node scripts/capture-baseline.mjs",
     "lint": "oxlint src tests && node scripts/check-boundaries.mjs",
     "check:budget": "node scripts/check-budget.mjs"

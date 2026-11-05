@@ -46,11 +46,14 @@ export function renderHub(games: readonly GameModule[]): string {
           <h1 id="hero-title">一块画布，<br /><span>无限种玩法。</span></h1>
           <p class="lede">
             用 Vite 8 + TypeScript 7 + Phaser 4 搭起的共享游戏底座：
-            页面壳、按需引擎、输入、资源与自适应渲染已经接通，下一款 2D 或 3D 游戏可以直接开工。
+            页面壳、按需引擎、输入、资源与自适应渲染已经接通，第一款完整游戏「贪食蛇」已经跑通。
           </p>
           <div class="hero-actions">
-            <a class="button button--primary" href="${gameHref('blank')}" data-testid="enter-blank">
-              进入空白画布 <span aria-hidden="true">→</span>
+            <a class="button button--primary" href="${gameHref('snake')}" data-testid="enter-snake">
+              开始贪食蛇 <span aria-hidden="true">→</span>
+            </a>
+            <a class="button button--ghost" href="${gameHref('blank')}" data-testid="enter-blank">
+              进入空白画布
             </a>
             <button class="button button--ghost" type="button" data-action="scroll-features">
               看看框架能力
@@ -151,13 +154,14 @@ npm run build</code></pre>
 
 function renderGameCard(game: GameModule): string {
   const meta = game.meta;
+  const isSnake = meta.id === 'snake';
   return `
     <a class="game-card" href="${gameHref(meta.id)}" data-testid="game-card-${escapeHtml(meta.id)}"
       style="--game-accent: ${escapeHtml(meta.accent)}">
-      <div class="game-card-art" aria-hidden="true">
+      <div class="game-card-art${isSnake ? ' game-card-art--snake' : ''}"
+        aria-hidden="true">
         <span class="game-card-engine">${escapeHtml(engineLabel(meta.engine))}</span>
-        <span class="mini-orb"></span>
-        <span class="mini-grid"></span>
+        ${renderCardArt(isSnake)}
       </div>
       <div class="game-card-body">
         <p class="game-card-genre">${escapeHtml(meta.genre)} · ${escapeHtml(meta.controls.join(' · '))}</p>
@@ -166,6 +170,35 @@ function renderGameCard(game: GameModule): string {
         <p class="game-card-cta">打开 <span aria-hidden="true">→</span></p>
       </div>
     </a>
+  `;
+}
+
+function renderCardArt(isSnake: boolean): string {
+  if (isSnake) {
+    return `
+      <svg class="snake-card-art" viewBox="0 0 220 132" aria-hidden="true">
+        <defs>
+          <linearGradient id="snake-card-body" x1="0" y1="1" x2="1" y2="0">
+            <stop offset="0" stop-color="#4d7c0f" />
+            <stop offset="1" stop-color="#bef264" />
+          </linearGradient>
+        </defs>
+        <g stroke="rgba(148,163,184,0.12)" stroke-width="1">
+          <path d="M0 22H220M0 44H220M0 66H220M0 88H220M0 110H220" />
+          <path d="M22 0V132M44 0V132M66 0V132M88 0V132M110 0V132M132 0V132M154 0V132M176 0V132M198 0V132" />
+        </g>
+        <path d="M34 104 H96 V54 H142 V88 H178" fill="none" stroke="url(#snake-card-body)"
+          stroke-width="14" stroke-linecap="round" stroke-linejoin="round" />
+        <circle cx="178" cy="40" r="9" fill="#fb7185" />
+        <circle cx="175" cy="37" r="2.4" fill="#fff" opacity="0.7" />
+        <circle cx="186" cy="34" r="3.2" fill="#4ade80" />
+      </svg>
+      <span class="mini-grid"></span>
+    `;
+  }
+  return `
+    <span class="mini-orb"></span>
+    <span class="mini-grid"></span>
   `;
 }
 
