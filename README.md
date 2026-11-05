@@ -160,7 +160,7 @@ games/<game>/scene → 对应引擎（动态 import）
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过
-npm run test:unit    # 43 passed（含贪食蛇 20 个规则用例）
+npm run test:unit    # 44 passed（含贪食蛇 21 个规则用例）
 npm run build        # 通过
 npm run check:budget # 通过
 npm run test:e2e     # 39 passed（桌面 35 + 手机 4）

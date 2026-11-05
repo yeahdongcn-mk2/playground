@@ -242,7 +242,7 @@ export async function mountSnake(
           break;
         case 'paused':
           setText(overlayKicker, 'PAUSED');
-          setText(overlayTitle, '暂停中');
+          setText(overlayTitle, '已暂停');
           setText(overlayBody, '按空格、P 或点击按钮继续。');
           overlayScore.hidden = true;
           primaryButton.textContent = '继续游戏';
