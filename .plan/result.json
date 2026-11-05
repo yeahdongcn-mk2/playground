@@ -1,12 +1,9 @@
 {
-  "branch": "agent/plan-#17",
+  "branch": "agent/plan-yeahdongcn-mk2/playground#19-t0",
   "files": [
-    ".plan/result.json",
-    "README.md",
-    "docs/snake-design.md",
-    "src/games/snake/engine.test.ts",
-    "src/games/snake/snake-view.ts",
-    "tests/e2e/snake.spec.ts"
+    "src/games/tetris/engine.ts",
+    "src/games/tetris/engine.test.ts",
+    ".plan/result.json"
   ],
-  "note": "贪食蛇已具备空格暂停/继续、暂停遮罩与暂停期间状态冻结；本次按 #17 验收文案把遮罩标题改为「已暂停」，补充 togglePause 单测和暂停期间分数/蛇位不变化的 e2e 断言，构建、lint、44 单测与 39 e2e 全部通过。"
+  "note": "新增不依赖 DOM/Phaser 的俄罗斯方块纯规则引擎与 38 个单元测试，构建、typecheck、82 个单测与 lint 全部通过。"
 }
