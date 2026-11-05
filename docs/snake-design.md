@@ -49,7 +49,7 @@ ready ──start()──▶ running ──pause()──▶ paused
 ```text
 src/games/snake/
   engine.ts        纯规则引擎：状态、转向队列、碰撞、食物、计分、速度、胜利
-  engine.test.ts   Vitest 单元测试（20 个）
+  engine.test.ts   Vitest 单元测试（21 个）
   scene.ts         Phaser 场景：棋盘 / 蛇 / 果实绘制、键盘输入、死亡闪动
   snake-view.ts    DOM 视图：HUD、覆盖层、按钮、D-pad、滑动、最高分、音效
   index.ts         GameModule 元数据与懒加载入口
@@ -81,7 +81,7 @@ src/games/snake/
 
 ## 测试
 
-### 单元测试（20）
+### 单元测试（21）
 
 `src/games/snake/engine.test.ts` 覆盖：
 
@@ -91,7 +91,7 @@ src/games/snake/
 - 食物不生成在蛇身上、注入 RNG 的确定性、填满棋盘时胜利。
 - `state` 返回防御性副本，外部修改不影响引擎。
 
-运行：`npm run test:unit`（全仓 43 个用例）。
+运行：`npm run test:unit`（全仓 44 个用例）。
 
 ### 端到端（21）
 

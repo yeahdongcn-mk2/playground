@@ -52,18 +52,29 @@ test.describe('snake gameplay', () => {
     await expect(page.getByTestId('length')).toHaveText('3');
   });
 
-  test('Space pauses with an overlay and the overlay button resumes', async ({ page }) => {
+  test('Space pauses with an overlay, freezes the run and resumes', async ({ page }) => {
     await openSnake(page, { food: '0,0' });
     await startGame(page);
+    const scoreBefore = (await readState(page)).score;
 
     await page.keyboard.press('Space');
     await expect.poll(() => readStatus(page)).toBe('paused');
     await expect(page.getByTestId('overlay')).toBeVisible();
-    await expect(page.getByTestId('overlay-title')).toHaveText('暂停中');
+    await expect(page.getByTestId('overlay-title')).toHaveText('已暂停');
 
     const headBefore = (await readState(page)).snake[0];
     await page.waitForTimeout(400);
-    expect((await readState(page)).snake[0]).toEqual(headBefore);
+    const frozen = await readState(page);
+    expect(frozen.status).toBe('paused');
+    expect(frozen.score).toBe(scoreBefore);
+    expect(frozen.snake[0]).toEqual(headBefore);
+
+    // A second Space press resumes; pressing it again pauses.
+    await page.keyboard.press('Space');
+    await expect.poll(() => readStatus(page)).toBe('running');
+    await expect(page.getByTestId('overlay')).toBeHidden();
+    await page.keyboard.press('Space');
+    await expect.poll(() => readStatus(page)).toBe('paused');
 
     await page.getByRole('button', { name: '继续游戏' }).click();
     await expect.poll(() => readStatus(page)).toBe('running');
@@ -205,7 +216,7 @@ test.describe('additional input paths', () => {
     });
 
     await expect.poll(() => readStatus(page)).toBe('paused');
-    await expect(page.getByTestId('overlay-title')).toHaveText('暂停中');
+    await expect(page.getByTestId('overlay-title')).toHaveText('已暂停');
   });
 
   test('auto-pauses when the window loses focus', async ({ page }) => {
@@ -214,7 +225,7 @@ test.describe('additional input paths', () => {
 
     await page.evaluate(() => window.dispatchEvent(new Event('blur')));
     await expect.poll(() => readStatus(page)).toBe('paused');
-    await expect(page.getByTestId('overlay-title')).toHaveText('暂停中');
+    await expect(page.getByTestId('overlay-title')).toHaveText('已暂停');
   });
 
   test('the hero CTA opens the snake game', async ({ page }) => {

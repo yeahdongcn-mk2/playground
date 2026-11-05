@@ -286,6 +286,22 @@ describe('SnakeEngine', () => {
     expect(engine.step()).toBe('moved');
   });
 
+  it('toggles pause only between running and paused', () => {
+    const engine = makeEngine({ width: 10, height: 10 });
+
+    engine.togglePause();
+    expect(engine.state.status).toBe('ready');
+
+    engine.start();
+    engine.togglePause();
+    expect(engine.state.status).toBe('paused');
+    expect(engine.step()).toBe('idle');
+
+    engine.togglePause();
+    expect(engine.state.status).toBe('running');
+    expect(engine.step()).toBe('moved');
+  });
+
   it('resets score, speed, layout and status on restart', () => {
     const engine = makeEngine({ width: 10, height: 10 });
     engine.start();
