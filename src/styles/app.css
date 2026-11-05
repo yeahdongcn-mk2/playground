@@ -590,6 +590,24 @@ ol {
     linear-gradient(140deg, #0a1526, #060b13);
 }
 
+.game-card-art--snake {
+  background:
+    radial-gradient(circle at 50% 50%, rgba(163, 230, 53, 0.18), transparent 62%),
+    linear-gradient(140deg, #0a1526, #060b13);
+}
+
+.snake-card-art {
+  position: relative;
+  z-index: 1;
+  width: 76%;
+  max-width: 240px;
+}
+
+.game-card-art--snake .game-card-engine {
+  border-color: rgba(163, 230, 53, 0.28);
+  color: var(--lime);
+}
+
 .mini-grid {
   position: absolute;
   inset: 0;

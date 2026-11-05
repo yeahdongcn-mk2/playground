@@ -51,6 +51,7 @@ src/
   games/
     registry.ts     游戏注册表
     blank/          空白游戏（index 元数据、view DOM 外壳、scene Phaser 场景）
+    snake/          完整玩法参考（规则 engine、scene、响应式 view、单元 / e2e 测试）
   styles/app.css
 public/games/<id>/  游戏静态资源
 ```
@@ -241,7 +242,7 @@ const vector = directions.vector(); // 对角线已归一化
    };
    ```
 
-2. **规则与场景分离**：把规则放在 `engine.ts`（无 DOM / 无 Phaser），先为边界写 Vitest；`scene.ts` 只读取状态快照并绘制。
+2. **规则与场景分离**：把规则放在 `engine.ts`（无 DOM / 无 Phaser），先为边界写 Vitest；`scene.ts` 只读取状态快照并绘制。完整的拆分示例可参考 `src/games/snake/`。
 3. **DOM 外壳** `view.ts`：负责 HUD、覆盖层、按钮、触屏辅助键；用 `createPhaser2DGame()` 创建 2D 运行时，返回的 `destroy()` 里释放引擎与监听器。
 4. **注册**：在 `src/games/registry.ts` 的 `games` 数组加入 `myGame`，大厅自动出现卡片。
 5. **资源**：放到 `public/games/my-game/`，场景 `preload()` 里加载；体积大的资源按需加载。
@@ -290,8 +291,8 @@ Node.js `^22.12.0 || ^24.0.0 || >=26.0.0`（Vite 8 的要求）。CI（`.github/
 ## 14. 性能与已知限制
 
 - 大厅首屏不包含 Phaser；Phaser 只在进入 2D 游戏时加载（本地构建 chunk 约 1.3 MB / 357 KB gzip）。
-- 入口 JS 约 7.5 KB gzip；`check:budget` 断言入口不含引擎且小于 50 KB，单 2D 游戏首局全部 JS 小于 450 KB gzip。
+- 入口 JS 约 8.2 KB gzip；`check:budget` 断言入口不含引擎且小于 50 KB，单 2D 游戏首局全部 JS 小于 450 KB gzip。
 - 3D 尚未实现，Three.js 只在文档与目录层面预留。
-- 空白示例只演示框架能力，不是完整游戏；贪食蛇由后续子任务 t3 实现。
+- 空白示例只演示框架能力；`src/games/snake/` 是完整玩法参考（规则引擎、Phaser 场景、响应式视图、测试）。
 - Lint 使用 oxlint 而不是 ESLint：TypeScript 7 暂无 JS Compiler API，`typescript-eslint` 的 peer 范围也尚未覆盖 TS 7；oxlint 负责 TS 语法与常见规则，目录边界由本地脚本补足。
 - 手机端目前用 Playwright 模拟，真实设备手感需要人工验收。
