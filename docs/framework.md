@@ -247,7 +247,7 @@ const vector = directions.vector(); // 对角线已归一化
 3. **DOM 外壳** `view.ts`：负责 HUD、覆盖层、按钮、触屏辅助键；用 `createPhaser2DGame()` 创建 2D 运行时，返回的 `destroy()` 里释放引擎与监听器。
 4. **注册**：在 `src/games/registry.ts` 的 `games` 数组加入 `myGame`，大厅自动出现卡片。
 5. **资源**：放到 `public/games/my-game/`，场景 `preload()` 里加载；体积大的资源按需加载。
-6. **测试**：规则单测放 `engine.test.ts`；浏览器行为加到 `tests/e2e/`，用 `data-testid` 定位。需要读取只读状态或固定初始数据时，可参考 snake / tetris 只在 `import.meta.env.DEV` 或 `?debug=1` 下安装 `window.__playground`，生产默认入口不会暴露调试 API。
+6. **测试**：规则单测放 `engine.test.ts`；浏览器行为加到 `tests/e2e/`，用 `data-testid` 定位。需要读取只读状态或固定初始数据时，可参考 snake / tetris 只在 `import.meta.env.DEV` 或 hash 路由后的 `?debug=1`（例如 `#/games/tetris?debug=1`）下安装 `window.__playground`，生产默认入口不会暴露调试 API。
 
 ## 11. 3D（Three.js）接入
 
@@ -274,7 +274,7 @@ npm run test:e2e     # 先 build，再用 vite preview 跑桌面 + Pixel 7
 
 - 单测只覆盖引擎无关逻辑；不要在 Node 里启动 Phaser。
 - 端到端使用 `data-testid`，覆盖进入 / 返回、最近游玩时间、键盘 / 鼠标 / 触屏、修饰键、重置、容器级缩放、未知路由、快速切换的晚到 mount、休眠时销毁和监听器清理；贪食蛇与俄罗斯方块另有完整玩法用例（暂停 / 重开、计分 / 结束、手机端触屏按钮）。
-- 端到端会先构建，`webServer` 启动 `npm run preview`，因此测试的是生产产物，而不是 dev server。需要固定状态时由游戏通过 `?debug=1` 提供只读调试接缝，测试不依赖开发服务器。
+- 端到端会先构建，`webServer` 启动 `npm run preview`，因此测试的是生产产物，而不是 dev server。需要固定状态时由游戏通过 hash 路由后的 `?debug=1`（例如 `/#/games/tetris?debug=1`）提供只读调试接缝，测试不依赖开发服务器。
 - 生产构建后可用 `npm run preview` 手工检查 `dist/`。
 - 截图由 `npm run screenshots` 生成，来源说明见 [screenshots/README.md](./screenshots/README.md)。
 

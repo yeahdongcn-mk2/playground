@@ -692,4 +692,3 @@ function parseDebugBoard(raw: string): Board | undefined {
 function isTetrominoType(value: string): value is TetrominoType {
   return (TETROMINO_TYPES as readonly string[]).includes(value);
 }
-

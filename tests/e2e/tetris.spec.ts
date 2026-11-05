@@ -99,7 +99,9 @@ test.describe('tetris gameplay', () => {
     await expect(page.getByTestId('overlay-title')).toHaveText('已暂停');
 
     const frozen = await readState(page);
-    await page.waitForTimeout(400);
+    // Wait past one full gravity interval (800ms) so a pause regression would
+    // have produced at least one tick and moved the piece.
+    await page.waitForTimeout(1_000);
     const still = await readState(page);
     expect(still.status).toBe('paused');
     expect(still.active?.x).toBe(frozen.active?.x);
@@ -116,7 +118,8 @@ test.describe('tetris gameplay', () => {
   });
 
   test('stacks to the top, ends the run and restarts from the overlay', async ({ page }) => {
-    await openTetris(page);
+    // A deterministic first piece keeps the spawn position check below stable.
+    await openTetris(page, { piece: 'T' });
     await startGame(page);
 
     // Accelerated fall keeps this quick, while the last key is not Space so
@@ -135,9 +138,21 @@ test.describe('tetris gameplay', () => {
     await expect(page.getByTestId('lines')).toHaveText('0');
     await expect(page.getByTestId('overlay')).toBeHidden();
 
+    // Make R's restart observable: move off spawn and lock a piece first.
+    await page.keyboard.press('ArrowLeft');
+    await expect.poll(async () => (await readState(page)).active?.x).toBe(2);
+    await page.keyboard.press('Space');
+    await expect.poll(async () => lockedCellCount(await readState(page))).toBe(4);
+
+    // R restarts the run: the stack is cleared and the piece returns to spawn.
     await page.keyboard.press('KeyR');
     await expect.poll(() => readStatus(page)).toBe('running');
     await expect(page.getByTestId('score')).toHaveText('0');
+    const afterRestart = await readState(page);
+    expect(lockedCellCount(afterRestart)).toBe(0);
+    expect(afterRestart.active?.type).toBe('T');
+    expect(afterRestart.active?.x).toBe(3);
+    expect(afterRestart.active?.rotation).toBe(0);
 
     await page.getByRole('link', { name: /返回大厅/ }).click();
     await expect(page.getByTestId('game-card-tetris')).toBeVisible();
