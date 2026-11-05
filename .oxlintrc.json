@@ -1,0 +1,7 @@
+{
+  "rules": {
+    "no-unused-vars": "error",
+    "no-explicit-any": "error",
+    "no-debugger": "error"
+  }
+}
