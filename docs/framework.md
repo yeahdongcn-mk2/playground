@@ -272,7 +272,7 @@ npm run test:e2e     # 先 build，再用 vite preview 跑桌面 + Pixel 7
 ```
 
 - 单测只覆盖引擎无关逻辑；不要在 Node 里启动 Phaser。
-- 端到端使用 `data-testid`，覆盖进入 / 返回、键盘 / 鼠标 / 触屏、修饰键、重置、容器级缩放、未知路由、快速切换的晚到 mount、休眠时销毁和监听器清理。
+- 端到端使用 `data-testid`，覆盖进入 / 返回、最近游玩时间、键盘 / 鼠标 / 触屏、修饰键、重置、容器级缩放、未知路由、快速切换的晚到 mount、休眠时销毁和监听器清理。
 - 端到端会先构建，`webServer` 启动 `npm run preview`，因此测试的是生产产物，而不是 dev server。
 - 生产构建后可用 `npm run preview` 手工检查 `dist/`。
 - 截图由 `npm run screenshots` 生成，来源说明见 [screenshots/README.md](./screenshots/README.md)。

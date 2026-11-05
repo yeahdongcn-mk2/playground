@@ -102,7 +102,7 @@ describe('formatLastPlayed', () => {
 });
 
 describe('hub cards', () => {
-  it('shows the last-played time after a game is opened and a fallback otherwise', () => {
+  it('renders the stored relative time and a never-played fallback', () => {
     const { history } = createHistory();
     history.record('snake', NOW - 3 * MINUTE);
 
