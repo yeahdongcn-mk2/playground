@@ -1,5 +1,6 @@
 {
   "done": true,
-  "addressed": 1,
-  "note": "按评审意见补主路径自动化测试：tests/e2e/framework.spec.ts 新增「从大厅卡片进入 blank → 返回大厅后断言 game-card-last-played-blank 显示「刚刚」、snake 仍为「还没玩过」→ reload 后仍保留」，固定时钟并直接校验 localStorage 时间戳；同时修正 play-history 单测名并同步 README/docs 中的测试计数。已做反向验证（删掉 app.ts 的 record 调用后新用例失败）。typecheck/lint/43 单测/构建/预算/39 e2e 全部通过，已推送 agent/plan-#15。"
+  "addressed": 4,
+  "skipped": 0,
+  "note": "逐条处理 4 条评审意见：(1) R 重开 e2e 先左移到 x=2 并硬降锁定 4 格，再断言 R 后棋盘清空、方块回到出生位（T 型 x=3 / rotation=0）且仍为 running；已做反向验证，临时删掉 scene.ts 的 KeyR restart 后该用例在 lockedCellCount 断言处失败（expected 0, received 4）。(2) 暂停冻结断言等待由 400ms 改为 1000ms，超过初始重力周期 800ms。(3) debug 参数采用评审的第二种方案：不改生产 debug 识别行为（与 snake 保持一致），将 README 与 docs/framework.md 明确为 hash 路由后的 query，例如 #/games/tetris?debug=1。(4) 删除 tetris-view.ts 文件末尾多余空行，git diff --check 通过。typecheck、lint、82 单测、build、check:budget（入口 9.04 KB gzip、全部 JS 378.02 KB gzip）与 46 e2e（桌面 40 + 手机 6）全部通过，已推送分支，未合并。"
 }

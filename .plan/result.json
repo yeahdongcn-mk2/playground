@@ -1,15 +1,13 @@
 {
-  "branch": "agent/plan-yeahdongcn-mk2/playground#19-t1",
+  "branch": "agent/plan-yeahdongcn-mk2/playground#19-t2",
   "files": [
-    "src/games/tetris/index.ts",
-    "src/games/tetris/palette.ts",
-    "src/games/tetris/scene.ts",
+    "tests/e2e/tetris.spec.ts",
+    "tests/e2e/tetris.mobile.spec.ts",
+    "tests/e2e/tetris-helpers.ts",
     "src/games/tetris/tetris-view.ts",
-    "src/games/tetris/tetris.css",
-    "src/games/registry.ts",
-    "src/app/hub.ts",
-    "src/styles/app.css",
+    "README.md",
+    "docs/framework.md",
     ".plan/result.json"
   ],
-  "note": "按框架契约接入俄罗斯方块：Phaser 场景/视图/样式、注册表与大厅卡片、键盘与触屏操作、HUD/暂停/结束/重开；typecheck、lint、82 个单测、构建、预算检查与 39 个现有 e2e 全部通过。"
+  "note": "新增俄罗斯方块桌面与手机端 e2e（复用 fixtures，补只读调试接缝与固定首块/棋盘），同步 README/docs 游戏列表、目录与计数；typecheck、lint、82 单测、构建、预算（入口 9.0 KB gzip、全部 JS 378.0 KB gzip）与 46 e2e 全部通过。"
 }

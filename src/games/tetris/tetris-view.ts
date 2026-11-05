@@ -4,10 +4,14 @@ import type { Phaser2DRuntime } from '../../engine/phaser2d';
 import {
   createSeededRng,
   DEFAULT_TETRIS_CONFIG,
+  TETROMINO_TYPES,
   TetrisEngine,
   tetrominoCells,
+  type Board,
   type StepResult,
   type TetrominoType,
+  type TetrisEngineOptions,
+  type TetrisSnapshot,
   type TetrisStatus,
 } from './engine';
 import { TETROMINO_COLORS } from './palette';
@@ -210,6 +214,7 @@ export async function mountTetris(
 
   const engine = new TetrisEngine({
     rng: createSeededRng((Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0),
+    ...debugEngineOptions(),
   });
 
   let lastStatus: TetrisStatus = engine.currentStatus;
@@ -567,6 +572,13 @@ export async function mountTetris(
   };
   window.addEventListener('blur', onWindowBlur);
 
+  if (debugEnabled()) {
+    debugWindow().__playground = {
+      gameId: 'tetris',
+      getState: () => engine.state,
+    };
+  }
+
   sync();
 
   let destroyed = false;
@@ -583,7 +595,100 @@ export async function mountTetris(
       window.removeEventListener('blur', onWindowBlur);
       controller.abort();
       window.clearTimeout(readyTimer);
+      const debug = debugWindow();
+      if (debug.__playground?.gameId === 'tetris') {
+        delete debug.__playground;
+      }
       activeRuntime.destroy();
     },
   };
+}
+
+interface TetrisDebugApi {
+  gameId: 'tetris';
+  getState: () => TetrisSnapshot;
+}
+
+/**
+ * Test seam. The global `__playground` property is also declared for the snake
+ * game, so access it through one shared cast instead of merging a conflicting
+ * `Window` declaration.
+ */
+interface TetrisDebugWindow {
+  __playground?: TetrisDebugApi;
+}
+
+function debugWindow(): TetrisDebugWindow {
+  return window as unknown as TetrisDebugWindow;
+}
+
+/** Test seam: enabled on the dev server, or with `?debug=1` in a build. */
+function debugEnabled(): boolean {
+  if (import.meta.env.DEV) {
+    return true;
+  }
+  const query = window.location.hash.split('?')[1];
+  return query ? new URLSearchParams(query).has('debug') : false;
+}
+
+/** Query string after the hash route, e.g. `#/games/tetris?debug=1&piece=O`. */
+function debugParams(): URLSearchParams {
+  const hash = window.location.hash;
+  const queryIndex = hash.indexOf('?');
+  return new URLSearchParams(
+    queryIndex >= 0 ? hash.slice(queryIndex + 1) : window.location.search,
+  );
+}
+
+function debugEngineOptions(): Pick<TetrisEngineOptions, 'initialBoard' | 'initialPiece'> {
+  if (!debugEnabled()) {
+    return {};
+  }
+  const params = debugParams();
+  const options: { initialBoard?: Board; initialPiece?: TetrominoType } = {};
+
+  const piece = params.get('piece');
+  if (piece && isTetrominoType(piece)) {
+    options.initialPiece = piece;
+  }
+
+  const board = params.get('board');
+  if (board) {
+    const parsed = parseDebugBoard(board);
+    if (parsed) {
+      options.initialBoard = parsed;
+    }
+  }
+
+  return options;
+}
+
+/** Row-major stack with `.` for empty cells and a piece letter for filled ones. */
+function parseDebugBoard(raw: string): Board | undefined {
+  const rows = raw.split('/');
+  if (rows.length !== DEFAULT_TETRIS_CONFIG.height) {
+    return undefined;
+  }
+  const board: (TetrominoType | null)[][] = [];
+  for (const row of rows) {
+    if (row.length !== DEFAULT_TETRIS_CONFIG.width) {
+      return undefined;
+    }
+    const cells: (TetrominoType | null)[] = [];
+    for (const cell of row) {
+      if (cell === '.') {
+        cells.push(null);
+      } else if (isTetrominoType(cell)) {
+        cells.push(cell);
+      } else {
+        return undefined;
+      }
+    }
+    board.push(cells);
+  }
+  return board;
+}
+
+function isTetrominoType(value: string): value is TetrominoType {
+  return (TETROMINO_TYPES as readonly string[]).includes(value);
 }
