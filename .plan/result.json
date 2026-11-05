@@ -48,5 +48,5 @@
     "docs/screenshots/after-hub-mobile.png",
     "docs/screenshots/after-blank-mobile.png"
   ],
-  "note": "t2 共享网页游戏框架与工程骨架完成：Vite 8 + TypeScript 7 strict + Phaser 4 懒加载；共享外壳（hash 路由 #/games/<game>、大厅、加载/错误态、音效、存储）、GameModule/GameHandle/AbortSignal 契约、2D 适配层（容器级缩放、输入、确定性销毁）、可交互空白游戏与 3D 接入说明。已通过 npm run typecheck、lint、17 个单元测试、生产构建、check:budget（入口 7.48 KB gzip，全部 JS 359.91 KB gzip）和 17 个 Playwright 用例（桌面 16 + 手机 1，生产 preview）。交付 PR 见本分支。"
+  "note": "t2 共享网页游戏框架与工程骨架完成：Vite 8 + TypeScript 7 strict + Phaser 4 懒加载；共享外壳（hash 路由 #/games/<game>、大厅、加载/错误态、音效、存储）、GameModule/GameHandle/AbortSignal 契约、2D 适配层（容器级缩放、输入、确定性销毁）、可交互空白游戏与 3D 接入说明。已通过 npm run typecheck、lint、17 个单元测试、生产构建、check:budget（入口 7.69 KB gzip，全部 JS 359.95 KB gzip）和 17 个 Playwright 用例（桌面 16 + 手机 1，生产 preview）。交付 PR：https://github.com/yeahdongcn-mk2/playground/pull/13"
 }
