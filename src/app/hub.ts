@@ -1,5 +1,6 @@
 import { escapeHtml } from '../core/dom';
 import type { GameModule } from '../core/game';
+import { formatLastPlayed, type PlayHistoryReader } from './play-history';
 import { gameHref } from './router';
 
 const GITHUB_URL = 'https://github.com/yeahdongcn-mk2/playground';
@@ -37,7 +38,11 @@ const FEATURES = [
   },
 ] as const;
 
-export function renderHub(games: readonly GameModule[]): string {
+export function renderHub(
+  games: readonly GameModule[],
+  playHistory: PlayHistoryReader,
+  now = Date.now(),
+): string {
   return `
     <section class="hub">
       <section class="hero" aria-labelledby="hero-title">
@@ -85,7 +90,7 @@ export function renderHub(games: readonly GameModule[]): string {
           <p>每个游戏一个动态 import；引擎随游戏 chunk 加载，大厅首屏不为未启动的游戏买单。</p>
         </div>
         <div class="game-grid">
-          ${games.map(renderGameCard).join('')}
+          ${games.map((game) => renderGameCard(game, playHistory, now)).join('')}
           <article class="game-card game-card--placeholder" aria-label="更多游戏即将加入">
             <div class="game-card-art game-card-art--placeholder" aria-hidden="true">
               <span class="placeholder-grid"></span>
@@ -152,7 +157,7 @@ npm run build</code></pre>
   `;
 }
 
-function renderGameCard(game: GameModule): string {
+function renderGameCard(game: GameModule, playHistory: PlayHistoryReader, now: number): string {
   const meta = game.meta;
   const isSnake = meta.id === 'snake';
   return `
@@ -167,10 +172,34 @@ function renderGameCard(game: GameModule): string {
         <p class="game-card-genre">${escapeHtml(meta.genre)} · ${escapeHtml(meta.controls.join(' · '))}</p>
         <h3>${escapeHtml(meta.title)} <span>${escapeHtml(meta.englishTitle)}</span></h3>
         <p>${escapeHtml(meta.description)}</p>
+        ${renderLastPlayed(meta.id, playHistory.lastPlayed(meta.id), now)}
         <p class="game-card-cta">打开 <span aria-hidden="true">→</span></p>
       </div>
     </a>
   `;
+}
+
+function renderLastPlayed(gameId: string, lastPlayed: number | null, now: number): string {
+  const testId = `data-testid="game-card-last-played-${escapeHtml(gameId)}"`;
+  if (lastPlayed === null) {
+    return `
+        <p class="game-card-played game-card-played--empty" ${testId}>
+          <span class="game-card-played-label">最近游玩</span>
+          <span class="game-card-played-value">还没玩过</span>
+        </p>`;
+  }
+
+  const playedAt = new Date(lastPlayed);
+  const datetime = Number.isNaN(playedAt.getTime())
+    ? ''
+    : ` datetime="${playedAt.toISOString()}"`;
+  return `
+        <p class="game-card-played" ${testId}>
+          <span class="game-card-played-label">最近游玩</span>
+          <time class="game-card-played-value"${datetime}>${escapeHtml(
+            formatLastPlayed(lastPlayed, now),
+          )}</time>
+        </p>`;
 }
 
 function renderCardArt(isSnake: boolean): string {

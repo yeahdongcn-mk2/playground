@@ -676,6 +676,31 @@ ol {
   font-size: 0.9rem;
 }
 
+.game-card-body > .game-card-played {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 2px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+}
+
+.game-card-played-label {
+  color: var(--dim);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.game-card-played-value {
+  font-variant-numeric: tabular-nums;
+}
+
+.game-card-played--empty .game-card-played-value {
+  color: var(--dim);
+}
+
 .game-card-cta {
   margin-top: auto;
   padding-top: 12px;

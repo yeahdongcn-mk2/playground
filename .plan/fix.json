@@ -1,0 +1,5 @@
+{
+  "done": true,
+  "addressed": 1,
+  "note": "按评审意见补主路径自动化测试：tests/e2e/framework.spec.ts 新增「从大厅卡片进入 blank → 返回大厅后断言 game-card-last-played-blank 显示「刚刚」、snake 仍为「还没玩过」→ reload 后仍保留」，固定时钟并直接校验 localStorage 时间戳；同时修正 play-history 单测名并同步 README/docs 中的测试计数。已做反向验证（删掉 app.ts 的 record 调用后新用例失败）。typecheck/lint/43 单测/构建/预算/39 e2e 全部通过，已推送 agent/plan-#15。"
+}

@@ -50,6 +50,42 @@ test.describe('hub and routing', () => {
     await expect(page.locator('canvas[data-testid="game-canvas"]')).toHaveCount(1);
   });
 
+  test('shows the last-played time after returning to the hub and keeps it across reloads', async ({
+    page,
+  }) => {
+    // Freeze the clock so the relative label cannot drift out of its
+    // one-minute window even when the suite is slow.
+    const now = new Date('2026-01-01T12:00:00Z');
+    await page.clock.setFixedTime(now);
+
+    await page.goto('/');
+    const blankLastPlayed = page.getByTestId('game-card-last-played-blank');
+    const snakeLastPlayed = page.getByTestId('game-card-last-played-snake');
+    await expect(blankLastPlayed).toContainText('还没玩过');
+    await expect(snakeLastPlayed).toContainText('还没玩过');
+
+    // Open blank from its hub card; mounting it must record the visit in the
+    // shared storage before the hub can show a relative time.
+    await page.getByTestId('game-card-blank').click();
+    await expect(page).toHaveURL(/#\/games\/blank$/);
+    await expect(page.getByTestId('blank-stage')).toHaveAttribute('data-state', 'ready', {
+      timeout: 20_000,
+    });
+
+    await page.getByRole('link', { name: /返回大厅/ }).first().click();
+    await expect(page).toHaveURL(/#\/$/);
+    await expect(blankLastPlayed).toContainText('刚刚');
+    await expect(snakeLastPlayed).toContainText('还没玩过');
+
+    // The timestamp lives in localStorage, so a full reload keeps showing it.
+    expect(
+      await page.evaluate(() => localStorage.getItem('playground:v1:blank.lastPlayed')),
+    ).toBe(String(now.getTime()));
+    await page.reload();
+    await expect(page.getByTestId('game-card-last-played-blank')).toContainText('刚刚');
+    await expect(page.getByTestId('game-card-last-played-snake')).toContainText('还没玩过');
+  });
+
   test('shows a recoverable error for an unknown game', async ({ page }) => {
     await page.goto('/#/games/does-not-exist');
 

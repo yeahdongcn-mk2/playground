@@ -4,6 +4,7 @@ import type { GameHandle, GameServices } from '../core/game';
 import { createBrowserStorage } from '../core/storage';
 import { findGame, games } from '../games/registry';
 import { renderHub } from './hub';
+import { PlayHistory } from './play-history';
 import { gameHref, parseRoute } from './router';
 
 const REPO_URL = 'https://github.com/yeahdongcn-mk2/playground';
@@ -78,6 +79,7 @@ export class App {
   private readonly root: HTMLElement;
   private readonly storage = createBrowserStorage();
   private readonly audio: AudioService;
+  private readonly playHistory: PlayHistory;
   private readonly reduceMotion: boolean;
   private readonly view: HTMLElement;
   private readonly soundButton: HTMLButtonElement;
@@ -88,6 +90,7 @@ export class App {
   constructor(root: HTMLElement) {
     this.root = root;
     this.audio = new AudioService(this.storage);
+    this.playHistory = new PlayHistory(this.storage);
     this.reduceMotion = prefersReducedMotion();
     this.root.innerHTML = SHELL_HTML;
 
@@ -155,7 +158,7 @@ export class App {
 
     if (route.kind === 'home') {
       this.view.className = 'view';
-      this.view.innerHTML = renderHub(games);
+      this.view.innerHTML = renderHub(games, this.playHistory);
       document.title = 'Playground Arcade · 共享游戏框架与贪食蛇';
       this.bindHubActions();
       return;
@@ -196,6 +199,7 @@ export class App {
         return;
       }
       this.currentHandle = handle;
+      this.playHistory.record(game.meta.id);
       this.view.focus({ preventScroll: true });
     } catch (error) {
       if (token === this.renderToken) {
