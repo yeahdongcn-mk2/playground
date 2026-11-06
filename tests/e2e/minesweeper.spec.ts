@@ -86,6 +86,20 @@ test.describe('minesweeper gameplay', () => {
     await expect(safeCell).toHaveAttribute('data-revealed', 'true');
     await expect(page.getByTestId('overlay')).toBeHidden();
 
+    // Right-click must suppress the browser menu. Dispatch the event on an
+    // already revealed cell so the handler's flag toggle is a no-op. Without
+    // event.preventDefault() in the view this assertion fails.
+    const contextMenuPrevented = await safeCell.evaluate((cell) => {
+      const event = new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+      });
+      cell.dispatchEvent(event);
+      return event.defaultPrevented;
+    });
+    expect(contextMenuPrevented).toBe(true);
+    expect((await readState(page)).flaggedCount).toBe(0);
+
     // The clock only starts on the first reveal; the HUD must show it moving.
     await expect
       .poll(async () => (await readState(page)).elapsedMs)
@@ -93,6 +107,12 @@ test.describe('minesweeper gameplay', () => {
     await expect
       .poll(async () => page.getByTestId('timer').textContent(), { timeout: 4_000 })
       .not.toBe('0:00');
+    const timerText = (await page.getByTestId('timer').textContent()) ?? '';
+    expect(timerText).toMatch(/^\d+:\d{2}$/);
+    await page.waitForTimeout(1_200);
+    const laterTimerText = (await page.getByTestId('timer').textContent()) ?? '';
+    expect(laterTimerText).toMatch(/^\d+:\d{2}$/);
+    expect(laterTimerText).not.toBe(timerText);
 
     const state = await readState(page);
     expect(state.status).toBe('playing');
@@ -134,9 +154,12 @@ test.describe('minesweeper gameplay', () => {
     await expect(page.locator('[data-state="mine"]')).toHaveCount(8);
     await expect(page.locator('[data-mine="true"]')).toHaveCount(9);
 
-    // The engine clock is frozen after the loss.
+    // Both the engine clock and the visible HUD stay frozen after the loss.
+    const frozenTimer = (await page.getByTestId('timer').textContent()) ?? '';
+    expect(frozenTimer).toMatch(/^\d+:\d{2}$/);
     await page.waitForTimeout(700);
     expect((await readState(page)).elapsedMs).toBe(lost.elapsedMs);
+    expect((await page.getByTestId('timer').textContent()) ?? '').toBe(frozenTimer);
 
     await page.getByTestId('overlay-primary').click();
     await expect(page.getByTestId('status')).toHaveText('待开始');

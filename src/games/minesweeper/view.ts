@@ -25,7 +25,7 @@ const STATUS_LABELS: Readonly<Record<MinesweeperStatus, string>> = {
 };
 
 const VIEW_HTML = `
-  <section class="minesweeper" data-testid="minesweeper-game" data-status="ready">
+  <section class="minesweeper-game" data-testid="minesweeper-game" data-status="ready">
     <div class="game-heading">
       <a class="back-link" href="#/">
         <span aria-hidden="true">←</span> 返回大厅
@@ -53,7 +53,7 @@ const VIEW_HTML = `
     <div class="minesweeper-layout">
       <div class="minesweeper-main">
         <div class="minesweeper-stage">
-          <div class="minesweeper-board" data-testid="minesweeper-board" role="grid"
+          <div class="minesweeper-board" data-testid="minesweeper-board" role="group"
             aria-label="9 × 9 扫雷棋盘"></div>
           <div class="minesweeper-overlay" data-testid="overlay" role="group"
             aria-labelledby="minesweeper-overlay-title" hidden>
@@ -111,8 +111,8 @@ interface MinesweeperDebugApi {
 }
 
 /**
- * The snake, 2048 and breakout views also use `window.__playground`, so one
- * local cast avoids a conflicting global declaration.
+ * The snake, tetris, 2048 and breakout views also use `window.__playground`,
+ * so one local cast avoids a conflicting global declaration.
  */
 interface MinesweeperDebugWindow {
   __playground?: MinesweeperDebugApi;
@@ -267,6 +267,7 @@ export async function mountMinesweeper(
   const overlayTitle = query<HTMLElement>(root, '[data-testid="overlay-title"]');
   const overlayBody = query<HTMLElement>(root, '[data-testid="overlay-body"]');
   const primaryButton = query<HTMLButtonElement>(root, '[data-testid="overlay-primary"]');
+  const restartButton = query<HTMLButtonElement>(root, '[data-testid="restart-button"]');
   const remainingElement = query<HTMLElement>(root, '[data-testid="remaining-mines"]');
   const flagCountElement = query<HTMLElement>(root, '[data-testid="flag-count"]');
   const timerElement = query<HTMLElement>(root, '[data-testid="timer"]');
@@ -276,11 +277,11 @@ export async function mountMinesweeper(
   boardElement.innerHTML = Array.from({ length: ROWS }, (_, row) => {
     const cells = Array.from({ length: COLS }, (_, col) => {
       const testId = `cell-${row}-${col}`;
-      return `<button class="minesweeper-cell" type="button" role="gridcell"
+      return `<button class="minesweeper-cell" type="button"
         data-cell data-row="${row}" data-col="${col}" data-state="hidden"
         data-testid="${testId}" aria-label="第 ${row + 1} 行第 ${col + 1} 列，未翻开"></button>`;
     }).join('');
-    return `<div class="minesweeper-row" role="row">${cells}</div>`;
+    return `<div class="minesweeper-row">${cells}</div>`;
   }).join('');
 
   const cellButtons: HTMLButtonElement[][] = Array.from({ length: ROWS }, (_, row) =>
@@ -347,11 +348,6 @@ export async function mountMinesweeper(
       button.dataset.mine = 'true';
     } else {
       delete button.dataset.mine;
-    }
-    if (visual === 'flagged') {
-      button.setAttribute('aria-pressed', 'true');
-    } else {
-      button.removeAttribute('aria-pressed');
     }
     button.textContent = cellContent(cell, visual);
     button.setAttribute('aria-label', cellLabel(cell, status));
@@ -453,6 +449,9 @@ export async function mountMinesweeper(
     lastStatus = engine.currentStatus;
     sync();
     announce('游戏重新开始');
+    // The overlay hides with focus still inside it, so move focus back to a
+    // visible control once the new board is ready.
+    restartButton.focus({ preventScroll: true });
   }
 
   boardElement.addEventListener(
@@ -500,8 +499,8 @@ export async function mountMinesweeper(
       return;
     }
     destroyed = true;
-    // The board, overlay and restart listeners are all signal-bound; the clock
-    // is not, so it is cleared explicitly before the view goes away.
+    // The board and restart listeners are signal-bound; the clock and the
+    // mountSignal bridge are not, so both are released explicitly here.
     mountSignal.removeEventListener('abort', onMountAbort);
     controller.abort();
     stopClock();

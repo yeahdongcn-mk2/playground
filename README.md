@@ -17,8 +17,8 @@
 ![扫雷游戏中](docs/screenshots/after-minesweeper-playing-desktop.png)
 
 - **共享外壳**：Hash 路由、大厅、加载 / 错误态、音效开关、命名空间存储与可访问性约定。
-- **按需引擎**：2D 使用 Phaser 4，引擎随游戏 chunk 懒加载；3D 预留 Three.js 接入位，不拖累首屏。
-- **最小 2D 框架**：主循环与场景由 Phaser 提供，共享适配层统一容器缩放、ResizeObserver、输入约定与销毁生命周期。
+- **按需引擎**：Phaser 4 只随使用它的 2D 游戏 chunk 懒加载，扫雷是纯 DOM 视图；3D 预留 Three.js 接入位，不拖累首屏。
+- **最小 2D 框架**：Phaser 游戏的主循环与场景由 Phaser 提供，共享适配层统一容器缩放、ResizeObserver、输入约定与销毁生命周期。
 - **完整可玩贪食蛇**：20×20 棋盘，吃果实 +10 分、变长、加速；撞墙 / 自撞结束；最高分持久化；键盘、触屏 D-pad 与滑动都能玩。
 - **完整可玩俄罗斯方块**：10×20 棋盘，七种方块（I / O / T / S / Z / J / L）、旋转与踢墙、左右移动、加速下落、消行计分、等级加速；堆顶结束，支持暂停 / 重开；键盘与移动端触屏按钮都能玩。
 - **完整可玩 2048**：4×4 棋盘，方向键 / WASD 或触屏滑动合并相同数字，合并计分并生成新方块；无路可走时结束，支持重开与最高分；键盘与触屏都能玩。
@@ -302,7 +302,7 @@ games/<game>/scene → 对应引擎（动态 import）
 | 单元测试 | Vitest |
 | 端到端测试 | Playwright（Chromium、桌面 + Pixel 7） |
 
-2D 游戏把规则与渲染分离：纯逻辑放 `engine.ts` / `logic/` 并先写单测，Phaser Scene 只负责绘制与输入。3D 游戏在 `mount()` 内创建 `WebGLRenderer` 和相机，沿用相同的路由、存储、音效和销毁契约。
+使用 Phaser 的 2D 游戏把规则与渲染分离：纯逻辑放 `engine.ts` / `logic/` 并先写单测，Phaser Scene 只负责绘制与输入；DOM 游戏则由 `view.ts` 直接渲染并复用同一份纯逻辑。3D 游戏在 `mount()` 内创建 `WebGLRenderer` 和相机，沿用相同的路由、存储、音效和销毁契约。
 
 ## 验证
 
@@ -330,4 +330,4 @@ npm run test:e2e     # 70 passed（桌面 62 + 手机 8）
 - 3D（Three.js）只预留契约与目录路径，参考实现要等首个 3D 游戏接入。
 - 手机端使用 Playwright 的设备模拟，真实触屏手感仍建议人工验收。
 - 扫雷使用原生 DOM 网格，不进入 Phaser chunk；其余 2D 游戏仍共用 Phaser 适配层。
-- Phaser 引擎 chunk 约数百 KB（gzip），只在进入 2D 游戏时加载；大厅首屏不包含引擎。
+- Phaser 引擎 chunk 约数百 KB（gzip），只在进入使用 Phaser 的游戏时加载；大厅首屏和纯 DOM 的扫雷都不包含引擎。

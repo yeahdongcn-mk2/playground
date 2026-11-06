@@ -9,7 +9,7 @@ const FEATURES = [
   {
     index: '01',
     title: '主循环与场景',
-    body: 'Phaser 的 update 循环与 Scene 生命周期被统一收进按需加载的 2D 适配层；页面隐藏时主循环休眠。',
+    body: 'Phaser 游戏的 update 循环与 Scene 生命周期被统一收进按需加载的 2D 适配层；页面隐藏时主循环休眠。',
   },
   {
     index: '02',
@@ -34,7 +34,7 @@ const FEATURES = [
   {
     index: '06',
     title: '2D / 3D 扩展',
-    body: '契约与引擎无关：2D 用 Phaser，3D 预留给 Three.js；新游戏只需要一个 mount()。',
+    body: '契约与引擎无关：2D 可用 Phaser 或原生 DOM，3D 预留给 Three.js；新游戏只需要一个 mount()。',
   },
 ] as const;
 

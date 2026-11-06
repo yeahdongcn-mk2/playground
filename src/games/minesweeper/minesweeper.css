@@ -1,6 +1,6 @@
 /* Minesweeper game view. Loaded with the game chunk, not the hub shell. */
 
-.minesweeper {
+.minesweeper-game {
   padding-bottom: 40px;
 }
 
@@ -319,6 +319,13 @@
 
   .minesweeper-panel {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (hover: none) and (pointer: coarse) {
+  /* Touch browsers can keep :hover after a tap; do not leave a lifted cell. */
+  .minesweeper-cell:hover {
+    transform: none;
   }
 }
 
