@@ -2,6 +2,45 @@
 
 这些截图用于各期交付的 Before / After 视觉证据。全部由 Playwright Chromium 真实渲染，不是 mockup。
 
+## t5：打砖块（Issue #27 / 子任务 1）
+
+- Before 基线：main `63bf67e`（PR #28 合入打砖块规则引擎后、接入共享框架前的提交）。大厅还没有打砖块卡片，`#/games/breakout` 显示「没有找到这个游戏」。
+- After：PR #29 的截图捕获提交 [`abed3bc`](https://github.com/yeahdongcn-mk2/playground/commit/abed3bc0346fe738f24ef4e51666ca1ddb369f48)（分支 `agent/plan-27-t1`）。其后提交只修改 `tests/e2e/` 与 `docs/screenshots/README.md`，不改变界面；PR 描述中附有 Before / After 截图链接。
+- 视口 / 主题：桌面 1440×1000、手机 390×844（DPR 2），深色主题，`reducedMotion: reduce`。桌面与手机大厅均为整页截图（`fullPage: true`），手机 Before / After 用同一口径，保证单列布局中的打砖块卡片进入画面。
+- 生成：`npm run screenshots:breakout`（生产构建 + `vite preview`，固定砖块 / 球 / 生命走 `?debug=1` 调试接缝）。
+- 复现 Before：在 `63bf67e` 的干净 worktree 里 `npm ci && npm run build`，用 `node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4184 --strictPort` 启动预览，然后在当前分支运行 `BASE_URL=http://127.0.0.1:4184 npm run screenshots:breakout:before`。
+
+### Before（main `63bf67e`，没有打砖块）
+
+| 文件 | 场景 | 视口 / 主题 | 说明 |
+| --- | --- | --- | --- |
+| `before-breakout-hub-desktop.png` | main 大厅 | 1440×1000 / 深色 | 只有贪食蛇、俄罗斯方块、2048 与空白画布卡片（没有打砖块）。 |
+| `before-breakout-hub-mobile.png` | main 大厅（手机） | 390×844（DPR 2）/ 深色 | 整页单列大厅，没有打砖块卡片。 |
+| `before-breakout-route-desktop.png` | main 访问 `#/games/breakout` | 1440×1000 / 深色 | 真实基线：打砖块未注册，显示「没有找到这个游戏」。 |
+| `before-breakout-route-mobile.png` | main 访问 `#/games/breakout`（手机） | 390×844（DPR 2）/ 深色 | 同上，手机视口。 |
+
+### After（PR #29，截图捕获于 `abed3bc`）
+
+`after-hub-desktop.png` / `after-hub-mobile.png` 已刷新为同时含贪食蛇、俄罗斯方块、2048、打砖块与空白画布卡片的大厅（手机为整页截图）。
+
+| 文件 | 场景 | 视口 / 主题 | 说明 |
+| --- | --- | --- | --- |
+| `after-hub-desktop.png` | 大厅 | 1440×1000 / 深色 | 新增打砖块卡片与入口。 |
+| `after-hub-mobile.png` | 大厅（手机） | 390×844（DPR 2）/ 深色 | 整页单列布局，含打砖块卡片。 |
+| `after-breakout-ready-desktop.png` | 打砖块 READY | 1440×1000 / 深色 | 球场、分层砖块、HUD 与开始遮罩。 |
+| `after-breakout-playing-desktop.png` | 打砖块游玩中 | 1440×1000 / 深色 | 挡板、球、砖墙与 HUD。 |
+| `after-breakout-levelclear-desktop.png` | 打砖块 LEVEL CLEAR | 1440×1000 / 深色 | 固定单砖清空后的过关遮罩。 |
+| `after-breakout-gameover-desktop.png` | 打砖块 GAME OVER | 1440×1000 / 深色 | 固定单条命结束后的结算与重开入口。 |
+| `after-breakout-ready-mobile.png` | 打砖块 READY（手机） | 390×844（DPR 2）/ 深色 | 手机端球场与开始遮罩。 |
+| `after-breakout-playing-mobile.png` | 打砖块游玩中（手机） | 390×844（DPR 2）/ 深色 | 手机端球场、HUD 与触屏提示。 |
+| `after-breakout-gameover-mobile.png` | 打砖块 GAME OVER（手机） | 390×844（DPR 2）/ 深色 | 手机端结算与重开入口。 |
+
+### 证据限制
+
+- main 没有打砖块页面，所以 Before 只能对比大厅（同一视口 / 主题）与真实未注册路由，不能与旧版打砖块页面逐像素对比。
+- 手机端为 Playwright 设备模拟（390×844、DPR 2、触摸、大厅整页截图），不是真实设备截图。
+- 截图来自生产构建；绘制行为另有 e2e 读取 canvas 像素验证，不依赖截图比对。
+
 ## t4：2048（PR #26）
 
 - Before 基线：main `d54ae9f`（PR #26 的父提交）。大厅还没有 2048 卡片，`#/games/2048` 显示「没有找到这个游戏」。
@@ -21,7 +60,7 @@
 
 ### After（本 PR）
 
-`after-hub-desktop.png` / `after-hub-mobile.png` 已刷新为同时含贪食蛇、俄罗斯方块、2048 与空白画布卡片的大厅（手机为整页截图）；其余为 2048 游戏页的三种状态。2048 的文件名保留 `-desktop` / `-mobile` 后缀，明确每种状态各自的视口。
+`after-hub-desktop.png` / `after-hub-mobile.png` 是跨任务共用的文件名，当前已由 t5 刷新为含打砖块的四游戏大厅（手机为整页截图）；2048 卡片仍在。下表「新增 2048 卡片」描述的是 t4 当时的页面状态。2048 的文件名保留 `-desktop` / `-mobile` 后缀，明确每种状态各自的视口。
 
 | 文件 | 场景 | 视口 / 主题 | 说明 |
 | --- | --- | --- | --- |
@@ -68,7 +107,7 @@
 | `after-hub-mobile.png` | 大厅 | 390×844（DPR 2）/ 深色 | 单列布局。 |
 | `after-snake-mobile.png` | 贪食蛇（手机） | 390×844（DPR 2）/ 深色 | 棋盘、D-pad 与操作面板堆叠。 |
 
-`after-hub-desktop.png` / `after-hub-mobile.png` 已由 t4 更新为含 2048 卡片的大厅（手机为整页截图，当前尺寸 780×11182）。
+`after-hub-desktop.png` / `after-hub-mobile.png` 是跨任务共用的文件名，当前已由 t4 / t5 更新为含 2048 与打砖块的四游戏大厅（手机为整页截图）；t3 表格里的「新增贪食蛇卡片」描述当时状态。
 
 ### 证据限制
 
@@ -99,7 +138,7 @@ npm run screenshots:baseline
 | `after-blank-desktop.png` | 空白画布游戏（指针移动后） | 1440×1000 / 深色 | 可交互画布、HUD、操作面板与重置入口。 |
 | `after-blank-mobile.png` | 空白画布游戏（触屏移动后） | 390×844（DPR 2）/ 深色 | 自适应画布、触屏操作与面板堆叠。 |
 
-`after-hub-desktop.png` / `after-hub-mobile.png` 已由 t4 更新为含 2048 卡片的大厅。
+`after-hub-desktop.png` / `after-hub-mobile.png` 已由后续 t4 / t5 更新为含 2048 与打砖块的四游戏大厅；t2 表格里的「只有空白画布卡片」描述的是 t2 当时状态。
 
 生成方式（会先构建，再用 `vite preview` 在 4174 端口启动生产预览）：
 

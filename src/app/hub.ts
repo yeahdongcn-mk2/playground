@@ -51,7 +51,7 @@ export function renderHub(
           <h1 id="hero-title">一块画布，<br /><span>无限种玩法。</span></h1>
           <p class="lede">
             用 Vite 8 + TypeScript 7 + Phaser 4 搭起的共享游戏底座：
-            页面壳、按需引擎、输入、资源与自适应渲染已经接通，贪食蛇、俄罗斯方块与 2048 都已跑通。
+            页面壳、按需引擎、输入、资源与自适应渲染已经接通，贪食蛇、俄罗斯方块、2048 与打砖块都已跑通。
           </p>
           <div class="hero-actions">
             <a class="button button--primary" href="${gameHref('snake')}" data-testid="enter-snake">
@@ -202,7 +202,7 @@ function renderLastPlayed(gameId: string, lastPlayed: number | null, now: number
         </p>`;
 }
 
-type CardArt = 'snake' | 'tetris' | '2048' | 'default';
+type CardArt = 'snake' | 'tetris' | '2048' | 'breakout' | 'default';
 
 function cardArtFor(gameId: string): CardArt {
   if (gameId === 'snake') {
@@ -213,6 +213,9 @@ function cardArtFor(gameId: string): CardArt {
   }
   if (gameId === '2048') {
     return '2048';
+  }
+  if (gameId === 'breakout') {
+    return 'breakout';
   }
   return 'default';
 }
@@ -308,6 +311,41 @@ function renderCardArt(art: CardArt): string {
           <text x="124" y="122" fill="#ffffff">128</text>
           <text x="156" y="122" fill="#04121a">2048</text>
         </g>
+      </svg>
+      <span class="mini-grid"></span>
+    `;
+  }
+  if (art === 'breakout') {
+    return `
+      <svg class="breakout-card-art" viewBox="0 0 220 132" aria-hidden="true">
+        <g fill="#22d3ee">
+          <rect x="30" y="10" width="24" height="11" rx="3" />
+          <rect x="60" y="10" width="24" height="11" rx="3" />
+          <rect x="90" y="10" width="24" height="11" rx="3" />
+          <rect x="120" y="10" width="24" height="11" rx="3" />
+          <rect x="150" y="10" width="24" height="11" rx="3" />
+        </g>
+        <g fill="#60a5fa">
+          <rect x="30" y="27" width="24" height="11" rx="3" />
+          <rect x="60" y="27" width="24" height="11" rx="3" />
+          <rect x="90" y="27" width="24" height="11" rx="3" />
+          <rect x="120" y="27" width="24" height="11" rx="3" />
+        </g>
+        <g fill="#a78bfa">
+          <rect x="30" y="44" width="24" height="11" rx="3" />
+          <rect x="60" y="44" width="24" height="11" rx="3" />
+          <rect x="90" y="44" width="24" height="11" rx="3" />
+        </g>
+        <g fill="#f472b6">
+          <rect x="30" y="61" width="24" height="11" rx="3" />
+          <rect x="60" y="61" width="24" height="11" rx="3" />
+        </g>
+        <rect x="76" y="112" width="68" height="9" rx="4.5" fill="#67e8f9" />
+        <rect x="80" y="114" width="60" height="3" rx="1.5" fill="#e0f2fe" opacity="0.65" />
+        <circle cx="150" cy="88" r="10" fill="#22d3ee" opacity="0.2" />
+        <circle cx="150" cy="88" r="5" fill="#f8fafc" />
+        <path d="M150 88 L184 54" fill="none" stroke="#67e8f9" stroke-width="1.5"
+          stroke-dasharray="3 5" opacity="0.65" />
       </svg>
       <span class="mini-grid"></span>
     `;

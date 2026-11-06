@@ -53,6 +53,8 @@ src/
     blank/          空白游戏（index 元数据、view DOM 外壳、scene Phaser 场景）
     snake/          完整玩法参考（规则 engine、scene、响应式 view、单元 / e2e 测试）
     tetris/         第二个完整玩法（七种方块、消行计分、等级、触屏按钮）
+    2048/           第三个完整玩法（滑动合并、键盘 + 触屏、固定初始棋盘）
+    breakout/       第四个完整玩法（固定步长模拟、分层砖块、键盘 + 拖动挡板）
   styles/app.css
 public/games/<id>/  游戏静态资源
 ```
@@ -243,11 +245,11 @@ const vector = directions.vector(); // 对角线已归一化
    };
    ```
 
-2. **规则与场景分离**：把规则放在 `engine.ts`（无 DOM / 无 Phaser），先为边界写 Vitest；`scene.ts` 只读取状态快照并绘制。完整的拆分示例可参考 `src/games/snake/` 与 `src/games/tetris/`。
+2. **规则与场景分离**：把规则放在 `engine.ts`（无 DOM / 无 Phaser），先为边界写 Vitest；`scene.ts` 只读取状态快照并绘制。完整的拆分示例可参考 `src/games/snake/`、`src/games/tetris/`、`src/games/2048/` 与 `src/games/breakout/`。
 3. **DOM 外壳** `view.ts`：负责 HUD、覆盖层、按钮、触屏辅助键；用 `createPhaser2DGame()` 创建 2D 运行时，返回的 `destroy()` 里释放引擎与监听器。
 4. **注册**：在 `src/games/registry.ts` 的 `games` 数组加入 `myGame`，大厅自动出现卡片。
 5. **资源**：放到 `public/games/my-game/`，场景 `preload()` 里加载；体积大的资源按需加载。
-6. **测试**：规则单测放 `engine.test.ts`；浏览器行为加到 `tests/e2e/`，用 `data-testid` 定位。需要读取只读状态或固定初始数据时，可参考 snake / tetris 只在 `import.meta.env.DEV` 或 hash 路由后的 `?debug=1`（例如 `#/games/tetris?debug=1`）下安装 `window.__playground`，生产默认入口不会暴露调试 API。
+6. **测试**：规则单测放 `engine.test.ts`；浏览器行为加到 `tests/e2e/`，用 `data-testid` 定位。需要读取只读状态或固定初始数据时，可参考 snake / tetris / 2048 / breakout 只在 `import.meta.env.DEV` 或 hash 路由后的 `?debug=1`（例如 `#/games/breakout?debug=1`）下安装 `window.__playground`，生产默认入口不会暴露调试 API。
 
 ## 11. 3D（Three.js）接入
 
@@ -266,17 +268,17 @@ const vector = directions.vector(); // 对角线已归一化
 ```bash
 npm run typecheck    # tsc --noEmit
 npm run lint         # oxlint + 模块边界检查
-npm run test:unit    # Vitest：storage / input / router / dom 与两个游戏的纯规则引擎
+npm run test:unit    # Vitest：storage / input / router / dom 与四个游戏的纯规则引擎
 npm run build        # 类型检查 + 生产构建
 npm run check:budget # 入口无引擎、体积预算
 npm run test:e2e     # 先 build，再用 vite preview 跑桌面 + Pixel 7
 ```
 
 - 单测只覆盖引擎无关逻辑；不要在 Node 里启动 Phaser。
-- 端到端使用 `data-testid`，覆盖进入 / 返回、最近游玩时间、键盘 / 鼠标 / 触屏、修饰键、重置、容器级缩放、未知路由、快速切换的晚到 mount、休眠时销毁和监听器清理；贪食蛇与俄罗斯方块另有完整玩法用例（暂停 / 重开、计分 / 结束、手机端触屏按钮）。
-- 端到端会先构建，`webServer` 启动 `npm run preview`，因此测试的是生产产物，而不是 dev server。需要固定状态时由游戏通过 hash 路由后的 `?debug=1`（例如 `/#/games/tetris?debug=1`）提供只读调试接缝，测试不依赖开发服务器。
+- 端到端使用 `data-testid`，覆盖进入 / 返回、最近游玩时间、键盘 / 鼠标 / 触屏、修饰键、重置、容器级缩放、未知路由、快速切换的晚到 mount、休眠时销毁和监听器清理；贪食蛇、俄罗斯方块、2048 与打砖块另有完整玩法用例（暂停 / 重开、计分 / 结束、窗口失焦暂停与恢复、手机端触屏按钮或拖动、像素绘制与监听器清理）。
+- 端到端会先构建，`webServer` 启动 `npm run preview`，因此测试的是生产产物，而不是 dev server。需要固定状态时由游戏通过 hash 路由后的 `?debug=1`（例如 `/#/games/breakout?debug=1`）提供只读调试接缝，测试不依赖开发服务器。
 - 生产构建后可用 `npm run preview` 手工检查 `dist/`。
-- 截图由 `npm run screenshots` 生成，来源说明见 [screenshots/README.md](./screenshots/README.md)。
+- 截图由 `npm run screenshots`（通用页）与 `npm run screenshots:breakout` 等游戏专用脚本生成，来源说明见 [screenshots/README.md](./screenshots/README.md)。
 
 ## 13. 环境与命令
 
@@ -292,8 +294,9 @@ Node.js `^22.12.0 || ^24.0.0 || >=26.0.0`（Vite 8 的要求）。CI（`.github/
 ## 14. 性能与已知限制
 
 - 大厅首屏不包含 Phaser；Phaser 只在进入 2D 游戏时加载（本地构建 chunk 约 1.3 MB / 357 KB gzip）。
-- 入口 JS 约 9.0 KB gzip；`check:budget` 断言入口不含引擎且小于 50 KB，全部 JS chunk 小于 450 KB gzip（当前约 378 KB gzip）。
+- 入口 JS 约 10.1 KB gzip；`check:budget` 断言入口不含引擎且小于 50 KB，全部 JS chunk 小于 450 KB gzip（当前约 394 KB gzip）。
 - 3D 尚未实现，Three.js 只在文档与目录层面预留。
-- 空白示例只演示框架能力；`src/games/snake/` 与 `src/games/tetris/` 是完整玩法参考（规则引擎、Phaser 场景、响应式视图、测试）。
+- 空白示例只演示框架能力；`src/games/snake/`、`src/games/tetris/`、`src/games/2048/` 与 `src/games/breakout/` 是完整玩法参考（规则引擎、Phaser 场景、响应式视图、测试）。
+- 打砖块固定 480×720 逻辑球场与 10 列砖块，没有道具、多球或在线排行榜；难度曲线由砖块行数与球速控制。
 - Lint 使用 oxlint 而不是 ESLint：TypeScript 7 暂无 JS Compiler API，`typescript-eslint` 的 peer 范围也尚未覆盖 TS 7；oxlint 负责 TS 语法与常见规则，目录边界由本地脚本补足。
 - 手机端目前用 Playwright 模拟，真实设备手感需要人工验收。
