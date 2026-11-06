@@ -143,6 +143,7 @@ export async function installListenerProbe(page: Page): Promise<void> {
       readonly target: EventTarget;
       readonly type: string;
       readonly listener: EventListenerOrEventListenerObject;
+      readonly capture: boolean;
     }
 
     const entries = new Set<Entry>();
@@ -151,6 +152,25 @@ export async function installListenerProbe(page: Page): Promise<void> {
 
     const nativeAdd = EventTarget.prototype.addEventListener;
     const nativeRemove = EventTarget.prototype.removeEventListener;
+    const captureOf = (options?: boolean | AddEventListenerOptions | EventListenerOptions): boolean =>
+      typeof options === 'boolean' ? options : Boolean(options?.capture);
+    const removeEntry = (
+      target: EventTarget,
+      type: string,
+      listener: EventListenerOrEventListenerObject | null,
+      capture: boolean,
+    ): void => {
+      for (const entry of entries) {
+        if (
+          entry.target === target &&
+          entry.type === type &&
+          entry.listener === listener &&
+          entry.capture === capture
+        ) {
+          entries.delete(entry);
+        }
+      }
+    };
 
     EventTarget.prototype.addEventListener = function (
       this: EventTarget,
@@ -159,14 +179,24 @@ export async function installListenerProbe(page: Page): Promise<void> {
       options?: boolean | AddEventListenerOptions,
     ): void {
       if (listener) {
-        const entry: Entry = { target: this, type, listener };
-        entries.add(entry);
-        const signal =
-          typeof options === 'object' && options !== null ? options.signal : undefined;
-        if (signal) {
-          // The browser drops signal-bound listeners without calling
-          // removeEventListener, so mirror that here.
-          nativeAdd.call(signal, 'abort', () => entries.delete(entry), { once: true });
+        const capture = captureOf(options);
+        const existing = [...entries].some(
+          (entry) =>
+            entry.target === this &&
+            entry.type === type &&
+            entry.listener === listener &&
+            entry.capture === capture,
+        );
+        if (!existing) {
+          const entry: Entry = { target: this, type, listener, capture };
+          entries.add(entry);
+          const signal =
+            typeof options === 'object' && options !== null ? options.signal : undefined;
+          if (signal) {
+            // The browser drops signal-bound listeners without calling
+            // removeEventListener, so mirror that here.
+            nativeAdd.call(signal, 'abort', () => entries.delete(entry), { once: true });
+          }
         }
       }
       nativeAdd.call(this, type, listener, options);
@@ -178,11 +208,7 @@ export async function installListenerProbe(page: Page): Promise<void> {
       listener: EventListenerOrEventListenerObject | null,
       options?: boolean | EventListenerOptions,
     ): void {
-      for (const entry of entries) {
-        if (entry.target === this && entry.type === type && entry.listener === listener) {
-          entries.delete(entry);
-        }
-      }
+      removeEntry(this, type, listener, captureOf(options));
       nativeRemove.call(this, type, listener, options);
     } as typeof EventTarget.prototype.removeEventListener;
 

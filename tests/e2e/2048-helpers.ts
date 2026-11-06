@@ -5,6 +5,8 @@ import type { Game2048Snapshot } from '../../src/games/2048/engine';
 export interface Open2048Options {
   /** Dev-only starting board, row-major from top to bottom; null is empty. */
   board?: readonly (readonly (number | null)[])[];
+  /** Force Phaser's canvas renderer so canvas pixels can be read reliably. */
+  renderer?: 'canvas';
 }
 
 /** Fixed 2x2 block of equal tiles: moving left merges twice, scoring 8. */
@@ -37,6 +39,9 @@ export async function open2048(page: Page, options: Open2048Options = {}): Promi
   const params = new URLSearchParams({ debug: '1' });
   if (options.board) {
     params.set('board', encodeBoard(options.board));
+  }
+  if (options.renderer) {
+    params.set('renderer', options.renderer);
   }
 
   await page.goto(`/#/games/2048?${params.toString()}`);
@@ -86,7 +91,11 @@ export async function expectNoHorizontalOverflow(page: Page): Promise<void> {
   expect(overflow, 'page should not scroll horizontally').toBeLessThanOrEqual(1);
 }
 
-/** Exact RGB colour histogram of the Phaser canvas, keyed as `r,g,b`. */
+/**
+ * Exact RGB histogram of the Phaser canvas, keyed as `r,g,b`. Callers pass
+ * `renderer: 'canvas'` to open2048 so the renderer is deterministic; WebGL
+ * canvases do not expose a 2D context to read.
+ */
 export async function readCanvasColorCounts(page: Page): Promise<Record<string, number>> {
   return page.evaluate(() => {
     const canvas = document.querySelector<HTMLCanvasElement>(

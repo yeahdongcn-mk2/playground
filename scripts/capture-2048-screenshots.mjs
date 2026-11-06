@@ -20,7 +20,7 @@ const ORIGIN = `http://${HOST}:${PORT}`;
 const OUTPUT = 'docs/screenshots';
 const MODE = process.argv.includes('--before') ? 'before' : 'after';
 const BASE_URL = process.env.BASE_URL ?? ORIGIN;
-const COLOUR_BOARD = '2,4,8,16/32,64,128,256/512,1024,2048,./.,.,.,.';
+const COLOR_BOARD = '2,4,8,16/32,64,128,256/512,1024,2048,./.,.,.,.';
 const MERGE_BOARD = '2,2,4,4/8,8,16,16/.,.,.,./.,.,.,.';
 const STUCK_BOARD = '2,2,16,8/8,4,2,16/4,8,16,2/16,2,4,8';
 
@@ -72,38 +72,50 @@ async function captureDesktop(browser) {
     deviceScaleFactor: 1,
     reducedMotion: 'reduce',
   });
-  const page = await context.newPage();
 
   if (MODE === 'before') {
-    await page.goto(`${BASE_URL}/`, { waitUntil: 'networkidle' });
-    await settle(page);
-    await capture(page, 'before-2048-hub-desktop.png', true);
+    const hub = await context.newPage();
+    await hub.goto(`${BASE_URL}/`, { waitUntil: 'networkidle' });
+    await settle(hub);
+    await capture(hub, 'before-2048-hub-desktop.png', true);
+    await hub.close();
 
-    await page.goto(`${BASE_URL}/#/games/2048`, { waitUntil: 'networkidle' });
-    await page.getByText('没有找到这个游戏').waitFor();
-    await settle(page);
-    await capture(page, 'before-2048-route-desktop.png', true);
+    const route = await context.newPage();
+    await route.goto(`${BASE_URL}/#/games/2048`, { waitUntil: 'networkidle' });
+    await route.getByText('没有找到这个游戏').waitFor();
+    await settle(route);
+    await capture(route, 'before-2048-route-desktop.png', true);
+    await route.close();
   } else {
-    await page.goto(`${BASE_URL}/`, { waitUntil: 'networkidle' });
-    await page.getByTestId('game-card-2048').waitFor();
-    await settle(page);
-    await capture(page, 'after-hub-desktop.png', true);
+    const hub = await context.newPage();
+    await hub.goto(`${BASE_URL}/`, { waitUntil: 'networkidle' });
+    await hub.getByTestId('game-card-2048').waitFor();
+    await settle(hub);
+    await capture(hub, 'after-hub-desktop.png', true);
+    await hub.close();
 
-    await open2048(page, COLOUR_BOARD);
-    await capture(page, 'after-2048-ready-desktop.png', true);
+    // A fresh page per state avoids a hash-remount race between screenshots.
+    const ready = await context.newPage();
+    await open2048(ready, COLOR_BOARD);
+    await capture(ready, 'after-2048-ready-desktop.png', true);
+    await ready.close();
 
-    await open2048(page, MERGE_BOARD);
-    await page.keyboard.press('ArrowLeft');
-    await page.getByTestId('status').filter({ hasText: '进行中' }).waitFor();
-    await page.getByTestId('score').filter({ hasText: '60' }).waitFor();
-    await settle(page);
-    await capture(page, 'after-2048-playing-desktop.png', true);
+    const playing = await context.newPage();
+    await open2048(playing, MERGE_BOARD);
+    await playing.keyboard.press('ArrowLeft');
+    await playing.getByTestId('status').filter({ hasText: '进行中' }).waitFor();
+    await playing.getByTestId('score').filter({ hasText: '60' }).waitFor();
+    await settle(playing);
+    await capture(playing, 'after-2048-playing-desktop.png', true);
+    await playing.close();
 
-    await open2048(page, STUCK_BOARD);
-    await page.keyboard.press('ArrowLeft');
-    await page.getByTestId('overlay-title').filter({ hasText: '无路可走' }).waitFor();
-    await settle(page);
-    await capture(page, 'after-2048-gameover-desktop.png', true);
+    const over = await context.newPage();
+    await open2048(over, STUCK_BOARD);
+    await over.keyboard.press('ArrowLeft');
+    await over.getByTestId('overlay-title').filter({ hasText: '无路可走' }).waitFor();
+    await settle(over);
+    await capture(over, 'after-2048-gameover-desktop.png', true);
+    await over.close();
   }
 
   await context.close();
@@ -118,37 +130,49 @@ async function captureMobile(browser) {
     hasTouch: true,
     reducedMotion: 'reduce',
   });
-  const page = await context.newPage();
 
   if (MODE === 'before') {
-    await page.goto(`${BASE_URL}/`, { waitUntil: 'networkidle' });
-    await settle(page);
-    await capture(page, 'before-2048-hub-mobile.png', false);
+    const hub = await context.newPage();
+    await hub.goto(`${BASE_URL}/`, { waitUntil: 'networkidle' });
+    await settle(hub);
+    await capture(hub, 'before-2048-hub-mobile.png', false);
+    await hub.close();
 
-    await page.goto(`${BASE_URL}/#/games/2048`, { waitUntil: 'networkidle' });
-    await page.getByText('没有找到这个游戏').waitFor();
-    await settle(page);
-    await capture(page, 'before-2048-route-mobile.png', false);
+    const route = await context.newPage();
+    await route.goto(`${BASE_URL}/#/games/2048`, { waitUntil: 'networkidle' });
+    await route.getByText('没有找到这个游戏').waitFor();
+    await settle(route);
+    await capture(route, 'before-2048-route-mobile.png', false);
+    await route.close();
   } else {
-    await page.goto(`${BASE_URL}/`, { waitUntil: 'networkidle' });
-    await page.getByTestId('game-card-2048').waitFor();
-    await settle(page);
-    await capture(page, 'after-hub-mobile.png', false);
+    const hub = await context.newPage();
+    await hub.goto(`${BASE_URL}/`, { waitUntil: 'networkidle' });
+    await hub.getByTestId('game-card-2048').waitFor();
+    await settle(hub);
+    await capture(hub, 'after-hub-mobile.png', false);
+    await hub.close();
 
-    await open2048(page, COLOUR_BOARD);
-    await capture(page, 'after-2048-ready-mobile.png', false);
+    const ready = await context.newPage();
+    await open2048(ready, COLOR_BOARD);
+    await capture(ready, 'after-2048-ready-mobile.png', false);
+    await ready.close();
 
-    await open2048(page, MERGE_BOARD);
-    await page.keyboard.press('ArrowLeft');
-    await page.getByTestId('status').filter({ hasText: '进行中' }).waitFor();
-    await settle(page);
-    await capture(page, 'after-2048-playing-mobile.png', false);
+    const playing = await context.newPage();
+    await open2048(playing, MERGE_BOARD);
+    await playing.keyboard.press('ArrowLeft');
+    await playing.getByTestId('status').filter({ hasText: '进行中' }).waitFor();
+    await playing.getByTestId('score').filter({ hasText: '60' }).waitFor();
+    await settle(playing);
+    await capture(playing, 'after-2048-playing-mobile.png', false);
+    await playing.close();
 
-    await open2048(page, STUCK_BOARD);
-    await page.keyboard.press('ArrowLeft');
-    await page.getByTestId('overlay-title').filter({ hasText: '无路可走' }).waitFor();
-    await settle(page);
-    await capture(page, 'after-2048-gameover-mobile.png', false);
+    const over = await context.newPage();
+    await open2048(over, STUCK_BOARD);
+    await over.keyboard.press('ArrowLeft');
+    await over.getByTestId('overlay-title').filter({ hasText: '无路可走' }).waitFor();
+    await settle(over);
+    await capture(over, 'after-2048-gameover-mobile.png', false);
+    await over.close();
   }
 
   await context.close();

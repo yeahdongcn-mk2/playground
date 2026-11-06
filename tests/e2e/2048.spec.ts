@@ -18,15 +18,15 @@ import {
   startGame,
 } from './2048-helpers';
 
-/** Ready board with empty cells and all four low tile colours. */
-const COLOUR_BOARD = [
+/** Ready board with empty cells and all four low tile colors. */
+const COLOR_BOARD = [
   [2, 2, 4, 4],
   [8, 8, 16, 16],
   [null, null, null, null],
   [null, null, null, null],
 ] as const;
 
-const TILE_COLOURS = [
+const TILE_COLORS = [
   '226,232,240', // 2
   '203,213,225', // 4
   '251,191,36', // 8
@@ -141,15 +141,15 @@ test.describe('2048 gameplay', () => {
 
 test.describe('2048 rendering and teardown', () => {
   test('draws the board and tiles on the Phaser canvas', async ({ page }) => {
-    await open2048(page, { board: COLOUR_BOARD });
+    await open2048(page, { board: COLOR_BOARD, renderer: 'canvas' });
     await expect(page.getByTestId('status')).toHaveText('准备开始');
 
     const ready = await readCanvasColorCounts(page);
     // scene.draw() paints the frame, board, empty cells and tile fills. If
-    // draw() is removed the Phaser canvas only keeps its flat clear colour,
+    // draw() is removed the Phaser canvas only keeps its flat clear color,
     // so every count below drops to zero.
-    for (const colour of TILE_COLOURS) {
-      expect(ready[colour] ?? 0, `canvas should draw tile colour ${colour}`).toBeGreaterThan(
+    for (const color of TILE_COLORS) {
+      expect(ready[color] ?? 0, `canvas should draw tile color ${color}`).toBeGreaterThan(
         2_000,
       );
     }
@@ -159,7 +159,7 @@ test.describe('2048 rendering and teardown', () => {
     );
 
     const signature = (counts: Record<string, number>): string =>
-      TILE_COLOURS.map((colour) => String(counts[colour] ?? 0)).join('|');
+      TILE_COLORS.map((color) => String(counts[color] ?? 0)).join('|');
     const before = signature(ready);
 
     // A merge changes the engine state and must also repaint the canvas.
@@ -181,7 +181,13 @@ test.describe('2048 rendering and teardown', () => {
     await expect(page.getByTestId('status')).toHaveText('进行中');
     await expect(page.getByTestId('overlay')).toBeHidden();
     await expect(page.getByTestId('score')).toHaveText('0');
-    expect((await readState(page)).status).toBe('playing');
+    const state = await readState(page);
+    expect(state.status).toBe('playing');
+    // Both start and restart keep the fixed debug board, so the live region is
+    // what distinguishes them: startRun announces "游戏开始" while a restart
+    // would announce "游戏重新开始".
+    await expect(page.getByTestId('announcer')).toHaveText('游戏开始');
+    expect(state.board).toEqual(MERGE_BOARD.map((row) => [...row]));
   });
 
   test('releases keyboard, visibility, pointer listeners and the ready timer', async ({
@@ -217,12 +223,20 @@ test.describe('2048 rendering and teardown', () => {
     await expect.poll(() => listenerCount(page, 'stage', 'pointerup')).toBe(0);
     expect(await pendingLongTimerCount(page)).toBe(0);
 
-    // The route remains usable and a second mount/teardown stays clean.
+    // The route remains usable and a second normal mount/teardown stays clean.
     await page.getByRole('link', { name: /返回大厅/ }).click();
     await expect(page.getByTestId('game-card-2048')).toBeVisible();
     await open2048(page, { board: MERGE_BOARD });
+    await trackProbeTarget(page, 'stage', '[data-testid="2048-stage"]');
     await page.getByRole('link', { name: /返回大厅/ }).click();
     await expect(page.getByTestId('game-card-2048')).toBeVisible();
     await expect(page.locator('canvas')).toHaveCount(0);
+    await expect.poll(() => listenerCount(page, 'window', 'keydown')).toBe(baselineKeydown);
+    await expect
+      .poll(() => listenerCount(page, 'document', 'visibilitychange'))
+      .toBe(baselineVisibility);
+    await expect.poll(() => listenerCount(page, 'stage', 'pointerdown')).toBe(0);
+    await expect.poll(() => listenerCount(page, 'stage', 'pointerup')).toBe(0);
+    expect(await pendingLongTimerCount(page)).toBe(0);
   });
 });

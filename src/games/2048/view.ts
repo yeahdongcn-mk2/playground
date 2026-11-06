@@ -174,6 +174,14 @@ function debugParams(): URLSearchParams {
   );
 }
 
+/** Force the canvas renderer only when a test asks for it explicitly. */
+function debugRenderer(): 'canvas' | undefined {
+  if (!debugEnabled()) {
+    return undefined;
+  }
+  return debugParams().get('renderer') === 'canvas' ? 'canvas' : undefined;
+}
+
 function debugEngineOptions(): Pick<Game2048Options, 'initialBoard'> {
   if (!debugEnabled()) {
     return {};
@@ -499,6 +507,7 @@ export async function mount2048(
       scene,
       ariaLabel: '2048 棋盘',
       activePointers: 2,
+      renderer: debugRenderer(),
     });
 
     await waitForReady(ready, mountSignal);
@@ -562,7 +571,6 @@ export async function mount2048(
     document.removeEventListener('visibilitychange', onVisibilityChange);
     mountSignal.removeEventListener('abort', onMountAbort);
     controller.abort();
-    window.clearTimeout(readyTimer);
     const debug = debugWindow();
     if (debug.__playground?.gameId === '2048') {
       delete debug.__playground;
