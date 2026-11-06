@@ -1,0 +1,26 @@
+# Baseline pre-commit checks shared by local contributors and CI.
+#
+# Usage:
+#   pip install pre-commit   (or: pipx install pre-commit)
+#   pre-commit install
+#   pre-commit run --all-files
+#
+# The hook repository is pinned to a stable release; bump `rev` deliberately.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-added-large-files
+        # The repository intentionally stores four UI screenshots between
+        # ~1.56 MB and ~2.33 MB under docs/screenshots/. The hook's default
+        # 500 KB limit would reject those existing files on every commit.
+        # Instead of excluding docs/screenshots/ wholesale (which would also
+        # hide accidentally committed giant captures), the ceiling is raised
+        # to 4 MB: enough headroom for current documentation evidence, while
+        # still catching abnormal binaries (current largest is ~2.33 MB).
+        # `--enforce-all` makes `pre-commit run --all-files` (and CI) inspect
+        # every tracked file, not just files staged as additions.
+        args: ['--maxkb=4096', '--enforce-all']
+      - id: check-merge-conflict
