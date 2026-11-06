@@ -13,6 +13,7 @@ import {
   NEAR_STUCK_BOARD,
   open2048,
   readCanvasColorCounts,
+  readCanvasPixelCount,
   readState,
   readStatus,
   startGame,
@@ -49,7 +50,7 @@ test.describe('2048 gameplay', () => {
     await expect(page.locator('[data-testid="2048-board"] canvas')).toBeVisible();
     await expect(page.getByTestId('overlay-title')).toHaveText('合并出 2048');
     await expect(page.getByTestId('status')).toHaveText('准备开始');
-    // The normal entry must not install the read-only debug seam.
+    // The normal entry must not install the debug seam.
     expect(
       await page.evaluate(
         () => (window as unknown as { __playground?: unknown }).__playground,
@@ -144,18 +145,21 @@ test.describe('2048 rendering and teardown', () => {
     await open2048(page, { board: COLOR_BOARD, renderer: 'canvas' });
     await expect(page.getByTestId('status')).toHaveText('准备开始');
 
+    const area = await readCanvasPixelCount(page);
+    const share = (counts: Record<string, number>, color: string): number =>
+      (counts[color] ?? 0) / area;
     const ready = await readCanvasColorCounts(page);
     // scene.draw() paints the frame, board, empty cells and tile fills. If
     // draw() is removed the Phaser canvas only keeps its flat clear color,
-    // so every count below drops to zero.
+    // so every share below drops to zero.
     for (const color of TILE_COLORS) {
-      expect(ready[color] ?? 0, `canvas should draw tile color ${color}`).toBeGreaterThan(
-        2_000,
+      expect(share(ready, color), `canvas should draw tile color ${color}`).toBeGreaterThan(
+        0.01,
       );
     }
-    expect(ready['17,29,48'] ?? 0, 'canvas should draw empty cells').toBeGreaterThan(10_000);
-    expect(ready['10,19,34'] ?? 0, 'canvas should draw the board background').toBeGreaterThan(
-      10_000,
+    expect(share(ready, '17,29,48'), 'canvas should draw empty cells').toBeGreaterThan(0.05);
+    expect(share(ready, '10,19,34'), 'canvas should draw the board background').toBeGreaterThan(
+      0.03,
     );
 
     const signature = (counts: Record<string, number>): string =>
@@ -169,6 +173,17 @@ test.describe('2048 rendering and teardown', () => {
     await expect
       .poll(async () => signature(await readCanvasColorCounts(page)))
       .not.toBe(before);
+    const after = await readCanvasColorCounts(page);
+    // The merged 8/16/32 tiles must be on the canvas, so a repaint that just
+    // clears the frame cannot satisfy the check above.
+    for (const color of ['251,191,36', '245,158,11', '249,115,22']) {
+      expect(share(after, color), `canvas should draw merged tile ${color}`).toBeGreaterThan(
+        0.005,
+      );
+    }
+    expect(share(after, '17,29,48'), 'canvas should still draw empty cells').toBeGreaterThan(
+      0.05,
+    );
   });
 
   test('R starts the game from READY instead of being a no-op', async ({ page }) => {

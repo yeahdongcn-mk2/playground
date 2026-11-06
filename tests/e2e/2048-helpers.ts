@@ -132,3 +132,16 @@ export async function destroyDebugGame(page: Page): Promise<void> {
     api.destroy();
   });
 }
+
+/** Number of pixels in the Phaser canvas backing store. */
+export async function readCanvasPixelCount(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const canvas = document.querySelector<HTMLCanvasElement>(
+      '[data-testid="2048-board"] canvas',
+    );
+    if (!canvas) {
+      throw new Error('2048 canvas is missing');
+    }
+    return canvas.width * canvas.height;
+  });
+}

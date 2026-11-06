@@ -572,7 +572,8 @@ export async function mount2048(
     mountSignal.removeEventListener('abort', onMountAbort);
     controller.abort();
     const debug = debugWindow();
-    if (debug.__playground?.gameId === '2048') {
+    const api = debug.__playground;
+    if (api?.gameId === '2048' && api.destroy === destroy) {
       delete debug.__playground;
     }
     activeRuntime.destroy();

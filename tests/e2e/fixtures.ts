@@ -188,14 +188,20 @@ export async function installListenerProbe(page: Page): Promise<void> {
             entry.capture === capture,
         );
         if (!existing) {
-          const entry: Entry = { target: this, type, listener, capture };
-          entries.add(entry);
           const signal =
             typeof options === 'object' && options !== null ? options.signal : undefined;
-          if (signal) {
-            // The browser drops signal-bound listeners without calling
-            // removeEventListener, so mirror that here.
-            nativeAdd.call(signal, 'abort', () => entries.delete(entry), { once: true });
+          if (!signal?.aborted) {
+            const entry: Entry = { target: this, type, listener, capture };
+            entries.add(entry);
+            if (signal) {
+              // The browser drops signal-bound listeners without calling
+              // removeEventListener, so mirror that here.
+              nativeAdd.call(signal, 'abort', () => entries.delete(entry), { once: true });
+            }
+            if (typeof options === 'object' && options !== null && options.once) {
+              // Match the browser: a once listener is gone after it fires.
+              nativeAdd.call(this, type, () => entries.delete(entry), { capture, once: true });
+            }
           }
         }
       }
@@ -223,8 +229,17 @@ export async function installListenerProbe(page: Page): Promise<void> {
       timeout?: number,
       ...args: unknown[]
     ): number => {
-      const id = nativeSetTimeout(handler, timeout, ...args);
-      if (typeof timeout === 'number' && timeout >= 1_000) {
+      const isLong = typeof timeout === 'number' && timeout >= 1_000;
+      let id = 0;
+      const callback: TimerHandler =
+        isLong && typeof handler === 'function'
+          ? (...callbackArgs: unknown[]): void => {
+              longTimers.delete(id);
+              (handler as (...callbackArgs: unknown[]) => void)(...callbackArgs);
+            }
+          : handler;
+      id = nativeSetTimeout(callback, timeout, ...args);
+      if (isLong) {
         longTimers.add(id);
       }
       return id;
