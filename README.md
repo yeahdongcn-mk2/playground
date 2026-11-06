@@ -23,7 +23,7 @@
 - **完整可玩俄罗斯方块**：10×20 棋盘，七种方块（I / O / T / S / Z / J / L）、旋转与踢墙、左右移动、加速下落、消行计分、等级加速；堆顶结束，支持暂停 / 重开；键盘与移动端触屏按钮都能玩。
 - **完整可玩 2048**：4×4 棋盘，方向键 / WASD 或触屏滑动合并相同数字，合并计分并生成新方块；无路可走时结束，支持重开与最高分；键盘与触屏都能玩。
 - **完整可玩打砖块**：480×720 逻辑球场，10 列砖块按 4 档配色，移动挡板接球、击碎砖块计分；漏球扣命，三条命用完结束；每过一关砖块更多、球速更快；键盘、鼠标与触屏都能玩。
-- **完整可玩扫雷**：9×9 棋盘、10 颗雷，左键翻开、右键插旗；第一次翻开总是安全的，踩雷结束，翻开全部安全格获胜；剩余雷数与用时实时显示，支持重开与返回大厅。
+- **完整可玩扫雷**：9×9 棋盘、10 颗雷，左键翻开、右键插旗，触屏轻点翻开、长按插旗；第一次翻开总是安全的，踩雷结束，翻开全部安全格获胜；剩余雷数与用时实时显示，支持重开与返回大厅。
 - **可交互空白游戏**：方向键 / WASD、鼠标点击拖动、触屏点击拖动都能移动光标；重置位置、返回大厅、页面隐藏自动休眠。
 - **工程化**：TypeScript strict、oxlint + 模块边界检查、Vitest 单元测试、Playwright 桌面与手机端到端测试，以及按同样顺序执行检查的 GitHub Actions CI。
 
@@ -159,10 +159,14 @@ npm run dev
 | --- | --- |
 | 左键点击格子 | 翻开格子；点已翻开的格子无效果 |
 | 右键点击格子 | 插旗 / 取消旗，并阻止浏览器右键菜单 |
+| 触屏轻点格子 | 翻开格子；一次轻点只产生一次翻开 |
+| 触屏长按格子（约 0.5 秒） | 插旗 / 取消旗；长按期间移动超过阈值、滚动或指针取消都会放弃本次长按，避免误触 |
 | 「重开」/「再来一局」 | 重新开始整局 |
 | 「返回大厅」 | 回到首页 |
 
 扫雷用原生 DOM 网格渲染（`engine: 'dom'`），不加载 Phaser；它同样通过 hash 路由后的 query `?debug=1`（例如 `/#/games/minesweeper?debug=1`）安装调试接缝：只读状态、用 `mines=row,col;...` 固定雷盘（分号分隔单元格）、`seed` 固定随机数，以及 e2e 专用的 `destroy()` 销毁入口。正常入口不显示调试 UI，也不暴露调试 API。
+
+触屏长按会抑制浏览器上下文菜单和文本选择，棋盘与格子也设置了 `touch-action: manipulation` 与 `user-select: none`；手机视口下 HUD、返回大厅和棋盘旁的重开入口都保持可见，页面不会横向滚动。
 
 ## 空白画布
 
@@ -190,8 +194,9 @@ npm run dev
 | `npm run screenshots:2048:before` | 用 `BASE_URL` 指定的 main 预览生成 2048 Before 截图 |
 | `npm run screenshots:breakout` | 构建后生成打砖块大厅与 ready / playing / levelclear / gameover 截图 |
 | `npm run screenshots:breakout:before` | 用 `BASE_URL` 指定的 main 预览生成打砖块 Before 截图 |
-| `npm run screenshots:minesweeper` | 构建后生成扫雷大厅与 ready / playing / lost / won 截图 |
+| `npm run screenshots:minesweeper` | 构建后生成扫雷大厅、桌面玩法与 Pixel 7 手机玩法截图 |
 | `npm run screenshots:minesweeper:before` | 用 `BASE_URL` 指定的 main 预览生成扫雷 Before 截图 |
+| `npm run screenshots:minesweeper:touch-before` | 用 `BASE_URL` 指定的触屏改动前基线生成手机扫雷 Before 截图 |
 
 首次运行端到端测试前需要安装浏览器：
 
@@ -254,7 +259,7 @@ src/
     minesweeper/
       engine.ts            纯规则引擎（布雷 / 翻开 / 插旗 / 计时 / 状态机）
       engine.test.ts       Vitest 单元测试
-      view.ts              DOM 网格、HUD、结束遮罩、左右键与测试接缝
+      view.ts              DOM 网格、HUD、结束遮罩、左右键 / 触屏与测试接缝
       index.ts             GameModule 元数据与懒加载入口
       minesweeper.css      游戏页样式（随游戏 chunk 加载）
     blank/                 空白游戏示例（元数据、Phaser 场景、DOM 外壳）
