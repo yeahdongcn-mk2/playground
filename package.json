@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Reusable web game shell with a Phaser 2D adapter and an interactive blank game.",
+  "description": "Reusable web game shell with lazily loaded Phaser 2D games: Snake, Tetris, 2048 and Breakout.",
   "engines": {
     "node": "^22.12.0 || ^24.0.0 || >=26.0.0"
   },
@@ -20,6 +20,8 @@
     "screenshots:snake": "node scripts/capture-snake-screenshots.mjs",
     "screenshots:2048": "npm run build && node scripts/capture-2048-screenshots.mjs",
     "screenshots:2048:before": "node scripts/capture-2048-screenshots.mjs --before",
+    "screenshots:breakout": "npm run build && node scripts/capture-breakout-screenshots.mjs",
+    "screenshots:breakout:before": "node scripts/capture-breakout-screenshots.mjs --before",
     "screenshots:baseline": "node scripts/capture-baseline.mjs",
     "lint": "oxlint src tests && node scripts/check-boundaries.mjs",
     "check:budget": "node scripts/check-budget.mjs"

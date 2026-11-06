@@ -1,0 +1,245 @@
+/* Breakout game view. Loaded with the game chunk, not the hub shell. */
+
+.breakout-game {
+  padding-bottom: 40px;
+}
+
+.breakout-hud {
+  display: flex;
+  gap: 8px;
+}
+
+.breakout-stat {
+  display: flex;
+  min-width: 78px;
+  flex-direction: column;
+  gap: 1px;
+  padding: 8px 13px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(6, 11, 19, 0.6);
+}
+
+.breakout-stat dt {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.breakout-stat dd {
+  color: var(--text);
+  font-size: 1.24rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+.breakout-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 560px) 300px;
+  justify-content: center;
+  gap: 18px;
+  align-items: start;
+}
+
+.breakout-main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.breakout-stage {
+  position: relative;
+  width: min(100%, clamp(240px, 44dvh, 430px));
+  aspect-ratio: 2 / 3;
+  margin-inline: auto;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-deep);
+  box-shadow:
+    inset 0 0 70px rgba(2, 6, 12, 0.6),
+    0 40px 90px -58px rgba(34, 211, 238, 0.36);
+  isolation: isolate;
+  touch-action: none;
+}
+
+.breakout-board {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  touch-action: none;
+}
+
+.breakout-board canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.breakout-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: radial-gradient(
+    circle at 50% 38%,
+    rgba(10, 18, 32, 0.5),
+    rgba(4, 8, 16, 0.9)
+  );
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+}
+
+.breakout-overlay[hidden] {
+  display: none;
+}
+
+.breakout-overlay-card {
+  width: 100%;
+  max-width: 320px;
+  padding: 26px 22px;
+  border: 1px solid rgba(34, 211, 238, 0.26);
+  border-radius: 22px;
+  background: linear-gradient(160deg, rgba(16, 35, 52, 0.96), rgba(8, 13, 24, 0.98));
+  box-shadow: 0 34px 70px -34px rgba(0, 0, 0, 0.95);
+  text-align: center;
+}
+
+.breakout-overlay-card .panel-kicker {
+  justify-content: center;
+  color: var(--cyan-bright);
+}
+
+.breakout-overlay-card h2 {
+  margin: 10px 0 8px;
+  font-size: 1.5rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.breakout-overlay-body {
+  color: var(--muted);
+  font-size: 0.86rem;
+  line-height: 1.65;
+}
+
+.breakout-overlay-score {
+  margin-top: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.breakout-overlay-card .button {
+  width: 100%;
+  margin-top: 18px;
+}
+
+.breakout-touch-hint {
+  display: none;
+  margin-top: 12px;
+  color: var(--dim);
+  font-size: 0.78rem;
+  text-align: center;
+}
+
+.breakout-panel {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.breakout-panel .panel-actions {
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.breakout-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.breakout-row strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.breakout-hint {
+  padding: 0 4px;
+  color: var(--dim);
+  font-size: 0.74rem;
+  line-height: 1.65;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .breakout-touch-hint {
+    display: block;
+  }
+}
+
+@media (max-width: 1080px) {
+  .breakout-layout {
+    grid-template-columns: minmax(0, 1fr) 288px;
+  }
+}
+
+@media (max-width: 860px) {
+  .breakout-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .breakout-hud {
+    grid-column: 1 / -1;
+  }
+
+  .breakout-stage {
+    width: min(100%, clamp(240px, 46dvh, 420px));
+  }
+
+  .breakout-touch-hint {
+    display: block;
+  }
+
+  .breakout-panel {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .breakout-hint {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 560px) {
+  .breakout-hud {
+    gap: 6px;
+  }
+
+  .breakout-stat {
+    min-width: 0;
+    flex: 1;
+    padding: 7px 10px;
+  }
+
+  .breakout-stat dd {
+    font-size: 1.06rem;
+  }
+
+  .breakout-overlay-card {
+    padding: 20px 16px;
+  }
+
+  .breakout-overlay-card h2 {
+    font-size: 1.3rem;
+  }
+
+  .breakout-panel {
+    grid-template-columns: 1fr;
+  }
+}
