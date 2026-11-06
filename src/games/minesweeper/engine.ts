@@ -41,6 +41,9 @@ export interface MinesweeperCell extends Cell {
   readonly adjacentMines: number;
 }
 
+/** Immutable row-major board; rows are top to bottom, columns left to right. */
+export type MinesweeperBoard = readonly (readonly MinesweeperCell[])[];
+
 /** Immutable view of everything a renderer needs. */
 export interface MinesweeperSnapshot {
   readonly rows: number;
@@ -54,7 +57,7 @@ export interface MinesweeperSnapshot {
   readonly elapsedMs: number;
   /** The mine that ended the game, or null while playing. */
   readonly explodedCell: Cell | null;
-  readonly board: readonly (readonly MinesweeperCell[])[];
+  readonly board: MinesweeperBoard;
 }
 
 export interface MinesweeperOptions {

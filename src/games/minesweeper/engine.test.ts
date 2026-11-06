@@ -7,6 +7,7 @@ import {
   MinesweeperEngine,
   ROWS,
   type Cell,
+  type MinesweeperBoard,
   type MinesweeperCell,
   type MinesweeperOptions,
 } from './engine';
@@ -225,6 +226,50 @@ describe('first reveal', () => {
     expect(mineKeys(first)).toEqual(mineKeys(second));
     expect(first.state).toEqual(second.state);
   });
+
+  it('draws the mine layout from the injected random source', () => {
+    let calls = 0;
+    const engine = new MinesweeperEngine({
+      rng: () => {
+        calls += 1;
+        return 0;
+      },
+    });
+    // Lazy placement: construction and flagging must not consume randomness.
+    expect(calls).toBe(0);
+    engine.toggleFlag(0, 0);
+    expect(calls).toBe(0);
+
+    engine.reveal(4, 4);
+    expect(calls).toBe(MINE_COUNT);
+
+    const low = new MinesweeperEngine({ rng: () => 0 });
+    const high = new MinesweeperEngine({ rng: () => 1 - Number.EPSILON });
+    low.reveal(4, 4);
+    high.reveal(4, 4);
+    expect(mineKeys(low)).not.toEqual(mineKeys(high));
+  });
+
+  it('clamps out-of-range and non-finite random values', () => {
+    const engines = {
+      // `roll()` maps a broken source to 0.5.
+      broken: new MinesweeperEngine({ rng: () => Number.NaN }),
+      half: new MinesweeperEngine({ rng: () => 0.5 }),
+      // `roll()` clamps negatives to 0 and values above 1 to just below 1.
+      negative: new MinesweeperEngine({ rng: () => -5 }),
+      zero: new MinesweeperEngine({ rng: () => 0 }),
+      aboveOne: new MinesweeperEngine({ rng: () => 5 }),
+      belowOne: new MinesweeperEngine({ rng: () => 1 - Number.EPSILON }),
+    };
+    for (const engine of Object.values(engines)) {
+      expect(engine.reveal(4, 4).hitMine).toBe(false);
+      expect(mineCells(engine)).toHaveLength(MINE_COUNT);
+    }
+
+    expect(mineKeys(engines.broken)).toEqual(mineKeys(engines.half));
+    expect(mineKeys(engines.negative)).toEqual(mineKeys(engines.zero));
+    expect(mineKeys(engines.aboveOne)).toEqual(mineKeys(engines.belowOne));
+  });
 });
 
 describe('numbers and flood fill', () => {
@@ -251,6 +296,20 @@ describe('numbers and flood fill', () => {
     expect(boardCell(engine, 3, 4).revealed).toBe(true);
     expect(boardCell(engine, 4, 4).mine).toBe(true);
     expect(boardCell(engine, 4, 4).revealed).toBe(false);
+  });
+
+  it('reveals only the numbered cell when the cascade stops there', () => {
+    const engine = makeEngine({ initialMines: WALL_MINES });
+    engine.reveal(0, 0);
+
+    const result = engine.reveal(8, 7);
+
+    expect(result.hitMine).toBe(false);
+    expect(result.revealed).toEqual([{ row: 8, col: 7 }]);
+    expect(boardCell(engine, 8, 7)).toMatchObject({ revealed: true, adjacentMines: 1 });
+    // Numbered cells do not cascade into their hidden neighbours.
+    expect(boardCell(engine, 7, 7)).toMatchObject({ revealed: false });
+    expect(boardCell(engine, 8, 6)).toMatchObject({ revealed: false });
   });
 
   it('does not flood through flagged cells', () => {
@@ -346,6 +405,7 @@ describe('losing', () => {
     expect(boardCell(engine, 3, 3)).toMatchObject({
       mine: true,
       revealed: true,
+      adjacentMines: 0,
     });
 
     expect(engine.tick(10_000)).toBe(1500);
@@ -377,6 +437,29 @@ describe('winning', () => {
     expect(engine.tick(500)).toBe(1000);
     expect(engine.reveal(3, 3).revealed).toEqual([]);
     expect(engine.toggleFlag(8, 0).changed).toBe(false);
+  });
+
+  it('does not win while a safe cell is still flagged and hidden', () => {
+    const engine = makeEngine({ initialMines: RING_MINES });
+    expect(engine.toggleFlag(8, 8).changed).toBe(true);
+    engine.reveal(0, 0);
+
+    for (let row = 0; row < ROWS; row += 1) {
+      for (let col = 0; col < COLS; col += 1) {
+        const cell = boardCell(engine, row, col);
+        if (!cell.mine && !cell.flagged && !cell.revealed) {
+          engine.reveal(row, col);
+        }
+      }
+    }
+
+    // Every other safe cell is open, but the flag still hides one of them.
+    expect(engine.state.status).toBe('playing');
+    expect(boardCell(engine, 8, 8)).toMatchObject({ revealed: false, flagged: true });
+
+    engine.toggleFlag(8, 8);
+    expect(engine.reveal(8, 8).status).toBe('won');
+    expect(engine.state.status).toBe('won');
   });
 });
 
@@ -470,6 +553,30 @@ describe('snapshots', () => {
     expect(engine.state.board).toEqual(original);
     expect(boardCell(engine, 0, 1)).toMatchObject({ mine: false, revealed: false });
   });
+
+  it('copies the exploded cell so callers cannot rewrite the loss', () => {
+    const engine = makeEngine({ initialMines: RING_MINES });
+    engine.reveal(0, 0);
+    engine.reveal(3, 3);
+
+    const exploded = engine.state.explodedCell as unknown as
+      | { row: number; col: number }
+      | null;
+    if (exploded) {
+      exploded.row = 8;
+      exploded.col = 8;
+    }
+
+    expect(engine.state.explodedCell).toEqual({ row: 3, col: 3 });
+  });
+
+  it('exposes the board through the exported board type', () => {
+    const engine = makeEngine();
+    const board: MinesweeperBoard = engine.state.board;
+
+    expect(board).toHaveLength(ROWS);
+    expect(board[0]).toHaveLength(COLS);
+  });
 });
 
 describe('validation', () => {
@@ -496,6 +603,30 @@ describe('validation', () => {
           initialMines: [...RING_MINES.slice(0, 9), { row: ROWS, col: 0 }],
         }),
     ).toThrow(RangeError);
+  });
+
+  it('does not mutate caller-provided mine layouts', () => {
+    const safeLayout: Cell[] = RING_MINES.map((cell) => ({ ...cell }));
+    const safeCopy = safeLayout.map((cell) => ({ ...cell }));
+    const safeEngine = makeEngine({ initialMines: safeLayout });
+    safeEngine.reveal(0, 0);
+    expect(safeLayout).toEqual(safeCopy);
+
+    // Every injected mine sits inside the first-click safe zone, so all of them
+    // are relocated; the caller's array must stay untouched.
+    const overlapping: Cell[] = [
+      ...RING_MINES.slice(0, 6),
+      { row: 4, col: 4 },
+      { row: 0, col: 0 },
+      { row: 0, col: 1 },
+      { row: 1, col: 1 },
+    ];
+    const overlappingCopy = overlapping.map((cell) => ({ ...cell }));
+    const relocated = makeEngine({ initialMines: overlapping });
+    relocated.reveal(4, 4);
+
+    expect(mineCells(relocated)).toHaveLength(MINE_COUNT);
+    expect(overlapping).toEqual(overlappingCopy);
   });
 
   it('accepts boundary coordinates', () => {
