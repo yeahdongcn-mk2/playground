@@ -8,6 +8,8 @@ import { expect } from './fixtures';
 export interface OpenMinesweeperOptions {
   /** Fixed mine layout, e.g. `[{ row: 0, col: 0 }, ...]`. */
   readonly mines?: readonly Cell[];
+  /** Raw `mines=...` value, used to exercise malformed parser input. */
+  readonly rawMines?: string;
   /** Seed for the deterministic debug PRNG. */
   readonly seed?: number;
 }
@@ -53,16 +55,35 @@ export async function openMinesweeper(
       options.mines.map((mine) => `${mine.row},${mine.col}`).join(';'),
     );
   }
+  if (options.rawMines !== undefined) {
+    params.set('mines', options.rawMines);
+  }
   if (options.seed !== undefined) {
     params.set('seed', String(options.seed));
   }
 
+  // Mark the current debug API so the wait below cannot accept the previous
+  // mount's DOM after a hash-only goto (which does not reload the document).
+  await page.evaluate(() => {
+    const api = (window as unknown as { __playground?: { stale?: boolean } })
+      .__playground;
+    if (api) {
+      api.stale = true;
+    }
+  });
   await page.goto(`/#/games/minesweeper?${params.toString()}`);
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const api = (window as unknown as { __playground?: { stale?: boolean } })
+          .__playground;
+        return api !== undefined && api.stale !== true;
+      }),
+    )
+    .toBe(true);
   await expect(page.getByTestId('minesweeper-game')).toBeVisible();
   await expect(page.getByTestId('minesweeper-board')).toBeVisible();
   await expect(page.locator('[data-cell]')).toHaveCount(81);
-  // A hash-only goto also happens without a document reload; waiting for a
-  // ready HUD proves the previous game was torn down and a fresh one mounted.
   await expect(page.getByTestId('status')).toHaveText('待开始');
 }
 
@@ -98,13 +119,24 @@ export async function expectCleanBoard(page: Page): Promise<void> {
   await expect(page.locator('[data-revealed="true"]')).toHaveCount(0);
   await expect(page.locator('[data-number]')).toHaveCount(0);
   await expect(page.locator('[data-mine="true"]')).toHaveCount(0);
+  await expect
+    .poll(() =>
+      page.locator('[data-cell]').evaluateAll((cells) =>
+        cells
+          .map((cell) => (cell.textContent ?? '').trim())
+          .filter((text) => text.length > 0),
+      ),
+    )
+    .toEqual([]);
+}
+
+/** Assert the normal entry or a destroyed mount left no debug seam behind. */
+export async function expectNoDebugSeam(page: Page): Promise<void> {
   expect(
-    await page.locator('[data-cell]').evaluateAll((cells) =>
-      cells
-        .map((cell) => (cell.textContent ?? '').trim())
-        .filter((text) => text.length > 0),
+    await page.evaluate(
+      () => (window as unknown as { __playground?: unknown }).__playground,
     ),
-  ).toEqual([]);
+  ).toBeUndefined();
 }
 
 /** Call the debug-only destroy seam without changing the route. */
@@ -185,6 +217,12 @@ interface AbortProbeWindow {
  * Track active `abort` listeners added to `AbortSignal` instances. The view
  * registers one on the mount signal and must remove it on destroy; the shared
  * listener probe cannot identify a transient signal by selector.
+ *
+ * Install this after `installListenerProbe`: it layers on the current
+ * `addEventListener`, and the listener probe's own signal-bound cleanup would
+ * otherwise be counted. Duplicate registrations of one listener on one signal
+ * are counted once, and already-aborted signals are skipped because their
+ * listeners can never fire.
  */
 export async function installAbortProbe(page: Page): Promise<void> {
   await page.addInitScript(() => {
@@ -205,18 +243,25 @@ export async function installAbortProbe(page: Page): Promise<void> {
       options?: boolean | AddEventListenerOptions,
     ): void {
       if (listener && isAbortListener(this, type)) {
-        active += 1;
-        let signalTrackers = trackers.get(this as AbortSignal);
-        if (!signalTrackers) {
-          signalTrackers = new Map();
-          trackers.set(this as AbortSignal, signalTrackers);
+        const signal = this as AbortSignal;
+        if (!signal.aborted) {
+          let signalTrackers = trackers.get(signal);
+          if (!signalTrackers) {
+            signalTrackers = new Map();
+            trackers.set(signal, signalTrackers);
+          }
+          if (!signalTrackers.has(listener)) {
+            const signalMap = signalTrackers;
+            const tracker = (): void => {
+              if (signalMap.delete(listener)) {
+                active -= 1;
+              }
+            };
+            signalMap.set(listener, tracker);
+            active += 1;
+            nativeAdd.call(signal, 'abort', tracker, { once: true });
+          }
         }
-        const tracker = (): void => {
-          active = Math.max(0, active - 1);
-          signalTrackers.delete(listener);
-        };
-        signalTrackers.set(listener, tracker);
-        nativeAdd.call(this, 'abort', tracker, { once: true });
       }
       nativeAdd.call(this, type, listener, options);
     } as typeof EventTarget.prototype.addEventListener;
@@ -230,10 +275,10 @@ export async function installAbortProbe(page: Page): Promise<void> {
       if (listener && isAbortListener(this, type)) {
         const signalTrackers = trackers.get(this as AbortSignal);
         const tracker = signalTrackers?.get(listener);
-        if (tracker) {
-          signalTrackers?.delete(listener);
+        if (signalTrackers && tracker) {
+          signalTrackers.delete(listener);
           nativeRemove.call(this, 'abort', tracker);
-          active = Math.max(0, active - 1);
+          active -= 1;
         }
       }
       nativeRemove.call(this, type, listener, options);

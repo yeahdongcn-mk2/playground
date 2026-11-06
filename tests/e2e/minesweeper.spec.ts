@@ -4,6 +4,7 @@ import {
   activeIntervalCount,
   destroyDebugGame,
   expectCleanBoard,
+  expectNoDebugSeam,
   installAbortProbe,
   installIntervalProbe,
   LOSS_MINE_CLICK,
@@ -15,6 +16,7 @@ import {
   WIN_CLICK,
   WIN_MINES,
 } from './minesweeper-helpers';
+import type { MinesweeperSnapshot } from '../../src/games/minesweeper/engine';
 import {
   expect,
   installListenerProbe,
@@ -48,11 +50,7 @@ test.describe('minesweeper gameplay', () => {
     await expect(page.getByTestId('status')).toHaveText('待开始');
     await expect(page.getByTestId('overlay')).toBeHidden();
     // The normal entry must not install the debug seam.
-    expect(
-      await page.evaluate(
-        () => (window as unknown as { __playground?: unknown }).__playground,
-      ),
-    ).toBeUndefined();
+    await expectNoDebugSeam(page);
 
     await page.getByRole('link', { name: /返回大厅/ }).click();
     await expect(page).toHaveURL(/#\/$/);
@@ -148,39 +146,33 @@ test.describe('minesweeper gameplay', () => {
       '0,0;0,1;0,2;0,3;0,4;0,5;0,6;0,7;0,8;9,0',
       '0,0;0,1;0,2;0,3;0,4;0,5;0,6;0,7;0,8;0,0,1',
     ];
-    const mineSignature = async (): Promise<string> =>
-      (await readState(page))
-        .board.flat()
+    const mineSignature = (state: MinesweeperSnapshot): string =>
+      state.board
+        .flat()
         .filter((cell) => cell.mine)
         .map((cell) => `${cell.row},${cell.col}`)
         .join(';');
 
     const signatures: string[] = [];
     for (const layout of malformedLayouts) {
-      await page.goto(
-        `/#/games/minesweeper?debug=1&mines=${encodeURIComponent(layout)}`,
-      );
-      await expect(page.getByTestId('minesweeper-game')).toBeVisible();
-      await expect(page.locator('[data-cell]')).toHaveCount(81);
-      // The hash-only navigation remounts without a document reload, so wait
-      // for the fresh ready HUD before clicking the new board.
-      await expect(page.getByTestId('status')).toHaveText('待开始');
+      await openMinesweeper(page, { rawMines: layout });
       // The first reveal is always safe, so it plants the fallback layout.
       await cellLocator(page, 8, 8).click();
       await expect(page.getByTestId('status')).toHaveText('进行中');
-      expect(await readState(page)).toMatchObject({ status: 'playing' });
-      expect((await readState(page)).board.flat().filter((cell) => cell.mine)).toHaveLength(
-        10,
-      );
-      signatures.push(await mineSignature());
+      const state = await readState(page);
+      expect(state.status).toBe('playing');
+      expect(state.board.flat().filter((cell) => cell.mine)).toHaveLength(10);
+      signatures.push(mineSignature(state));
     }
 
     // No layout parameter must use the same debug seed and land on the same
-    // board as every rejected layout; the fixture also fails on page errors.
+    // board as every rejected layout. Uncaught page errors also fail this test
+    // through the shared fixture; a thrown mount surfaces as an assertion
+    // timeout because the app renders its route error instead.
     await openMinesweeper(page);
     await cellLocator(page, 8, 8).click();
     await expect(page.getByTestId('status')).toHaveText('进行中');
-    const fallbackSignature = await mineSignature();
+    const fallbackSignature = mineSignature(await readState(page));
     expect(signatures).toEqual(malformedLayouts.map(() => fallbackSignature));
   });
 
@@ -330,11 +322,7 @@ test.describe('minesweeper gameplay', () => {
     expect(await listenerCount(page, 'window', 'keydown')).toBe(baselineKeydown);
     // The mount-signal bridge is removed explicitly, and the debug seam is gone.
     await expect.poll(() => abortListenerCount(page)).toBe(baselineAbort);
-    expect(
-      await page.evaluate(
-        () => (window as unknown as { __playground?: unknown }).__playground,
-      ),
-    ).toBeUndefined();
+    await expectNoDebugSeam(page);
 
     // The route stays usable and a second normal mount/teardown is clean too.
     await page.getByRole('link', { name: /返回大厅/ }).click();
@@ -353,10 +341,6 @@ test.describe('minesweeper gameplay', () => {
     await expect.poll(() => listenerCount(page, 'board', 'contextmenu')).toBe(0);
     await expect.poll(() => abortListenerCount(page)).toBe(baselineAbort);
     expect(await listenerCount(page, 'window', 'keydown')).toBe(baselineKeydown);
-    expect(
-      await page.evaluate(
-        () => (window as unknown as { __playground?: unknown }).__playground,
-      ),
-    ).toBeUndefined();
+    await expectNoDebugSeam(page);
   });
 });
