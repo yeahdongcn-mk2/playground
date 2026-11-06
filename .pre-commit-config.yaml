@@ -24,3 +24,29 @@ repos:
         # every tracked file, not just files staged as additions.
         args: ['--maxkb=4096', '--enforce-all']
       - id: check-merge-conflict
+
+  # Secret scanning for every text file the hook receives. `pre-commit` passes
+  # each selected filename as an argument, so `pre-commit run --all-files`
+  # scans the whole tracked tree (not just staged changes), including a clean
+  # checkout.
+  #
+  # This hook stays local instead of using the upstream gitleaks/detect-secrets
+  # entries: gitleaks' default hook entry is `gitleaks git ... --staged`, which
+  # finds nothing in a clean checkout, and detect-secrets needs a Python
+  # environment that the Node-only unit test suite cannot exercise. The local
+  # entry is filename-based, uses the repository's existing Node runtime, and
+  # installs nothing extra. False positives are narrowed with `exclude` and
+  # `types`; the scan itself is never disabled.
+  - repo: local
+    hooks:
+      - id: secret-scan
+        name: scan text files for secrets
+        entry: node scripts/scan-secrets.mjs
+        language: system
+        # Known deterministic false positives: generated npm integrity hashes
+        # in the lockfile, and the binary PNG captures under docs/screenshots/.
+        # `types: [text]` already drops the PNGs; the explicit PNG exclude is a
+        # defensive backstop. Only these paths are narrowed, so text files in
+        # the docs tree (for example docs/screenshots/README.md) stay scanned.
+        types: [text]
+        exclude: '^(?:package-lock\.json|docs/screenshots/.*\.png)'
