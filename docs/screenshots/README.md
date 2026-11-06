@@ -5,7 +5,7 @@
 ## t6：扫雷（Issue #33 / 子任务 1）
 
 - Before 基线：main `cdd2200`（PR #35 合入扫雷规则引擎后、接入共享框架前的提交）。大厅还没有扫雷卡片，`#/games/minesweeper` 显示「没有找到这个游戏」。
-- After：分支 `agent/plan-33-t1`（按计划节点要求只推分支、不开 PR）。截图捕获于该分支实现完成后的工作树。
+- After：PR #36（分支 `agent/plan-33-t1`），截图捕获于提交 [`e75da7b`](https://github.com/yeahdongcn-mk2/playground/commit/e75da7bddb6172bd44b6ef7cd0edfb6911364258)。其后提交只更新本文档与测试，不改变界面。
 - 视口 / 主题：桌面 1440×1000、手机 390×844（DPR 2），深色主题，`reducedMotion: reduce`。桌面与手机大厅均为整页截图（`fullPage: true`），Before / After 用同一口径。
 - 生成：`npm run screenshots:minesweeper`（生产构建 + `vite preview`，固定雷盘走 `?debug=1&mines=row,col;...` 调试接缝）。
 - 复现 Before：在 `cdd2200` 的干净 worktree 里 `npm ci && npm run build`，用 `node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4187 --strictPort` 启动预览，然后在当前分支运行 `BASE_URL=http://127.0.0.1:4187 npm run screenshots:minesweeper:before`。
@@ -18,7 +18,7 @@
 | `before-minesweeper-hub-mobile.png` | main 大厅（手机） | 390×844（DPR 2）/ 深色 | 整页单列大厅，没有扫雷卡片。 |
 | `before-minesweeper-route-desktop.png` | main 访问 `#/games/minesweeper` | 1440×1000 / 深色 | 真实基线：扫雷未注册，显示「没有找到这个游戏」。 |
 
-### After（分支 `agent/plan-33-t1`）
+### After（PR #36，截图捕获于 `e75da7b`）
 
 `after-hub-desktop.png` / `after-hub-mobile.png` 已刷新为同时含贪食蛇、俄罗斯方块、2048、打砖块、扫雷与空白画布卡片的大厅（手机为整页截图）。
 
@@ -34,6 +34,7 @@
 ### 证据限制
 
 - main 没有扫雷页面，所以 Before 只能对比大厅（同一视口 / 主题）与真实未注册路由，不能与旧版扫雷页面逐像素对比。
+- After 大厅截图已在最终 head 重新生成：`7b2f05b` 的 hub 文案改动会让旧图过期，本次刷新后桌面大厅为 1440×3422；4 张游戏页截图重跑后逐字节一致。
 - 本子任务只做桌面输入与桌面 e2e；手机端只刷新大厅截图，不覆盖手机端扫雷玩法。
 - 手机端为 Playwright 设备模拟（390×844、DPR 2、触摸、大厅整页截图），不是真实设备截图。
 - 截图来自生产构建；交互行为另有桌面 e2e 验证，不依赖截图比对。
