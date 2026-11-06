@@ -38,7 +38,7 @@ export interface SpawnedTile extends Cell {
   readonly value: number;
 }
 
-/** Destination cell of one merge, useful for feedback and animation. */
+/** Destination cell and resulting value of one merge, for pop/score feedback. */
 export interface MergedTile extends Cell {
   readonly value: number;
 }
@@ -58,7 +58,8 @@ export interface Game2048Options {
   readonly fourChance?: number;
   /**
    * Exact starting position, primarily for tests and saved games. When present
-   * it is used verbatim and no random tiles are spawned; `initialTiles` is ignored.
+   * it is used verbatim and no random tiles are spawned; `initialTiles` has no
+   * effect on the starting tiles.
    */
   readonly initialBoard?: Board;
   /** Random tiles placed on an empty board by reset/restart. Defaults to 2. */
@@ -73,6 +74,8 @@ export interface MoveResult {
   /** Tile created after a valid move, or null when the move was a no-op. */
   readonly spawned: SpawnedTile | null;
   readonly mergedTiles: readonly MergedTile[];
+  /** True when the game is over after this move. */
+  readonly gameOver: boolean;
 }
 
 interface LineResult {
@@ -156,22 +159,34 @@ function cellAt(board: Board, row: number, col: number): BoardCell {
 }
 
 function isPowerOfTwo(value: number): boolean {
-  return value >= 2 && Number.isInteger(value) && Number.isInteger(Math.log2(value));
+  if (value < 2 || !Number.isInteger(value)) {
+    return false;
+  }
+  const exponent = Math.log2(value);
+  return Number.isInteger(exponent) && 2 ** exponent === value;
 }
 
 function validateBoard(board: Board): void {
   if (board.length !== BOARD_SIZE) {
     throw new RangeError(`Board must have ${BOARD_SIZE} rows.`);
   }
+  let tiles = 0;
   for (const row of board) {
     if (row.length !== BOARD_SIZE) {
       throw new RangeError(`Every row must have ${BOARD_SIZE} cells.`);
     }
     for (const value of row) {
-      if (value !== null && !isPowerOfTwo(value)) {
+      if (value === null) {
+        continue;
+      }
+      if (!isPowerOfTwo(value)) {
         throw new RangeError(`Invalid tile value: ${String(value)}.`);
       }
+      tiles += 1;
     }
+  }
+  if (tiles === 0) {
+    throw new RangeError('initialBoard must contain at least one tile.');
   }
 }
 
@@ -220,7 +235,7 @@ export class Game2048Engine {
 
   private tiles: BoardCell[][] = createEmptyBoard();
   private currentScore = 0;
-  private currentStatus: Game2048Status = 'playing';
+  private gameStatus: Game2048Status = 'playing';
 
   constructor(options: Game2048Options = {}) {
     this.rng = options.rng ?? Math.random;
@@ -233,10 +248,10 @@ export class Game2048Engine {
     }
     if (
       !Number.isInteger(this.initialTiles) ||
-      this.initialTiles < 0 ||
+      this.initialTiles < 1 ||
       this.initialTiles > BOARD_SIZE * BOARD_SIZE
     ) {
-      throw new RangeError(`initialTiles must be between 0 and ${BOARD_SIZE * BOARD_SIZE}.`);
+      throw new RangeError(`initialTiles must be between 1 and ${BOARD_SIZE * BOARD_SIZE}.`);
     }
     if (this.initialBoard) {
       validateBoard(this.initialBoard);
@@ -251,20 +266,23 @@ export class Game2048Engine {
       size: this.size,
       board: cloneBoard(this.tiles),
       score: this.currentScore,
-      status: this.currentStatus,
+      status: this.gameStatus,
     };
   }
 
+  /** Convenience copy of the board; state carries the same data plus status. */
   get board(): Board {
     return cloneBoard(this.tiles);
   }
 
+  /** Convenience accessor for the current score. */
   get score(): number {
     return this.currentScore;
   }
 
-  get status(): Game2048Status {
-    return this.currentStatus;
+  /** Status shortcut, named to match the snake and tetris engines. */
+  get currentStatus(): Game2048Status {
+    return this.gameStatus;
   }
 
   /** Reset score and tiles. A custom initialBoard is restored as given. */
@@ -277,13 +295,14 @@ export class Game2048Engine {
    * the board changed, add one random tile and refresh the game-over status.
    */
   move(direction: Direction): MoveResult {
-    if (this.currentStatus !== 'playing') {
+    if (this.gameStatus !== 'playing') {
       return {
         direction,
         moved: false,
         scoreGained: 0,
         spawned: null,
         mergedTiles: [],
+        gameOver: this.gameStatus === 'gameover',
       };
     }
 
@@ -324,21 +343,29 @@ export class Game2048Engine {
         scoreGained: 0,
         spawned: null,
         mergedTiles: [],
+        gameOver: false,
       };
     }
 
     this.currentScore += gained;
     const spawned = this.spawnTile();
     if (!canMove(this.tiles)) {
-      this.currentStatus = 'gameover';
+      this.gameStatus = 'gameover';
     }
-    return { direction, moved: true, scoreGained: gained, spawned, mergedTiles };
+    return {
+      direction,
+      moved: true,
+      scoreGained: gained,
+      spawned,
+      mergedTiles,
+      gameOver: this.gameStatus === 'gameover',
+    };
   }
 
   private reset(): void {
     this.tiles = this.initialBoard ? cloneBoard(this.initialBoard) : createEmptyBoard();
     this.currentScore = 0;
-    this.currentStatus = 'playing';
+    this.gameStatus = 'playing';
 
     if (!this.initialBoard) {
       for (let tile = 0; tile < this.initialTiles; tile += 1) {
@@ -346,7 +373,7 @@ export class Game2048Engine {
       }
     }
     if (!canMove(this.tiles)) {
-      this.currentStatus = 'gameover';
+      this.gameStatus = 'gameover';
     }
   }
 

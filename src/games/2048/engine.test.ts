@@ -7,6 +7,7 @@ import {
   Game2048Engine,
   type Board,
   type BoardCell,
+  type Direction,
   type Game2048Options,
   type SpawnedTile,
 } from './engine';
@@ -109,10 +110,35 @@ describe('fresh game', () => {
     ]);
   });
 
+  it('places a custom number of starting tiles on an empty board', () => {
+    const one = new Game2048Engine({ rng: createSeededRng(5), initialTiles: 1 });
+    const three = new Game2048Engine({ rng: createSeededRng(5), initialTiles: 3 });
+
+    expect(tileValues(one.board)).toHaveLength(1);
+    expect(tileValues(three.board)).toHaveLength(3);
+  });
+
   it('rejects invalid configuration instead of silently correcting it', () => {
     expect(() => new Game2048Engine({ fourChance: 1.5 })).toThrow(RangeError);
+    expect(() => new Game2048Engine({ initialTiles: 0 })).toThrow(RangeError);
     expect(() => new Game2048Engine({ initialTiles: 17 })).toThrow(RangeError);
     expect(() => new Game2048Engine({ initialBoard: boardFrom([[2]]) })).toThrow(RangeError);
+    expect(() =>
+      new Game2048Engine({
+        initialBoard: boardFrom([[3, null, null, null], EMPTY_ROW, EMPTY_ROW, EMPTY_ROW]),
+      }),
+    ).toThrow(RangeError);
+    // 2 ** 53 - 1 is not a power of two even though Math.log2 rounds it to 53.
+    expect(() =>
+      new Game2048Engine({
+        initialBoard: boardFrom([[2 ** 53 - 1, null, null, null], EMPTY_ROW, EMPTY_ROW, EMPTY_ROW]),
+      }),
+    ).toThrow(RangeError);
+    expect(() =>
+      new Game2048Engine({
+        initialBoard: boardFrom([EMPTY_ROW, EMPTY_ROW, EMPTY_ROW, EMPTY_ROW]),
+      }),
+    ).toThrow(RangeError);
   });
 });
 
@@ -133,6 +159,7 @@ describe('moving and merging', () => {
       direction: 'left',
       moved: true,
       scoreGained: 4,
+      gameOver: false,
     });
     expect(result.spawned).not.toBeNull();
     expect(result.mergedTiles).toEqual([{ row: 0, col: 0, value: 4 }]);
@@ -189,7 +216,14 @@ describe('moving and merging', () => {
     expect(column).toEqual([null, null, 4, 4]);
   });
 
-  it('accepts every direction for a tile in the middle', () => {
+  it('moves a centred tile to the destination edge of every direction', () => {
+    const destinations: Record<Direction, { row: number; col: number }> = {
+      up: { row: 0, col: 1 },
+      right: { row: 1, col: 3 },
+      down: { row: 3, col: 1 },
+      left: { row: 1, col: 0 },
+    };
+
     for (const direction of DIRECTIONS) {
       const engine = makeEngine({
         initialBoard: boardFrom([
@@ -201,10 +235,21 @@ describe('moving and merging', () => {
       });
 
       const result = engine.move(direction);
+      const clean = withoutSpawned(engine.board, result.spawned);
+      const tiles: Array<{ row: number; col: number; value: number }> = [];
+      for (let row = 0; row < 4; row += 1) {
+        for (let col = 0; col < 4; col += 1) {
+          const value = clean[row]?.[col];
+          if (typeof value === 'number') {
+            tiles.push({ row, col, value });
+          }
+        }
+      }
 
       expect(result.direction).toBe(direction);
       expect(result.moved).toBe(true);
       expect(result.spawned).not.toBeNull();
+      expect(tiles).toEqual([{ ...destinations[direction], value: 2 }]);
     }
   });
 
@@ -275,7 +320,7 @@ describe('moving and merging', () => {
       for (const value of tileValues(engine.board)) {
         expect(Number.isInteger(Math.log2(value))).toBe(true);
       }
-      if (engine.status === 'gameover') {
+      if (engine.currentStatus === 'gameover') {
         break;
       }
     }
@@ -319,7 +364,12 @@ describe('spawning', () => {
 
     const result = engine.move('left');
 
-    expect(result).toMatchObject({ moved: false, scoreGained: 0, spawned: null });
+    expect(result).toMatchObject({
+      moved: false,
+      scoreGained: 0,
+      spawned: null,
+      gameOver: false,
+    });
     expect(result.mergedTiles).toEqual([]);
     expect(engine.state.board).toEqual(before);
   });
@@ -383,6 +433,22 @@ describe('spawning', () => {
     expect(tileValues(alwaysFour.board).every((value) => value === 4)).toBe(true);
     expect(tileValues(alwaysTwo.board).every((value) => value === 2)).toBe(true);
   });
+
+  it('spawns a 2 after a move when fourChance is 0', () => {
+    const engine = new Game2048Engine({
+      fourChance: 0,
+      initialBoard: boardFrom([
+        [null, 2, null, null],
+        EMPTY_ROW,
+        EMPTY_ROW,
+        EMPTY_ROW,
+      ]),
+    });
+
+    const result = engine.move('right');
+
+    expect(result.spawned?.value).toBe(2);
+  });
 });
 
 describe('game over', () => {
@@ -395,15 +461,20 @@ describe('game over', () => {
     ]);
     const engine = makeEngine({ initialBoard: stuck });
 
-    expect(engine.status).toBe('gameover');
+    expect(engine.currentStatus).toBe('gameover');
     expect(engine.state.status).toBe('gameover');
 
     const result = engine.move('left');
-    expect(result).toMatchObject({ moved: false, spawned: null, scoreGained: 0 });
+    expect(result).toMatchObject({
+      moved: false,
+      spawned: null,
+      scoreGained: 0,
+      gameOver: true,
+    });
     expect(engine.state.board).toEqual(stuck);
   });
 
-  it('stays playable while an empty cell or an equal neighbour exists', () => {
+  it('stays playable while an empty cell exists', () => {
     const engine = makeEngine({
       initialBoard: boardFrom([
         [2, 4, 2, 4],
@@ -413,7 +484,20 @@ describe('game over', () => {
       ]),
     });
 
-    expect(engine.status).toBe('playing');
+    expect(engine.currentStatus).toBe('playing');
+  });
+
+  it('stays playable on a full board with one equal neighbour', () => {
+    const engine = makeEngine({
+      initialBoard: boardFrom([
+        [2, 2, 4, 8],
+        [4, 8, 16, 32],
+        [8, 16, 32, 64],
+        [16, 32, 64, 128],
+      ]),
+    });
+
+    expect(engine.currentStatus).toBe('playing');
   });
 
   it('ends the game when the post-move spawn fills the last cell', () => {
@@ -426,13 +510,13 @@ describe('game over', () => {
         [4, 8, 16, 4],
       ]),
     });
-    expect(engine.status).toBe('playing');
+    expect(engine.currentStatus).toBe('playing');
 
     const result = engine.move('left');
 
-    expect(result).toMatchObject({ moved: true, scoreGained: 4 });
+    expect(result).toMatchObject({ moved: true, scoreGained: 4, gameOver: true });
     expect(result.spawned).toEqual({ row: 0, col: 3, value: 4 });
-    expect(engine.status).toBe('gameover');
+    expect(engine.currentStatus).toBe('gameover');
   });
 });
 
@@ -449,7 +533,7 @@ describe('restart', () => {
     engine.restart();
 
     expect(engine.score).toBe(0);
-    expect(engine.status).toBe('playing');
+    expect(engine.currentStatus).toBe('playing');
     expect(engine.board).toEqual([
       [2, 2, null, null],
       EMPTY_ROW,
@@ -457,6 +541,27 @@ describe('restart', () => {
       EMPTY_ROW,
     ]);
     expect(engine.move('left').scoreGained).toBe(4);
+  });
+
+  it('restores the injected starting board after a game over', () => {
+    const initial = boardFrom([
+      [2, 2, 8, 16],
+      [8, 16, 4, 2],
+      [16, 4, 2, 8],
+      [4, 8, 16, 4],
+    ]);
+    const engine = new Game2048Engine({ fourChance: 1, initialBoard: initial });
+
+    engine.move('left');
+    expect(engine.currentStatus).toBe('gameover');
+    expect(engine.score).toBe(4);
+
+    engine.restart();
+
+    expect(engine.score).toBe(0);
+    expect(engine.currentStatus).toBe('playing');
+    expect(engine.board).toEqual(initial);
+    expect(engine.move('left').gameOver).toBe(true);
   });
 });
 
@@ -485,6 +590,11 @@ describe('snapshots', () => {
 
     engine.move('left');
 
-    expect(initial[0]).toEqual([2, 2, null, null]);
+    expect(initial).toEqual([
+      [2, 2, null, null],
+      EMPTY_ROW,
+      EMPTY_ROW,
+      EMPTY_ROW,
+    ]);
   });
 });
