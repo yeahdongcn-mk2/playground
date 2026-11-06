@@ -627,6 +627,25 @@ ol {
   color: #d8b4fe;
 }
 
+.game-card-art--2048 {
+  background:
+    radial-gradient(circle at 50% 48%, rgba(251, 191, 36, 0.18), transparent 62%),
+    linear-gradient(140deg, #0a1526, #060b13);
+}
+
+.game-2048-card-art {
+  position: relative;
+  z-index: 1;
+  width: 62%;
+  max-width: 220px;
+  filter: drop-shadow(0 12px 26px rgba(251, 191, 36, 0.18));
+}
+
+.game-card-art--2048 .game-card-engine {
+  border-color: rgba(251, 191, 36, 0.32);
+  color: #fcd34d;
+}
+
 .mini-grid {
   position: absolute;
   inset: 0;
