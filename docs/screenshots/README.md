@@ -5,7 +5,7 @@
 ## t7：扫雷触屏与手机布局（Issue #33 / 子任务 2）
 
 - Before 基线：`60bc3f3`（PR #36 合入扫雷 DOM 视图后、本子任务触屏与手机布局改动前）。页面已有桌面鼠标操作；手机视口下轻点可以翻开，但没有触屏插旗，重开按钮位于首屏之外。
-- After：本子任务分支 `agent/plan-33-t2` 的界面提交 [`fbbe118`](https://github.com/yeahdongcn-mk2/playground/commit/fbbe118afc7f54ae86cefab574e9872c86c6e922)；手机与桌面 After 截图都在该提交的生产构建上捕获，截图文件由紧随其后的文档提交入库。本子任务按计划只推分支、不创建 PR。
+- After：本子任务分支 `agent/plan-33-t2`。手机与桌面 After 截图在提交 [`c7bdade`](https://github.com/yeahdongcn-mk2/playground/commit/c7bdade) 捕获并入库；其后 `fbbe118` 只调整触屏交互逻辑与测试、把触屏提示 / 手机重开按钮的显示条件从 `(hover: none) and (pointer: coarse)` 放宽到 `any-pointer: coarse`，并同步 README 与截图脚本；`f36826f` 重截 `before-minesweeper-playing-mobile.png` 并对齐本文件引用，静态截图的界面视觉未变，因此这些 After 截图仍代表当前 head。Before 截图由 `60bc3f3` 构建生成，同样在 `c7bdade` 入库（游玩中一张在 `f36826f` 重截）。PR [#38](https://github.com/yeahdongcn-mk2/playground/pull/38) 描述附有 4 组 Before / After 链接。
 - 视口 / 主题：Pixel 7（412×839 CSS px，DPR 2.625，`isMobile: true`、`hasTouch: true`），深色主题，`reducedMotion: reduce`。Before / After 使用同一场景、同一视口、同一状态，均为视口截图（`fullPage: false`），以便核对 HUD、返回大厅与重开入口在手机首屏内完整可见。
 - 生成 After：`npm run screenshots:minesweeper`（生产构建 + `vite preview`，固定雷盘走 `?debug=1&mines=row,col;...` 调试接缝）。
 - 复现 Before：在 `60bc3f3` 的干净 worktree 里 `npm ci && npm run build`，用 `node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4188 --strictPort` 启动预览，然后在当前分支运行 `BASE_URL=http://127.0.0.1:4188 npm run screenshots:minesweeper:touch-before`。Before 的游玩中截图用鼠标右键插旗（基线还没有触屏插旗），After 用真实触摸轻点 + 长按插旗，因此两张游玩中截图里的旗子与 HUD 状态相同，但产生方式不同。
@@ -19,7 +19,7 @@
 | `before-minesweeper-lost-mobile.png` | 扫雷 BOOM（手机） | Pixel 7 412×839 / 深色 | 踩雷结束遮罩与全部雷。 |
 | `before-minesweeper-won-mobile.png` | 扫雷 CLEARED（手机） | Pixel 7 412×839 / 深色 | 固定雷盘翻开全部安全格后的胜利遮罩。 |
 
-### After（`agent/plan-33-t2`，截图捕获于 `fbbe118`）
+### After（`agent/plan-33-t2`，截图捕获于 `c7bdade`）
 
 | 文件 | 场景 | 视口 / 主题 | 说明 |
 | --- | --- | --- | --- |
@@ -34,7 +34,7 @@
 
 - 手机端为 Playwright Pixel 7 设备模拟（412×839、DPR 2.625、触摸），不是真实手机截图。
 - Before 截图只能证明旧界面的视觉状态；触屏长按 / 取消等交互行为由 `tests/e2e/minesweeper.mobile.spec.ts` 在生产构建上验证，不依赖截图比对。
-- 本子任务按计划只推分支、不创建 PR，因此没有 PR 附件链接；截图与说明随分支一起提交。
+- PR [#38](https://github.com/yeahdongcn-mk2/playground/pull/38) 描述中附有 4 组 Before / After 截图链接（基线 `60bc3f3`），截图与说明随分支一起提交。
 
 ## t6：扫雷（Issue #33 / 子任务 1）
 

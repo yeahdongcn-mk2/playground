@@ -135,6 +135,19 @@ test.describe('minesweeper gameplay', () => {
     await expect(numbered).toHaveText(String(numberedAdjacent));
   });
 
+  test('Enter activates a focused cell through the keyboard click path', async ({ page }) => {
+    await openMinesweeper(page, { mines: LOSS_MINES });
+    const safe = cellLocator(page, LOSS_SAFE_CLICK.row, LOSS_SAFE_CLICK.col);
+
+    // Keyboard activation dispatches a click with detail 0. This is a plain
+    // regression guard that the keyboard path still reveals a focused cell.
+    await safe.focus();
+    await expect(safe).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(safe).toHaveAttribute('data-revealed', 'true');
+    await expect(page.getByTestId('status')).toHaveText('进行中');
+  });
+
   test('malformed debug mine layouts fall back to the seeded random board', async ({ page }) => {
     // Every entry must be rejected wholesale: too few cells, duplicate cells,
     // an empty coordinate token (Number('') must not become row 0), an
@@ -286,6 +299,9 @@ test.describe('minesweeper gameplay', () => {
     await expect(page.getByTestId('timer')).toHaveText('0:00');
     await expect(page.getByTestId('overlay')).toBeHidden();
     await expect(page.locator('[data-state="hidden"]')).toHaveCount(81);
+    // The compact touch restart is hidden on desktop, so focus stays on the
+    // sidebar button that the player used.
+    await expect(page.getByTestId('mobile-restart-button')).toBeHidden();
     await expect(page.getByTestId('restart-button')).toBeFocused();
     await expectCleanBoard(page);
   });

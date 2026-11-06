@@ -62,6 +62,33 @@ export async function tapCell(page: Page, row: number, col: number): Promise<voi
   await page.touchscreen.tap(point.x, point.y);
 }
 
+/** Dispatch a synthetic touch PointerEvent on a cell. CDP cannot express every
+ * multi-pointer sequence (for example two ids at once, or a click that arrives
+ * after a long hold), so the suppression tests inject the exact events. */
+export async function dispatchTouchPointer(
+  page: Page,
+  row: number,
+  col: number,
+  type: 'pointerdown' | 'pointerup' | 'click',
+  pointerId: number,
+  detail = 1,
+): Promise<void> {
+  await cellLocator(page, row, col).evaluate(
+    (cell, init: { type: string; pointerId: number; detail: number }) => {
+      cell.dispatchEvent(
+        new PointerEvent(init.type, {
+          bubbles: true,
+          cancelable: true,
+          pointerId: init.pointerId,
+          pointerType: 'touch',
+          detail: init.detail,
+        }),
+      );
+    },
+    { type, pointerId, detail },
+  );
+}
+
 export interface CellPress {
   readonly client: CDPSession;
   readonly point: { readonly x: number; readonly y: number };
