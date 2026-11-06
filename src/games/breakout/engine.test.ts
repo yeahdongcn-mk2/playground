@@ -249,6 +249,24 @@ describe('ball collisions', () => {
     expect(engine.state.ball.vx).toBeLessThan(0);
   });
 
+  it('nudges a right-side graze out to the right of the paddle', () => {
+    const paddleRight = WIDTH / 2 + PADDLE_HALF;
+    const engine = makeEngine({
+      initialBall: {
+        x: paddleRight + RADIUS - 1,
+        y: PADDLE_TOP + 4,
+        vx: -100,
+        vy: 100,
+      },
+    });
+
+    engine.step();
+    expect(engine.state.ball.x).toBeCloseTo(paddleRight + RADIUS, 6);
+    expect(engine.state.ball.y).toBeGreaterThan(PADDLE_TOP);
+    expect(engine.state.ball.vx).toBeGreaterThan(0);
+    expect(engine.state.ball.vy).toBeGreaterThan(0);
+  });
+
   it('removes a brick, scores it and rebounds away from the brick', () => {
     const brick = brickAt(createLevelBricks(1));
     const engine = makeEngine({
@@ -269,6 +287,7 @@ describe('ball collisions', () => {
     expect(engine.state.bricks).toHaveLength(1);
     expect(engine.state.bricks[0]?.id).toBe(1);
     expect(engine.state.ball.vy).toBeGreaterThan(0);
+    expect(Math.hypot(engine.state.ball.vx, engine.state.ball.vy)).toBeCloseTo(200, 6);
     expect(engine.state.status).toBe('running');
     expect(update.gameOver).toBe(false);
   });
@@ -309,6 +328,54 @@ describe('ball collisions', () => {
     expect(engine.state.bricks).toHaveLength(1);
   });
 
+  it('accumulates the score when consecutive steps destroy bricks', () => {
+    const brick = brickAt(createLevelBricks(1));
+    const engine = makeEngine({
+      initialBricks: [
+        { row: 0, col: 0 },
+        { row: 0, col: 1 },
+      ],
+      // Sit in the gap between both bricks so each step finds another brick.
+      initialBall: {
+        ...ballUnderBrick(brick),
+        x: brick.x + brick.width + DEFAULT_BREAKOUT_CONFIG.brickGap / 2,
+      },
+    });
+
+    const first = engine.step();
+    expect(first.destroyedBricks).toHaveLength(1);
+    expect(engine.state.score).toBe(DEFAULT_BREAKOUT_CONFIG.scorePerBrick);
+
+    const second = engine.step();
+    expect(second.destroyedBricks).toHaveLength(1);
+    expect(engine.state.bricks).toHaveLength(0);
+    expect(first.destroyedBricks[0]?.id).not.toBe(second.destroyedBricks[0]?.id);
+    expect(first.scoreGained + second.scoreGained).toBe(
+      DEFAULT_BREAKOUT_CONFIG.scorePerBrick * 2,
+    );
+    expect(engine.state.score).toBe(DEFAULT_BREAKOUT_CONFIG.scorePerBrick * 2);
+  });
+
+  it('sums scoreGained across fixed steps inside one update', () => {
+    const brick = brickAt(createLevelBricks(1));
+    const engine = makeEngine({
+      initialBricks: [
+        { row: 0, col: 0 },
+        { row: 0, col: 1 },
+      ],
+      initialBall: {
+        ...ballUnderBrick(brick),
+        x: brick.x + brick.width + DEFAULT_BREAKOUT_CONFIG.brickGap / 2,
+      },
+    });
+
+    const update = engine.update(20);
+    expect(update.steps).toBe(2);
+    expect(update.destroyedBricks).toHaveLength(2);
+    expect(update.scoreGained).toBe(DEFAULT_BREAKOUT_CONFIG.scorePerBrick * 2);
+    expect(engine.state.score).toBe(DEFAULT_BREAKOUT_CONFIG.scorePerBrick * 2);
+  });
+
   it('rebounds off a brick side and removes it', () => {
     const brick = brickAt(createLevelBricks(1));
     const engine = makeEngine({
@@ -327,6 +394,29 @@ describe('ball collisions', () => {
     const step = engine.step();
     expect(step.destroyedBricks).toHaveLength(1);
     expect(engine.state.ball.vx).toBeLessThan(0);
+    expect(Math.hypot(engine.state.ball.vx, engine.state.ball.vy)).toBeCloseTo(200, 6);
+    expect(engine.state.bricks).toHaveLength(1);
+  });
+
+  it('rebounds off a brick right side and removes it', () => {
+    const brick = brickAt(createLevelBricks(1));
+    const engine = makeEngine({
+      initialBricks: [
+        { row: 0, col: 0 },
+        { row: 0, col: 1 },
+      ],
+      initialBall: {
+        x: brick.x + brick.width + RADIUS - 1,
+        y: brick.y + brick.height / 2,
+        vx: -200,
+        vy: 0,
+      },
+    });
+
+    const step = engine.step();
+    expect(step.destroyedBricks).toHaveLength(1);
+    expect(engine.state.ball.vx).toBeGreaterThan(0);
+    expect(Math.hypot(engine.state.ball.vx, engine.state.ball.vy)).toBeCloseTo(200, 6);
     expect(engine.state.bricks).toHaveLength(1);
   });
 
@@ -348,6 +438,7 @@ describe('ball collisions', () => {
     const step = engine.step();
     expect(step.destroyedBricks).toHaveLength(1);
     expect(engine.state.ball.vy).toBeLessThan(0);
+    expect(Math.hypot(engine.state.ball.vx, engine.state.ball.vy)).toBeCloseTo(200, 6);
     expect(engine.state.bricks).toHaveLength(1);
   });
 });
@@ -592,11 +683,12 @@ describe('fixed-step updates', () => {
 });
 
 describe('serving randomness', () => {
-  it('uses the injected random source for the initial serve direction', () => {
+  it('uses the injected random source for the serve direction and angle', () => {
+    const angle = (DEFAULT_BREAKOUT_CONFIG.serveAngleDegrees * Math.PI) / 180;
     const left = makeEngine({ rng: () => 0.1 });
     expect(left.start()).toBe(true);
-    expect(left.state.ball.vx).toBeLessThan(0);
-    expect(left.state.ball.vy).toBeLessThan(0);
+    expect(left.state.ball.vx).toBeCloseTo(-Math.sin(angle) * BALL_SPEED, 6);
+    expect(left.state.ball.vy).toBeCloseTo(-Math.cos(angle) * BALL_SPEED, 6);
     expect(Math.hypot(left.state.ball.vx, left.state.ball.vy)).toBeCloseTo(
       BALL_SPEED,
       6,
@@ -604,8 +696,19 @@ describe('serving randomness', () => {
 
     const right = makeEngine({ rng: () => 0.9 });
     expect(right.start()).toBe(true);
-    expect(right.state.ball.vx).toBeGreaterThan(0);
-    expect(right.state.ball.vy).toBeLessThan(0);
+    expect(right.state.ball.vx).toBeCloseTo(Math.sin(angle) * BALL_SPEED, 6);
+    expect(right.state.ball.vy).toBeCloseTo(-Math.cos(angle) * BALL_SPEED, 6);
+  });
+
+  it('honours a custom serveAngleDegrees', () => {
+    const angle = (45 * Math.PI) / 180;
+    const engine = makeEngine({ rng: () => 0.9, serveAngleDegrees: 45 });
+    expect(engine.start()).toBe(true);
+    expect(engine.state.ball.vx).toBeCloseTo(Math.sin(angle) * BALL_SPEED, 6);
+    expect(engine.state.ball.vy).toBeCloseTo(-Math.cos(angle) * BALL_SPEED, 6);
+    expect(
+      (Math.atan2(engine.state.ball.vx, -engine.state.ball.vy) * 180) / Math.PI,
+    ).toBeCloseTo(45, 6);
   });
 
   it('is deterministic when seeded', () => {
@@ -705,8 +808,18 @@ describe('snapshots and validation', () => {
     expect(
       () => new BreakoutEngine({ ballSpeed: 5_000, maxBallSpeed: 5_000 }),
     ).toThrow(RangeError);
-    expect(() => new BreakoutEngine({ serveAngleDegrees: 90 })).toThrow(RangeError);
-    expect(() => new BreakoutEngine({ maxBounceAngleDegrees: 0 })).toThrow(RangeError);
+    expect(() => new BreakoutEngine({ serveAngleDegrees: 0 })).toThrow(
+      /must be greater than 0 and less than 90 degrees/,
+    );
+    expect(() => new BreakoutEngine({ serveAngleDegrees: 90 })).toThrow(
+      /must be greater than 0 and less than 90 degrees/,
+    );
+    expect(() => new BreakoutEngine({ maxBounceAngleDegrees: 0 })).toThrow(
+      /must be greater than 0 and less than 90 degrees/,
+    );
+    expect(() => new BreakoutEngine({ maxBounceAngleDegrees: 90 })).toThrow(
+      /must be greater than 0 and less than 90 degrees/,
+    );
     expect(() => new BreakoutEngine({ initialLevel: 0 })).toThrow(RangeError);
     expect(() => new BreakoutEngine({ initialBricks: [] })).toThrow(RangeError);
     expect(

@@ -390,7 +390,9 @@ function assertIntegerAtLeast(name: string, value: number, minimum: number): voi
 function assertAngle(name: string, value: number): void {
   assertFinite(name, value);
   if (value <= 0 || value >= 90) {
-    throw new RangeError(`${name} must be between 0 and 90 degrees.`);
+    throw new RangeError(
+      `${name} must be greater than 0 and less than 90 degrees.`,
+    );
   }
 }
 
