@@ -117,7 +117,7 @@ export function createEmptyBoard(): BoardCell[][] {
   );
 }
 
-export function cloneBoard(board: Board): BoardCell[][] {
+function cloneBoard(board: Board): BoardCell[][] {
   return board.map((row) => [...row]);
 }
 
