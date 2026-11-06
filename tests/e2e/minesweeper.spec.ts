@@ -1,7 +1,10 @@
 import {
+  abortListenerCount,
   cellLocator,
   activeIntervalCount,
   destroyDebugGame,
+  expectCleanBoard,
+  installAbortProbe,
   installIntervalProbe,
   LOSS_MINE_CLICK,
   LOSS_MINES,
@@ -66,6 +69,8 @@ test.describe('minesweeper gameplay', () => {
     // Flags are allowed before the first reveal and do not start the clock.
     await mineCell.click({ button: 'right' });
     await expect(mineCell).toHaveAttribute('data-state', 'flagged');
+    // Players see the flag glyph, not the data-* implementation detail.
+    await expect(mineCell).toHaveText('⚑');
     await expect(page.getByTestId('remaining-mines')).toHaveText('9');
     await expect(page.getByTestId('flag-count')).toHaveText('1');
     expect((await readState(page)).status).toBe('ready');
@@ -73,10 +78,12 @@ test.describe('minesweeper gameplay', () => {
     // A flagged cell cannot be revealed by a left click.
     await mineCell.click();
     await expect(mineCell).toHaveAttribute('data-state', 'flagged');
+    await expect(mineCell).toHaveText('⚑');
     expect((await readState(page)).status).toBe('ready');
 
     await mineCell.click({ button: 'right' });
     await expect(mineCell).toHaveAttribute('data-state', 'hidden');
+    await expect(mineCell).toHaveText('');
     await expect(page.getByTestId('remaining-mines')).toHaveText('10');
     await expect(page.getByTestId('flag-count')).toHaveText('0');
 
@@ -84,6 +91,8 @@ test.describe('minesweeper gameplay', () => {
     await safeCell.click();
     await expect(page.getByTestId('status')).toHaveText('进行中');
     await expect(safeCell).toHaveAttribute('data-revealed', 'true');
+    // A blank revealed cell stays visually empty.
+    await expect(safeCell).toHaveText('');
     await expect(page.getByTestId('overlay')).toBeHidden();
 
     // Right-click must suppress the browser menu. Dispatch the event on an
@@ -118,6 +127,61 @@ test.describe('minesweeper gameplay', () => {
     expect(state.status).toBe('playing');
     expect(state.board[LOSS_SAFE_CLICK.row]?.[LOSS_SAFE_CLICK.col]?.revealed).toBe(true);
     expect(state.remainingMines).toBe(10);
+
+    // A revealed number cell must render the engine's adjacent-mine count as
+    // text; (5, 0) touches (4, 0) and (4, 1) in LOSS_MINES.
+    const numbered = cellLocator(page, 5, 0);
+    const numberedAdjacent = (await readState(page)).board[5]?.[0]?.adjacentMines;
+    expect(numberedAdjacent).toBe(2);
+    await expect(numbered).toHaveAttribute('data-state', 'revealed');
+    await expect(numbered).toHaveText(String(numberedAdjacent));
+  });
+
+  test('malformed debug mine layouts fall back to the seeded random board', async ({ page }) => {
+    // Every entry must be rejected wholesale: too few cells, duplicate cells,
+    // an empty coordinate token (Number('') must not become row 0), an
+    // out-of-bounds cell and a trailing field.
+    const malformedLayouts = [
+      '0,0;0,1;0,2;0,3;0,4;0,5;0,6;0,7;0,8',
+      '0,0;0,0;0,1;0,2;0,3;0,4;0,5;0,6;0,7;0,8',
+      ',0;0,1;0,2;0,3;0,4;0,5;0,6;0,7;0,8;1,0',
+      '0,0;0,1;0,2;0,3;0,4;0,5;0,6;0,7;0,8;9,0',
+      '0,0;0,1;0,2;0,3;0,4;0,5;0,6;0,7;0,8;0,0,1',
+    ];
+    const mineSignature = async (): Promise<string> =>
+      (await readState(page))
+        .board.flat()
+        .filter((cell) => cell.mine)
+        .map((cell) => `${cell.row},${cell.col}`)
+        .join(';');
+
+    const signatures: string[] = [];
+    for (const layout of malformedLayouts) {
+      await page.goto(
+        `/#/games/minesweeper?debug=1&mines=${encodeURIComponent(layout)}`,
+      );
+      await expect(page.getByTestId('minesweeper-game')).toBeVisible();
+      await expect(page.locator('[data-cell]')).toHaveCount(81);
+      // The hash-only navigation remounts without a document reload, so wait
+      // for the fresh ready HUD before clicking the new board.
+      await expect(page.getByTestId('status')).toHaveText('待开始');
+      // The first reveal is always safe, so it plants the fallback layout.
+      await cellLocator(page, 8, 8).click();
+      await expect(page.getByTestId('status')).toHaveText('进行中');
+      expect(await readState(page)).toMatchObject({ status: 'playing' });
+      expect((await readState(page)).board.flat().filter((cell) => cell.mine)).toHaveLength(
+        10,
+      );
+      signatures.push(await mineSignature());
+    }
+
+    // No layout parameter must use the same debug seed and land on the same
+    // board as every rejected layout; the fixture also fails on page errors.
+    await openMinesweeper(page);
+    await cellLocator(page, 8, 8).click();
+    await expect(page.getByTestId('status')).toHaveText('进行中');
+    const fallbackSignature = await mineSignature();
+    expect(signatures).toEqual(malformedLayouts.map(() => fallbackSignature));
   });
 
   test('hitting a mine ends the game, reveals every mine, freezes the clock and restarts', async ({
@@ -139,6 +203,8 @@ test.describe('minesweeper gameplay', () => {
     await expect(page.getByTestId('overlay-title')).toHaveText('踩到地雷');
     await expect(page.getByTestId('overlay-body')).toContainText('用时');
     await expect(page.getByTestId('overlay-primary')).toHaveText('再来一局');
+    // The finished overlay takes focus so keyboard users can restart at once.
+    await expect(page.getByTestId('overlay-primary')).toBeFocused();
 
     const lost = await readState(page);
     expect(lost.status).toBe('lost');
@@ -148,10 +214,15 @@ test.describe('minesweeper gameplay', () => {
     const exploded = cellLocator(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
     await expect(exploded).toHaveAttribute('data-state', 'exploded');
     await expect(exploded).toHaveAttribute('data-mine', 'true');
+    await expect(exploded).toHaveText('✹');
     // A correctly flagged mine keeps its flag; the other mines are exposed.
     await expect(correctFlag).toHaveAttribute('data-state', 'flagged');
     expect(await correctFlag.getAttribute('data-mine')).toBeNull();
+    await expect(correctFlag).toHaveText('⚑');
     await expect(page.locator('[data-state="mine"]')).toHaveCount(8);
+    await expect(page.locator('[data-state="mine"]')).toHaveText(
+      Array.from({ length: 8 }, () => '✹'),
+    );
     await expect(page.locator('[data-mine="true"]')).toHaveCount(9);
 
     // Both the engine clock and the visible HUD stay frozen after the loss.
@@ -167,6 +238,8 @@ test.describe('minesweeper gameplay', () => {
     await expect(page.getByTestId('remaining-mines')).toHaveText('10');
     await expect(page.getByTestId('timer')).toHaveText('0:00');
     await expect(page.locator('[data-state="hidden"]')).toHaveCount(81);
+    await expect(page.getByTestId('restart-button')).toBeFocused();
+    await expectCleanBoard(page);
   });
 
   test('revealing every safe cell wins the game', async ({ page }) => {
@@ -177,6 +250,7 @@ test.describe('minesweeper gameplay', () => {
     await expect(page.getByTestId('overlay')).toBeVisible();
     await expect(page.getByTestId('overlay-title')).toHaveText('扫雷成功');
     await expect(page.getByTestId('overlay-primary')).toHaveText('再来一局');
+    await expect(page.getByTestId('overlay-primary')).toBeFocused();
 
     const state = await readState(page);
     expect(state.status).toBe('won');
@@ -187,10 +261,21 @@ test.describe('minesweeper gameplay', () => {
     // A win does not need to expose the mines.
     await expect(page.locator('[data-mine="true"]')).toHaveCount(0);
 
+    // Every revealed number renders the engine's adjacent count as text.
+    const numbered = safeCells.find((cell) => cell.adjacentMines > 0);
+    expect(numbered).toBeDefined();
+    if (numbered) {
+      await expect(cellLocator(page, numbered.row, numbered.col)).toHaveText(
+        String(numbered.adjacentMines),
+      );
+    }
+
     await page.getByTestId('overlay-primary').click();
     await expect(page.getByTestId('status')).toHaveText('待开始');
     await expect(page.getByTestId('overlay')).toBeHidden();
     await expect(page.locator('[data-state="hidden"]')).toHaveCount(81);
+    await expect(page.getByTestId('restart-button')).toBeFocused();
+    await expectCleanBoard(page);
   });
 
   test('the restart button resets a running game', async ({ page }) => {
@@ -209,6 +294,8 @@ test.describe('minesweeper gameplay', () => {
     await expect(page.getByTestId('timer')).toHaveText('0:00');
     await expect(page.getByTestId('overlay')).toBeHidden();
     await expect(page.locator('[data-state="hidden"]')).toHaveCount(81);
+    await expect(page.getByTestId('restart-button')).toBeFocused();
+    await expectCleanBoard(page);
   });
 
   test('destroy and leaving the route release board listeners and the clock interval', async ({
@@ -216,14 +303,18 @@ test.describe('minesweeper gameplay', () => {
   }) => {
     await installListenerProbe(page);
     await installIntervalProbe(page);
+    await installAbortProbe(page);
     await page.goto('/');
     const baselineKeydown = await listenerCount(page, 'window', 'keydown');
+    const baselineAbort = await abortListenerCount(page);
 
     await openMinesweeper(page, { mines: LOSS_MINES });
     await trackProbeTarget(page, 'board', '[data-testid="minesweeper-board"]');
     expect(await listenerCount(page, 'board', 'click')).toBe(1);
     expect(await listenerCount(page, 'board', 'contextmenu')).toBe(1);
     expect(await activeIntervalCount(page)).toBe(0);
+    // The view bridges the mount signal onto its own listener AbortController.
+    expect(await abortListenerCount(page)).toBe(baselineAbort + 1);
 
     await cellLocator(page, LOSS_SAFE_CLICK.row, LOSS_SAFE_CLICK.col).click();
     await expect(page.getByTestId('status')).toHaveText('进行中');
@@ -237,12 +328,20 @@ test.describe('minesweeper gameplay', () => {
     await expect.poll(() => listenerCount(page, 'board', 'click')).toBe(0);
     await expect.poll(() => listenerCount(page, 'board', 'contextmenu')).toBe(0);
     expect(await listenerCount(page, 'window', 'keydown')).toBe(baselineKeydown);
+    // The mount-signal bridge is removed explicitly, and the debug seam is gone.
+    await expect.poll(() => abortListenerCount(page)).toBe(baselineAbort);
+    expect(
+      await page.evaluate(
+        () => (window as unknown as { __playground?: unknown }).__playground,
+      ),
+    ).toBeUndefined();
 
     // The route stays usable and a second normal mount/teardown is clean too.
     await page.getByRole('link', { name: /返回大厅/ }).click();
     await expect(page.getByTestId('game-card-minesweeper')).toBeVisible();
     await openMinesweeper(page, { mines: LOSS_MINES });
     await trackProbeTarget(page, 'board', '[data-testid="minesweeper-board"]');
+    expect(await abortListenerCount(page)).toBe(baselineAbort + 1);
     await cellLocator(page, LOSS_SAFE_CLICK.row, LOSS_SAFE_CLICK.col).click();
     await expect(page.getByTestId('status')).toHaveText('进行中');
     expect(await activeIntervalCount(page)).toBe(1);
@@ -252,6 +351,12 @@ test.describe('minesweeper gameplay', () => {
     await expect.poll(() => activeIntervalCount(page)).toBe(0);
     await expect.poll(() => listenerCount(page, 'board', 'click')).toBe(0);
     await expect.poll(() => listenerCount(page, 'board', 'contextmenu')).toBe(0);
+    await expect.poll(() => abortListenerCount(page)).toBe(baselineAbort);
     expect(await listenerCount(page, 'window', 'keydown')).toBe(baselineKeydown);
+    expect(
+      await page.evaluate(
+        () => (window as unknown as { __playground?: unknown }).__playground,
+      ),
+    ).toBeUndefined();
   });
 });
