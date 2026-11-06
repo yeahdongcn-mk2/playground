@@ -73,6 +73,8 @@
   gap: 3px;
   width: 100%;
   height: 100%;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .minesweeper-row {
@@ -97,6 +99,10 @@
   font-weight: 700;
   line-height: 1;
   place-items: center;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
   transition:
     background 120ms ease,
     border-color 120ms ease,
@@ -245,6 +251,27 @@
   text-align: center;
 }
 
+/* Touch instructions and a restart button that stay next to the board. */
+.minesweeper-touch-hint {
+  display: none;
+  margin-top: 10px;
+  padding: 0 4px;
+  color: var(--dim);
+  font-size: 0.78rem;
+  line-height: 1.65;
+  text-align: center;
+}
+
+.minesweeper-touch-actions {
+  display: none;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.minesweeper-touch-actions .button {
+  flex: 1;
+}
+
 .minesweeper-panel {
   display: grid;
   gap: 12px;
@@ -309,6 +336,16 @@
     font-size: 1.06rem;
   }
 
+  .minesweeper-stage {
+    width: 100%;
+    padding: 8px;
+  }
+
+  .minesweeper-board,
+  .minesweeper-row {
+    gap: 2px;
+  }
+
   .minesweeper-overlay-card {
     padding: 20px 16px;
   }
@@ -326,6 +363,22 @@
   /* Touch browsers can keep :hover after a tap; do not leave a lifted cell. */
   .minesweeper-cell:hover {
     transform: none;
+  }
+
+  .minesweeper-pointer-hint {
+    display: none;
+  }
+}
+
+/* Show the touch affordances on any device with a coarse pointer: phones,
+   tablets, and touch laptops whose primary pointer is still a mouse. */
+@media (any-pointer: coarse) {
+  .minesweeper-touch-hint {
+    display: block;
+  }
+
+  .minesweeper-touch-actions {
+    display: flex;
   }
 }
 

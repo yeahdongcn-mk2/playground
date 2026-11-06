@@ -16,6 +16,10 @@ import {
 import './minesweeper.css';
 
 const CLOCK_INTERVAL_MS = 250;
+/** Hold this long on a touchscreen to toggle a flag instead of revealing. */
+const LONG_PRESS_MS = 500;
+/** Moving further than this while holding cancels the long press (e.g. scroll). */
+const LONG_PRESS_MOVE_TOLERANCE_PX = 10;
 
 const STATUS_LABELS: Readonly<Record<MinesweeperStatus, string>> = {
   ready: '待开始',
@@ -66,9 +70,16 @@ const VIEW_HTML = `
             </div>
           </div>
         </div>
-        <p class="minesweeper-hint">
+        <p class="minesweeper-hint minesweeper-pointer-hint">
           左键翻开格子，右键插旗标记地雷。第一次翻开总是安全的，雷区在第一次翻开后生成。
         </p>
+        <p class="minesweeper-touch-hint" data-testid="touch-hint">
+          轻点翻开格子，长按约 0.5 秒插旗 / 取消旗。长按期间移动或滚动会取消，不会误触。
+        </p>
+        <div class="minesweeper-touch-actions">
+          <button class="button button--ghost" type="button" data-action="restart"
+            data-testid="mobile-restart-button">重开</button>
+        </div>
       </div>
 
       <aside class="minesweeper-panel" aria-label="操作与状态">
@@ -81,6 +92,7 @@ const VIEW_HTML = `
               <dd>翻开格子</dd>
             </div>
             <div><dt>右键</dt><dd>插旗 / 取消旗</dd></div>
+            <div><dt>触屏</dt><dd>轻点翻开 / 长按插旗</dd></div>
             <div><dt>按钮</dt><dd>重开 / 返回大厅</dd></div>
           </dl>
         </div>
@@ -268,6 +280,10 @@ export async function mountMinesweeper(
   const overlayBody = query<HTMLElement>(root, '[data-testid="overlay-body"]');
   const primaryButton = query<HTMLButtonElement>(root, '[data-testid="overlay-primary"]');
   const restartButton = query<HTMLButtonElement>(root, '[data-testid="restart-button"]');
+  const mobileRestartButton = query<HTMLButtonElement>(
+    root,
+    '[data-testid="mobile-restart-button"]',
+  );
   const remainingElement = query<HTMLElement>(root, '[data-testid="remaining-mines"]');
   const flagCountElement = query<HTMLElement>(root, '[data-testid="flag-count"]');
   const timerElement = query<HTMLElement>(root, '[data-testid="timer"]');
@@ -300,6 +316,53 @@ export async function mountMinesweeper(
   let clock: number | null = null;
   let lastTickAt = 0;
   let lastStatus: MinesweeperStatus = engine.currentStatus;
+
+  interface TouchGesture {
+    readonly pointerId: number;
+    readonly row: number;
+    readonly col: number;
+    readonly startX: number;
+    readonly startY: number;
+    timer: number | null;
+    longPressed: boolean;
+  }
+
+  let touchGesture: TouchGesture | null = null;
+  // Pointer ids whose synthetic click must not also reveal a cell: the long
+  // press already toggled a flag, or the finger moved / the page scrolled. This
+  // is gesture-level state, not a timer: the synthetic click arrives when the
+  // finger lifts, which may be long after the 500 ms long-press timer (for
+  // example a second hold that clears a flag). It is keyed by pointer id so a
+  // second finger can start its own gesture without clearing the suppression
+  // that belongs to the first finger. Each id is consumed by one pointer
+  // click, or cleared when that pointer starts a new gesture (defensive: a
+  // browser may reuse an id). pointercancel drops its id because no click can
+  // follow; a scroll / pointerleave cancel keeps its id because a click still
+  // might, and ids that never get one stay harmlessly until destroy drops the
+  // set. Keyboard activation (detail 0) always passes.
+  const suppressedClickPointers = new Set<number>();
+
+  function clearGestureTimer(gesture: TouchGesture): void {
+    if (gesture.timer !== null) {
+      window.clearTimeout(gesture.timer);
+      gesture.timer = null;
+    }
+  }
+
+  function suppressNextTouchClick(pointerId: number): void {
+    suppressedClickPointers.add(pointerId);
+  }
+
+  function cancelTouchGesture(): void {
+    if (!touchGesture) {
+      return;
+    }
+    clearGestureTimer(touchGesture);
+    // Keep this finger's synthetic click from revealing the cell, even if a
+    // second finger starts its own gesture in the meantime.
+    suppressNextTouchClick(touchGesture.pointerId);
+    touchGesture = null;
+  }
 
   function stopClock(): void {
     if (clock === null) {
@@ -443,6 +506,9 @@ export async function mountMinesweeper(
   }
 
   function restart(): void {
+    // A restart from another finger must not let a held cell's timer flag the
+    // fresh board a moment later.
+    cancelTouchGesture();
     services.audio.unlock();
     engine.restart();
     stopClock();
@@ -450,13 +516,124 @@ export async function mountMinesweeper(
     sync();
     announce('游戏重新开始');
     // The overlay hides with focus still inside it, so move focus back to a
-    // visible control once the new board is ready.
-    restartButton.focus({ preventScroll: true });
+    // visible restart control once the new board is ready. On touch layouts the
+    // compact button next to the board is preferred even when the restart came
+    // from the sidebar button, which can sit below the phone fold; desktop
+    // hides the touch actions and keeps the sidebar button.
+    const focusTarget =
+      mobileRestartButton.offsetParent !== null ? mobileRestartButton : restartButton;
+    // Let focus scroll the target into view: a sidebar restart on a phone can
+    // leave the compact button above the fold, and a focused off-screen button
+    // would only look like the focus was lost.
+    focusTarget.focus();
   }
+
+  boardElement.addEventListener(
+    'pointerdown',
+    (event) => {
+      // Any new press supersedes a pending touch hold: a second finger, a
+      // mouse click after a cancelled hold, or a pen tap.
+      cancelTouchGesture();
+      // Only this pointer's stale suppression is cleared; another finger's
+      // pending release click keeps its own entry.
+      suppressedClickPointers.delete(event.pointerId);
+      if (event.pointerType !== 'touch') {
+        return;
+      }
+      const cell = currentCell(event.target);
+      if (!cell) {
+        return;
+      }
+      const gesture: TouchGesture = {
+        pointerId: event.pointerId,
+        row: cell.row,
+        col: cell.col,
+        startX: event.clientX,
+        startY: event.clientY,
+        timer: null,
+        longPressed: false,
+      };
+      gesture.timer = window.setTimeout(() => {
+        gesture.timer = null;
+        if (touchGesture !== gesture || gesture.longPressed) {
+          return;
+        }
+        gesture.longPressed = true;
+        // The release must not reveal the cell on the synthetic click.
+        suppressNextTouchClick(gesture.pointerId);
+        toggleFlag(gesture.row, gesture.col);
+      }, LONG_PRESS_MS);
+      touchGesture = gesture;
+    },
+    { signal: listenerSignal },
+  );
+
+  boardElement.addEventListener(
+    'pointermove',
+    (event) => {
+      if (!touchGesture || touchGesture.pointerId !== event.pointerId) {
+        return;
+      }
+      const distance = Math.hypot(
+        event.clientX - touchGesture.startX,
+        event.clientY - touchGesture.startY,
+      );
+      // A drag is a scroll / accidental movement, not a long press or a tap.
+      if (distance > LONG_PRESS_MOVE_TOLERANCE_PX) {
+        cancelTouchGesture();
+      }
+    },
+    { signal: listenerSignal },
+  );
+
+  boardElement.addEventListener(
+    'pointerup',
+    (event) => {
+      if (!touchGesture || touchGesture.pointerId !== event.pointerId) {
+        return;
+      }
+      clearGestureTimer(touchGesture);
+      touchGesture = null;
+      // A quick tap reaches the click handler below and reveals exactly once.
+    },
+    { signal: listenerSignal },
+  );
+
+  boardElement.addEventListener(
+    'pointercancel',
+    (event) => {
+      cancelTouchGesture();
+      // A cancelled pointer never produces a click, so its id would otherwise
+      // stay suppressed for the lifetime of the mount.
+      suppressedClickPointers.delete(event.pointerId);
+    },
+    { signal: listenerSignal },
+  );
+  boardElement.addEventListener('pointerleave', cancelTouchGesture, {
+    signal: listenerSignal,
+  });
+
+  // Scrolling must cancel a pending flag even when the browser does not send
+  // pointercancel (for example a programmatic scroll or a nested scroller).
+  window.addEventListener('scroll', cancelTouchGesture, {
+    capture: true,
+    passive: true,
+    signal: listenerSignal,
+  });
 
   boardElement.addEventListener(
     'click',
     (event) => {
+      // A synthetic click is a PointerEvent whose pointerId matches the touch
+      // that produced it. Consuming the id here keeps a long press / cancelled
+      // gesture from revealing the cell; detail 0 is keyboard activation.
+      const suppressed =
+        event.detail > 0 &&
+        event instanceof PointerEvent &&
+        suppressedClickPointers.delete(event.pointerId);
+      if (suppressed) {
+        return;
+      }
       const cell = currentCell(event.target);
       if (cell) {
         reveal(cell.row, cell.col);
@@ -472,8 +649,26 @@ export async function mountMinesweeper(
       if (!cell) {
         return;
       }
-      // Keep the browser menu closed so right-click stays a flag toggle.
+      // Keep the browser menu closed so right-click stays a flag toggle and a
+      // touch long press never opens the native menu or selects text.
       event.preventDefault();
+      // Touch long presses are owned by the 500 ms timer; a contextmenu that
+      // arrives while the finger is down must not toggle the flag a second
+      // time. Mouse right-click keeps its existing behavior.
+      const touchContextMenu =
+        event instanceof PointerEvent && event.pointerType === 'touch';
+      if (touchContextMenu || touchGesture !== null) {
+        // Some touch browsers fire the native contextmenu at the same moment
+        // as our timer. Whichever runs first owns the flag; if the menu wins,
+        // disarm the timer so one hold still toggles exactly once.
+        if (touchGesture && !touchGesture.longPressed) {
+          clearGestureTimer(touchGesture);
+          touchGesture.longPressed = true;
+          suppressNextTouchClick(touchGesture.pointerId);
+          toggleFlag(touchGesture.row, touchGesture.col);
+        }
+        return;
+      }
       toggleFlag(cell.row, cell.col);
     },
     { signal: listenerSignal },
@@ -503,6 +698,9 @@ export async function mountMinesweeper(
     // mountSignal bridge are not, so both are released explicitly here.
     mountSignal.removeEventListener('abort', onMountAbort);
     controller.abort();
+    cancelTouchGesture();
+    // No further click can reach this mount; drop any pending suppression ids.
+    suppressedClickPointers.clear();
     stopClock();
     const debug = debugWindow();
     const api = debug.__playground;

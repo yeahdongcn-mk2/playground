@@ -12,11 +12,16 @@ export const minesweeperGame: GameModule = {
     title: '扫雷',
     englishTitle: 'Minesweeper',
     description:
-      '9×9 棋盘藏着 10 颗雷。左键翻开、右键插旗，避开地雷并翻开所有安全格；踩雷立即结束，全部安全格翻开即获胜。',
+      '9×9 棋盘藏着 10 颗雷。左键翻开、右键插旗，触屏轻点翻开、长按插旗；避开地雷并翻开所有安全格；踩雷立即结束，全部安全格翻开即获胜。',
     engine: 'dom',
     genre: '益智 · 经典',
     accent: '#f472b6',
-    controls: ['左键翻开格子', '右键插旗 / 取消', '按钮重开或返回大厅'],
+    controls: [
+      '左键翻开格子',
+      '右键插旗 / 取消',
+      '触屏轻点翻开 / 长按插旗',
+      '按钮重开或返回大厅',
+    ],
   },
   async mount(root, services, signal) {
     throwIfAborted(signal);

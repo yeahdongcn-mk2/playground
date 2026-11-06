@@ -1,4 +1,4 @@
-import type { Locator, Page } from '@playwright/test';
+import type { CDPSession, Locator, Page } from '@playwright/test';
 import type {
   Cell,
   MinesweeperSnapshot,
@@ -42,6 +42,153 @@ export const WIN_CLICK = { row: 8, col: 8 } as const;
 
 export function cellLocator(page: Page, row: number, col: number): Locator {
   return page.getByTestId(`cell-${row}-${col}`);
+}
+
+async function cellCenter(
+  page: Page,
+  row: number,
+  col: number,
+): Promise<{ x: number; y: number }> {
+  const box = await cellLocator(page, row, col).boundingBox();
+  if (!box) {
+    throw new Error(`cell-${row}-${col} has no bounding box`);
+  }
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+}
+
+/** A real touch tap, so Chromium emits the same pointer/click pair a finger does. */
+export async function tapCell(page: Page, row: number, col: number): Promise<void> {
+  const point = await cellCenter(page, row, col);
+  await page.touchscreen.tap(point.x, point.y);
+}
+
+/** Dispatch a synthetic touch PointerEvent on a cell. CDP cannot express every
+ * multi-pointer sequence (for example two ids at once, or a click that arrives
+ * after a long hold), so the suppression tests inject the exact events. */
+export async function dispatchTouchPointer(
+  page: Page,
+  row: number,
+  col: number,
+  type: 'pointerdown' | 'pointerup' | 'click',
+  pointerId: number,
+  detail = 1,
+): Promise<void> {
+  await cellLocator(page, row, col).evaluate(
+    (cell, init: { type: string; pointerId: number; detail: number }) => {
+      cell.dispatchEvent(
+        new PointerEvent(init.type, {
+          bubbles: true,
+          cancelable: true,
+          pointerId: init.pointerId,
+          pointerType: 'touch',
+          detail: init.detail,
+        }),
+      );
+    },
+    { type, pointerId, detail },
+  );
+}
+
+export interface CellPress {
+  readonly client: CDPSession;
+  readonly point: { readonly x: number; readonly y: number };
+}
+
+/** Begin a real touch press on a cell and keep it down until released. */
+export async function startCellPress(
+  page: Page,
+  row: number,
+  col: number,
+): Promise<CellPress> {
+  const client = await page.context().newCDPSession(page);
+  const point = await cellCenter(page, row, col);
+  await client.send('Input.dispatchTouchEvent', {
+    type: 'touchStart',
+    touchPoints: [point],
+  });
+  return { client, point };
+}
+
+export async function moveCellPress(
+  press: CellPress,
+  dx: number,
+  dy: number,
+): Promise<void> {
+  await press.client.send('Input.dispatchTouchEvent', {
+    type: 'touchMove',
+    touchPoints: [{ x: press.point.x + dx, y: press.point.y + dy }],
+  });
+}
+
+/** Release a press and detach the CDP session. */
+export async function endCellPress(press: CellPress): Promise<void> {
+  try {
+    await press.client.send('Input.dispatchTouchEvent', {
+      type: 'touchEnd',
+      touchPoints: [],
+    });
+  } finally {
+    await press.client.detach();
+  }
+}
+
+/** Cancel a press (browser scroll or gesture takeover) and detach the session. */
+export async function cancelCellPress(press: CellPress): Promise<void> {
+  try {
+    await press.client.send('Input.dispatchTouchEvent', {
+      type: 'touchCancel',
+      touchPoints: [],
+    });
+  } finally {
+    await press.client.detach();
+  }
+}
+
+export async function longPressCell(
+  page: Page,
+  row: number,
+  col: number,
+  holdMs = 650,
+): Promise<void> {
+  const press = await startCellPress(page, row, col);
+  try {
+    await page.waitForTimeout(holdMs);
+    await endCellPress(press);
+  } catch (error) {
+    await press.client.detach().catch(() => undefined);
+    throw error;
+  }
+}
+
+/** Assert the document does not scroll horizontally. */
+export async function expectNoHorizontalOverflow(page: Page): Promise<void> {
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - window.innerWidth,
+  );
+  expect(overflow, 'page should not scroll horizontally').toBeLessThanOrEqual(1);
+}
+
+/** Assert an element is fully inside the current phone viewport. */
+export async function expectInsideViewport(
+  page: Page,
+  locator: Locator,
+  label: string,
+): Promise<void> {
+  const box = await locator.boundingBox();
+  const viewport = page.viewportSize();
+  expect(box, `${label} should have a bounding box`).not.toBeNull();
+  expect(viewport, 'viewport size should be available').not.toBeNull();
+  if (!box || !viewport) {
+    return;
+  }
+  expect(box.x, `${label} should start inside the viewport`).toBeGreaterThanOrEqual(0);
+  expect(box.y, `${label} should start inside the viewport`).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width, `${label} should end inside the viewport`).toBeLessThanOrEqual(
+    viewport.width + 0.5,
+  );
+  expect(box.y + box.height, `${label} should end inside the viewport`).toBeLessThanOrEqual(
+    viewport.height + 0.5,
+  );
 }
 
 export async function openMinesweeper(
