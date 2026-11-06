@@ -6,7 +6,7 @@
 
 - Before 基线：main `d54ae9f`（PR #26 的父提交）。大厅还没有 2048 卡片，`#/games/2048` 显示「没有找到这个游戏」。
 - After：本 PR head（见 PR 描述中的 commit SHA）。
-- 视口 / 主题：桌面 1440×1000、手机 390×844（DPR 2），深色主题，`reducedMotion: reduce`。
+- 视口 / 主题：桌面 1440×1000、手机 390×844（DPR 2），深色主题，`reducedMotion: reduce`。手机大厅为整页截图（`fullPage: true`），保证单列布局中的 2048 卡片进入画面；Before 用同一口径重截。
 - 生成：`npm run screenshots:2048`（生产构建 + `vite preview`，固定棋盘走 `?debug=1` 调试接缝）。
 - 复现 Before：在 `d54ae9f` 的干净 worktree 里 `npm ci && npm run build`，用 `node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4184 --strictPort` 启动预览，然后在分支运行 `BASE_URL=http://127.0.0.1:4184 npm run screenshots:2048:before`。
 
@@ -15,18 +15,18 @@
 | 文件 | 场景 | 视口 / 主题 | 说明 |
 | --- | --- | --- | --- |
 | `before-2048-hub-desktop.png` | main 大厅 | 1440×1000 / 深色 | 只有贪食蛇、俄罗斯方块与空白画布卡片（没有 2048）。 |
-| `before-2048-hub-mobile.png` | main 大厅（手机） | 390×844（DPR 2）/ 深色 | 单列大厅，没有 2048 卡片。 |
+| `before-2048-hub-mobile.png` | main 大厅（手机） | 390×844（DPR 2）/ 深色 | 整页单列大厅，没有 2048 卡片。 |
 | `before-2048-route-desktop.png` | main 访问 `#/games/2048` | 1440×1000 / 深色 | 真实基线：2048 未注册，显示「没有找到这个游戏」。 |
 | `before-2048-route-mobile.png` | main 访问 `#/games/2048`（手机） | 390×844（DPR 2）/ 深色 | 同上，手机视口。 |
 
 ### After（本 PR）
 
-`after-hub-desktop.png` / `after-hub-mobile.png` 已刷新为同时含贪食蛇、俄罗斯方块、2048 与空白画布卡片的大厅；其余为 2048 游戏页的三种状态。2048 的文件名保留 `-desktop` / `-mobile` 后缀，明确每种状态各自的视口。
+`after-hub-desktop.png` / `after-hub-mobile.png` 已刷新为同时含贪食蛇、俄罗斯方块、2048 与空白画布卡片的大厅（手机为整页截图）；其余为 2048 游戏页的三种状态。2048 的文件名保留 `-desktop` / `-mobile` 后缀，明确每种状态各自的视口。
 
 | 文件 | 场景 | 视口 / 主题 | 说明 |
 | --- | --- | --- | --- |
 | `after-hub-desktop.png` | 大厅 | 1440×1000 / 深色 | 新增 2048 卡片与入口。 |
-| `after-hub-mobile.png` | 大厅（手机） | 390×844（DPR 2）/ 深色 | 单列布局中的 2048 卡片。 |
+| `after-hub-mobile.png` | 大厅（手机） | 390×844（DPR 2）/ 深色 | 整页单列布局，含 2048 卡片。 |
 | `after-2048-ready-desktop.png` | 2048 READY | 1440×1000 / 深色 | 棋盘、方块、HUD 与开始遮罩。 |
 | `after-2048-playing-desktop.png` | 2048 游玩中 | 1440×1000 / 深色 | 合并后的分数、棋盘与侧栏。 |
 | `after-2048-gameover-desktop.png` | 2048 GAME OVER | 1440×1000 / 深色 | 无路可走结算与重开入口。 |
@@ -37,7 +37,7 @@
 ### 证据限制
 
 - main 没有 2048 页面，所以 Before 只能对比大厅（同一视口 / 主题）与真实未注册路由，不能与旧版 2048 页面逐像素对比。
-- 手机端为 Playwright 设备模拟（390×844、DPR 2、触摸），不是真实设备截图。
+- 手机端为 Playwright 设备模拟（390×844、DPR 2、触摸、大厅整页截图），不是真实设备截图。
 - 截图来自生产构建；绘制行为另有 e2e 读取 canvas 像素验证，不依赖截图比对。
 
 ## t3：贪食蛇（PR #14）

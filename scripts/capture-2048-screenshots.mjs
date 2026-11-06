@@ -132,10 +132,12 @@ async function captureMobile(browser) {
   });
 
   if (MODE === 'before') {
+    // Full-page so the single-column card grid (where 2048 will appear) is visible;
+    // a 390x844 viewport only reaches the hero.
     const hub = await context.newPage();
     await hub.goto(`${BASE_URL}/`, { waitUntil: 'networkidle' });
     await settle(hub);
-    await capture(hub, 'before-2048-hub-mobile.png', false);
+    await capture(hub, 'before-2048-hub-mobile.png', true);
     await hub.close();
 
     const route = await context.newPage();
@@ -145,11 +147,12 @@ async function captureMobile(browser) {
     await capture(route, 'before-2048-route-mobile.png', false);
     await route.close();
   } else {
+    // Same full-page framing as the Before hub so the 2048 card is comparable.
     const hub = await context.newPage();
     await hub.goto(`${BASE_URL}/`, { waitUntil: 'networkidle' });
     await hub.getByTestId('game-card-2048').waitFor();
     await settle(hub);
-    await capture(hub, 'after-hub-mobile.png', false);
+    await capture(hub, 'after-hub-mobile.png', true);
     await hub.close();
 
     const ready = await context.newPage();

@@ -16,7 +16,7 @@ export const game2048: GameModule = {
     engine: 'phaser',
     genre: '益智 · 数字',
     accent: '#fbbf24',
-    controls: ['方向键 / WASD 滑动', '触屏在棋盘上滑动', 'R 重开'],
+    controls: ['方向键 / WASD 滑动', '触屏在棋盘上滑动', 'R 开始 / 重新开始'],
   },
   async mount(root, services, signal) {
     throwIfAborted(signal);

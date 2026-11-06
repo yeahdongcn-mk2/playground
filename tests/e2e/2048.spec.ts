@@ -47,6 +47,7 @@ test.describe('2048 gameplay', () => {
     const card = page.getByTestId('game-card-2048');
     await expect(card).toBeVisible();
     await expect(card).toContainText('2048');
+    await expect(card).toContainText('R 开始 / 重新开始');
     await expect(card.locator('svg.game-2048-card-art')).toBeVisible();
     await expect(page.getByTestId('game-card-snake')).toBeVisible();
     await expect(page.getByTestId('game-card-tetris')).toBeVisible();
