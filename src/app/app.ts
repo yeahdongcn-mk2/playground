@@ -65,7 +65,7 @@ const SHELL_HTML = `
   <footer class="site-footer">
     <div class="footer-brand">
       <strong>Playground Arcade</strong>
-      <span>共享游戏框架 · 四款游戏已上线</span>
+      <span>共享游戏框架 · 五款游戏已上线</span>
     </div>
     <div class="footer-links">
       <a href="${REPO_URL}" target="_blank" rel="noreferrer">GitHub</a>
@@ -159,7 +159,7 @@ export class App {
     if (route.kind === 'home') {
       this.view.className = 'view';
       this.view.innerHTML = renderHub(games, this.playHistory);
-      document.title = 'Playground Arcade · 共享游戏框架与四款游戏';
+      document.title = 'Playground Arcade · 共享游戏框架与五款游戏';
       this.bindHubActions();
       return;
     }

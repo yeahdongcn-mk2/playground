@@ -665,6 +665,25 @@ ol {
   color: var(--cyan-bright);
 }
 
+.game-card-art--minesweeper {
+  background:
+    radial-gradient(circle at 50% 48%, rgba(244, 114, 182, 0.18), transparent 62%),
+    linear-gradient(140deg, #0a1526, #060b13);
+}
+
+.minesweeper-card-art {
+  position: relative;
+  z-index: 1;
+  width: 72%;
+  max-width: 240px;
+  filter: drop-shadow(0 12px 26px rgba(244, 114, 182, 0.18));
+}
+
+.game-card-art--minesweeper .game-card-engine {
+  border-color: rgba(244, 114, 182, 0.32);
+  color: #f9a8d4;
+}
+
 .mini-grid {
   position: absolute;
   inset: 0;

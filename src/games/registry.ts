@@ -2,6 +2,7 @@ import type { GameModule } from '../core/game';
 import { game2048 } from './2048';
 import { blankGame } from './blank';
 import { breakoutGame } from './breakout';
+import { minesweeperGame } from './minesweeper';
 import { snakeGame } from './snake';
 import { tetrisGame } from './tetris';
 
@@ -14,6 +15,7 @@ export const games: readonly GameModule[] = [
   tetrisGame,
   game2048,
   breakoutGame,
+  minesweeperGame,
   blankGame,
 ];
 

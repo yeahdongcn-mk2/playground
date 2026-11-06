@@ -51,7 +51,7 @@ export function renderHub(
           <h1 id="hero-title">一块画布，<br /><span>无限种玩法。</span></h1>
           <p class="lede">
             用 Vite 8 + TypeScript 7 + Phaser 4 搭起的共享游戏底座：
-            页面壳、按需引擎、输入、资源与自适应渲染已经接通，贪食蛇、俄罗斯方块、2048 与打砖块都已跑通。
+            页面壳、按需引擎、输入、资源与自适应渲染已经接通，贪食蛇、俄罗斯方块、2048、打砖块与扫雷都已跑通。
           </p>
           <div class="hero-actions">
             <a class="button button--primary" href="${gameHref('snake')}" data-testid="enter-snake">
@@ -202,7 +202,7 @@ function renderLastPlayed(gameId: string, lastPlayed: number | null, now: number
         </p>`;
 }
 
-type CardArt = 'snake' | 'tetris' | '2048' | 'breakout' | 'default';
+type CardArt = 'snake' | 'tetris' | '2048' | 'breakout' | 'minesweeper' | 'default';
 
 function cardArtFor(gameId: string): CardArt {
   if (gameId === 'snake') {
@@ -216,6 +216,9 @@ function cardArtFor(gameId: string): CardArt {
   }
   if (gameId === 'breakout') {
     return 'breakout';
+  }
+  if (gameId === 'minesweeper') {
+    return 'minesweeper';
   }
   return 'default';
 }
@@ -310,6 +313,58 @@ function renderCardArt(art: CardArt): string {
           <text x="124" y="90" fill="#ffffff">64</text>
           <text x="124" y="122" fill="#ffffff">128</text>
           <text x="156" y="122" fill="#04121a">2048</text>
+        </g>
+      </svg>
+      <span class="mini-grid"></span>
+    `;
+  }
+  if (art === 'minesweeper') {
+    return `
+      <svg class="minesweeper-card-art" viewBox="0 0 220 132" aria-hidden="true">
+        <g fill="#1d2f4d" stroke="rgba(148,163,184,0.25)" stroke-width="1">
+          <rect x="40" y="20" width="20" height="20" rx="4" />
+          <rect x="64" y="20" width="20" height="20" rx="4" />
+          <rect x="88" y="20" width="20" height="20" rx="4" />
+          <rect x="112" y="20" width="20" height="20" rx="4" />
+          <rect x="136" y="20" width="20" height="20" rx="4" />
+          <rect x="160" y="20" width="20" height="20" rx="4" />
+          <rect x="112" y="44" width="20" height="20" rx="4" />
+          <rect x="160" y="44" width="20" height="20" rx="4" />
+          <rect x="136" y="68" width="20" height="20" rx="4" />
+          <rect x="40" y="92" width="20" height="20" rx="4" />
+          <rect x="64" y="92" width="20" height="20" rx="4" />
+          <rect x="136" y="92" width="20" height="20" rx="4" />
+          <rect x="160" y="92" width="20" height="20" rx="4" />
+        </g>
+        <g fill="#08101e" stroke="rgba(148,163,184,0.14)" stroke-width="1">
+          <rect x="40" y="44" width="20" height="20" rx="4" />
+          <rect x="64" y="44" width="20" height="20" rx="4" />
+          <rect x="88" y="44" width="20" height="20" rx="4" />
+          <rect x="40" y="68" width="20" height="20" rx="4" />
+          <rect x="64" y="68" width="20" height="20" rx="4" />
+          <rect x="112" y="68" width="20" height="20" rx="4" />
+          <rect x="88" y="92" width="20" height="20" rx="4" />
+          <rect x="112" y="92" width="20" height="20" rx="4" />
+        </g>
+        <g font-family="ui-monospace, monospace" font-size="11" font-weight="700"
+          text-anchor="middle">
+          <text x="50" y="58" fill="#67e8f9">1</text>
+          <text x="74" y="58" fill="#67e8f9">1</text>
+          <text x="98" y="58" fill="#a3e635">2</text>
+          <text x="74" y="82" fill="#67e8f9">1</text>
+          <text x="122" y="82" fill="#67e8f9">1</text>
+          <text x="98" y="106" fill="#67e8f9">1</text>
+          <text x="122" y="106" fill="#67e8f9">1</text>
+        </g>
+        <rect x="136" y="44" width="20" height="20" rx="4" fill="rgba(244,114,182,0.18)"
+          stroke="rgba(244,114,182,0.45)" stroke-width="1" />
+        <path d="M145 50 V62" stroke="#f9a8d4" stroke-width="1.8" stroke-linecap="round" />
+        <path d="M146 50 L157 54 L146 58 Z" fill="#f472b6" />
+        <rect x="88" y="68" width="20" height="20" rx="4" fill="rgba(244,63,94,0.18)"
+          stroke="rgba(244,63,94,0.42)" stroke-width="1" />
+        <circle cx="98" cy="78" r="4.6" fill="#fb7185" />
+        <g stroke="#fb7185" stroke-width="1.4" stroke-linecap="round">
+          <path d="M98 70.5 V72M98 84 V85.5M90.5 78 H92M104 78 H105.5" />
         </g>
       </svg>
       <span class="mini-grid"></span>
