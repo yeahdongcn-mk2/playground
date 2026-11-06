@@ -5,7 +5,7 @@
 ## t7：扫雷触屏与手机布局（Issue #33 / 子任务 2）
 
 - Before 基线：`60bc3f3`（PR #36 合入扫雷 DOM 视图后、本子任务触屏与手机布局改动前）。页面已有桌面鼠标操作；手机视口下轻点可以翻开，但没有触屏插旗，重开按钮位于首屏之外。
-- After：本子任务分支 `agent/plan-33-t2` 的界面提交 [`02870bb`](https://github.com/yeahdongcn-mk2/playground/commit/02870bb21c838ef8c43299f67a1c9abdb4824395)；手机与桌面 After 截图都在该提交的生产构建上捕获，截图文件由紧随其后的文档提交入库。本子任务按计划只推分支、不创建 PR。
+- After：本子任务分支 `agent/plan-33-t2` 的界面提交 [`fbbe118`](https://github.com/yeahdongcn-mk2/playground/commit/fbbe118afc7f54ae86cefab574e9872c86c6e922)；手机与桌面 After 截图都在该提交的生产构建上捕获，截图文件由紧随其后的文档提交入库。本子任务按计划只推分支、不创建 PR。
 - 视口 / 主题：Pixel 7（412×839 CSS px，DPR 2.625，`isMobile: true`、`hasTouch: true`），深色主题，`reducedMotion: reduce`。Before / After 使用同一场景、同一视口、同一状态，均为视口截图（`fullPage: false`），以便核对 HUD、返回大厅与重开入口在手机首屏内完整可见。
 - 生成 After：`npm run screenshots:minesweeper`（生产构建 + `vite preview`，固定雷盘走 `?debug=1&mines=row,col;...` 调试接缝）。
 - 复现 Before：在 `60bc3f3` 的干净 worktree 里 `npm ci && npm run build`，用 `node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4188 --strictPort` 启动预览，然后在当前分支运行 `BASE_URL=http://127.0.0.1:4188 npm run screenshots:minesweeper:touch-before`。Before 的游玩中截图用鼠标右键插旗（基线还没有触屏插旗），After 用真实触摸轻点 + 长按插旗，因此两张游玩中截图里的旗子与 HUD 状态相同，但产生方式不同。
@@ -19,7 +19,7 @@
 | `before-minesweeper-lost-mobile.png` | 扫雷 BOOM（手机） | Pixel 7 412×839 / 深色 | 踩雷结束遮罩与全部雷。 |
 | `before-minesweeper-won-mobile.png` | 扫雷 CLEARED（手机） | Pixel 7 412×839 / 深色 | 固定雷盘翻开全部安全格后的胜利遮罩。 |
 
-### After（`agent/plan-33-t2`，截图捕获于 `02870bb`）
+### After（`agent/plan-33-t2`，截图捕获于 `fbbe118`）
 
 | 文件 | 场景 | 视口 / 主题 | 说明 |
 | --- | --- | --- | --- |
