@@ -275,6 +275,9 @@ async function captureTouchMobile(browser, prefix) {
   }
   await playing.getByTestId('status').filter({ hasText: '进行中' }).waitFor();
   await playing.getByTestId('remaining-mines').filter({ hasText: '9' }).waitFor();
+  // Both modes wait for the clock to leave 0:00 so the Before / After frames
+  // show the same live HUD state despite the slower touch long press.
+  await playing.getByTestId('timer').filter({ hasNotText: '0:00' }).waitFor();
   await settle(playing);
   await capture(playing, `${prefix}-minesweeper-playing-mobile.png`, false);
   await playing.close();

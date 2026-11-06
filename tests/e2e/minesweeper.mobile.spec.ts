@@ -81,7 +81,21 @@ test.describe('minesweeper on a phone viewport', () => {
     // A long press must not toggle twice through the synthetic contextmenu.
     expect((await readState(page)).flaggedCount).toBe(1);
 
-    // Holding the same flagged cell again clears the flag.
+    // The restart entry next to the board works from a dirty board.
+    const mobileRestart = page.getByTestId('mobile-restart-button');
+    const restartBox = await mobileRestart.boundingBox();
+    expect(restartBox).not.toBeNull();
+    await page.touchscreen.tap(
+      (restartBox?.x ?? 0) + (restartBox?.width ?? 0) / 2,
+      (restartBox?.y ?? 0) + (restartBox?.height ?? 0) / 2,
+    );
+    await expect(page.getByTestId('status')).toHaveText('待开始');
+    await expect(page.getByTestId('remaining-mines')).toHaveText('10');
+    await expectCleanBoard(page);
+
+    // Holding a flagged cell clears the flag; the first hold sets it again.
+    await longPressCell(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
+    await expect(mine).toHaveAttribute('data-state', 'flagged');
     await longPressCell(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
     await expect(mine).toHaveAttribute('data-state', 'hidden');
     await expect(mine).toHaveText('');
@@ -116,7 +130,9 @@ test.describe('minesweeper on a phone viewport', () => {
     await expect(mine).toHaveAttribute('data-state', 'hidden');
     expect(await readStatus(page)).toBe('ready');
 
-    // pointerleave (the finger leaves the board) also cancels.
+    // pointerleave (the finger leaves the board) also cancels. A real finger
+    // would already trip the move tolerance above, so this synthetic event
+    // covers the dedicated handler without claiming a physical path.
     const leftBoard = await startCellPress(
       page,
       LOSS_MINE_CLICK.row,
@@ -138,28 +154,48 @@ test.describe('minesweeper on a phone viewport', () => {
     await expect(mine).toHaveAttribute('data-state', 'hidden');
     expect(await readStatus(page)).toBe('ready');
 
-    expect((await readState(page)).flaggedCount).toBe(0);
+    // Positive control: cancellation did not break the timer itself.
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await longPressCell(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
+    await expect(mine).toHaveAttribute('data-state', 'flagged');
+    expect((await readState(page)).flaggedCount).toBe(1);
     await expectNoHorizontalOverflow(page);
   });
 
-  test('a touch contextmenu during a hold is prevented and flags only once', async ({
+  test('a touch contextmenu is always prevented and never toggles twice', async ({
     page,
   }) => {
     await openMinesweeper(page, { mines: LOSS_MINES });
     const mine = cellLocator(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
 
-    const press = await startCellPress(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
-    await page.waitForTimeout(120);
-    const prevented = await mine.evaluate((cell) => {
-      const event = new MouseEvent('contextmenu', {
+    // Without an active hold, a touch contextmenu is prevented and ignored.
+    const preventedWithoutHold = await mine.evaluate((cell) => {
+      const event = new PointerEvent('contextmenu', {
         bubbles: true,
         cancelable: true,
+        pointerType: 'touch',
       });
       cell.dispatchEvent(event);
       return event.defaultPrevented;
     });
-    expect(prevented).toBe(true);
-    await page.waitForTimeout(500);
+    expect(preventedWithoutHold).toBe(true);
+    expect((await readState(page)).flaggedCount).toBe(0);
+
+    // If the native menu wins the race against the 500 ms timer, it owns the
+    // flag and disarms the timer so the hold still toggles exactly once.
+    const press = await startCellPress(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
+    await page.waitForTimeout(120);
+    const preventedDuringHold = await mine.evaluate((cell) => {
+      const event = new PointerEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        pointerType: 'touch',
+      });
+      cell.dispatchEvent(event);
+      return event.defaultPrevented;
+    });
+    expect(preventedDuringHold).toBe(true);
+    await page.waitForTimeout(600);
     await endCellPress(press);
 
     await expect(mine).toHaveAttribute('data-state', 'flagged');

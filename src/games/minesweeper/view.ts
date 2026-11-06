@@ -20,6 +20,8 @@ const CLOCK_INTERVAL_MS = 250;
 const LONG_PRESS_MS = 500;
 /** Moving further than this while holding cancels the long press (e.g. scroll). */
 const LONG_PRESS_MOVE_TOLERANCE_PX = 10;
+/** How long a cancelled / long-pressed touch gesture may swallow its click. */
+const TOUCH_CLICK_SUPPRESS_MS = 700;
 
 const STATUS_LABELS: Readonly<Record<MinesweeperStatus, string>> = {
   ready: '待开始',
@@ -330,13 +332,20 @@ export async function mountMinesweeper(
   let touchGesture: TouchGesture | null = null;
   // Set when a touch gesture must not also reveal on the synthetic click:
   // long press already toggled a flag, or the finger moved / the page scrolled.
-  let suppressTouchClick = false;
+  // A deadline keeps a cancellation without a following click from swallowing
+  // a much later activation. Only clicks with detail > 0 (pointer-generated)
+  // are considered; keyboard activation always passes.
+  let suppressTouchClickUntil = 0;
 
   function clearGestureTimer(gesture: TouchGesture): void {
     if (gesture.timer !== null) {
       window.clearTimeout(gesture.timer);
       gesture.timer = null;
     }
+  }
+
+  function suppressNextTouchClick(): void {
+    suppressTouchClickUntil = performance.now() + TOUCH_CLICK_SUPPRESS_MS;
   }
 
   function cancelTouchGesture(): void {
@@ -346,7 +355,7 @@ export async function mountMinesweeper(
     clearGestureTimer(touchGesture);
     touchGesture = null;
     // Keep the synthetic click from revealing the cell.
-    suppressTouchClick = true;
+    suppressNextTouchClick();
   }
 
   function stopClock(): void {
@@ -491,6 +500,9 @@ export async function mountMinesweeper(
   }
 
   function restart(): void {
+    // A restart from another finger must not let a held cell's timer flag the
+    // fresh board a moment later.
+    cancelTouchGesture();
     services.audio.unlock();
     engine.restart();
     stopClock();
@@ -508,17 +520,17 @@ export async function mountMinesweeper(
   boardElement.addEventListener(
     'pointerdown',
     (event) => {
+      // Any new press supersedes a pending touch hold: a second finger, a
+      // mouse click after a cancelled hold, or a pen tap.
+      cancelTouchGesture();
+      suppressTouchClickUntil = 0;
       if (event.pointerType !== 'touch') {
-        // A mouse or keyboard interaction owns the next click.
-        suppressTouchClick = false;
         return;
       }
       const cell = currentCell(event.target);
       if (!cell) {
         return;
       }
-      cancelTouchGesture();
-      suppressTouchClick = false;
       const gesture: TouchGesture = {
         pointerId: event.pointerId,
         row: cell.row,
@@ -535,7 +547,7 @@ export async function mountMinesweeper(
         }
         gesture.longPressed = true;
         // The release must not reveal the cell on the synthetic click.
-        suppressTouchClick = true;
+        suppressNextTouchClick();
         toggleFlag(gesture.row, gesture.col);
       }, LONG_PRESS_MS);
       touchGesture = gesture;
@@ -592,12 +604,9 @@ export async function mountMinesweeper(
   boardElement.addEventListener(
     'click',
     (event) => {
-      if (suppressTouchClick) {
-        suppressTouchClick = false;
-        // Keyboard activation (detail 0) is never the synthetic touch click.
-        if (event.detail > 0) {
-          return;
-        }
+      if (event.detail > 0 && performance.now() < suppressTouchClickUntil) {
+        suppressTouchClickUntil = 0;
+        return;
       }
       const cell = currentCell(event.target);
       if (cell) {
@@ -623,6 +632,15 @@ export async function mountMinesweeper(
       const touchContextMenu =
         event instanceof PointerEvent && event.pointerType === 'touch';
       if (touchContextMenu || touchGesture !== null) {
+        // Some touch browsers fire the native contextmenu at the same moment
+        // as our timer. Whichever runs first owns the flag; if the menu wins,
+        // disarm the timer so one hold still toggles exactly once.
+        if (touchGesture && !touchGesture.longPressed) {
+          clearGestureTimer(touchGesture);
+          touchGesture.longPressed = true;
+          suppressNextTouchClick();
+          toggleFlag(touchGesture.row, touchGesture.col);
+        }
         return;
       }
       toggleFlag(cell.row, cell.col);

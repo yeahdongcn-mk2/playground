@@ -368,7 +368,11 @@
   .minesweeper-pointer-hint {
     display: none;
   }
+}
 
+/* Show the touch affordances on any device with a coarse pointer: phones,
+   tablets, and touch laptops whose primary pointer is still a mouse. */
+@media (any-pointer: coarse) {
   .minesweeper-touch-hint {
     display: block;
   }
