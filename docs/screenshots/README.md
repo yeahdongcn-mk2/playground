@@ -1,8 +1,46 @@
 # 截图来源
 
-这些截图用于 Issue #11 的 Before / After 视觉证据。全部由 Playwright Chromium 真实渲染，不是 mockup。
+这些截图用于各期交付的 Before / After 视觉证据。全部由 Playwright Chromium 真实渲染，不是 mockup。
 
-## t3：贪食蛇（本 PR）
+## t4：2048（PR #26）
+
+- Before 基线：main `d54ae9f`（PR #26 的父提交）。大厅还没有 2048 卡片，`#/games/2048` 显示「没有找到这个游戏」。
+- After：本 PR head（见 PR 描述中的 commit SHA）。
+- 视口 / 主题：桌面 1440×1000、手机 390×844（DPR 2），深色主题，`reducedMotion: reduce`。桌面与手机大厅均为整页截图（`fullPage: true`）；手机 Before 用同一口径重截，保证单列布局中的 2048 卡片进入画面。
+- 生成：`npm run screenshots:2048`（生产构建 + `vite preview`，固定棋盘走 `?debug=1` 调试接缝）。
+- 复现 Before：在 `d54ae9f` 的干净 worktree 里 `npm ci && npm run build`，用 `node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4184 --strictPort` 启动预览，然后在分支运行 `BASE_URL=http://127.0.0.1:4184 npm run screenshots:2048:before`。
+
+### Before（main，没有 2048）
+
+| 文件 | 场景 | 视口 / 主题 | 说明 |
+| --- | --- | --- | --- |
+| `before-2048-hub-desktop.png` | main 大厅 | 1440×1000 / 深色 | 只有贪食蛇、俄罗斯方块与空白画布卡片（没有 2048）。 |
+| `before-2048-hub-mobile.png` | main 大厅（手机） | 390×844（DPR 2）/ 深色 | 整页单列大厅，没有 2048 卡片。 |
+| `before-2048-route-desktop.png` | main 访问 `#/games/2048` | 1440×1000 / 深色 | 真实基线：2048 未注册，显示「没有找到这个游戏」。 |
+| `before-2048-route-mobile.png` | main 访问 `#/games/2048`（手机） | 390×844（DPR 2）/ 深色 | 同上，手机视口。 |
+
+### After（本 PR）
+
+`after-hub-desktop.png` / `after-hub-mobile.png` 已刷新为同时含贪食蛇、俄罗斯方块、2048 与空白画布卡片的大厅（手机为整页截图）；其余为 2048 游戏页的三种状态。2048 的文件名保留 `-desktop` / `-mobile` 后缀，明确每种状态各自的视口。
+
+| 文件 | 场景 | 视口 / 主题 | 说明 |
+| --- | --- | --- | --- |
+| `after-hub-desktop.png` | 大厅 | 1440×1000 / 深色 | 新增 2048 卡片与入口。 |
+| `after-hub-mobile.png` | 大厅（手机） | 390×844（DPR 2）/ 深色 | 整页单列布局，含 2048 卡片。 |
+| `after-2048-ready-desktop.png` | 2048 READY | 1440×1000 / 深色 | 棋盘、方块、HUD 与开始遮罩。 |
+| `after-2048-playing-desktop.png` | 2048 游玩中 | 1440×1000 / 深色 | 合并后的分数、棋盘与侧栏。 |
+| `after-2048-gameover-desktop.png` | 2048 GAME OVER | 1440×1000 / 深色 | 无路可走结算与重开入口。 |
+| `after-2048-ready-mobile.png` | 2048 READY（手机） | 390×844（DPR 2）/ 深色 | 手机端棋盘与开始遮罩。 |
+| `after-2048-playing-mobile.png` | 2048 游玩中（手机） | 390×844（DPR 2）/ 深色 | 手机端棋盘、HUD 与滑动提示。 |
+| `after-2048-gameover-mobile.png` | 2048 GAME OVER（手机） | 390×844（DPR 2）/ 深色 | 手机端结算与重开入口。 |
+
+### 证据限制
+
+- main 没有 2048 页面，所以 Before 只能对比大厅（同一视口 / 主题）与真实未注册路由，不能与旧版 2048 页面逐像素对比。
+- 手机端为 Playwright 设备模拟（390×844、DPR 2、触摸、大厅整页截图），不是真实设备截图。
+- 截图来自生产构建；绘制行为另有 e2e 读取 canvas 像素验证，不依赖截图比对。
+
+## t3：贪食蛇（PR #14）
 
 - Before 基线：t2 已合入 main 的 `60c0206`（squash commit，树内容 = t2 分支 head `c9e8dec`）。截图在 `c9e8dec` 的干净 worktree 捕获。
 - After：本 PR head（见 PR 描述中的 commit SHA）。
@@ -29,6 +67,8 @@
 | `after-snake-gameover.png` | 贪食蛇 GAME OVER | 1440×1000 / 深色 | 撞墙结算、最高分与重开入口。 |
 | `after-hub-mobile.png` | 大厅 | 390×844（DPR 2）/ 深色 | 单列布局。 |
 | `after-snake-mobile.png` | 贪食蛇（手机） | 390×844（DPR 2）/ 深色 | 棋盘、D-pad 与操作面板堆叠。 |
+
+`after-hub-desktop.png` / `after-hub-mobile.png` 已由 t4 更新为含 2048 卡片的大厅（手机为整页截图，当前尺寸 780×11182）。
 
 ### 证据限制
 
@@ -59,7 +99,7 @@ npm run screenshots:baseline
 | `after-blank-desktop.png` | 空白画布游戏（指针移动后） | 1440×1000 / 深色 | 可交互画布、HUD、操作面板与重置入口。 |
 | `after-blank-mobile.png` | 空白画布游戏（触屏移动后） | 390×844（DPR 2）/ 深色 | 自适应画布、触屏操作与面板堆叠。 |
 
-`after-hub-desktop.png` / `after-hub-mobile.png` 已由 t3 更新为含贪食蛇卡片的大厅。
+`after-hub-desktop.png` / `after-hub-mobile.png` 已由 t4 更新为含 2048 卡片的大厅。
 
 生成方式（会先构建，再用 `vite preview` 在 4174 端口启动生产预览）：
 

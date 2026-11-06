@@ -119,3 +119,206 @@ export async function visibilityListenerCount(page: Page): Promise<number> {
         .__visibilityListenerCount(),
   );
 }
+
+interface ListenerProbeApi {
+  setTarget(name: string, target: EventTarget | null): void;
+  count(name: string, type: string): number;
+  pendingLongTimers(): number;
+}
+
+interface ListenerProbeWindow {
+  __listenerProbe?: ListenerProbeApi;
+}
+
+/**
+ * Count the listeners that are *effectively* active on window, document and a
+ * game element. Unlike a plain add/remove counter this also drops listeners
+ * registered with `{ signal }` when that signal aborts, so it catches leaks
+ * that teardown only handles through `AbortController`. It also tracks timers
+ * of one second or longer, such as the 2048 scene-ready timeout.
+ */
+export async function installListenerProbe(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    interface Entry {
+      readonly target: EventTarget;
+      readonly type: string;
+      readonly listener: EventListenerOrEventListenerObject;
+      readonly capture: boolean;
+    }
+
+    const entries = new Set<Entry>();
+    const targets = new Map<string, EventTarget>();
+    const longTimers = new Set<number>();
+
+    const nativeAdd = EventTarget.prototype.addEventListener;
+    const nativeRemove = EventTarget.prototype.removeEventListener;
+    const captureOf = (options?: boolean | AddEventListenerOptions | EventListenerOptions): boolean =>
+      typeof options === 'boolean' ? options : Boolean(options?.capture);
+    const removeEntry = (
+      target: EventTarget,
+      type: string,
+      listener: EventListenerOrEventListenerObject | null,
+      capture: boolean,
+    ): void => {
+      for (const entry of entries) {
+        if (
+          entry.target === target &&
+          entry.type === type &&
+          entry.listener === listener &&
+          entry.capture === capture
+        ) {
+          entries.delete(entry);
+        }
+      }
+    };
+
+    EventTarget.prototype.addEventListener = function (
+      this: EventTarget,
+      type: string,
+      listener: EventListenerOrEventListenerObject | null,
+      options?: boolean | AddEventListenerOptions,
+    ): void {
+      if (listener) {
+        const capture = captureOf(options);
+        const existing = [...entries].some(
+          (entry) =>
+            entry.target === this &&
+            entry.type === type &&
+            entry.listener === listener &&
+            entry.capture === capture,
+        );
+        if (!existing) {
+          const signal =
+            typeof options === 'object' && options !== null ? options.signal : undefined;
+          if (!signal?.aborted) {
+            const entry: Entry = { target: this, type, listener, capture };
+            entries.add(entry);
+            if (signal) {
+              // The browser drops signal-bound listeners without calling
+              // removeEventListener, so mirror that here.
+              nativeAdd.call(signal, 'abort', () => entries.delete(entry), { once: true });
+            }
+            if (typeof options === 'object' && options !== null && options.once) {
+              // Match the browser: a once listener is gone after it fires.
+              nativeAdd.call(this, type, () => entries.delete(entry), { capture, once: true });
+            }
+          }
+        }
+      }
+      nativeAdd.call(this, type, listener, options);
+    } as typeof EventTarget.prototype.addEventListener;
+
+    EventTarget.prototype.removeEventListener = function (
+      this: EventTarget,
+      type: string,
+      listener: EventListenerOrEventListenerObject | null,
+      options?: boolean | EventListenerOptions,
+    ): void {
+      removeEntry(this, type, listener, captureOf(options));
+      nativeRemove.call(this, type, listener, options);
+    } as typeof EventTarget.prototype.removeEventListener;
+
+    const nativeSetTimeout = window.setTimeout.bind(window) as (
+      handler: TimerHandler,
+      timeout?: number,
+      ...args: unknown[]
+    ) => number;
+    const nativeClearTimeout = window.clearTimeout.bind(window);
+    window.setTimeout = ((
+      handler: TimerHandler,
+      timeout?: number,
+      ...args: unknown[]
+    ): number => {
+      const isLong = typeof timeout === 'number' && timeout >= 1_000;
+      let id = 0;
+      const callback: TimerHandler =
+        isLong && typeof handler === 'function'
+          ? (...callbackArgs: unknown[]): void => {
+              longTimers.delete(id);
+              (handler as (...callbackArgs: unknown[]) => void)(...callbackArgs);
+            }
+          : handler;
+      id = nativeSetTimeout(callback, timeout, ...args);
+      if (isLong) {
+        longTimers.add(id);
+      }
+      return id;
+    }) as typeof window.setTimeout;
+    window.clearTimeout = ((id?: number): void => {
+      if (typeof id === 'number') {
+        longTimers.delete(id);
+      }
+      nativeClearTimeout(id);
+    }) as typeof window.clearTimeout;
+
+    targets.set('window', window);
+    targets.set('document', document);
+
+    const api: ListenerProbeApi = {
+      setTarget(name, target) {
+        if (target) {
+          targets.set(name, target);
+        } else {
+          targets.delete(name);
+        }
+      },
+      count(name, type) {
+        const target = targets.get(name);
+        if (!target) {
+          return -1;
+        }
+        let total = 0;
+        for (const entry of entries) {
+          if (entry.target === target && entry.type === type) {
+            total += 1;
+          }
+        }
+        return total;
+      },
+      pendingLongTimers() {
+        return longTimers.size;
+      },
+    };
+    Object.assign(window, { __listenerProbe: api });
+  });
+}
+
+/** Point a named probe target at an element matching `selector`. */
+export async function trackProbeTarget(
+  page: Page,
+  name: string,
+  selector: string,
+): Promise<void> {
+  await page.evaluate(
+    ({ name, selector }) => {
+      const api = (window as unknown as ListenerProbeWindow).__listenerProbe;
+      api?.setTarget(name, document.querySelector(selector));
+    },
+    { name, selector },
+  );
+}
+
+/** Count active listeners of `type` on a probe target ('window', 'stage', ...). */
+export async function listenerCount(page: Page, name: string, type: string): Promise<number> {
+  return page.evaluate(
+    ({ name, type }) => {
+      const api = (window as unknown as ListenerProbeWindow).__listenerProbe;
+      if (!api) {
+        throw new Error('Listener probe is not installed');
+      }
+      return api.count(name, type);
+    },
+    { name, type },
+  );
+}
+
+/** Number of pending timers with a delay of at least one second. */
+export async function pendingLongTimerCount(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const api = (window as unknown as ListenerProbeWindow).__listenerProbe;
+    if (!api) {
+      throw new Error('Listener probe is not installed');
+    }
+    return api.pendingLongTimers();
+  });
+}

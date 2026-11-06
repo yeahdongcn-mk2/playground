@@ -51,7 +51,7 @@ export function renderHub(
           <h1 id="hero-title">一块画布，<br /><span>无限种玩法。</span></h1>
           <p class="lede">
             用 Vite 8 + TypeScript 7 + Phaser 4 搭起的共享游戏底座：
-            页面壳、按需引擎、输入、资源与自适应渲染已经接通，第一款完整游戏「贪食蛇」已经跑通。
+            页面壳、按需引擎、输入、资源与自适应渲染已经接通，贪食蛇、俄罗斯方块与 2048 都已跑通。
           </p>
           <div class="hero-actions">
             <a class="button button--primary" href="${gameHref('snake')}" data-testid="enter-snake">
@@ -202,7 +202,7 @@ function renderLastPlayed(gameId: string, lastPlayed: number | null, now: number
         </p>`;
 }
 
-type CardArt = 'snake' | 'tetris' | 'default';
+type CardArt = 'snake' | 'tetris' | '2048' | 'default';
 
 function cardArtFor(gameId: string): CardArt {
   if (gameId === 'snake') {
@@ -210,6 +210,9 @@ function cardArtFor(gameId: string): CardArt {
   }
   if (gameId === 'tetris') {
     return 'tetris';
+  }
+  if (gameId === '2048') {
+    return '2048';
   }
   return 'default';
 }
@@ -268,6 +271,42 @@ function renderCardArt(art: CardArt): string {
           <g fill="#facc15">
             <rect x="128" y="74" width="20" height="20" rx="4" />
           </g>
+        </g>
+      </svg>
+      <span class="mini-grid"></span>
+    `;
+  }
+  if (art === '2048') {
+    return `
+      <svg class="game-2048-card-art" viewBox="0 0 220 132" aria-hidden="true">
+        <g>
+          <rect x="46" y="8" width="28" height="28" rx="6" fill="#1b2740" />
+          <rect x="78" y="8" width="28" height="28" rx="6" fill="#e2e8f0" />
+          <rect x="110" y="8" width="28" height="28" rx="6" fill="#cbd5e1" />
+          <rect x="142" y="8" width="28" height="28" rx="6" fill="#1b2740" />
+          <rect x="46" y="40" width="28" height="28" rx="6" fill="#fbbf24" />
+          <rect x="78" y="40" width="28" height="28" rx="6" fill="#f59e0b" />
+          <rect x="110" y="40" width="28" height="28" rx="6" fill="#1b2740" />
+          <rect x="142" y="40" width="28" height="28" rx="6" fill="#1b2740" />
+          <rect x="46" y="72" width="28" height="28" rx="6" fill="#1b2740" />
+          <rect x="78" y="72" width="28" height="28" rx="6" fill="#f97316" />
+          <rect x="110" y="72" width="28" height="28" rx="6" fill="#ef4444" />
+          <rect x="142" y="72" width="28" height="28" rx="6" fill="#1b2740" />
+          <rect x="46" y="104" width="28" height="28" rx="6" fill="#1b2740" />
+          <rect x="78" y="104" width="28" height="28" rx="6" fill="#1b2740" />
+          <rect x="110" y="104" width="28" height="28" rx="6" fill="#a855f7" />
+          <rect x="142" y="104" width="28" height="28" rx="6" fill="#22d3ee" />
+        </g>
+        <g font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="700"
+          text-anchor="middle">
+          <text x="92" y="26" fill="#0b1220">2</text>
+          <text x="124" y="26" fill="#0b1220">4</text>
+          <text x="60" y="58" fill="#0b1220">8</text>
+          <text x="92" y="58" fill="#0b1220">16</text>
+          <text x="92" y="90" fill="#ffffff">32</text>
+          <text x="124" y="90" fill="#ffffff">64</text>
+          <text x="124" y="122" fill="#ffffff">128</text>
+          <text x="156" y="122" fill="#04121a">2048</text>
         </g>
       </svg>
       <span class="mini-grid"></span>

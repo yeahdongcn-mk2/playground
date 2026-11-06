@@ -18,6 +18,8 @@
     "test:e2e": "npm run build && playwright test",
     "screenshots": "npm run build && node scripts/capture-screenshots.mjs",
     "screenshots:snake": "node scripts/capture-snake-screenshots.mjs",
+    "screenshots:2048": "npm run build && node scripts/capture-2048-screenshots.mjs",
+    "screenshots:2048:before": "node scripts/capture-2048-screenshots.mjs --before",
     "screenshots:baseline": "node scripts/capture-baseline.mjs",
     "lint": "oxlint src tests && node scripts/check-boundaries.mjs",
     "check:budget": "node scripts/check-budget.mjs"

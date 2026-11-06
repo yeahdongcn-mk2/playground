@@ -15,6 +15,8 @@ export interface Phaser2DConfig {
   readonly backgroundColor?: string;
   readonly activePointers?: number;
   readonly ariaLabel?: string;
+  /** Tests force the 2D canvas renderer so pixels can be read reliably. */
+  readonly renderer?: 'auto' | 'canvas';
 }
 
 export interface Phaser2DRuntime {
@@ -61,7 +63,7 @@ export function createPhaser2DGame(config: Phaser2DConfig): Phaser2DRuntime {
   let game: Phaser.Game;
   try {
     game = new Phaser.Game({
-      type: Phaser.AUTO,
+      type: config.renderer === 'canvas' ? Phaser.CANVAS : Phaser.AUTO,
       parent,
       width,
       height,
