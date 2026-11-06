@@ -272,4 +272,3 @@ function prefersReducedMotion(): boolean {
     return false;
   }
 }
-
