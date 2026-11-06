@@ -296,6 +296,16 @@ export class Game2048Engine {
    * the board changed, add one random tile and refresh the game-over status.
    */
   move(direction: Direction): MoveResult {
+    // Validate before the status check so invalid input fails the same way in
+    // every state instead of being silently ignored after game over. Object.hasOwn
+    // keeps inherited names such as 'constructor' from passing as directions.
+    const lines = Object.hasOwn(LINE_CELLS, direction)
+      ? LINE_CELLS[direction]
+      : undefined;
+    if (!lines) {
+      throw new RangeError(`Unknown direction: ${String(direction)}.`);
+    }
+
     if (this.gameStatus !== 'playing') {
       return {
         direction,
@@ -310,11 +320,6 @@ export class Game2048Engine {
     const mergedTiles: MergedTile[] = [];
     let gained = 0;
     let moved = false;
-
-    const lines = LINE_CELLS[direction];
-    if (!lines) {
-      throw new RangeError(`Unknown direction: ${String(direction)}.`);
-    }
 
     for (const line of lines) {
       const before = line.map((cell) => cellAt(this.tiles, cell.row, cell.col));

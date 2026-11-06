@@ -45,6 +45,25 @@ function withoutSpawned(board: Board, spawned: SpawnedTile | null): BoardCell[][
 
 const EMPTY_ROW: readonly BoardCell[] = [null, null, null, null];
 
+/** Full checkerboard with no equal neighbours and no empty cells. */
+const STUCK_BOARD: Board = [
+  [2, 4, 2, 4],
+  [4, 2, 4, 2],
+  [2, 4, 2, 4],
+  [4, 2, 4, 2],
+];
+
+/**
+ * Full board with no equal horizontal neighbours; the only equal pair is the
+ * vertical (0,0)/(1,0).
+ */
+const VERTICAL_ONLY_BOARD: Board = [
+  [2, 4, 2, 4],
+  [2, 8, 4, 8],
+  [4, 2, 8, 2],
+  [8, 4, 2, 4],
+];
+
 describe('board helpers', () => {
   it('creates an empty 4x4 board', () => {
     const board = createEmptyBoard();
@@ -55,12 +74,6 @@ describe('board helpers', () => {
   });
 
   it('detects whether any move is still possible', () => {
-    const stuck = boardFrom([
-      [2, 4, 2, 4],
-      [4, 2, 4, 2],
-      [2, 4, 2, 4],
-      [4, 2, 4, 2],
-    ]);
     const withGap = boardFrom([
       [2, 4, 2, 4],
       [4, 2, 4, 2],
@@ -74,7 +87,7 @@ describe('board helpers', () => {
       [16, 2, 4, 2],
     ]);
 
-    expect(canMove(stuck)).toBe(false);
+    expect(canMove(STUCK_BOARD)).toBe(false);
     expect(canMove(withGap)).toBe(true);
     expect(canMove(withNeighbours)).toBe(true);
   });
@@ -106,6 +119,24 @@ describe('fresh game', () => {
       [2, 2, null, null],
       EMPTY_ROW,
       EMPTY_ROW,
+      EMPTY_ROW,
+    ]);
+  });
+
+  it('places a starting tile in the randomly chosen cell, not just the first empty one', () => {
+    // One spawn on an empty board: the index roll 0.5 chooses empty[8] = (2, 0),
+    // and the value roll 0.5 is above the default 10% four chance, so it is a 2.
+    const rolls = [0.5, 0.5];
+    let index = 0;
+    const engine = new Game2048Engine({
+      initialTiles: 1,
+      rng: () => rolls[index++] ?? 0.5,
+    });
+
+    expect(engine.board).toEqual([
+      EMPTY_ROW,
+      EMPTY_ROW,
+      [2, null, null, null],
       EMPTY_ROW,
     ]);
   });
@@ -160,6 +191,16 @@ describe('invalid runtime input', () => {
     const engine = makeEngine();
 
     expect(() => engine.move('sideways' as Direction)).toThrow(RangeError);
+    // Object.prototype names must not pass as directions.
+    expect(() => engine.move('constructor' as Direction)).toThrow(RangeError);
+  });
+
+  it('rejects an unknown direction after game over instead of ignoring it', () => {
+    const engine = makeEngine({ initialBoard: STUCK_BOARD });
+    expect(engine.currentStatus).toBe('gameover');
+
+    expect(() => engine.move('sideways' as Direction)).toThrow(RangeError);
+    expect(() => engine.move('constructor' as Direction)).toThrow(RangeError);
   });
 });
 
@@ -474,13 +515,7 @@ describe('spawning', () => {
 
 describe('game over', () => {
   it('is over on a full board without equal neighbours', () => {
-    const stuck = boardFrom([
-      [2, 4, 2, 4],
-      [4, 2, 4, 2],
-      [2, 4, 2, 4],
-      [4, 2, 4, 2],
-    ]);
-    const engine = makeEngine({ initialBoard: stuck });
+    const engine = makeEngine({ initialBoard: STUCK_BOARD });
 
     expect(engine.currentStatus).toBe('gameover');
     expect(engine.state.status).toBe('gameover');
@@ -492,7 +527,7 @@ describe('game over', () => {
       scoreGained: 0,
       gameOver: true,
     });
-    expect(engine.state.board).toEqual(stuck);
+    expect(engine.state.board).toEqual(STUCK_BOARD);
   });
 
   it('stays playable while an empty cell exists', () => {
@@ -518,6 +553,14 @@ describe('game over', () => {
       ]),
     });
 
+    expect(engine.currentStatus).toBe('playing');
+  });
+
+  it('stays playable when the only equal neighbour is vertical', () => {
+    // Dropping the `down` branch in canMove would wrongly report game over here.
+    const engine = makeEngine({ initialBoard: VERTICAL_ONLY_BOARD });
+
+    expect(canMove(VERTICAL_ONLY_BOARD)).toBe(true);
     expect(engine.currentStatus).toBe('playing');
   });
 
