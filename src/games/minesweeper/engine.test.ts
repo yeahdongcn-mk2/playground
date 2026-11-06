@@ -486,6 +486,25 @@ describe('clock', () => {
     expect(engine.tick(400)).toBe(400);
   });
 
+  it('reports status and clock through the direct getters', () => {
+    const engine = makeEngine({ initialMines: WALL_MINES });
+    expect(engine.currentStatus).toBe('ready');
+    expect(engine.elapsedMs).toBe(0);
+
+    engine.reveal(0, 0);
+    engine.tick(1250);
+    expect(engine.currentStatus).toBe('playing');
+    expect(engine.elapsedMs).toBe(1250);
+
+    engine.reveal(8, 8);
+    expect(engine.currentStatus).toBe('lost');
+    expect(engine.elapsedMs).toBe(1250);
+
+    engine.restart();
+    expect(engine.currentStatus).toBe('ready');
+    expect(engine.elapsedMs).toBe(0);
+  });
+
   it('does not start when flagging', () => {
     const engine = makeEngine();
     engine.toggleFlag(4, 4);
@@ -505,8 +524,14 @@ describe('clock', () => {
 describe('restart', () => {
   it('restores a fresh board after a loss', () => {
     const engine = makeEngine({ initialMines: RING_MINES });
+    // Flag a hidden safe cell before the first reveal: flooding from (0, 0)
+    // reveals (8, 8), so flagging it afterwards would be a silent no-op and
+    // the reset assertions below could not fail.
+    expect(engine.toggleFlag(8, 8)).toMatchObject({ changed: true, flagged: true });
     engine.reveal(0, 0);
-    engine.toggleFlag(8, 8);
+    expect(engine.state.flaggedCount).toBe(1);
+    expect(engine.state.remainingMines).toBe(MINE_COUNT - 1);
+
     engine.tick(2500);
     engine.reveal(3, 3);
     expect(engine.state.status).toBe('lost');
