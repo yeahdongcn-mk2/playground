@@ -79,7 +79,7 @@ const VIEW_HTML = `
               <dd>滑动并合并</dd>
             </div>
             <div><dt><span class="pointer-glyph" aria-hidden="true"></span> 触屏</dt><dd>在棋盘上滑动</dd></div>
-            <div><dt><kbd>R</kbd></dt><dd>重新开始</dd></div>
+            <div><dt><kbd>R</kbd></dt><dd>开始 / 重新开始</dd></div>
           </dl>
         </div>
 
@@ -105,6 +105,8 @@ const VIEW_HTML = `
 interface Game2048DebugApi {
   gameId: '2048';
   getState: () => Game2048Snapshot;
+  /** Test seam: destroy the mount without waiting for a route change. */
+  destroy: () => void;
 }
 
 /**
@@ -451,9 +453,15 @@ export async function mount2048(
       return;
     }
 
-    if (event.code === 'KeyR' && started) {
+    if (event.code === 'KeyR') {
       event.preventDefault();
-      restartRun();
+      // From READY, R starts the run; once started it restarts, including
+      // after a game over. This keeps the panel and README wording true.
+      if (started || engine.currentStatus === 'gameover') {
+        restartRun();
+      } else {
+        startRun();
+      }
     }
   };
 
@@ -541,34 +549,36 @@ export async function mount2048(
   document.addEventListener('visibilitychange', onVisibilityChange, { signal: listenerSignal });
   bindSwipe(stageElement, performMove, listenerSignal);
 
+  let destroyed = false;
+  const destroy = (): void => {
+    if (destroyed) {
+      return;
+    }
+    destroyed = true;
+    // The keydown and visibilitychange listeners are also registered with
+    // the abort signal, so abort() below releases every listener added by
+    // this mount, including the stage pointer handlers from bindSwipe().
+    window.removeEventListener('keydown', onKeyDown);
+    document.removeEventListener('visibilitychange', onVisibilityChange);
+    mountSignal.removeEventListener('abort', onMountAbort);
+    controller.abort();
+    window.clearTimeout(readyTimer);
+    const debug = debugWindow();
+    if (debug.__playground?.gameId === '2048') {
+      delete debug.__playground;
+    }
+    activeRuntime.destroy();
+  };
+
   if (debugEnabled()) {
     debugWindow().__playground = {
       gameId: '2048',
       getState: () => engine.state,
+      destroy,
     };
   }
 
   sync();
 
-  let destroyed = false;
-  return {
-    destroy(): void {
-      if (destroyed) {
-        return;
-      }
-      destroyed = true;
-      // Remove these explicitly instead of relying on the abort signal: the
-      // shared e2e listener probe tracks add/removeEventListener calls.
-      window.removeEventListener('keydown', onKeyDown);
-      document.removeEventListener('visibilitychange', onVisibilityChange);
-      mountSignal.removeEventListener('abort', onMountAbort);
-      controller.abort();
-      window.clearTimeout(readyTimer);
-      const debug = debugWindow();
-      if (debug.__playground?.gameId === '2048') {
-        delete debug.__playground;
-      }
-      activeRuntime.destroy();
-    },
-  };
+  return { destroy };
 }

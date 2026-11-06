@@ -85,3 +85,41 @@ export async function expectNoHorizontalOverflow(page: Page): Promise<void> {
   );
   expect(overflow, 'page should not scroll horizontally').toBeLessThanOrEqual(1);
 }
+
+/** Exact RGB colour histogram of the Phaser canvas, keyed as `r,g,b`. */
+export async function readCanvasColorCounts(page: Page): Promise<Record<string, number>> {
+  return page.evaluate(() => {
+    const canvas = document.querySelector<HTMLCanvasElement>(
+      '[data-testid="2048-board"] canvas',
+    );
+    if (!canvas) {
+      throw new Error('2048 canvas is missing');
+    }
+    const context = canvas.getContext('2d');
+    if (!context) {
+      throw new Error('2048 canvas is not a 2D canvas');
+    }
+    const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
+    const counts: Record<string, number> = {};
+    for (let index = 0; index < data.length; index += 4) {
+      const key = `${data[index]},${data[index + 1]},${data[index + 2]}`;
+      counts[key] = (counts[key] ?? 0) + 1;
+    }
+    return counts;
+  });
+}
+
+/** Call the debug-only destroy seam without changing the route. */
+export async function destroyDebugGame(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const api = (
+      window as unknown as {
+        __playground?: { gameId: string; destroy?: () => void };
+      }
+    ).__playground;
+    if (api?.gameId !== '2048' || !api.destroy) {
+      throw new Error('2048 debug destroy seam is not available');
+    }
+    api.destroy();
+  });
+}
