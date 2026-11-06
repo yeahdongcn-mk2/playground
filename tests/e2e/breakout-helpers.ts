@@ -244,3 +244,35 @@ export async function destroyDebugGame(page: Page): Promise<void> {
     api.destroy();
   });
 }
+
+interface PageVisibilityProbeWindow {
+  __pageHidden?: boolean;
+}
+
+/**
+ * Override `document.hidden` and dispatch `visibilitychange`. Only `hidden` is
+ * stubbed because the breakout view reads that property; `visibilityState` is
+ * left untouched so this cannot silently test the wrong signal.
+ */
+export async function setPageHidden(page: Page, hidden: boolean): Promise<void> {
+  await page.evaluate((hidden) => {
+    const probe = window as unknown as PageVisibilityProbeWindow;
+    if (probe.__pageHidden === undefined) {
+      Object.defineProperty(document, 'hidden', {
+        configurable: true,
+        get: () =>
+          Boolean((window as unknown as PageVisibilityProbeWindow).__pageHidden),
+      });
+    }
+    probe.__pageHidden = hidden;
+    document.dispatchEvent(new Event('visibilitychange'));
+  }, hidden);
+}
+
+/** Restore the real `document.hidden` getter after {@link setPageHidden}. */
+export async function restorePageVisibility(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    Reflect.deleteProperty(document, 'hidden');
+    delete (window as unknown as PageVisibilityProbeWindow).__pageHidden;
+  });
+}

@@ -322,3 +322,105 @@ export async function pendingLongTimerCount(page: Page): Promise<number> {
     return api.pendingLongTimers();
   });
 }
+
+interface RafProbeApi {
+  count(): number;
+  pending(): number;
+  reset(): void;
+}
+
+interface RafProbeWindow {
+  __rafProbe?: RafProbeApi;
+}
+
+/**
+ * Observe the real animation-frame loop. Phaser drives its game loop through
+ * `window.requestAnimationFrame`, so instead of only a `running` flag this
+ * counts delivered callbacks and tracks frames that are scheduled but not
+ * delivered yet. A loop left alive after destroy keeps a pending frame and a
+ * rising count. The probe is page-wide; the Phaser adapter is the app's only
+ * RAF user, so a stopped count after destroy means the game loop stopped.
+ */
+export async function installRafProbe(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    let frames = 0;
+    const pending = new Set<number>();
+    const nativeRequest = window.requestAnimationFrame.bind(window);
+    const nativeCancel = window.cancelAnimationFrame.bind(window);
+    window.requestAnimationFrame = ((callback: FrameRequestCallback): number => {
+      let id = 0;
+      id = nativeRequest((time) => {
+        pending.delete(id);
+        frames += 1;
+        callback(time);
+      });
+      pending.add(id);
+      return id;
+    }) as typeof window.requestAnimationFrame;
+    window.cancelAnimationFrame = ((id: number): void => {
+      pending.delete(id);
+      nativeCancel(id);
+    }) as typeof window.cancelAnimationFrame;
+    Object.assign(window, {
+      __rafProbe: {
+        count: () => frames,
+        pending: () => pending.size,
+        reset: () => {
+          frames = 0;
+        },
+      },
+    });
+  });
+}
+
+/** Callbacks delivered since the probe was installed or last reset. */
+export async function rafCount(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const api = (window as unknown as RafProbeWindow).__rafProbe;
+    if (!api) {
+      throw new Error('RAF probe is not installed');
+    }
+    return api.count();
+  });
+}
+
+/** Frame callbacks that are scheduled but not delivered yet. */
+export async function rafPending(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const api = (window as unknown as RafProbeWindow).__rafProbe;
+    if (!api) {
+      throw new Error('RAF probe is not installed');
+    }
+    return api.pending();
+  });
+}
+
+/** Reset the delivered-callback count; scheduled frames are left untouched. */
+export async function resetRafCount(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const api = (window as unknown as RafProbeWindow).__rafProbe;
+    if (!api) {
+      throw new Error('RAF probe is not installed');
+    }
+    api.reset();
+  });
+}
+
+/**
+ * Assert that nothing keeps driving the animation-frame loop: first wait until
+ * no frame remains scheduled (the deferred teardown step of `Game.destroy()`
+ * still owns one frame), then observe a short window with neither a delivered
+ * callback nor a newly scheduled frame. Tracking the scheduled id catches a
+ * live loop even when the browser throttles delivery.
+ */
+export async function expectNoAnimationFrames(page: Page): Promise<void> {
+  await expect
+    .poll(() => rafPending(page), {
+      message: 'no animation frame should remain scheduled',
+    })
+    .toBe(0);
+  await resetRafCount(page);
+  await page.waitForTimeout(300);
+  expect(await rafCount(page), 'game loop must not keep delivering frames').toBe(0);
+  expect(await rafPending(page), 'game loop must not reschedule frames').toBe(0);
+}

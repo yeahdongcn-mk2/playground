@@ -1,8 +1,13 @@
 import {
   expect,
+  expectNoAnimationFrames,
   installListenerProbe,
+  installRafProbe,
   listenerCount,
   pendingLongTimerCount,
+  rafCount,
+  rafPending,
+  resetRafCount,
   test,
   trackProbeTarget,
 } from './fixtures';
@@ -16,6 +21,8 @@ import {
   readCanvasPixelCount,
   readState,
   readStatus,
+  restorePageVisibility,
+  setPageHidden,
   startGame,
 } from './breakout-helpers';
 import { BREAKOUT_COLORS, BRICK_COLORS } from '../../src/games/breakout/palette';
@@ -107,6 +114,15 @@ test.describe('breakout gameplay', () => {
     });
 
     await expect(page.getByTestId('score')).toHaveText('10');
+    // Pause the loop before the remaining assertions. A hit ball falls off the
+    // court after a few seconds, so a slow CI could otherwise reach the
+    // ready/game-over overlay while these assertions are still running.
+    await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+    const paused = await readState(page);
+    await page.waitForTimeout(100);
+    const still = await readState(page);
+    expect(still.ball.x).toBe(paused.ball.x);
+    expect(still.ball.y).toBe(paused.ball.y);
     await expect(page.getByTestId('status')).toHaveText('进行中');
     await expect(page.getByTestId('bricks-left')).toHaveText('1');
     await expect(page.getByTestId('overlay')).toBeHidden();
@@ -163,6 +179,65 @@ test.describe('breakout gameplay', () => {
         return state.ball.x !== paused.ball.x || state.ball.y !== paused.ball.y;
       })
       .toBe(true);
+  });
+
+  test('hiding the page pauses the ball and showing the page resumes it', async ({
+    page,
+  }) => {
+    await openBreakout(page);
+    await startGame(page);
+    await page.waitForTimeout(100);
+
+    await setPageHidden(page, true);
+    try {
+      await page.waitForTimeout(100);
+      const paused = await readState(page);
+      expect(paused.status).toBe('running');
+      expect(paused.ball.attached).toBe(false);
+      await page.waitForTimeout(400);
+      const still = await readState(page);
+      expect(still.ball.x).toBe(paused.ball.x);
+      expect(still.ball.y).toBe(paused.ball.y);
+
+      // A real browser blur may have cleared windowFocused while hidden. Restore
+      // it now, while still hidden, so showing the page exercises the visibility
+      // wake path instead of the focus path.
+      await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+      await setPageHidden(page, false);
+      await expect
+        .poll(async () => {
+          const state = await readState(page);
+          return state.ball.x !== paused.ball.x || state.ball.y !== paused.ball.y;
+        })
+        .toBe(true);
+
+      // While the window is blurred, showing the page must not wake the loop;
+      // only a matching focus event resumes it.
+      await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+      await page.waitForTimeout(100);
+      const blurred = await readState(page);
+      await page.waitForTimeout(100);
+      const blurredStill = await readState(page);
+      expect(blurredStill.ball.x).toBe(blurred.ball.x);
+      expect(blurredStill.ball.y).toBe(blurred.ball.y);
+
+      await setPageHidden(page, true);
+      await setPageHidden(page, false);
+      await page.waitForTimeout(200);
+      const gated = await readState(page);
+      expect(gated.ball.x).toBe(blurred.ball.x);
+      expect(gated.ball.y).toBe(blurred.ball.y);
+
+      await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+      await expect
+        .poll(async () => {
+          const state = await readState(page);
+          return state.ball.x !== blurred.ball.x || state.ball.y !== blurred.ball.y;
+        })
+        .toBe(true);
+    } finally {
+      await restorePageVisibility(page);
+    }
   });
 
   test('hitting a brick scores and clearing the level advances faster', async ({ page }) => {
@@ -270,10 +345,11 @@ test.describe('breakout rendering and teardown', () => {
     );
   });
 
-  test('releases keyboard, pointer, visibility listeners and the ready timer', async ({
+  test('destroying the game releases keyboard, pointer and visibility listeners, the ready timer and the frame loop', async ({
     page,
   }) => {
     await installListenerProbe(page);
+    await installRafProbe(page);
     await page.goto('/');
     const baselineKeydown = await listenerCount(page, 'window', 'keydown');
     const baselineKeyup = await listenerCount(page, 'window', 'keyup');
@@ -282,8 +358,45 @@ test.describe('breakout rendering and teardown', () => {
     const baselineVisibility = await listenerCount(page, 'document', 'visibilitychange');
     expect(await pendingLongTimerCount(page)).toBe(0);
 
+    const expectReleasedMount = async (): Promise<void> => {
+      await expect.poll(() => listenerCount(page, 'window', 'keydown')).toBe(
+        baselineKeydown,
+      );
+      await expect.poll(() => listenerCount(page, 'window', 'keyup')).toBe(baselineKeyup);
+      await expect.poll(() => listenerCount(page, 'window', 'blur')).toBe(baselineBlur);
+      await expect.poll(() => listenerCount(page, 'window', 'focus')).toBe(baselineFocus);
+      await expect
+        .poll(() => listenerCount(page, 'document', 'visibilitychange'))
+        .toBe(baselineVisibility);
+      await expect.poll(() => listenerCount(page, 'board', 'pointerdown')).toBe(0);
+      await expect.poll(() => listenerCount(page, 'board', 'pointermove')).toBe(0);
+      await expect.poll(() => listenerCount(page, 'board', 'pointerup')).toBe(0);
+      await expect.poll(() => listenerCount(page, 'board', 'pointercancel')).toBe(0);
+      await expect.poll(() => listenerCount(page, 'board', 'lostpointercapture')).toBe(0);
+      expect(
+        await page.evaluate(
+          () => (window as unknown as { __playground?: unknown }).__playground,
+        ),
+        'the debug seam should be removed with the mount',
+      ).toBeUndefined();
+      expect(await pendingLongTimerCount(page)).toBe(0);
+    };
+
     await openBreakout(page);
     await trackProbeTarget(page, 'board', '[data-testid="breakout-board"]');
+    // The adapter also schedules a one-shot resize frame through RAF. Reset the
+    // counter and require a sustained sequence: only Phaser's live loop can
+    // deliver several frames, so the post-destroy check is not vacuous.
+    await resetRafCount(page);
+    await expect
+      .poll(() => rafCount(page), {
+        message: 'the mounted Phaser loop should keep delivering frames',
+      })
+      .toBeGreaterThan(2);
+    expect(
+      await rafPending(page),
+      'a running loop keeps the next frame scheduled',
+    ).toBeGreaterThan(0);
     expect(await listenerCount(page, 'window', 'keydown')).toBeGreaterThan(
       baselineKeydown,
     );
@@ -305,45 +418,25 @@ test.describe('breakout rendering and teardown', () => {
     // signal first. This makes the cleanup in GameHandle.destroy observable.
     await destroyDebugGame(page);
     await expect(page.locator('canvas')).toHaveCount(0);
-    await expect.poll(() => listenerCount(page, 'window', 'keydown')).toBe(baselineKeydown);
-    await expect.poll(() => listenerCount(page, 'window', 'keyup')).toBe(baselineKeyup);
-    await expect.poll(() => listenerCount(page, 'window', 'blur')).toBe(baselineBlur);
-    await expect.poll(() => listenerCount(page, 'window', 'focus')).toBe(baselineFocus);
-    await expect
-      .poll(() => listenerCount(page, 'document', 'visibilitychange'))
-      .toBe(baselineVisibility);
-    await expect.poll(() => listenerCount(page, 'board', 'pointerdown')).toBe(0);
-    await expect.poll(() => listenerCount(page, 'board', 'pointermove')).toBe(0);
-    await expect.poll(() => listenerCount(page, 'board', 'pointerup')).toBe(0);
-    await expect.poll(() => listenerCount(page, 'board', 'pointercancel')).toBe(0);
-    await expect.poll(() => listenerCount(page, 'board', 'lostpointercapture')).toBe(0);
-    expect(
-      await page.evaluate(
-        () => (window as unknown as { __playground?: unknown }).__playground,
-      ),
-    ).toBeUndefined();
-    expect(await pendingLongTimerCount(page)).toBe(0);
+    await expectReleasedMount();
+
+    // Destroying the canvas and listeners is not enough: the Phaser loop must
+    // stop scheduling and delivering frames too.
+    await expectNoAnimationFrames(page);
 
     // The route remains usable and a second normal mount/teardown stays clean.
     await page.getByRole('link', { name: /返回大厅/ }).click();
     await expect(page.getByTestId('game-card-breakout')).toBeVisible();
     await openBreakout(page);
     await trackProbeTarget(page, 'board', '[data-testid="breakout-board"]');
+    // Sleep the loop before the route unmount so the shared adapter has to wake
+    // it for the deferred Game.destroy() teardown; without that wake the canvas
+    // would stay in the DOM and no teardown frame would run.
+    await page.evaluate(() => window.dispatchEvent(new Event('blur')));
     await page.getByRole('link', { name: /返回大厅/ }).click();
     await expect(page.getByTestId('game-card-breakout')).toBeVisible();
     await expect(page.locator('canvas')).toHaveCount(0);
-    await expect.poll(() => listenerCount(page, 'window', 'keydown')).toBe(baselineKeydown);
-    await expect.poll(() => listenerCount(page, 'window', 'keyup')).toBe(baselineKeyup);
-    await expect.poll(() => listenerCount(page, 'window', 'blur')).toBe(baselineBlur);
-    await expect.poll(() => listenerCount(page, 'window', 'focus')).toBe(baselineFocus);
-    await expect
-      .poll(() => listenerCount(page, 'document', 'visibilitychange'))
-      .toBe(baselineVisibility);
-    await expect.poll(() => listenerCount(page, 'board', 'pointerdown')).toBe(0);
-    await expect.poll(() => listenerCount(page, 'board', 'pointermove')).toBe(0);
-    await expect.poll(() => listenerCount(page, 'board', 'pointerup')).toBe(0);
-    await expect.poll(() => listenerCount(page, 'board', 'pointercancel')).toBe(0);
-    await expect.poll(() => listenerCount(page, 'board', 'lostpointercapture')).toBe(0);
-    expect(await pendingLongTimerCount(page)).toBe(0);
+    await expectReleasedMount();
+    await expectNoAnimationFrames(page);
   });
 });
