@@ -2,10 +2,44 @@
 
 这些截图用于各期交付的 Before / After 视觉证据。全部由 Playwright Chromium 真实渲染，不是 mockup。
 
+## t7：扫雷触屏与手机布局（Issue #33 / 子任务 2）
+
+- Before 基线：`60bc3f3`（PR #36 合入扫雷 DOM 视图后、本子任务触屏与手机布局改动前）。页面已有桌面鼠标操作；手机视口下轻点可以翻开，但没有触屏插旗，重开按钮位于首屏之外。
+- After：本子任务分支 `agent/plan-33-t2` 的界面提交 [`02870bb`](https://github.com/yeahdongcn-mk2/playground/commit/02870bb21c838ef8c43299f67a1c9abdb4824395)；手机与桌面 After 截图都在该提交的生产构建上捕获，截图文件由紧随其后的文档提交入库。本子任务按计划只推分支、不创建 PR。
+- 视口 / 主题：Pixel 7（412×839 CSS px，DPR 2.625，`isMobile: true`、`hasTouch: true`），深色主题，`reducedMotion: reduce`。Before / After 使用同一场景、同一视口、同一状态，均为视口截图（`fullPage: false`），以便核对 HUD、返回大厅与重开入口在手机首屏内完整可见。
+- 生成 After：`npm run screenshots:minesweeper`（生产构建 + `vite preview`，固定雷盘走 `?debug=1&mines=row,col;...` 调试接缝）。
+- 复现 Before：在 `60bc3f3` 的干净 worktree 里 `npm ci && npm run build`，用 `node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4188 --strictPort` 启动预览，然后在当前分支运行 `BASE_URL=http://127.0.0.1:4188 npm run screenshots:minesweeper:touch-before`。Before 的游玩中截图用鼠标右键插旗（基线还没有触屏插旗），After 用真实触摸轻点 + 长按插旗，因此两张游玩中截图里的旗子与 HUD 状态相同，但产生方式不同。
+
+### Before（`60bc3f3`，桌面鼠标输入、无手机布局调整）
+
+| 文件 | 场景 | 视口 / 主题 | 说明 |
+| --- | --- | --- | --- |
+| `before-minesweeper-ready-mobile.png` | 扫雷 READY（手机） | Pixel 7 412×839 / 深色 | 初始棋盘与 HUD；HUD 与返回大厅可见，但重开按钮在首屏之外。 |
+| `before-minesweeper-playing-mobile.png` | 扫雷游玩中（手机） | Pixel 7 412×839 / 深色 | 轻点翻开安全格、右键（鼠标）插旗后的棋盘与 HUD。 |
+| `before-minesweeper-lost-mobile.png` | 扫雷 BOOM（手机） | Pixel 7 412×839 / 深色 | 踩雷结束遮罩与全部雷。 |
+| `before-minesweeper-won-mobile.png` | 扫雷 CLEARED（手机） | Pixel 7 412×839 / 深色 | 固定雷盘翻开全部安全格后的胜利遮罩。 |
+
+### After（`agent/plan-33-t2`，截图捕获于 `02870bb`）
+
+| 文件 | 场景 | 视口 / 主题 | 说明 |
+| --- | --- | --- | --- |
+| `after-minesweeper-ready-mobile.png` | 扫雷 READY（手机） | Pixel 7 412×839 / 深色 | 触屏提示、轻点 / 长按说明，以及位于首屏内的「重开」入口；9×9 格子加大到约 39 px 触控目标。 |
+| `after-minesweeper-playing-mobile.png` | 扫雷游玩中（手机） | Pixel 7 412×839 / 深色 | 真实触摸轻点翻开、长按 0.5 秒插旗后的状态；HUD 剩余雷数随之减少。 |
+| `after-minesweeper-lost-mobile.png` | 扫雷 BOOM（手机） | Pixel 7 412×839 / 深色 | 触摸踩雷后的失败遮罩。 |
+| `after-minesweeper-won-mobile.png` | 扫雷 CLEARED（手机） | Pixel 7 412×839 / 深色 | 触摸翻开最后一格后的胜利遮罩。 |
+
+`after-hub-desktop.png` / `after-hub-mobile.png` 也随本子任务刷新，因为扫雷卡片新增了触屏操作说明；`after-minesweeper-*-desktop.png` 因侧栏新增「触屏」操作行而重新生成，桌面鼠标左键 / 右键行为不变。
+
+### 证据限制
+
+- 手机端为 Playwright Pixel 7 设备模拟（412×839、DPR 2.625、触摸），不是真实手机截图。
+- Before 截图只能证明旧界面的视觉状态；触屏长按 / 取消等交互行为由 `tests/e2e/minesweeper.mobile.spec.ts` 在生产构建上验证，不依赖截图比对。
+- 本子任务按计划只推分支、不创建 PR，因此没有 PR 附件链接；截图与说明随分支一起提交。
+
 ## t6：扫雷（Issue #33 / 子任务 1）
 
 - Before 基线：main `cdd2200`（PR #35 合入扫雷规则引擎后、接入共享框架前的提交）。大厅还没有扫雷卡片，`#/games/minesweeper` 显示「没有找到这个游戏」。
-- After：PR #36（分支 `agent/plan-33-t1`）。大厅 After 截图捕获于提交 [`e75da7b`](https://github.com/yeahdongcn-mk2/playground/commit/e75da7bddb6172bd44b6ef7cd0edfb6911364258)，4 张玩法 After 截图重跑后与该提交内容逐字节一致；其后提交只更新本文档与测试，不改变界面。PR 描述中附有 Before / After 截图链接。
+- After：PR #36（分支 `agent/plan-33-t1`）。大厅 After 截图捕获于提交 [`e75da7b`](https://github.com/yeahdongcn-mk2/playground/commit/e75da7bddb6172bd44b6ef7cd0edfb6911364258)，4 张玩法 After 截图重跑后与该提交内容逐字节一致；其后提交只更新本文档与测试，不改变界面。PR 描述中附有 Before / After 截图链接。后续 t7 子任务因侧栏新增「触屏」操作行、扫雷卡片新增触屏说明，重新生成了 4 张桌面玩法截图与大厅截图；桌面鼠标左键 / 右键行为未变。
 - 视口 / 主题：桌面 1440×1000、手机 390×844（DPR 2），深色主题，`reducedMotion: reduce`。桌面与手机大厅均为整页截图（`fullPage: true`），Before / After 用同一口径。
 - 生成：`npm run screenshots:minesweeper`（生产构建 + `vite preview`，固定雷盘走 `?debug=1&mines=row,col;...` 调试接缝）。
 - 复现 Before：在 `cdd2200` 的干净 worktree 里 `npm ci && npm run build`，用 `node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4187 --strictPort` 启动预览，然后在当前分支运行 `BASE_URL=http://127.0.0.1:4187 npm run screenshots:minesweeper:before`。
