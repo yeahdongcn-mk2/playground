@@ -162,8 +162,15 @@ function parseDebugMines(raw: string | null): readonly Cell[] | undefined {
     if (rowText === undefined || colText === undefined || extra !== undefined) {
       return undefined;
     }
-    const row = Number(rowText);
-    const col = Number(colText);
+    // `Number('')` is 0, so require a non-empty integer token; otherwise a
+    // malformed layout would silently become a valid row-0 board.
+    const rowToken = rowText.trim();
+    const colToken = colText.trim();
+    if (!/^\d+$/.test(rowToken) || !/^\d+$/.test(colToken)) {
+      return undefined;
+    }
+    const row = Number(rowToken);
+    const col = Number(colToken);
     if (!isInBounds(row, col)) {
       return undefined;
     }
@@ -198,7 +205,12 @@ type CellVisual = 'hidden' | 'flagged' | 'revealed' | 'mine' | 'exploded';
 
 function cellVisual(cell: MinesweeperCell, status: MinesweeperStatus): CellVisual {
   if (status === 'lost' && cell.mine) {
-    return cell.revealed ? 'exploded' : 'mine';
+    if (cell.revealed) {
+      return 'exploded';
+    }
+    // Keep a correct flag visible after the loss; only unflagged mines are
+    // exposed so the board still agrees with the HUD flag count.
+    return cell.flagged ? 'flagged' : 'mine';
   }
   if (cell.revealed) {
     return 'revealed';

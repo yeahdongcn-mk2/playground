@@ -103,9 +103,15 @@ test.describe('minesweeper gameplay', () => {
   test('hitting a mine ends the game, reveals every mine, freezes the clock and restarts', async ({
     page,
   }) => {
+    await installIntervalProbe(page);
     await openMinesweeper(page, { mines: LOSS_MINES });
+    const correctFlag = cellLocator(page, 4, 0);
+    await correctFlag.click({ button: 'right' });
+    expect(await activeIntervalCount(page)).toBe(0);
+
     await cellLocator(page, LOSS_SAFE_CLICK.row, LOSS_SAFE_CLICK.col).click();
     await expect(page.getByTestId('status')).toHaveText('进行中');
+    expect(await activeIntervalCount(page)).toBe(1);
 
     await cellLocator(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col).click();
     await expect(page.getByTestId('status')).toHaveText('踩雷结束');
@@ -117,14 +123,18 @@ test.describe('minesweeper gameplay', () => {
     const lost = await readState(page);
     expect(lost.status).toBe('lost');
     expect(lost.explodedCell).toEqual(LOSS_MINE_CLICK);
+    // The clock interval stops as soon as the game is lost.
+    expect(await activeIntervalCount(page)).toBe(0);
     const exploded = cellLocator(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
     await expect(exploded).toHaveAttribute('data-state', 'exploded');
     await expect(exploded).toHaveAttribute('data-mine', 'true');
-    // The remaining mines are shown once the game is lost.
-    await expect(page.locator('[data-state="mine"]')).toHaveCount(9);
-    await expect(page.locator('[data-mine="true"]')).toHaveCount(10);
+    // A correctly flagged mine keeps its flag; the other mines are exposed.
+    await expect(correctFlag).toHaveAttribute('data-state', 'flagged');
+    expect(await correctFlag.getAttribute('data-mine')).toBeNull();
+    await expect(page.locator('[data-state="mine"]')).toHaveCount(8);
+    await expect(page.locator('[data-mine="true"]')).toHaveCount(9);
 
-    // The engine clock is frozen after the loss, and the interval is cleared.
+    // The engine clock is frozen after the loss.
     await page.waitForTimeout(700);
     expect((await readState(page)).elapsedMs).toBe(lost.elapsedMs);
 
