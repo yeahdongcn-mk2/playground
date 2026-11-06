@@ -564,11 +564,9 @@ export async function mount2048(
       return;
     }
     destroyed = true;
-    // The keydown and visibilitychange listeners are also registered with
-    // the abort signal, so abort() below releases every listener added by
-    // this mount, including the stage pointer handlers from bindSwipe().
-    window.removeEventListener('keydown', onKeyDown);
-    document.removeEventListener('visibilitychange', onVisibilityChange);
+    // keydown, visibilitychange and the stage pointer listeners all use
+    // listenerSignal, so abort() releases them. mountSignal is a separate
+    // signal, so its listener is removed explicitly.
     mountSignal.removeEventListener('abort', onMountAbort);
     controller.abort();
     const debug = debugWindow();

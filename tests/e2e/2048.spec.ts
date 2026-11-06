@@ -18,6 +18,17 @@ import {
   readStatus,
   startGame,
 } from './2048-helpers';
+import { COLORS, TILE_STYLES } from '../../src/games/2048/palette';
+
+const rgb = (fill: number): string =>
+  `${(fill >> 16) & 0xff},${(fill >> 8) & 0xff},${fill & 0xff}`;
+const tileFill = (value: number): string => {
+  const style = TILE_STYLES[value];
+  if (!style) {
+    throw new Error(`No tile style for ${value}`);
+  }
+  return rgb(style.fill);
+};
 
 /** Ready board with empty cells and all four low tile colors. */
 const COLOR_BOARD = [
@@ -27,12 +38,8 @@ const COLOR_BOARD = [
   [null, null, null, null],
 ] as const;
 
-const TILE_COLORS = [
-  '226,232,240', // 2
-  '203,213,225', // 4
-  '251,191,36', // 8
-  '245,158,11', // 16
-];
+const TILE_COLORS = [2, 4, 8, 16].map(tileFill);
+const MERGED_TILE_COLORS = [8, 16, 32].map(tileFill);
 
 test.describe('2048 gameplay', () => {
   test('hub card opens the game and the back link returns to the hub', async ({ page }) => {
@@ -157,8 +164,8 @@ test.describe('2048 rendering and teardown', () => {
         0.01,
       );
     }
-    expect(share(ready, '17,29,48'), 'canvas should draw empty cells').toBeGreaterThan(0.05);
-    expect(share(ready, '10,19,34'), 'canvas should draw the board background').toBeGreaterThan(
+    expect(share(ready, rgb(COLORS.empty)), 'canvas should draw empty cells').toBeGreaterThan(0.05);
+    expect(share(ready, rgb(COLORS.board)), 'canvas should draw the board background').toBeGreaterThan(
       0.03,
     );
 
@@ -176,12 +183,12 @@ test.describe('2048 rendering and teardown', () => {
     const after = await readCanvasColorCounts(page);
     // The merged 8/16/32 tiles must be on the canvas, so a repaint that just
     // clears the frame cannot satisfy the check above.
-    for (const color of ['251,191,36', '245,158,11', '249,115,22']) {
+    for (const color of MERGED_TILE_COLORS) {
       expect(share(after, color), `canvas should draw merged tile ${color}`).toBeGreaterThan(
         0.005,
       );
     }
-    expect(share(after, '17,29,48'), 'canvas should still draw empty cells').toBeGreaterThan(
+    expect(share(after, rgb(COLORS.empty)), 'canvas should still draw empty cells').toBeGreaterThan(
       0.05,
     );
   });
@@ -227,7 +234,7 @@ test.describe('2048 rendering and teardown', () => {
 
     // Destroy the mount directly, without the route change aborting the mount
     // signal first. This makes the cleanup in GameHandle.destroy observable:
-    // deleting the explicit removeEventListener/abort calls leaks them.
+    // deleting controller.abort() would leave the signal-bound listeners.
     await destroyDebugGame(page);
     await expect(page.locator('canvas')).toHaveCount(0);
     await expect.poll(() => listenerCount(page, 'window', 'keydown')).toBe(baselineKeydown);

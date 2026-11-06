@@ -14,14 +14,14 @@
 
 | 文件 | 场景 | 视口 / 主题 | 说明 |
 | --- | --- | --- | --- |
-| `before-2048-hub-desktop.png` | main 大厅 | 1440×1000 / 深色 | 只有贪食蛇与俄罗斯方块卡片。 |
+| `before-2048-hub-desktop.png` | main 大厅 | 1440×1000 / 深色 | 只有贪食蛇、俄罗斯方块与空白画布卡片（没有 2048）。 |
 | `before-2048-hub-mobile.png` | main 大厅（手机） | 390×844（DPR 2）/ 深色 | 单列大厅，没有 2048 卡片。 |
 | `before-2048-route-desktop.png` | main 访问 `#/games/2048` | 1440×1000 / 深色 | 真实基线：2048 未注册，显示「没有找到这个游戏」。 |
 | `before-2048-route-mobile.png` | main 访问 `#/games/2048`（手机） | 390×844（DPR 2）/ 深色 | 同上，手机视口。 |
 
 ### After（本 PR）
 
-`after-hub-desktop.png` / `after-hub-mobile.png` 已刷新为同时含贪食蛇、俄罗斯方块与 2048 卡片的大厅；其余为 2048 游戏页的三种状态。2048 的文件名保留 `-desktop` / `-mobile` 后缀，明确每种状态各自的视口。
+`after-hub-desktop.png` / `after-hub-mobile.png` 已刷新为同时含贪食蛇、俄罗斯方块、2048 与空白画布卡片的大厅；其余为 2048 游戏页的三种状态。2048 的文件名保留 `-desktop` / `-mobile` 后缀，明确每种状态各自的视口。
 
 | 文件 | 场景 | 视口 / 主题 | 说明 |
 | --- | --- | --- | --- |
