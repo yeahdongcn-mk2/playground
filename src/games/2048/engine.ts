@@ -85,8 +85,9 @@ interface LineResult {
 }
 
 /** Every line in the order tiles travel, starting at the destination edge. */
-const LINE_CELLS: Readonly<Record<Direction, ReadonlyArray<ReadonlyArray<Cell>>>> =
-  buildLineCells();
+const LINE_CELLS: Readonly<
+  Partial<Record<Direction, ReadonlyArray<ReadonlyArray<Cell>>>>
+> = buildLineCells();
 
 function buildLineCells(): Record<Direction, Cell[][]> {
   const lines: Record<Direction, Cell[][]> = { up: [], right: [], down: [], left: [] };
@@ -310,7 +311,12 @@ export class Game2048Engine {
     let gained = 0;
     let moved = false;
 
-    for (const line of LINE_CELLS[direction]) {
+    const lines = LINE_CELLS[direction];
+    if (!lines) {
+      throw new RangeError(`Unknown direction: ${String(direction)}.`);
+    }
+
+    for (const line of lines) {
       const before = line.map((cell) => cellAt(this.tiles, cell.row, cell.col));
       const result = slideLine(before);
       gained += result.gained;
@@ -408,6 +414,8 @@ export class Game2048Engine {
   }
 
   private random(): number {
-    return Math.min(1, Math.max(0, this.rng()));
+    const value = this.rng();
+    // A broken random source must not be able to suppress a required spawn.
+    return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0;
   }
 }

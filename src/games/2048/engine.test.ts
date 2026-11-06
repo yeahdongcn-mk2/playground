@@ -142,6 +142,27 @@ describe('fresh game', () => {
   });
 });
 
+describe('invalid runtime input', () => {
+  it('keeps spawning when the random source returns non-finite values', () => {
+    const engine = new Game2048Engine({ rng: () => Number.NaN });
+
+    expect(tileValues(engine.board)).toHaveLength(2);
+    expect(engine.board[0]).toEqual([4, 4, null, null]);
+
+    const result = engine.move('left');
+
+    expect(result.moved).toBe(true);
+    expect(result.spawned).not.toBeNull();
+    expect(tileValues(engine.board)).toHaveLength(2);
+  });
+
+  it('rejects an unknown direction at runtime', () => {
+    const engine = makeEngine();
+
+    expect(() => engine.move('sideways' as Direction)).toThrow(RangeError);
+  });
+});
+
 describe('moving and merging', () => {
   it('moves left, compressing and merging equal tiles', () => {
     const engine = makeEngine({
