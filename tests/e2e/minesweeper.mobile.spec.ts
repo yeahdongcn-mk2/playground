@@ -66,6 +66,48 @@ test.describe('minesweeper on a phone viewport', () => {
     expect(cellBox?.width ?? 0).toBeCloseTo(cellBox?.height ?? 0, 1);
   });
 
+  test('keeps 36px touch targets on a 360x740 phone viewport', async ({ page }) => {
+    await page.setViewportSize({ width: 360, height: 740 });
+    await openMinesweeper(page, { mines: LOSS_MINES });
+
+    // The narrow breakpoint must reclaim space without introducing a
+    // horizontally scrolling page at the smallest common Android width.
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth,
+    );
+    expect(overflow).toBe(0);
+
+    const cellBoxes = await page.locator('[data-cell]').evaluateAll((cells) =>
+      cells.map((cell) => {
+        const box = cell.getBoundingClientRect();
+        return { width: box.width, height: box.height };
+      }),
+    );
+    expect(cellBoxes).toHaveLength(81);
+    for (const [index, box] of cellBoxes.entries()) {
+      expect(box.width, `cell ${index} width`).toBeGreaterThanOrEqual(36);
+      expect(box.height, `cell ${index} height`).toBeGreaterThanOrEqual(36);
+      expect(box.width, `cell ${index} aspect ratio`).toBeCloseTo(box.height, 1);
+    }
+
+    await expectInsideViewport(
+      page,
+      page.getByTestId('remaining-mines'),
+      'remaining mines',
+    );
+    await expectInsideViewport(page, page.getByTestId('timer'), 'timer');
+    await expectInsideViewport(
+      page,
+      page.getByRole('link', { name: /返回大厅/ }),
+      'back link',
+    );
+    await expectInsideViewport(
+      page,
+      page.getByTestId('mobile-restart-button'),
+      'restart button',
+    );
+  });
+
   test('a tap reveals and a long press toggles a flag exactly once', async ({ page }) => {
     await openMinesweeper(page, { mines: LOSS_MINES });
 
