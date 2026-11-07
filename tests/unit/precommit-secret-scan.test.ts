@@ -92,10 +92,17 @@ const DATABASE_URL_SCHEMES = [
   'rediss',
   'amqp',
   'amqps',
+  'mssql',
+  'sqlserver',
+  'cockroachdb',
+  'clickhouse',
+  'oracle',
+  'neo4j',
 ] as const;
 
 // SQLAlchemy and async drivers extend a base protocol with `+driver`; the
-// scanner matches that suffix case-insensitively.
+// scanner matches that suffix case-insensitively. Neo4j's `+srv` routing
+// suffix follows the same shape.
 const DATABASE_URL_DRIVER_SCHEMES = [
   'postgresql+psycopg2',
   'postgresql+asyncpg',
@@ -104,6 +111,12 @@ const DATABASE_URL_DRIVER_SCHEMES = [
   'mysql+aiomysql',
   'mariadb+pymysql',
   'mongodb+srv',
+  'mssql+pyodbc',
+  'sqlserver+pyodbc',
+  'cockroachdb+psycopg2',
+  'clickhouse+native',
+  'oracle+oracledb',
+  'neo4j+srv',
 ] as const;
 
 // Shared fake password for the database URL fixtures, split so no literal
@@ -314,6 +327,20 @@ describe('secret scan pre-commit hook', () => {
       'mysql+aiomysql://dbuser:password@db.internal/app',
       'mariadb+pymysql://dbuser:${DB_PASSWORD}@db.internal/app',
       'mongodb+srv://cluster0.example.mongodb.net/app',
+      // The newly supported protocols apply the same userinfo, password and
+      // placeholder rules.
+      'mssql://db.internal:1433/app',
+      'sqlserver://dbuser@db.internal/app',
+      'cockroachdb://dbuser:@db.internal/app',
+      'clickhouse://analytics:8123/app',
+      'oracle://dbuser:password@db.internal/app',
+      'neo4j+srv://cluster0.example.com/app',
+      'mssql+pyodbc://dbuser:${DB_PASSWORD}@db.internal/app',
+      'sqlserver+pyodbc://dbuser:YOUR_PASSWORD@db.internal/app',
+      'cockroachdb+psycopg2://dbuser:${DB_PASSWORD}@db.internal/app',
+      'clickhouse+native://dbuser:<password>@db.internal/app',
+      'oracle+oracledb://dbuser:REPLACE_ME@db.internal/app',
+      'neo4j+srv://dbuser:xxxxx@db.internal/app',
     ];
     writeFileSync(fixture, `${urls.map((url) => `DATABASE_URL=${url}`).join('\n')}\n`);
 
