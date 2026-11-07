@@ -2,13 +2,19 @@ import { describe, expect, it } from 'vitest';
 import {
   COLS,
   createSeededRng,
+  DEFAULT_MINESWEEPER_CONFIG,
   isInBounds,
+  MAX_COLS,
+  MAX_ROWS,
   MINE_COUNT,
+  MIN_ROWS,
   MinesweeperEngine,
   ROWS,
+  validateConfig,
   type Cell,
   type MinesweeperBoard,
   type MinesweeperCell,
+  type MinesweeperConfig,
   type MinesweeperOptions,
 } from './engine';
 
@@ -76,6 +82,17 @@ function safeZoneKeys(row: number, col: number): Set<string> {
 
 function visibleCells(engine: MinesweeperEngine): MinesweeperCell[] {
   return boardCells(engine).filter((cell) => cell.revealed);
+}
+
+/** Keys of every revealed cell in board order, sorted for stable comparison. */
+function revealedKeys(engine: MinesweeperEngine): string[] {
+  return visibleCells(engine)
+    .map(({ row, col }) => key(row, col))
+    .sort();
+}
+
+function adjacentMatrix(engine: MinesweeperEngine): number[][] {
+  return engine.state.board.map((row) => row.map((cell) => cell.adjacentMines));
 }
 
 /**
@@ -660,5 +677,571 @@ describe('validation', () => {
     expect(isInBounds(ROWS, 0)).toBe(false);
     expect(isInBounds(-1, 0)).toBe(false);
     expect(isInBounds(0, 1.5)).toBe(false);
+  });
+});
+
+/**
+ * Golden board captured from the pre-parameterisation beginner engine with
+ * seed 20241107 and the first reveal at (4,4). These exact mine positions and
+ * adjacent numbers must survive the switch to configurable board sizes.
+ */
+const GOLDEN_RANDOM_MINE_KEYS = [
+  '0,2',
+  '0,3',
+  '1,3',
+  '1,5',
+  '3,0',
+  '4,2',
+  '4,6',
+  '6,1',
+  '7,3',
+  '8,7',
+];
+
+const GOLDEN_RANDOM_ADJACENT = [
+  [0, 1, 0, 0, 3, 1, 1, 0, 0],
+  [0, 1, 3, 0, 3, 0, 1, 0, 0],
+  [1, 1, 1, 1, 2, 1, 1, 0, 0],
+  [0, 2, 1, 1, 0, 1, 1, 1, 0],
+  [1, 2, 0, 1, 0, 1, 0, 1, 0],
+  [1, 2, 2, 1, 0, 1, 1, 1, 0],
+  [1, 0, 2, 1, 1, 0, 0, 0, 0],
+  [1, 1, 2, 0, 1, 0, 1, 1, 1],
+  [0, 0, 1, 1, 1, 0, 1, 0, 1],
+];
+
+/**
+ * Golden board for the injected WALL_MINES layout with the same seed and a
+ * first reveal at (0,0); relocation must keep the injected mines in place.
+ */
+const GOLDEN_INJECTED_MINE_KEYS = [
+  '4,0',
+  '4,1',
+  '4,2',
+  '4,3',
+  '4,4',
+  '4,5',
+  '4,6',
+  '4,7',
+  '4,8',
+  '8,8',
+];
+
+const GOLDEN_INJECTED_ADJACENT = [
+  [0, 0, 0, 0, 0, 0, 0, 0, 0],
+  [0, 0, 0, 0, 0, 0, 0, 0, 0],
+  [0, 0, 0, 0, 0, 0, 0, 0, 0],
+  [2, 3, 3, 3, 3, 3, 3, 3, 2],
+  [0, 0, 0, 0, 0, 0, 0, 0, 0],
+  [2, 3, 3, 3, 3, 3, 3, 3, 2],
+  [0, 0, 0, 0, 0, 0, 0, 0, 0],
+  [0, 0, 0, 0, 0, 0, 0, 1, 1],
+  [0, 0, 0, 0, 0, 0, 0, 1, 0],
+];
+
+describe('default beginner golden boards', () => {
+  it('keeps the exact seeded mine layout and adjacent numbers', () => {
+    const engine = new MinesweeperEngine({ rng: createSeededRng(20241107) });
+    engine.reveal(4, 4);
+
+    expect(mineKeys(engine)).toEqual(GOLDEN_RANDOM_MINE_KEYS);
+    expect(adjacentMatrix(engine)).toEqual(GOLDEN_RANDOM_ADJACENT);
+    expect(engine.state).toMatchObject({
+      rows: 9,
+      cols: 9,
+      mineCount: 10,
+      status: 'playing',
+      explodedCell: null,
+    });
+  });
+
+  it('keeps the exact injected layout and adjacent numbers', () => {
+    const engine = new MinesweeperEngine({
+      rng: createSeededRng(20241107),
+      initialMines: WALL_MINES,
+    });
+    engine.reveal(0, 0);
+
+    expect(mineKeys(engine)).toEqual(GOLDEN_INJECTED_MINE_KEYS);
+    expect(adjacentMatrix(engine)).toEqual(GOLDEN_INJECTED_ADJACENT);
+    expect(engine.state.status).toBe('playing');
+  });
+});
+
+const BEGINNER_CONFIG: MinesweeperConfig = {
+  rows: 9,
+  cols: 9,
+  mines: 10,
+  firstClickSafe: true,
+};
+
+const INTERMEDIATE_CONFIG: MinesweeperConfig = {
+  rows: 16,
+  cols: 16,
+  mines: 40,
+  firstClickSafe: true,
+};
+
+const EXPERT_CONFIG: MinesweeperConfig = {
+  rows: 16,
+  cols: 30,
+  mines: 99,
+  firstClickSafe: true,
+};
+
+const PRESET_CONFIGS: ReadonlyArray<readonly [string, MinesweeperConfig]> = [
+  ['beginner', BEGINNER_CONFIG],
+  ['intermediate', INTERMEDIATE_CONFIG],
+  ['expert', EXPERT_CONFIG],
+];
+
+/**
+ * Golden snapshots for the larger presets. The 9x9 goldens cannot exercise
+ * the per-instance `cols` indexing that computeAdjacentCounts and floodReveal
+ * use, so these fix the seed and a non-zero first click on both configured
+ * boards. Expected values were cross-checked against an independent
+ * neighbour scan and flood fill.
+ */
+const GOLDEN_CONFIGURED_SEED = 20241107;
+
+const GOLDEN_INTERMEDIATE_FIRST_CLICK: Cell = { row: 8, col: 8 };
+const GOLDEN_INTERMEDIATE_ADJACENT = [
+  [0, 1, 0, 1, 0, 0, 1, 2, 3, 0, 2, 2, 3, 0, 1, 0],
+  [0, 1, 1, 1, 0, 0, 2, 0, 0, 2, 3, 0, 0, 3, 1, 0],
+  [1, 1, 1, 1, 1, 1, 2, 0, 3, 2, 3, 0, 0, 3, 1, 0],
+  [1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 0, 3, 3, 0, 1, 0],
+  [1, 1, 1, 2, 2, 2, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0],
+  [0, 0, 0, 1, 0, 1, 1, 2, 2, 2, 1, 1, 0, 0, 0, 0],
+  [0, 0, 0, 1, 1, 1, 1, 0, 0, 2, 0, 2, 1, 1, 0, 0],
+  [0, 1, 1, 2, 1, 1, 1, 2, 2, 3, 2, 3, 0, 1, 0, 0],
+  [1, 2, 0, 2, 0, 1, 0, 0, 0, 2, 0, 3, 1, 1, 0, 0],
+  [1, 0, 2, 2, 1, 1, 1, 1, 2, 3, 0, 4, 2, 1, 0, 0],
+  [2, 2, 1, 0, 1, 2, 3, 0, 2, 0, 3, 0, 0, 1, 0, 0],
+  [0, 1, 0, 1, 2, 0, 0, 3, 2, 1, 2, 2, 2, 1, 0, 0],
+  [1, 2, 2, 3, 0, 4, 0, 3, 1, 0, 0, 0, 0, 0, 0, 0],
+  [0, 1, 0, 0, 3, 2, 3, 0, 2, 0, 0, 0, 0, 1, 1, 1],
+  [0, 1, 3, 0, 3, 1, 3, 0, 2, 0, 0, 0, 0, 1, 0, 1],
+  [0, 0, 1, 1, 2, 0, 2, 1, 1, 0, 0, 0, 0, 1, 1, 1],
+];
+const GOLDEN_INTERMEDIATE_REVEALED = [
+  '7,5', '7,6', '7,7', '7,8',
+  '7,9', '8,5', '8,6', '8,7',
+  '8,8', '8,9', '9,5', '9,6',
+  '9,7', '9,8', '9,9',
+];
+
+const GOLDEN_EXPERT_FIRST_CLICK: Cell = { row: 8, col: 15 };
+const GOLDEN_EXPERT_ADJACENT = [
+  [0, 1, 1, 0, 4, 0, 2, 1, 1, 2, 0, 1, 0, 1, 0, 2, 1, 1, 2, 0, 5, 0, 2, 1, 0, 0, 3, 1, 0, 0],
+  [2, 2, 3, 3, 0, 0, 3, 1, 0, 2, 1, 1, 0, 1, 1, 2, 0, 1, 3, 0, 0, 0, 3, 2, 4, 0, 0, 2, 1, 0],
+  [1, 0, 2, 0, 4, 0, 2, 1, 1, 2, 2, 3, 2, 1, 0, 1, 1, 2, 3, 0, 4, 2, 2, 0, 3, 3, 5, 0, 3, 1],
+  [1, 2, 3, 2, 2, 1, 1, 0, 1, 2, 0, 0, 0, 1, 0, 0, 0, 1, 0, 3, 2, 1, 2, 2, 4, 0, 4, 0, 0, 2],
+  [1, 2, 0, 2, 1, 1, 0, 0, 1, 0, 3, 3, 2, 1, 0, 0, 0, 1, 1, 3, 0, 2, 2, 0, 4, 0, 4, 3, 3, 0],
+  [1, 0, 2, 2, 0, 1, 0, 0, 1, 2, 2, 2, 1, 1, 0, 1, 1, 1, 1, 3, 0, 3, 3, 0, 3, 2, 0, 2, 2, 2],
+  [2, 2, 2, 3, 3, 3, 1, 1, 0, 2, 0, 4, 0, 2, 0, 1, 0, 1, 1, 0, 3, 0, 2, 1, 1, 1, 1, 2, 0, 1],
+  [0, 2, 1, 0, 0, 2, 0, 2, 1, 2, 0, 4, 0, 2, 0, 1, 1, 1, 1, 1, 3, 3, 3, 1, 0, 1, 1, 2, 2, 2],
+  [0, 2, 1, 2, 2, 2, 2, 0, 1, 1, 1, 2, 2, 2, 1, 0, 1, 2, 2, 1, 1, 0, 0, 3, 1, 3, 0, 2, 1, 0],
+  [2, 3, 1, 1, 0, 0, 2, 3, 3, 1, 0, 0, 1, 0, 2, 1, 3, 0, 0, 1, 2, 4, 0, 3, 0, 3, 0, 3, 2, 2],
+  [0, 4, 0, 3, 1, 0, 1, 0, 0, 1, 0, 0, 1, 1, 2, 0, 3, 0, 3, 1, 2, 0, 3, 2, 1, 2, 1, 2, 0, 1],
+  [2, 0, 0, 0, 2, 1, 2, 2, 2, 1, 0, 0, 0, 0, 1, 1, 2, 2, 2, 1, 3, 0, 3, 0, 0, 0, 1, 2, 2, 1],
+  [2, 3, 3, 2, 3, 0, 2, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 1, 2, 0, 2, 1, 1, 1, 1, 0, 1, 0],
+  [0, 1, 0, 1, 3, 0, 2, 0, 1, 0, 1, 0, 0, 0, 0, 1, 1, 2, 1, 1, 1, 2, 3, 4, 0, 2, 1, 1, 2, 1],
+  [1, 2, 1, 2, 0, 2, 1, 1, 2, 3, 2, 2, 2, 2, 2, 2, 0, 1, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 2, 0],
+  [0, 1, 0, 2, 1, 1, 0, 1, 0, 2, 0, 2, 0, 0, 2, 0, 2, 1, 0, 0, 0, 1, 2, 3, 2, 1, 0, 0, 2, 0],
+];
+const GOLDEN_EXPERT_REVEALED = [
+  '1,13', '1,14', '1,15', '2,13',
+  '2,14', '2,15', '2,16', '2,17',
+  '3,13', '3,14', '3,15', '3,16',
+  '3,17', '4,13', '4,14', '4,15',
+  '4,16', '4,17', '5,13', '5,14',
+  '5,15', '5,16', '5,17', '6,13',
+  '6,14', '6,15', '7,13', '7,14',
+  '7,15', '7,16', '8,13', '8,14',
+  '8,15', '8,16', '9,14', '9,15',
+  '9,16',
+];
+
+/**
+ * Build a configured board from the fixed seed, reveal the fixed first click
+ * and compare the whole adjacent-number matrix and both revealed views with
+ * the golden values.
+ */
+function expectConfiguredGolden(
+  config: MinesweeperConfig,
+  firstClick: Cell,
+  expectedAdjacent: readonly (readonly number[])[],
+  expectedRevealed: readonly string[],
+): void {
+  const engine = new MinesweeperEngine({
+    config,
+    rng: createSeededRng(GOLDEN_CONFIGURED_SEED),
+  });
+
+  const result = engine.reveal(firstClick.row, firstClick.col);
+
+  expect(result.hitMine).toBe(false);
+  expect(result.revealed.map(({ row, col }) => key(row, col)).sort()).toEqual(
+    expectedRevealed,
+  );
+  expect(adjacentMatrix(engine)).toEqual(expectedAdjacent);
+  expect(revealedKeys(engine)).toEqual(expectedRevealed);
+  expect(engine.state).toMatchObject({
+    rows: config.rows,
+    cols: config.cols,
+    mineCount: config.mines,
+    status: 'playing',
+  });
+}
+
+function configuredCells(config: MinesweeperConfig): Cell[] {
+  const cells: Cell[] = [];
+  for (let row = 0; row < config.rows; row += 1) {
+    for (let col = 0; col < config.cols; col += 1) {
+      cells.push({ row, col });
+    }
+  }
+  return cells;
+}
+
+/** The clicked cell plus its neighbours, clipped to the configured board. */
+function configuredSafeZoneKeys(
+  config: MinesweeperConfig,
+  row: number,
+  col: number,
+): Set<string> {
+  const keys = new Set<string>([key(row, col)]);
+  for (let rowOffset = -1; rowOffset <= 1; rowOffset += 1) {
+    for (let colOffset = -1; colOffset <= 1; colOffset += 1) {
+      if (rowOffset === 0 && colOffset === 0) {
+        continue;
+      }
+      const neighbourRow = row + rowOffset;
+      const neighbourCol = col + colOffset;
+      if (
+        neighbourRow >= 0 &&
+        neighbourRow < config.rows &&
+        neighbourCol >= 0 &&
+        neighbourCol < config.cols
+      ) {
+        keys.add(key(neighbourRow, neighbourCol));
+      }
+    }
+  }
+  return keys;
+}
+
+describe('configured boards', () => {
+  it('exports the classic beginner setup as the default config', () => {
+    expect(DEFAULT_MINESWEEPER_CONFIG).toEqual({
+      rows: 9,
+      cols: 9,
+      mines: 10,
+      firstClickSafe: true,
+    });
+    expect(Object.isFrozen(DEFAULT_MINESWEEPER_CONFIG)).toBe(true);
+    expect([ROWS, COLS, MINE_COUNT]).toEqual([9, 9, 10]);
+  });
+
+  it('keeps isInBounds on the default beginner board', () => {
+    expect(isInBounds(0, 0)).toBe(true);
+    expect(isInBounds(ROWS - 1, COLS - 1)).toBe(true);
+    expect(isInBounds(15, 15)).toBe(false);
+    expect(isInBounds(MAX_ROWS - 1, 0)).toBe(false);
+    expect(isInBounds(0, -1)).toBe(false);
+  });
+
+  it('treats an omitted config exactly like the default config', () => {
+    const implicit = new MinesweeperEngine({ rng: createSeededRng(20241107) });
+    const explicit = new MinesweeperEngine({
+      config: DEFAULT_MINESWEEPER_CONFIG,
+      rng: createSeededRng(20241107),
+    });
+
+    implicit.reveal(4, 4);
+    explicit.reveal(4, 4);
+
+    expect(explicit.state).toEqual(implicit.state);
+  });
+
+  for (const [label, config] of PRESET_CONFIGS) {
+    it(`builds the ${label} board from config`, () => {
+      const engine = makeEngine({ config });
+      const snapshot = engine.state;
+
+      expect(snapshot).toMatchObject({
+        rows: config.rows,
+        cols: config.cols,
+        mineCount: config.mines,
+        flaggedCount: 0,
+        remainingMines: config.mines,
+        status: 'ready',
+        elapsedMs: 0,
+        explodedCell: null,
+      });
+      expect(snapshot.board).toHaveLength(config.rows);
+      for (const row of snapshot.board) {
+        expect(row).toHaveLength(config.cols);
+      }
+
+      expect(engine.toggleFlag(0, 0).changed).toBe(true);
+      expect(engine.remainingMines).toBe(config.mines - 1);
+      expect(engine.toggleFlag(0, 0).changed).toBe(true);
+
+      const result = engine.reveal(0, 0);
+      expect(result.hitMine).toBe(false);
+      expect(['playing', 'won']).toContain(engine.state.status);
+      expect(engine.state.rows).toBe(config.rows);
+      expect(engine.state.cols).toBe(config.cols);
+      expect(mineCells(engine)).toHaveLength(config.mines);
+      const zone = configuredSafeZoneKeys(config, 0, 0);
+      for (const mine of mineCells(engine)) {
+        expect(zone.has(key(mine.row, mine.col))).toBe(false);
+      }
+
+      expect(() => engine.reveal(config.rows, 0)).toThrow(RangeError);
+      expect(() => engine.reveal(0, config.cols)).toThrow(RangeError);
+      expect(() => engine.reveal(-1, 0)).toThrow(RangeError);
+      expect(() => engine.reveal(0, -1)).toThrow(RangeError);
+      expect(() => engine.toggleFlag(config.rows - 1, config.cols)).toThrow(RangeError);
+
+      engine.restart();
+      expect(engine.state).toMatchObject({
+        rows: config.rows,
+        cols: config.cols,
+        mineCount: config.mines,
+        status: 'ready',
+        elapsedMs: 0,
+        explodedCell: null,
+      });
+      expect(engine.state.board).toHaveLength(config.rows);
+    });
+  }
+});
+
+describe('configured board golden snapshots', () => {
+  it('keeps the exact seeded 16x16 adjacent numbers and flood reveal', () => {
+    expectConfiguredGolden(
+      INTERMEDIATE_CONFIG,
+      GOLDEN_INTERMEDIATE_FIRST_CLICK,
+      GOLDEN_INTERMEDIATE_ADJACENT,
+      GOLDEN_INTERMEDIATE_REVEALED,
+    );
+  });
+
+  it('keeps the exact seeded 16x30 adjacent numbers and flood reveal', () => {
+    expectConfiguredGolden(
+      EXPERT_CONFIG,
+      GOLDEN_EXPERT_FIRST_CLICK,
+      GOLDEN_EXPERT_ADJACENT,
+      GOLDEN_EXPERT_REVEALED,
+    );
+  });
+});
+
+describe('first-click safety policy', () => {
+  it('keeps an injected layout exactly when firstClickSafe is false', () => {
+    const layout: Cell[] = [{ row: 0, col: 1 }, ...RING_MINES.slice(1)];
+    const engine = makeEngine({
+      config: { ...BEGINNER_CONFIG, firstClickSafe: false },
+      initialMines: layout,
+    });
+
+    const result = engine.reveal(0, 0);
+
+    expect(result.hitMine).toBe(false);
+    expect(mineKeys(engine)).toEqual(
+      layout.map((cell) => key(cell.row, cell.col)).sort(),
+    );
+    expect(boardCell(engine, 0, 1).mine).toBe(true);
+  });
+
+  it('explodes on the clicked cell when the layout puts a mine there', () => {
+    const layout: Cell[] = [{ row: 4, col: 4 }, ...RING_MINES.slice(0, 9)];
+    const engine = makeEngine({
+      config: { ...BEGINNER_CONFIG, firstClickSafe: false },
+      initialMines: layout,
+    });
+
+    const result = engine.reveal(4, 4);
+
+    expect(result.hitMine).toBe(true);
+    expect(engine.state.status).toBe('lost');
+    expect(engine.state.explodedCell).toEqual({ row: 4, col: 4 });
+    expect(mineKeys(engine)).toEqual(
+      layout.map((cell) => key(cell.row, cell.col)).sort(),
+    );
+  });
+
+  it('may plant a mine under the first click when safety is off', () => {
+    const engine = new MinesweeperEngine({
+      config: { ...BEGINNER_CONFIG, firstClickSafe: false },
+      rng: () => 0,
+    });
+
+    const result = engine.reveal(0, 0);
+
+    expect(result.hitMine).toBe(true);
+    expect(boardCell(engine, 0, 0).mine).toBe(true);
+    expect(mineCells(engine)).toHaveLength(MINE_COUNT);
+  });
+
+  it('relocates injected safe-zone mines when safety is on', () => {
+    // Nine of the ten mines sit in the safe zone of (4,4); one stays outside.
+    const layout: Cell[] = [...RING_MINES.slice(0, 9), { row: 4, col: 4 }];
+    const engine = makeEngine({ config: BEGINNER_CONFIG, initialMines: layout });
+
+    const result = engine.reveal(4, 4);
+
+    expect(result.hitMine).toBe(false);
+    expect(mineCells(engine)).toHaveLength(MINE_COUNT);
+    const zone = configuredSafeZoneKeys(BEGINNER_CONFIG, 4, 4);
+    for (const mine of mineCells(engine)) {
+      expect(zone.has(key(mine.row, mine.col))).toBe(false);
+    }
+  });
+
+  it('clips the safe zone to the edges of a wide configured board', () => {
+    const click = { row: EXPERT_CONFIG.rows - 1, col: EXPERT_CONFIG.cols - 1 };
+    const zone = configuredSafeZoneKeys(EXPERT_CONFIG, click.row, click.col);
+    const zoneMines: Cell[] = [
+      { row: click.row, col: click.col - 1 },
+      { row: click.row - 1, col: click.col - 1 },
+      { row: click.row - 1, col: click.col },
+    ];
+    const outside = configuredCells(EXPERT_CONFIG).filter(
+      (cell) => !zone.has(key(cell.row, cell.col)),
+    );
+    const layout: Cell[] = [
+      ...outside.slice(0, EXPERT_CONFIG.mines - zoneMines.length),
+      ...zoneMines,
+    ];
+    const engine = makeEngine({ config: EXPERT_CONFIG, initialMines: layout });
+
+    const result = engine.reveal(click.row, click.col);
+
+    expect(result.hitMine).toBe(false);
+    expect(mineCells(engine)).toHaveLength(EXPERT_CONFIG.mines);
+    for (const mine of mineCells(engine)) {
+      expect(zone.has(key(mine.row, mine.col))).toBe(false);
+    }
+  });
+});
+
+describe('config validation', () => {
+  it('accepts the three classic presets and returns a frozen copy', () => {
+    for (const [, config] of PRESET_CONFIGS) {
+      const validated = validateConfig(config);
+
+      expect(validated).toEqual(config);
+      expect(validated).not.toBe(config);
+      expect(Object.isFrozen(validated)).toBe(true);
+    }
+  });
+
+  it('accepts the largest safe-first mine count and skips that cap when safety is off', () => {
+    expect(validateConfig({ rows: 5, cols: 5, mines: 16, firstClickSafe: true })).toEqual({
+      rows: 5,
+      cols: 5,
+      mines: 16,
+      firstClickSafe: true,
+    });
+    expect(validateConfig({ rows: 5, cols: 5, mines: 20, firstClickSafe: false })).toEqual({
+      rows: 5,
+      cols: 5,
+      mines: 20,
+      firstClickSafe: false,
+    });
+    expect(validateConfig({ ...BEGINNER_CONFIG, mines: 72 })).toMatchObject({ mines: 72 });
+  });
+
+  it('rejects unplayable values with a field and value in the message', () => {
+    const cases: ReadonlyArray<readonly [MinesweeperConfig, RegExp]> = [
+      [{ ...BEGINNER_CONFIG, rows: 9.5 }, /rows must be an integer between 5 and 30, received 9\.5\./],
+      [{ ...BEGINNER_CONFIG, rows: 0 }, /rows must be an integer between 5 and 30, received 0\./],
+      [{ ...BEGINNER_CONFIG, rows: -3 }, /rows must be an integer between 5 and 30, received -3\./],
+      [{ ...BEGINNER_CONFIG, rows: MIN_ROWS - 1 }, /rows must be an integer between 5 and 30, received 4\./],
+      [{ ...BEGINNER_CONFIG, rows: MAX_ROWS + 1 }, /rows must be an integer between 5 and 30, received 31\./],
+      [{ ...BEGINNER_CONFIG, cols: 4.5 }, /cols must be an integer between 5 and 30, received 4\.5\./],
+      [{ ...BEGINNER_CONFIG, cols: 0 }, /cols must be an integer between 5 and 30, received 0\./],
+      [{ ...BEGINNER_CONFIG, cols: MAX_COLS + 1 }, /cols must be an integer between 5 and 30, received 31\./],
+      [{ ...BEGINNER_CONFIG, mines: 2.5 }, /mines must be a positive integer, received 2\.5\./],
+      [{ ...BEGINNER_CONFIG, mines: 0 }, /mines must be a positive integer, received 0\./],
+      [{ ...BEGINNER_CONFIG, mines: -1 }, /mines must be a positive integer, received -1\./],
+      [
+        { ...BEGINNER_CONFIG, mines: ROWS * COLS },
+        /mines must be smaller than the 81 board cells, received 81\./,
+      ],
+      [
+        { ...BEGINNER_CONFIG, mines: ROWS * COLS + 1 },
+        /mines must be smaller than the 81 board cells, received 82\./,
+      ],
+      [
+        { ...BEGINNER_CONFIG, mines: 73 },
+        /mines must fit outside the 9-cell first-click safe zone \(at most 72\), received 73\./,
+      ],
+      [
+        { rows: 5, cols: 5, mines: 17, firstClickSafe: true },
+        /mines must fit outside the 9-cell first-click safe zone \(at most 16\), received 17\./,
+      ],
+      [
+        { ...BEGINNER_CONFIG, firstClickSafe: 'yes' as unknown as boolean },
+        /firstClickSafe must be a boolean, received "yes"\./,
+      ],
+    ];
+
+    for (const [config, message] of cases) {
+      expect(() => validateConfig(config)).toThrow(RangeError);
+      expect(() => validateConfig(config)).toThrow(message);
+    }
+  });
+
+  it('rejects a non-object config', () => {
+    expect(() => validateConfig(null as unknown as MinesweeperConfig)).toThrow(
+      /config must be an object, received null\./,
+    );
+  });
+
+  it('rejects invalid configs at the engine constructor entry point', () => {
+    expect(
+      () => new MinesweeperEngine({ config: null as unknown as MinesweeperConfig }),
+    ).toThrow(/config must be an object, received null\./);
+    expect(
+      () => new MinesweeperEngine({ config: { ...BEGINNER_CONFIG, rows: 2 } }),
+    ).toThrow(RangeError);
+    expect(
+      () => new MinesweeperEngine({ config: { ...BEGINNER_CONFIG, mines: 81 } }),
+    ).toThrow(RangeError);
+    expect(
+      () =>
+        new MinesweeperEngine({
+          config: { ...BEGINNER_CONFIG, firstClickSafe: false },
+          initialMines: [{ row: -1, col: 0 }],
+        }),
+    ).toThrow(RangeError);
+  });
+
+  it('validates injected layouts against the configured board', () => {
+    const fullLayout: readonly Cell[] = Array.from(
+      { length: INTERMEDIATE_CONFIG.mines },
+      (_, index) => ({
+        row: Math.floor(index / INTERMEDIATE_CONFIG.cols),
+        col: index % INTERMEDIATE_CONFIG.cols,
+      }),
+    );
+
+    expect(
+      () => new MinesweeperEngine({ config: INTERMEDIATE_CONFIG, initialMines: RING_MINES }),
+    ).toThrow(/exactly 40/);
+    expect(
+      () => new MinesweeperEngine({ config: INTERMEDIATE_CONFIG, initialMines: fullLayout }),
+    ).not.toThrow();
+    expect(
+      () =>
+        new MinesweeperEngine({
+          config: INTERMEDIATE_CONFIG,
+          initialMines: [...fullLayout.slice(0, 39), { row: 16, col: 0 }],
+        }),
+    ).toThrow(/out of bounds/);
   });
 });
