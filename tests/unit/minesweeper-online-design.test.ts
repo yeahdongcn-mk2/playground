@@ -266,7 +266,7 @@ interface ImplementationTask {
   readonly title: string;
   readonly detail: string;
   readonly depends_on: readonly string[];
-  readonly events: readonly string[];
+  readonly handles_events: readonly string[];
   readonly acceptance: readonly string[];
 }
 
@@ -286,18 +286,80 @@ interface ImplementationPlan {
   readonly tasks: readonly ImplementationTask[];
 }
 
+interface ChapterEntry {
+  readonly title: string;
+  readonly anchor: string;
+}
+
 /** Escape a marker before embedding it in a regular expression. */
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** Apply GitHub's heading-slug rules closely enough for the numbered chapters. */
+/** Build the anchor GitHub generates for a unique numbered chapter heading. */
 function githubAnchor(heading: string): string {
   return heading
     .trim()
     .toLowerCase()
-    .replace(/[^\p{L}\p{N}\p{M}\s-]/gu, '')
-    .replace(/\s+/g, '-');
+    .replace(/[^\p{L}\p{N}\p{M}\p{Pc}\p{Pd}\s]/gu, '')
+    .replace(/\s/g, '-');
+}
+
+/** Parse numbered `## N. 标题` headings outside fenced code blocks. */
+function parseChapterHeadings(): Map<number, ChapterEntry> {
+  const headings = new Map<number, ChapterEntry>();
+  let inFence = false;
+  for (const line of DESIGN.split('\n')) {
+    if (line.startsWith('```')) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) {
+      continue;
+    }
+    const match = /^## (\d+)\. (.+)$/.exec(line);
+    if (match === null) {
+      continue;
+    }
+    const numberText = match[1];
+    const title = match[2];
+    if (numberText === undefined || title === undefined) {
+      continue;
+    }
+    const number = Number(numberText);
+    if (headings.has(number)) {
+      throw new Error(`Duplicate chapter heading ${number} in ${DESIGN_PATH}.`);
+    }
+    const trimmed = title.trim();
+    headings.set(number, {
+      title: trimmed,
+      anchor: githubAnchor(`${number}. ${trimmed}`),
+    });
+  }
+  return headings;
+}
+
+/** Parse the chapter-index table rows of the form `[N. 标题](#anchor)`. */
+function parseChapterIndex(index: string): Map<number, ChapterEntry> {
+  const entries = new Map<number, ChapterEntry>();
+  for (const line of index.split('\n')) {
+    const match = /^\|\s*\[(\d+)\. (.+?)\]\(#([^)]+)\)\s*\|/.exec(line);
+    if (match === null) {
+      continue;
+    }
+    const numberText = match[1];
+    const title = match[2];
+    const anchor = match[3];
+    if (numberText === undefined || title === undefined || anchor === undefined) {
+      continue;
+    }
+    const number = Number(numberText);
+    if (entries.has(number)) {
+      throw new Error(`Duplicate chapter index entry ${number} in ${DESIGN_PATH}.`);
+    }
+    entries.set(number, { title: title.trim(), anchor });
+  }
+  return entries;
 }
 
 /** Parse the JSON fenced block immediately after a design marker. */
@@ -850,7 +912,7 @@ describe('minesweeper online implementation plan design', () => {
       expect(task.title.trim().length).toBeGreaterThan(0);
       expect(task.detail.trim().length).toBeGreaterThan(0);
       expect(Array.isArray(task.depends_on)).toBe(true);
-      expect(Array.isArray(task.events)).toBe(true);
+      expect(Array.isArray(task.handles_events)).toBe(true);
       expect(Array.isArray(task.acceptance)).toBe(true);
       expect(task.acceptance.length).toBeGreaterThan(0);
       for (const item of task.acceptance) {
@@ -870,13 +932,13 @@ describe('minesweeper online implementation plan design', () => {
     }
   });
 
-  it('assigns every lifecycle event to at least one implementation task', () => {
+  it('assigns each lifecycle event to a single owner except the shared timeout', () => {
     const declaredEvents = new Set(lifecycle.events.map((event) => event.name));
     const owners = new Map<string, string[]>();
 
     for (const task of IMPLEMENTATION_TASKS) {
       const seen = new Set<string>();
-      for (const event of task.events) {
+      for (const event of task.handles_events) {
         expect(declaredEvents.has(event)).toBe(true);
         expect(seen.has(event)).toBe(false);
         seen.add(event);
@@ -888,11 +950,18 @@ describe('minesweeper online implementation plan design', () => {
     }
 
     for (const event of declaredEvents) {
-      expect(owners.get(event)?.length ?? 0).toBeGreaterThan(0);
+      const taskIds = owners.get(event) ?? [];
+      expect(taskIds.length).toBe(event === 'timeout' ? 2 : 1);
     }
+    expect(owners.get('timeout')).toEqual(
+      expect.arrayContaining(['room-service', 'reconnect-timeout']),
+    );
+    expect(owners.get('rematch')).toEqual(['room-service']);
+  });
 
+  it('makes room-service own the rematch lifecycle event', () => {
     const roomService = IMPLEMENTATION_TASKS.find((task) => task.id === 'room-service');
-    expect(roomService?.events).toContain('rematch');
+    expect(roomService?.handles_events).toContain('rematch');
     expect(roomService?.detail).toContain('rematch');
     expect(roomService?.acceptance.some((item) => item.includes('rematch'))).toBe(true);
   });
@@ -979,47 +1048,26 @@ describe('minesweeper online single-player relationship and glossary', () => {
 
     const index = sectionBetween('## 0. 章节索引', '## 1. 背景与范围');
 
-    const headings = new Map<number, { title: string; anchor: string }>();
-    for (const line of DESIGN.split('\n')) {
-      const match = /^## (\d+)\. (.+)$/.exec(line);
-      if (match === null) {
-        continue;
-      }
-      const number = match[1];
-      const title = match[2];
-      if (number === undefined || title === undefined || Number(number) === 0) {
-        continue;
-      }
-      headings.set(Number(number), {
-        title: title.trim(),
-        anchor: githubAnchor(`${number}. ${title.trim()}`),
-      });
+    const headings = parseChapterHeadings();
+    const headingNumbers = [...headings.keys()]
+      .filter((number) => number !== 0)
+      .sort((a, b) => a - b);
+    for (const section of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+      expect(headingNumbers).toContain(section);
     }
-    const headingNumbers = [...headings.keys()].sort((a, b) => a - b);
-    expect(headingNumbers).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 
-    const entries = new Map<number, { title: string; anchor: string }>();
-    for (const line of index.split('\n')) {
-      const match = /^\| \[(\d+)\. ([^\]]+)\]\(#([^)]+)\) \|/.exec(line);
-      if (match === null) {
-        continue;
-      }
-      const number = match[1];
-      const title = match[2];
-      const anchor = match[3];
-      if (number === undefined || title === undefined || anchor === undefined) {
-        continue;
-      }
-      expect(entries.has(Number(number))).toBe(false);
-      entries.set(Number(number), { title: title.trim(), anchor });
-    }
+    const entries = parseChapterIndex(index);
     expect([...entries.keys()].sort((a, b) => a - b)).toEqual(headingNumbers);
 
-    for (const [number, heading] of headings) {
+    for (const number of headingNumbers) {
+      const heading = headings.get(number);
       const entry = entries.get(number);
       expect(entry).toBeDefined();
-      expect(entry?.title).toBe(heading.title);
-      expect(entry?.anchor).toBe(heading.anchor);
+      if (heading === undefined || entry === undefined) {
+        continue;
+      }
+      expect(entry.title).toBe(heading.title);
+      expect(entry.anchor).toBe(heading.anchor);
     }
 
     const glossaryStart = DESIGN.indexOf('## 10. 术语表');
