@@ -103,6 +103,14 @@ describe('findDifficultyForConfig', () => {
       'expert',
     );
   });
+
+  it('does not match a preset that differs only in rows', () => {
+    expect(findDifficultyForConfig({ rows: 8, cols: 9, mines: 10, firstClickSafe: true })).toBeNull();
+  });
+
+  it('does not match a preset that differs only in cols', () => {
+    expect(findDifficultyForConfig({ rows: 9, cols: 8, mines: 10, firstClickSafe: true })).toBeNull();
+  });
 });
 
 describe('parseCustomDifficulty', () => {
