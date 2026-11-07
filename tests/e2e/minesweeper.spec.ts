@@ -13,10 +13,10 @@ import {
   openMinesweeper,
   readState,
   readStatus,
+  revealFirstCellMines,
   WIN_CLICK,
   WIN_MINES,
 } from './minesweeper-helpers';
-import type { MinesweeperSnapshot } from '../../src/games/minesweeper/engine';
 import {
   expect,
   installListenerProbe,
@@ -148,6 +148,29 @@ test.describe('minesweeper gameplay', () => {
     await expect(page.getByTestId('status')).toHaveText('进行中');
   });
 
+  test('an omitted debug seed plants the seed=1 board, not the seed=0 board', async ({
+    page,
+  }) => {
+    // The bare debug URL deliberately omits `seed`. The first reveal is fixed
+    // at (8, 8) so every run plants its board from the same safe zone.
+    await openMinesweeper(page);
+    const defaultLayout = await revealFirstCellMines(page);
+
+    await openMinesweeper(page, { seed: 1 });
+    const seedOneLayout = await revealFirstCellMines(page);
+
+    await openMinesweeper(page, { seed: 0 });
+    const seedZeroLayout = await revealFirstCellMines(page);
+
+    // Regression: `Number(null)` is 0, so the old parser silently treated a
+    // missing `seed` as seed 0. The documented fallback is seed 1.
+    expect(defaultLayout).toBe(seedOneLayout);
+    expect(defaultLayout).not.toBe(seedZeroLayout);
+    // Guard the negative control: seed 0 and seed 1 really differ at (8, 8),
+    // so the inequality above cannot pass vacuously.
+    expect(seedZeroLayout).not.toBe(seedOneLayout);
+  });
+
   test('malformed debug mine layouts fall back to the seeded random board', async ({ page }) => {
     // Every entry must be rejected wholesale: too few cells, duplicate cells,
     // an empty coordinate token (Number('') must not become row 0), an
@@ -159,41 +182,23 @@ test.describe('minesweeper gameplay', () => {
       '0,0;0,1;0,2;0,3;0,4;0,5;0,6;0,7;0,8;9,0',
       '0,0;0,1;0,2;0,3;0,4;0,5;0,6;0,7;0,8;0,0,1',
     ];
-    const mineSignature = (state: MinesweeperSnapshot): string =>
-      state.board
-        .flat()
-        .filter((cell) => cell.mine)
-        .map((cell) => `${cell.row},${cell.col}`)
-        .join(';');
 
-    const signatures: string[] = [];
+    // Seed 1 is explicit here so the fallback comparison does not depend on
+    // the default seed; the dedicated regression above covers that default.
+    const fallbackLayouts: string[] = [];
     for (const layout of malformedLayouts) {
-      await openMinesweeper(page, { rawMines: layout });
+      await openMinesweeper(page, { rawMines: layout, seed: 1 });
       // The first reveal is always safe, so it plants the fallback layout.
-      await cellLocator(page, 8, 8).click();
-      await expect(page.getByTestId('status')).toHaveText('进行中');
-      const state = await readState(page);
-      expect(state.status).toBe('playing');
-      expect(state.board.flat().filter((cell) => cell.mine)).toHaveLength(10);
-      signatures.push(mineSignature(state));
+      fallbackLayouts.push(await revealFirstCellMines(page));
     }
 
-    // No layout parameter must use the same debug seed and land on the same
-    // board as every rejected layout. Uncaught page errors also fail this test
-    // through the shared fixture; a thrown mount surfaces as an assertion
-    // timeout because the app renders its route error instead.
-    await openMinesweeper(page);
-    await cellLocator(page, 8, 8).click();
-    await expect(page.getByTestId('status')).toHaveText('进行中');
-    const fallbackSignature = mineSignature(await readState(page));
-    expect(signatures).toEqual(malformedLayouts.map(() => fallbackSignature));
-
-    // A missing seed must resolve to the documented default seed 1, so an
-    // explicit `seed=1` run has to plant exactly the same fallback board.
+    // A clean explicit `seed=1` run must plant exactly the same board as every
+    // rejected layout. Uncaught page errors also fail this test through the
+    // shared fixture; a thrown mount surfaces as an assertion timeout because
+    // the app renders its route error instead.
     await openMinesweeper(page, { seed: 1 });
-    await cellLocator(page, 8, 8).click();
-    await expect(page.getByTestId('status')).toHaveText('进行中');
-    expect(mineSignature(await readState(page))).toBe(fallbackSignature);
+    const seedOneLayout = await revealFirstCellMines(page);
+    expect(fallbackLayouts).toEqual(malformedLayouts.map(() => seedOneLayout));
   });
 
   test('hitting a mine ends the game, reveals every mine, freezes the clock and restarts', async ({
