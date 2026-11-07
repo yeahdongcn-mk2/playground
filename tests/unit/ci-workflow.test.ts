@@ -56,8 +56,18 @@ function requireStep(
 const isNpmCi = (step: WorkflowStep): boolean => (step.run ?? '').trim() === 'npm ci';
 const isSetupPython = (step: WorkflowStep): boolean =>
   (step.uses ?? '').startsWith('actions/setup-python@');
+const PRE_COMMIT_INSTALL_PATTERN =
+  /(?:^|\s)(?:pip|pipx|uv)(?:\s+tool)?\s+install(?:\s+--?[^\s]+)*\s+pre-commit(?:[=~><][^\s]*)?(?=\s|$)/;
+const PRE_COMMIT_PIN_PATTERN =
+  /(?:^|\s)(?:pip|pipx|uv)(?:\s+tool)?\s+install(?:\s+--?[^\s]+)*\s+pre-commit==(\d+\.\d+\.\d+)(?=\s|$)/;
 const isPreCommitInstall = (step: WorkflowStep): boolean =>
-  /(?:^|\s)(?:pip|pipx|uv)(?:\s+tool)?\s+install\s+pre-commit(?:\s|$)/.test(step.run ?? '');
+  PRE_COMMIT_INSTALL_PATTERN.test(step.run ?? '');
+
+/** Exact `x.y.z` version pinned by a pre-commit install command, if any. */
+function pinnedPreCommitVersion(command: string): string | null {
+  const match = PRE_COMMIT_PIN_PATTERN.exec(command);
+  return match?.[1] ?? null;
+}
 const isPreCommitRun = (step: WorkflowStep): boolean =>
   commandsOf(step).some((command) => /^pre-commit run --all-files(?:\s|$)/.test(command));
 const isTypecheck = (step: WorkflowStep): boolean => (step.run ?? '').trim() === 'npm run typecheck';
@@ -96,16 +106,55 @@ describe('CI workflow', () => {
     const install = requireStep(isPreCommitInstall, 'a pre-commit install step');
 
     expect(setupPython.with?.['python-version']).toBeDefined();
-    // An installation command such as `pip install pre-commit`,
-    // `pipx install pre-commit` or `uv tool install pre-commit`.
-    expect(commandsOf(install).join('\n')).toMatch(
-      /(?:^|\s)(?:pip|pipx|uv)(?:\s+tool)?\s+install\s+pre-commit(?:\s|$)/,
-    );
+    // An installation command such as `pip install pre-commit==4.7.0`,
+    // `pip install --upgrade pre-commit`, `pipx install pre-commit` or
+    // `uv tool install pre-commit`.
+    expect(
+      commandsOf(install).some((command) => PRE_COMMIT_INSTALL_PATTERN.test(command)),
+    ).toBe(true);
 
     const npmCiIndex = stepIndex(isNpmCi);
     expect(npmCiIndex).toBeGreaterThanOrEqual(0);
     expect(npmCiIndex).toBeLessThan(stepIndex(isSetupPython));
     expect(stepIndex(isSetupPython)).toBeLessThan(stepIndex(isPreCommitInstall));
+  });
+
+  it('pins one exact pre-commit version and ties the cache key to it', () => {
+    const install = requireStep(isPreCommitInstall, 'a pre-commit install step');
+    const installCommand = commandsOf(install).find(
+      (command) => pinnedPreCommitVersion(command) !== null,
+    );
+    expect(
+      installCommand,
+      'the pre-commit install step should pin an exact x.y.z version',
+    ).toBeDefined();
+
+    const version = pinnedPreCommitVersion(installCommand ?? '');
+    expect(version).toMatch(/^\d+\.\d+\.\d+$/);
+
+    const cache = steps.find((step) => (step.uses ?? '').startsWith('actions/cache@'));
+    expect(cache, 'verify job should cache pre-commit environments with actions/cache').toBeDefined();
+    const cacheKeyPrefix = 'pre-commit-${{ runner.os }}-';
+    expect(cache?.with?.key).toContain(`${cacheKeyPrefix}${version}-`);
+    expect(cache?.with?.key).toContain("hashFiles('.pre-commit-config.yaml')");
+    expect(cache?.with?.['restore-keys']).toContain(`${cacheKeyPrefix}${version}-`);
+  });
+
+  it('recognises pinned and unpinned pre-commit install commands', () => {
+    expect(pinnedPreCommitVersion('pip install pre-commit==4.7.0')).toBe('4.7.0');
+    expect(pinnedPreCommitVersion('pip install --upgrade pre-commit==4.7.0')).toBe('4.7.0');
+    expect(pinnedPreCommitVersion('pip install pre-commit')).toBeNull();
+    expect(pinnedPreCommitVersion('pip install --upgrade pre-commit')).toBeNull();
+
+    for (const command of [
+      'pip install pre-commit',
+      'pip install --upgrade pre-commit',
+      'pipx install pre-commit',
+      'uv tool install pre-commit',
+      'pip install pre-commit==4.7.0',
+    ]) {
+      expect(isPreCommitInstall({ run: command }), command).toBe(true);
+    }
   });
 
   it('caches the pre-commit environments to keep the job fast', () => {
