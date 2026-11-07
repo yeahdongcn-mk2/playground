@@ -81,6 +81,22 @@ const FAKE_JWT_SEGMENTS = [
 ];
 const FAKE_JWT = FAKE_JWT_SEGMENTS.join('.');
 
+const DATABASE_URL_SCHEMES = [
+  'postgres',
+  'postgresql',
+  'mysql',
+  'mariadb',
+  'mongodb',
+  'mongodb+srv',
+  'redis',
+  'rediss',
+  'amqp',
+  'amqps',
+] as const;
+
+// Built at runtime so this test file itself stays clean for the scanner.
+const FAKE_DB_PASSWORD = ['s3cr3t', 'password'].join('');
+
 describe('secret scan pre-commit hook', () => {
   it('is configured to scan every text file, not only staged changes', () => {
     const hook = requireScannerHook();
@@ -184,6 +200,55 @@ describe('secret scan pre-commit hook', () => {
         '',
       ].join('\n'),
     );
+
+    expect(runScanner([fixture])).toEqual({ status: 0, stderr: '' });
+  });
+
+  it('fails on database URLs with an inline password for every supported scheme', () => {
+    const dir = makeTempDir();
+    const fixture = join(dir, 'database-urls.txt');
+    const lines = DATABASE_URL_SCHEMES.map(
+      (scheme) => `DATABASE_URL=${scheme}://dbuser:${FAKE_DB_PASSWORD}@db.internal:5432/app`,
+    );
+    writeFileSync(fixture, `${lines.join('\n')}\n`);
+
+    const failing = runScanner([fixture]);
+    expect(failing.status).toBe(1);
+    expect(failing.stderr).toContain('database-url-password');
+    expect(failing.stderr).toContain('database-urls.txt');
+    // Every scheme must be reported, not just the first line of the fixture.
+    const findings = failing.stderr
+      .split('\n')
+      .filter((line) => line.includes('database-url-password'));
+    expect(findings).toHaveLength(DATABASE_URL_SCHEMES.length);
+  });
+
+  it('does not flag database URLs without real inline credentials', () => {
+    const dir = makeTempDir();
+    const fixture = join(dir, 'database-url-near-misses.txt');
+    const urls = [
+      // No userinfo at all.
+      'postgres://db.internal:5432/app',
+      'mysql://db.internal/app',
+      'mongodb://cluster0.example.mongodb.net/app',
+      'redis://cache:6379/0',
+      'amqp://broker:5672/vhost',
+      // A username without a password.
+      'postgres://dbuser@db.internal/app',
+      // An explicitly empty password.
+      'postgres://dbuser:@db.internal/app',
+      // Env-var interpolation and common documentation placeholders.
+      'postgres://dbuser:${DB_PASSWORD}@db.internal/app',
+      'postgres://dbuser:$DB_PASSWORD@db.internal/app',
+      'postgres://dbuser:{{DB_PASSWORD}}@db.internal/app',
+      'postgres://dbuser:<password>@db.internal/app',
+      'postgres://dbuser:[password]@db.internal/app',
+      'postgres://dbuser:password@db.internal/app',
+      'mongodb://dbuser:CHANGE_ME@db.internal/app',
+      'redis://dbuser:your_password@cache:6379/0',
+      'amqp://dbuser:REPLACE_ME@broker:5672/vhost',
+    ];
+    writeFileSync(fixture, `${urls.map((url) => `DATABASE_URL=${url}`).join('\n')}\n`);
 
     expect(runScanner([fixture])).toEqual({ status: 0, stderr: '' });
   });
