@@ -1,3 +1,4 @@
+import type { Page } from '@playwright/test';
 import {
   activeIntervalCount,
   abortListenerCount,
@@ -37,6 +38,63 @@ const INTERMEDIATE_MINES = [
 const BOTTOM_RIGHT_16 = { row: 15, col: 15 } as const;
 const BOTTOM_RIGHT_30 = { row: 15, col: 29 } as const;
 
+/**
+ * Assert the rendered geometry follows the configured rows/columns instead of
+ * only echoing the CSS custom properties. The stage must take the configured
+ * aspect ratio and every grid track must use the configured column/row count;
+ * a hardcoded `repeat(9, ...)` would leave oversized tracks followed by tiny
+ * implicit ones, so uniform track sizes are checked as well.
+ */
+async function expectConfiguredGeometry(
+  page: Page,
+  rows: number,
+  cols: number,
+): Promise<void> {
+  const stage = await page.getByTestId('minesweeper-stage').boundingBox();
+  expect(stage, 'stage should have a bounding box').not.toBeNull();
+  if (stage) {
+    expect(stage.width / stage.height, 'stage aspect ratio').toBeCloseTo(
+      cols / rows,
+      1,
+    );
+  }
+
+  const columns = await page
+    .locator('.minesweeper-row')
+    .first()
+    .evaluate((row) => getComputedStyle(row).gridTemplateColumns.split(' ').length);
+  expect(columns, 'grid columns in a row').toBe(cols);
+
+  const gridRows = await page
+    .getByTestId('minesweeper-board')
+    .evaluate((board) => getComputedStyle(board).gridTemplateRows.split(' ').length);
+  expect(gridRows, 'grid rows in the board').toBe(rows);
+
+  const rowHeights = await page
+    .locator('.minesweeper-row')
+    .evaluateAll((renderedRows) =>
+      renderedRows.map((row) => row.getBoundingClientRect().height),
+    );
+  expect(rowHeights, 'rendered row count').toHaveLength(rows);
+  expect(
+    Math.max(...rowHeights) - Math.min(...rowHeights),
+    'all rows should share the configured grid track height',
+  ).toBeLessThan(1);
+
+  const cellWidths = await page
+    .locator('.minesweeper-row')
+    .first()
+    .locator('[data-cell]')
+    .evaluateAll((cells) =>
+      cells.map((cell) => cell.getBoundingClientRect().width),
+    );
+  expect(cellWidths, 'rendered column count').toHaveLength(cols);
+  expect(
+    Math.max(...cellWidths) - Math.min(...cellWidths),
+    'all columns should share the configured grid track width',
+  ).toBeLessThan(1);
+}
+
 test.describe('minesweeper board configuration', () => {
   test('renders 16x16/40, 16x30/99 and the default 9x9/10 board', async ({ page }) => {
     await openMinesweeper(page, { rows: 16, cols: 16, mineCount: 40 });
@@ -58,6 +116,7 @@ test.describe('minesweeper board configuration', () => {
         };
       }),
     ).toEqual({ rows: '16', cols: '16' });
+    await expectConfiguredGeometry(page, 16, 16);
 
     await openMinesweeper(page, { rows: 16, cols: 30, mineCount: 99 });
     await expect(page.locator('[data-cell]')).toHaveCount(480);
@@ -65,6 +124,7 @@ test.describe('minesweeper board configuration', () => {
     await expect(page.getByTestId('board-summary')).toHaveText('16 × 30 · 99 雷');
     state = await readState(page);
     expect([state.rows, state.cols, state.mineCount]).toEqual([16, 30, 99]);
+    await expectConfiguredGeometry(page, 16, 30);
 
     await openMinesweeper(page);
     await expect(page.locator('[data-cell]')).toHaveCount(81);
@@ -169,6 +229,27 @@ test.describe('minesweeper board configuration', () => {
     }
   });
 
+  test('setConfig falls back to the beginner board for an invalid config', async ({
+    page,
+  }) => {
+    await openMinesweeper(page);
+    // The debug-only seam may receive out-of-bounds values; applyConfig must
+    // catch the validation error and rebuild the default board, not throw and
+    // leave a half-built game.
+    await setDebugConfig(page, { rows: 4, cols: 4, mines: 99, firstClickSafe: true });
+    await expect(page.locator('[data-cell]')).toHaveCount(81);
+    await expect(page.getByTestId('remaining-mines')).toHaveText('10');
+    await expect(page.getByTestId('board-summary')).toHaveText('9 × 9 · 10 雷');
+    await expect(page.getByTestId('minesweeper-board')).toHaveAttribute(
+      'aria-label',
+      '9 × 9 扫雷棋盘',
+    );
+    await expect(page.getByTestId('status')).toHaveText('待开始');
+    const state = await readState(page);
+    expect([state.rows, state.cols, state.mineCount]).toEqual([9, 9, 10]);
+    expect(state.status).toBe('ready');
+  });
+
   test('setConfig rebuilds the board, stops the clock and keeps listeners bounded', async ({
     page,
   }) => {
@@ -241,6 +322,7 @@ test.describe('minesweeper board configuration', () => {
       page.getByTestId('minesweeper-board'),
       'wide board',
     );
+    await expectConfiguredGeometry(page, 16, 30);
     const desktopCell = await cellLocator(
       page,
       BOTTOM_RIGHT_30.row,
@@ -260,6 +342,7 @@ test.describe('minesweeper board configuration', () => {
       page.getByTestId('minesweeper-board'),
       'phone wide board',
     );
+    await expectConfiguredGeometry(page, 16, 30);
     const phoneCell = await cellLocator(
       page,
       BOTTOM_RIGHT_30.row,

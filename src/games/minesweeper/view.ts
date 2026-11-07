@@ -471,10 +471,11 @@ export async function mountMinesweeper(
   }
 
   /**
-   * Rebuild the whole game for `rawConfig`: stop the old clock and pending
-   * touch gesture, replace the board DOM and engine, and reset the HUD. Board
-   * listeners live on the stable `boardElement` and listener signal, so this
-   * path never adds listeners or intervals.
+   * Rebuild the whole game for `rawConfig`: stop the old clock, cancel the
+   * pending touch gesture while keeping its release-click suppression, replace
+   * the board DOM and engine, and reset the HUD. Board listeners live on the
+   * stable `boardElement` and listener signal, so this path never adds
+   * listeners or intervals.
    */
   function applyConfig(rawConfig: MinesweeperConfig): void {
     let config: Readonly<MinesweeperConfig>;
@@ -487,8 +488,11 @@ export async function mountMinesweeper(
     currentConfig = config;
 
     stopClock();
+    // Like restart, a rebuild must keep the suppression that cancelTouchGesture
+    // adds: the finger is still down and its release click will target the
+    // rebuilt board. Stale ids are consumed by their own click, cleared by the
+    // next pointerdown, or dropped by destroy.
     cancelTouchGesture();
-    suppressedClickPointers.clear();
 
     stageElement.style.setProperty('--rows', String(config.rows));
     stageElement.style.setProperty('--cols', String(config.cols));
