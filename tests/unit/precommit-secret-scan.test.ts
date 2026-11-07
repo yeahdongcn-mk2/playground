@@ -94,6 +94,18 @@ const DATABASE_URL_SCHEMES = [
   'amqps',
 ] as const;
 
+// SQLAlchemy and async drivers extend a base protocol with `+driver`; the
+// scanner matches that suffix case-insensitively.
+const DATABASE_URL_DRIVER_SCHEMES = [
+  'postgresql+psycopg2',
+  'postgresql+asyncpg',
+  'postgresql+PSYCOPG2',
+  'mysql+pymysql',
+  'mysql+aiomysql',
+  'mariadb+pymysql',
+  'mongodb+srv',
+] as const;
+
 // Shared fake password for the database URL fixtures, split so no literal
 // `scheme://user:password@host` value appears in this file.
 const FAKE_DB_PASSWORD = ['s3cr3t', 'password'].join('');
@@ -233,6 +245,25 @@ describe('secret scan pre-commit hook', () => {
     }
   });
 
+  it('fails on SQLAlchemy and async driver DSNs with an inline password', () => {
+    const dir = makeTempDir();
+    const fixture = join(dir, 'driver-database-urls.txt');
+    const urls = DATABASE_URL_DRIVER_SCHEMES.map(
+      (scheme) => `${scheme}://dbuser:${FAKE_DB_PASSWORD}@db.internal:5432/app`,
+    );
+    writeFileSync(fixture, `${urls.map((url) => `DATABASE_URL=${url}`).join('\n')}\n`);
+
+    const failing = runScanner([fixture]);
+    expect(failing.status).toBe(1);
+    expect(failing.stderr).toContain('database-url-password');
+    // Every driver variant must be reported, not just the first line.
+    for (const [index] of urls.entries()) {
+      expect(failing.stderr).toContain(
+        `driver-database-urls.txt:${index + 1}: [database-url-password]`,
+      );
+    }
+  });
+
   it('does not flag database URLs without real inline credentials', () => {
     const dir = makeTempDir();
     const fixture = join(dir, 'database-url-near-misses.txt');
@@ -275,6 +306,14 @@ describe('secret scan pre-commit hook', () => {
       'redis://cache:6379?notify=ops@example.com',
       'postgres://localhost:5432?user=admin@example.com',
       'postgres://host?user=a:b@c',
+      // Driver suffixes keep the same credential requirements.
+      'postgresql+psycopg2://db.internal:5432/app',
+      'postgresql+asyncpg://dbuser@db.internal/app',
+      'postgresql+asyncpg://dbuser:@db.internal/app',
+      'mysql+pymysql://dbuser:${DB_PASSWORD}@db.internal/app',
+      'mysql+aiomysql://dbuser:password@db.internal/app',
+      'mariadb+pymysql://dbuser:${DB_PASSWORD}@db.internal/app',
+      'mongodb+srv://cluster0.example.mongodb.net/app',
     ];
     writeFileSync(fixture, `${urls.map((url) => `DATABASE_URL=${url}`).join('\n')}\n`);
 
