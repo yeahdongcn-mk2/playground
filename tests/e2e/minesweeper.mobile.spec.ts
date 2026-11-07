@@ -1,3 +1,4 @@
+import type { Page } from '@playwright/test';
 import { expect, test } from './fixtures';
 import {
   cancelCellPress,
@@ -22,6 +23,54 @@ import {
   WIN_CLICK,
   WIN_MINES,
 } from './minesweeper-helpers';
+
+/**
+ * Viewports from the supported 320px minimum through the 349px edge of the
+ * fallback range. At 320px the board cannot reach 36px cells (9 x 36px plus
+ * gaps already exceeds the 320px viewport), so the contract there is >=34px.
+ */
+const NARROW_VIEWPORTS = [
+  { width: 320, height: 640, minimumCellSize: 34, label: '320x640' },
+  { width: 340, height: 700, minimumCellSize: 36, label: '340x700' },
+  { width: 349, height: 700, minimumCellSize: 36, label: '349x700' },
+] as const;
+
+/**
+ * Assert the narrow-screen contract: no horizontal page scroll, every one of
+ * the 81 cells at least `minimumCellSize` px in both directions and roughly
+ * square, and the HUD plus back link inside the first screen.
+ */
+async function expectNarrowBoard(page: Page, minimumCellSize: number): Promise<void> {
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - window.innerWidth,
+  );
+  expect(overflow).toBe(0);
+
+  const cellBoxes = await page.locator('[data-cell]').evaluateAll((cells) =>
+    cells.map((cell) => {
+      const box = cell.getBoundingClientRect();
+      return { width: box.width, height: box.height };
+    }),
+  );
+  expect(cellBoxes).toHaveLength(81);
+  for (const [index, box] of cellBoxes.entries()) {
+    expect(box.width, `cell ${index} width`).toBeGreaterThanOrEqual(minimumCellSize);
+    expect(box.height, `cell ${index} height`).toBeGreaterThanOrEqual(minimumCellSize);
+    expect(box.width, `cell ${index} aspect ratio`).toBeCloseTo(box.height, 1);
+  }
+
+  await expectInsideViewport(
+    page,
+    page.getByTestId('remaining-mines'),
+    'remaining mines',
+  );
+  await expectInsideViewport(page, page.getByTestId('timer'), 'timer');
+  await expectInsideViewport(
+    page,
+    page.getByRole('link', { name: /返回大厅/ }),
+    'back link',
+  );
+}
 
 test.describe('minesweeper on a phone viewport', () => {
   test('opens with the board, HUD and restart / back entries inside the viewport', async ({
@@ -66,41 +115,27 @@ test.describe('minesweeper on a phone viewport', () => {
     expect(cellBox?.width ?? 0).toBeCloseTo(cellBox?.height ?? 0, 1);
   });
 
+  for (const viewport of NARROW_VIEWPORTS) {
+    test(`keeps the board usable and overflow-free on a ${viewport.label} phone viewport`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({
+        width: viewport.width,
+        height: viewport.height,
+      });
+      await openMinesweeper(page, { mines: LOSS_MINES });
+
+      await expectNarrowBoard(page, viewport.minimumCellSize);
+    });
+  }
+
   test('keeps 36px touch targets on a 360x740 phone viewport', async ({ page }) => {
     await page.setViewportSize({ width: 360, height: 740 });
     await openMinesweeper(page, { mines: LOSS_MINES });
 
     // The narrow breakpoint must reclaim space without introducing a
-    // horizontally scrolling page at the smallest common Android width.
-    const overflow = await page.evaluate(
-      () => document.documentElement.scrollWidth - window.innerWidth,
-    );
-    expect(overflow).toBe(0);
-
-    const cellBoxes = await page.locator('[data-cell]').evaluateAll((cells) =>
-      cells.map((cell) => {
-        const box = cell.getBoundingClientRect();
-        return { width: box.width, height: box.height };
-      }),
-    );
-    expect(cellBoxes).toHaveLength(81);
-    for (const [index, box] of cellBoxes.entries()) {
-      expect(box.width, `cell ${index} width`).toBeGreaterThanOrEqual(36);
-      expect(box.height, `cell ${index} height`).toBeGreaterThanOrEqual(36);
-      expect(box.width, `cell ${index} aspect ratio`).toBeCloseTo(box.height, 1);
-    }
-
-    await expectInsideViewport(
-      page,
-      page.getByTestId('remaining-mines'),
-      'remaining mines',
-    );
-    await expectInsideViewport(page, page.getByTestId('timer'), 'timer');
-    await expectInsideViewport(
-      page,
-      page.getByRole('link', { name: /返回大厅/ }),
-      'back link',
-    );
+    // horizontally scrolling page at this common Android width.
+    await expectNarrowBoard(page, 36);
     await expectInsideViewport(
       page,
       page.getByTestId('mobile-restart-button'),

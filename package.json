@@ -27,6 +27,8 @@
     "screenshots:minesweeper:touch-before": "node scripts/capture-minesweeper-screenshots.mjs --touch-before",
     "screenshots:minesweeper:narrow": "npm run build && node scripts/capture-minesweeper-screenshots.mjs --narrow",
     "screenshots:minesweeper:narrow-before": "node scripts/capture-minesweeper-screenshots.mjs --narrow-before",
+    "screenshots:minesweeper:min": "npm run build && node scripts/capture-minesweeper-screenshots.mjs --min",
+    "screenshots:minesweeper:min-before": "node scripts/capture-minesweeper-screenshots.mjs --min-before",
     "screenshots:baseline": "node scripts/capture-baseline.mjs",
     "lint": "oxlint src tests && node scripts/check-boundaries.mjs",
     "check:budget": "node scripts/check-budget.mjs"
