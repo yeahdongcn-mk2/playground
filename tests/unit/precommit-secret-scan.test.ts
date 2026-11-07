@@ -69,6 +69,62 @@ afterEach(() => {
 // it exercises.
 const FAKE_AWS_KEY = ['AKIA', 'IOSFODNN7EXAMPLE'].join('');
 const FAKE_PRIVATE_KEY_HEADER = ['-----BEGIN', 'RSA', 'PRIVATE', 'KEY-----'].join(' ');
+// The public AWS documentation example key, split so this test file itself
+// stays clean for the scanner it exercises.
+const FAKE_AWS_SECRET_KEY = ['wJalrXUtnFEMI/K7MDENG', '/bPxRfiCYEXAMPLEKEY'].join('');
+// The public JWT example from the scanner issue, split so no line in this test
+// file looks like a complete token to the scanner it exercises.
+const FAKE_JWT_SEGMENTS = [
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9',
+  'eyJzdWIiOiIxMjM0In0',
+  'abc',
+];
+const FAKE_JWT = FAKE_JWT_SEGMENTS.join('.');
+
+const DATABASE_URL_SCHEMES = [
+  'postgres',
+  'postgresql',
+  'mysql',
+  'mariadb',
+  'mongodb',
+  'mongodb+srv',
+  'redis',
+  'rediss',
+  'amqp',
+  'amqps',
+  'mssql',
+  'sqlserver',
+  'cockroachdb',
+  'clickhouse',
+  'oracle',
+  'neo4j',
+] as const;
+
+// SQLAlchemy and async drivers extend a base protocol with `+driver`; the
+// scanner matches that suffix case-insensitively. Neo4j's `+srv` routing
+// suffix follows the same shape.
+const DATABASE_URL_DRIVER_SCHEMES = [
+  'postgresql+psycopg2',
+  'postgresql+asyncpg',
+  'postgresql+PSYCOPG2',
+  'mysql+pymysql',
+  'mysql+aiomysql',
+  'mariadb+pymysql',
+  'mongodb+srv',
+  'mssql+pyodbc',
+  'sqlserver+pyodbc',
+  'cockroachdb+psycopg2',
+  'clickhouse+native',
+  'oracle+oracledb',
+  'neo4j+srv',
+] as const;
+
+// Shared fake password for the database URL fixtures, split so no literal
+// `scheme://user:password@host` value appears in this file.
+const FAKE_DB_PASSWORD = ['s3cr3t', 'password'].join('');
+// Percent-encoded `@` and `/`, which valid connection strings use instead of
+// the raw delimiters.
+const FAKE_DB_SPECIAL_PASSWORD = ['p%40ss', '%2Fword'].join('');
 
 describe('secret scan pre-commit hook', () => {
   it('is configured to scan every text file, not only staged changes', () => {
@@ -113,6 +169,182 @@ describe('secret scan pre-commit hook', () => {
 
     writeFileSync(fixture, "export const greeting = 'hello';\n");
     expect(runScanner([fixture]).status).toBe(0);
+  });
+
+  it('fails on aws_secret_access_key assignments with a 40-character base64 value', () => {
+    const dir = makeTempDir();
+    const fixtures = [
+      ['lowercase.ts', `export const aws_secret_access_key = '${FAKE_AWS_SECRET_KEY}';\n`],
+      ['uppercase.env', `AWS_SECRET_ACCESS_KEY=${FAKE_AWS_SECRET_KEY}\n`],
+    ] as const;
+
+    for (const [name, content] of fixtures) {
+      const fixture = join(dir, name);
+      writeFileSync(fixture, content);
+
+      const failing = runScanner([fixture]);
+      expect(failing.status).toBe(1);
+      expect(failing.stderr).toContain('aws-secret-access-key');
+      expect(failing.stderr).toContain(name);
+    }
+  });
+
+  it('does not flag bare or short AWS secret key lookalikes', () => {
+    const dir = makeTempDir();
+    const fixture = join(dir, 'near-misses.ts');
+    writeFileSync(
+      fixture,
+      [
+        'export const aws_secret_access_key = process.env.AWS_SECRET_ACCESS_KEY;',
+        `export const checksum = '${FAKE_AWS_SECRET_KEY}';`,
+        `export const aws_secret_access_key = '${FAKE_AWS_SECRET_KEY.slice(0, 39)}';`,
+        '',
+      ].join('\n'),
+    );
+
+    expect(runScanner([fixture])).toEqual({ status: 0, stderr: '' });
+  });
+
+  it('fails on a three-segment JWT fixture starting with eyJ', () => {
+    const dir = makeTempDir();
+    const fixture = join(dir, 'jwt.ts');
+    writeFileSync(fixture, `export const token = '${FAKE_JWT}';\n`);
+
+    const failing = runScanner([fixture]);
+    expect(failing.status).toBe(1);
+    expect(failing.stderr).toContain('jwt-token');
+    expect(failing.stderr).toContain('jwt.ts');
+  });
+
+  it('does not flag incomplete JWT lookalikes or ordinary base64 text', () => {
+    const dir = makeTempDir();
+    const fixture = join(dir, 'jwt-near-misses.ts');
+    writeFileSync(
+      fixture,
+      [
+        `export const headerOnly = '${FAKE_JWT_SEGMENTS[0]}';`,
+        `export const twoSegments = '${FAKE_JWT_SEGMENTS.slice(0, 2).join('.')}';`,
+        `export const trailingDot = '${FAKE_JWT_SEGMENTS.slice(0, 2).join('.')}.';`,
+        "export const base64 = 'SGVsbG8sIHdvcmxkIQ==';",
+        '',
+      ].join('\n'),
+    );
+
+    expect(runScanner([fixture])).toEqual({ status: 0, stderr: '' });
+  });
+
+  it('fails on database URLs with an inline password for every supported scheme', () => {
+    const dir = makeTempDir();
+    const fixture = join(dir, 'database-urls.txt');
+    const urls = [
+      ...DATABASE_URL_SCHEMES.map(
+        (scheme) => `${scheme}://dbuser:${FAKE_DB_PASSWORD}@db.internal:5432/app`,
+      ),
+      // Redis allows an empty username, with the password after a bare colon.
+      `redis://:${FAKE_DB_PASSWORD}@cache:6379/0`,
+      // Percent-encoded delimiters inside a password are still reported.
+      `postgres://dbuser:${FAKE_DB_SPECIAL_PASSWORD}@db.internal/app`,
+    ];
+    writeFileSync(fixture, `${urls.map((url) => `DATABASE_URL=${url}`).join('\n')}\n`);
+
+    const failing = runScanner([fixture]);
+    expect(failing.status).toBe(1);
+    expect(failing.stderr).toContain('database-url-password');
+    // Every URL must be reported, not just the first line of the fixture.
+    for (const [index] of urls.entries()) {
+      expect(failing.stderr).toContain(
+        `database-urls.txt:${index + 1}: [database-url-password]`,
+      );
+    }
+  });
+
+  it('fails on SQLAlchemy and async driver DSNs with an inline password', () => {
+    const dir = makeTempDir();
+    const fixture = join(dir, 'driver-database-urls.txt');
+    const urls = DATABASE_URL_DRIVER_SCHEMES.map(
+      (scheme) => `${scheme}://dbuser:${FAKE_DB_PASSWORD}@db.internal:5432/app`,
+    );
+    writeFileSync(fixture, `${urls.map((url) => `DATABASE_URL=${url}`).join('\n')}\n`);
+
+    const failing = runScanner([fixture]);
+    expect(failing.status).toBe(1);
+    expect(failing.stderr).toContain('database-url-password');
+    // Every driver variant must be reported, not just the first line.
+    for (const [index] of urls.entries()) {
+      expect(failing.stderr).toContain(
+        `driver-database-urls.txt:${index + 1}: [database-url-password]`,
+      );
+    }
+  });
+
+  it('does not flag database URLs without real inline credentials', () => {
+    const dir = makeTempDir();
+    const fixture = join(dir, 'database-url-near-misses.txt');
+    const urls = [
+      // No userinfo at all.
+      'postgres://db.internal:5432/app',
+      'mysql://db.internal/app',
+      'mongodb://cluster0.example.mongodb.net/app',
+      'redis://cache:6379/0',
+      'amqp://broker:5672/vhost',
+      // A username without a password.
+      'postgres://dbuser@db.internal/app',
+      // An explicitly empty password.
+      'postgres://dbuser:@db.internal/app',
+      // Env-var interpolation and common documentation placeholders.
+      'postgres://dbuser:${DB_PASSWORD}@db.internal/app',
+      'postgres://dbuser:$DB_PASSWORD@db.internal/app',
+      'postgres://dbuser:$(DB_PASSWORD)@db.internal/app',
+      'postgres://dbuser:{{DB_PASSWORD}}@db.internal/app',
+      'postgres://dbuser:{DB_PASSWORD}@db.internal/app',
+      'postgres://dbuser:%DB_PASSWORD%@db.internal/app',
+      'postgres://dbuser:<password>@db.internal/app',
+      'postgres://dbuser:[password]@db.internal/app',
+      'postgres://dbuser:password@db.internal/app',
+      'postgres://dbuser:pass@db.internal/app',
+      'postgres://dbuser:passwd@db.internal/app',
+      'postgres://dbuser:pwd@db.internal/app',
+      'postgres://dbuser:secret@db.internal/app',
+      'postgres://dbuser:changeme@db.internal/app',
+      'postgres://dbuser:placeholder@db.internal/app',
+      'postgres://dbuser:example@db.internal/app',
+      'postgres://dbuser:xxx@db.internal/app',
+      'postgres://dbuser:xxxxx@db.internal/app',
+      'postgres://dbuser:YOURPASSWORD@db.internal/app',
+      'mongodb://dbuser:CHANGE_ME@db.internal/app',
+      'redis://dbuser:YOUR_PASSWORD@cache:6379/0',
+      'redis://dbuser:your_password@cache:6379/0',
+      'amqp://dbuser:REPLACE_ME@broker:5672/vhost',
+      // A port/query combination that contains `@` is not userinfo.
+      'redis://cache:6379?notify=ops@example.com',
+      'postgres://localhost:5432?user=admin@example.com',
+      'postgres://host?user=a:b@c',
+      // Driver suffixes keep the same credential requirements.
+      'postgresql+psycopg2://db.internal:5432/app',
+      'postgresql+asyncpg://dbuser@db.internal/app',
+      'postgresql+asyncpg://dbuser:@db.internal/app',
+      'mysql+pymysql://dbuser:${DB_PASSWORD}@db.internal/app',
+      'mysql+aiomysql://dbuser:password@db.internal/app',
+      'mariadb+pymysql://dbuser:${DB_PASSWORD}@db.internal/app',
+      'mongodb+srv://cluster0.example.mongodb.net/app',
+      // The newly supported protocols apply the same userinfo, password and
+      // placeholder rules.
+      'mssql://db.internal:1433/app',
+      'sqlserver://dbuser@db.internal/app',
+      'cockroachdb://dbuser:@db.internal/app',
+      'clickhouse://analytics:8123/app',
+      'oracle://dbuser:password@db.internal/app',
+      'neo4j+srv://cluster0.example.com/app',
+      'mssql+pyodbc://dbuser:${DB_PASSWORD}@db.internal/app',
+      'sqlserver+pyodbc://dbuser:YOUR_PASSWORD@db.internal/app',
+      'cockroachdb+psycopg2://dbuser:${DB_PASSWORD}@db.internal/app',
+      'clickhouse+native://dbuser:<password>@db.internal/app',
+      'oracle+oracledb://dbuser:REPLACE_ME@db.internal/app',
+      'neo4j+srv://dbuser:xxxxx@db.internal/app',
+    ];
+    writeFileSync(fixture, `${urls.map((url) => `DATABASE_URL=${url}`).join('\n')}\n`);
+
+    expect(runScanner([fixture])).toEqual({ status: 0, stderr: '' });
   });
 
   it('fails on fixtures containing common private key headers', () => {

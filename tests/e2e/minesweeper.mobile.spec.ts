@@ -26,12 +26,11 @@ import {
 } from './minesweeper-helpers';
 
 /**
- * Viewports from the supported 320px minimum through the 349px edge of the
- * fallback range. At 320px the board cannot reach 36px cells (9 x 36px plus
- * gaps already exceeds the 320px viewport), so the contract there is >=34px.
+ * Viewports around the 349px edge of the fallback range. The 320x640 minimum
+ * has its own first-screen restart test below, where the board contract and
+ * the compact restart entry are asserted together.
  */
 const NARROW_VIEWPORTS = [
-  { width: 320, height: 640, minimumCellSize: 34, label: '320x640' },
   { width: 340, height: 700, minimumCellSize: 36, label: '340x700' },
   { width: 349, height: 700, minimumCellSize: 36, label: '349x700' },
 ] as const;
@@ -129,6 +128,34 @@ test.describe('minesweeper on a phone viewport', () => {
       await expectNarrowBoard(page, viewport.minimumCellSize);
     });
   }
+
+  test('keeps the restart entry inside the first screen on a 320x640 phone viewport', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 320, height: 640 });
+    await openMinesweeper(page, { mines: LOSS_MINES });
+
+    // The narrow contract still holds after the vertical compression: 81 cells
+    // stay >= 34px, the page has no horizontal overflow, and the back link plus
+    // both HUD readouts stay in the first screen.
+    await expectNarrowBoard(page, 34);
+    await expect(page.getByTestId('touch-hint')).toBeVisible();
+
+    const restart = page.getByTestId('mobile-restart-button');
+    const restartBox = await restart.boundingBox();
+    expect(restartBox, 'restart button should have a bounding box').not.toBeNull();
+    if (!restartBox) {
+      throw new Error('restart button should have a bounding box');
+    }
+    // The short-screen spacing must pull the whole restart entry into the
+    // 320x640 first screen. The shared viewport helper allows a 0.5px
+    // tolerance; the acceptance requires the exact bounds, so assert them
+    // directly: x + width <= 320 and y + height <= 640.
+    expect(restartBox.x).toBeGreaterThanOrEqual(0);
+    expect(restartBox.y).toBeGreaterThanOrEqual(0);
+    expect(restartBox.x + restartBox.width).toBeLessThanOrEqual(320);
+    expect(restartBox.y + restartBox.height).toBeLessThanOrEqual(640);
+  });
 
   test('keeps 36px touch targets on a 360x740 phone viewport', async ({ page }) => {
     await page.setViewportSize({ width: 360, height: 740 });

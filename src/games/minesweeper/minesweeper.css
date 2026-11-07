@@ -483,6 +483,42 @@
   }
 }
 
+/* Short narrow phones (Issue #53 / subtask 1): at 320x640 the compact restart
+   entry below the board ended about 24px past the first screen. Compact only
+   the vertical rhythm inside the game; the stage width, board size, gaps and
+   game rules stay untouched, so the 320px cells remain 34.2px and the 360x740
+   layout (height > 700px) is unaffected. This keeps the HUD, back link, touch
+   hint and restart entry fully inside the 320x640 viewport, and still fits the
+   widest viewport this query covers (400x700). */
+@media (max-width: 400px) and (max-height: 700px) {
+  .minesweeper-game {
+    padding-bottom: 16px;
+  }
+
+  .minesweeper-game .game-heading {
+    row-gap: 8px;
+    padding: 2px 0 10px;
+  }
+
+  .minesweeper-stat {
+    padding: 5px 10px;
+  }
+
+  .minesweeper-stat dt,
+  .minesweeper-stat dd {
+    line-height: 1.2;
+  }
+
+  .minesweeper-touch-hint {
+    margin-top: 4px;
+    line-height: 1.45;
+  }
+
+  .minesweeper-touch-actions {
+    margin-top: 6px;
+  }
+}
+
 @media (hover: none) and (pointer: coarse) {
   /* Touch browsers can keep :hover after a tap; do not leave a lifted cell. */
   .minesweeper-cell:hover {

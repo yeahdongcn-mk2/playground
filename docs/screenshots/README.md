@@ -23,6 +23,25 @@
 - 手机截图仍是 Playwright 设备模拟（Pixel 7 / 自定义视口），不是真实设备截图。
 - 截图只证明静态视觉；三档切换、合法 / 非法自定义、计时器与监听器清理由 `tests/e2e/minesweeper.difficulty.spec.ts` 在生产构建上验证。
 
+## restart：扫雷 320×640 首屏纵向溢出（Issue #53 / 子任务 1）
+
+- Before 基线：`9f9aa54`（本条子任务开始前的最新 `main`，已含子任务 0 的窄屏格子修复与 #57 的可配置棋盘视图；默认 9×9 布局与格子尺寸不变）。320×640 READY 下 9×9 格子约 34.2×34.2 px、无横向溢出，HUD 与返回大厅在首屏内；但 `mobile-restart-button` 底部约 664.1 px，未完整落在首屏内（底部约 24 px 被视口截断）。
+- After：本子任务分支 `agent/plan-39-t1`，变更提交 `46f0381`（截图与代码同提交）。`minesweeper.css` 新增 `@media (max-width: 400px) and (max-height: 700px)`，只压缩窄而矮视口内的纵向间距（`.minesweeper-game` 的 padding-bottom、`.game-heading` 的 padding / row-gap、HUD stat 的 padding / line-height、touch hint 与 touch actions 的 margin / line-height）。棋盘宽度、格子尺寸、横向规则和游戏规则未变：320×640 下格子仍约 34.2×34.2 px、无横向溢出；`mobile-restart-button` 底部约 612.5 px，完整落在 640 px 首屏内。查询覆盖的最宽视口 400×700 经手工测量也在首屏内（约 692.5 px）。360×740（高度 > 700 px）不受该查询影响，布局与子任务 0 一致。
+- 视口 / 主题：320×640 CSS px，DPR 2，`isMobile: true`、`hasTouch: true`，深色主题，`reducedMotion: reduce`；同一固定雷盘（WIN_MINES）与 READY 状态，均为视口截图（`fullPage: false`）。
+- 生成 After：`npm run screenshots:minesweeper:restart`（生产构建 + `vite preview`）。
+- 复现 Before：在 `9f9aa54` 的干净 worktree 里 `npm ci && npm run build`，用 `node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4191 --strictPort` 启动预览，然后在当前分支运行 `BASE_URL=http://127.0.0.1:4191 npm run screenshots:minesweeper:restart-before`。
+
+| 文件 | 场景 | 视口 / 主题 | 说明 |
+| --- | --- | --- | --- |
+| `before-minesweeper-ready-320x640-restart.png` | 扫雷 READY（320×640，含重开入口） | 320×640 / 深色 | 修复前：格子约 34.2 px，重开按钮底部约 664.1 px，底部被首屏截断约 24 px。 |
+| `after-minesweeper-ready-320x640-restart.png` | 扫雷 READY（320×640，含重开入口） | 320×640 / 深色 | 修复后：格子尺寸不变，重开按钮底部约 612.5 px，完整在首屏内。 |
+
+### 证据限制
+
+- 手机端为 Playwright 设备模拟（320×640、DPR 2、触摸），不是真实设备截图。
+- 截图只证明静态视觉；`tests/e2e/minesweeper.mobile.spec.ts` 的 320×640 用例断言 `mobile-restart-button` 的 `x + width <= 320` 且 `y + height <= 640`，并检查返回大厅、remaining-mines、timer 在首屏、81 个格子仍 ≥34 px、无横向溢出、touch-hint 仍可见。360×740 / 340×700 / 349×700 / 412×839 的既有手机用例继续通过。
+- `400×700` 的首屏位置来自手工测量，未纳入自动化用例；自动化断言只覆盖 `320×640` 重开入口与既有手机视口用例。
+
 ## narrow / min：扫雷 320–360px 窄屏触控目标（Issue #53 / 子任务 0）
 
 - Before 基线：`3814d69`（本条子任务开始前的 `main`）。320×640 下 9×9 格子约 32.7×32.7 px；360×740 下约 37.1×37.1 px。两者页面均无横向溢出，HUD 与返回大厅在首屏内；360×740 另含重开入口。

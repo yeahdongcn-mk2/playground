@@ -52,6 +52,58 @@ const RULES = [
     description: 'npm access token',
     pattern: /\bnpm_[A-Za-z0-9]{36}\b/,
   },
+  {
+    id: 'aws-secret-access-key',
+    description: 'AWS secret access key',
+    // Only the named assignment is matched: the `aws_secret_access_key` key
+    // followed by `=`/`:` and exactly 40 base64 characters (quotes around the
+    // key and value are optional). A bare 40-character string is deliberately
+    // not flagged, because that would be a generic entropy rule and would also
+    // match checksums, hashes and test fixtures.
+    pattern:
+      /\baws_secret_access_key['"]?\s*[:=]\s*['"`]?[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+=])/i,
+  },
+  {
+    id: 'jwt-token',
+    description: 'JSON Web Token',
+    // JWT compact serialization is exactly three base64url segments separated
+    // by dots. A JWT header is a JSON object, so its base64url encoding always
+    // starts with `eyJ`; requiring that prefix plus all three segments keeps
+    // standalone base64 text and two-segment lookalikes out of the results.
+    // The signature length is intentionally not checked: docs and test
+    // fixtures use short example signatures. `(?![A-Za-z0-9_-])` avoids
+    // reporting a prefix of a longer base64url run.
+    pattern: /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?![A-Za-z0-9_-])/,
+  },
+  {
+    id: 'database-url-password',
+    description: 'database URL with an inline password',
+    // Credentials embedded in the authority of a database/broker URL:
+    // `scheme://user:password@host`, for PostgreSQL, MySQL/MariaDB, MongoDB,
+    // Redis, AMQP, Microsoft SQL Server (`mssql`/`sqlserver`), CockroachDB,
+    // ClickHouse, Oracle and Neo4j. The scheme is the bare protocol plus an
+    // optional `+driver` suffix, so SQLAlchemy, JDBC-style, async and
+    // cluster/srv DSNs such as `postgresql+psycopg2`, `postgresql+asyncpg`,
+    // `mysql+pymysql`, `mysql+aiomysql`, `mariadb+pymysql`,
+    // `mssql+pyodbc`, `cockroachdb+psycopg2`, `clickhouse+native`,
+    // `oracle+oracledb`, `mongodb+srv` and `neo4j+srv` are covered too.
+    // The username may be empty (Redis puts the password after a bare `:`).
+    // The following are deliberately not reported so that connection strings
+    // in docs and env templates do not trip the hook:
+    //   - URLs without userinfo (`scheme://host/db`);
+    //   - an empty password (`scheme://user:@host/db`);
+    //   - env-var interpolation and obvious placeholders, for example
+    //     `$DB_PASSWORD`, `${DB_PASSWORD}`, `$(DB_PASSWORD)`,
+    //     `{{DB_PASSWORD}}`, `{DB_PASSWORD}`, `%DB_PASSWORD%`, `<password>`,
+    //     `[password]`, `password`, `changeme`, `YOUR_PASSWORD`,
+    //     `YOURPASSWORD`, `REPLACE_ME` and `xxxxx`.
+    // The host part is required, so a bare `user:password@` mention without a
+    // URL scheme or host is not reported. A raw `/` in a password is not
+    // matched because it would be ambiguous with the URL path; valid
+    // connection strings percent-encode it (`%2F`), which is still detected.
+    pattern:
+      /\b(?:postgres(?:ql)?|mysql|mariadb|mongodb|rediss?|amqps?|mssql|sqlserver|cockroachdb|clickhouse|oracle|neo4j)(?:\+[a-z0-9_]+)?:\/\/[^\s/:@?#]*:(?!\$(?:\{|\(|[A-Za-z_])|\{[A-Za-z_{]|<[^>\s]*>|\[[^\]\s]*\]|%[A-Za-z_][A-Za-z0-9_]*%|(?:password|passwd|pass|pwd|secret|changeme|change[_-]me|placeholder|example|your[_-]?(?:password|pass)|replace[_-]me|x{3,})(?=[@/?#]|$))[^\s@/?#]+@[^\s/?#@]+/i,
+  },
 ];
 
 function isBinary(buffer) {
