@@ -81,6 +81,26 @@ const FAKE_JWT_SEGMENTS = [
 ];
 const FAKE_JWT = FAKE_JWT_SEGMENTS.join('.');
 
+const DATABASE_URL_SCHEMES = [
+  'postgres',
+  'postgresql',
+  'mysql',
+  'mariadb',
+  'mongodb',
+  'mongodb+srv',
+  'redis',
+  'rediss',
+  'amqp',
+  'amqps',
+] as const;
+
+// Shared fake password for the database URL fixtures, split so no literal
+// `scheme://user:password@host` value appears in this file.
+const FAKE_DB_PASSWORD = ['s3cr3t', 'password'].join('');
+// Percent-encoded `@` and `/`, which valid connection strings use instead of
+// the raw delimiters.
+const FAKE_DB_SPECIAL_PASSWORD = ['p%40ss', '%2Fword'].join('');
+
 describe('secret scan pre-commit hook', () => {
   it('is configured to scan every text file, not only staged changes', () => {
     const hook = requireScannerHook();
@@ -184,6 +204,79 @@ describe('secret scan pre-commit hook', () => {
         '',
       ].join('\n'),
     );
+
+    expect(runScanner([fixture])).toEqual({ status: 0, stderr: '' });
+  });
+
+  it('fails on database URLs with an inline password for every supported scheme', () => {
+    const dir = makeTempDir();
+    const fixture = join(dir, 'database-urls.txt');
+    const urls = [
+      ...DATABASE_URL_SCHEMES.map(
+        (scheme) => `${scheme}://dbuser:${FAKE_DB_PASSWORD}@db.internal:5432/app`,
+      ),
+      // Redis allows an empty username, with the password after a bare colon.
+      `redis://:${FAKE_DB_PASSWORD}@cache:6379/0`,
+      // Percent-encoded delimiters inside a password are still reported.
+      `postgres://dbuser:${FAKE_DB_SPECIAL_PASSWORD}@db.internal/app`,
+    ];
+    writeFileSync(fixture, `${urls.map((url) => `DATABASE_URL=${url}`).join('\n')}\n`);
+
+    const failing = runScanner([fixture]);
+    expect(failing.status).toBe(1);
+    expect(failing.stderr).toContain('database-url-password');
+    // Every URL must be reported, not just the first line of the fixture.
+    for (const [index] of urls.entries()) {
+      expect(failing.stderr).toContain(
+        `database-urls.txt:${index + 1}: [database-url-password]`,
+      );
+    }
+  });
+
+  it('does not flag database URLs without real inline credentials', () => {
+    const dir = makeTempDir();
+    const fixture = join(dir, 'database-url-near-misses.txt');
+    const urls = [
+      // No userinfo at all.
+      'postgres://db.internal:5432/app',
+      'mysql://db.internal/app',
+      'mongodb://cluster0.example.mongodb.net/app',
+      'redis://cache:6379/0',
+      'amqp://broker:5672/vhost',
+      // A username without a password.
+      'postgres://dbuser@db.internal/app',
+      // An explicitly empty password.
+      'postgres://dbuser:@db.internal/app',
+      // Env-var interpolation and common documentation placeholders.
+      'postgres://dbuser:${DB_PASSWORD}@db.internal/app',
+      'postgres://dbuser:$DB_PASSWORD@db.internal/app',
+      'postgres://dbuser:$(DB_PASSWORD)@db.internal/app',
+      'postgres://dbuser:{{DB_PASSWORD}}@db.internal/app',
+      'postgres://dbuser:{DB_PASSWORD}@db.internal/app',
+      'postgres://dbuser:%DB_PASSWORD%@db.internal/app',
+      'postgres://dbuser:<password>@db.internal/app',
+      'postgres://dbuser:[password]@db.internal/app',
+      'postgres://dbuser:password@db.internal/app',
+      'postgres://dbuser:pass@db.internal/app',
+      'postgres://dbuser:passwd@db.internal/app',
+      'postgres://dbuser:pwd@db.internal/app',
+      'postgres://dbuser:secret@db.internal/app',
+      'postgres://dbuser:changeme@db.internal/app',
+      'postgres://dbuser:placeholder@db.internal/app',
+      'postgres://dbuser:example@db.internal/app',
+      'postgres://dbuser:xxx@db.internal/app',
+      'postgres://dbuser:xxxxx@db.internal/app',
+      'postgres://dbuser:YOURPASSWORD@db.internal/app',
+      'mongodb://dbuser:CHANGE_ME@db.internal/app',
+      'redis://dbuser:YOUR_PASSWORD@cache:6379/0',
+      'redis://dbuser:your_password@cache:6379/0',
+      'amqp://dbuser:REPLACE_ME@broker:5672/vhost',
+      // A port/query combination that contains `@` is not userinfo.
+      'redis://cache:6379?notify=ops@example.com',
+      'postgres://localhost:5432?user=admin@example.com',
+      'postgres://host?user=a:b@c',
+    ];
+    writeFileSync(fixture, `${urls.map((url) => `DATABASE_URL=${url}`).join('\n')}\n`);
 
     expect(runScanner([fixture])).toEqual({ status: 0, stderr: '' });
   });

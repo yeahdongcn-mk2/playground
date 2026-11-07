@@ -75,6 +75,28 @@ const RULES = [
     // reporting a prefix of a longer base64url run.
     pattern: /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?![A-Za-z0-9_-])/,
   },
+  {
+    id: 'database-url-password',
+    description: 'database URL with an inline password',
+    // Credentials embedded in the authority of a database/broker URL:
+    // `scheme://user:password@host`, for PostgreSQL, MySQL/MariaDB, MongoDB,
+    // Redis and AMQP. The username may be empty (Redis puts the password after
+    // a bare `:`). The following are deliberately not reported so that
+    // connection strings in docs and env templates do not trip the hook:
+    //   - URLs without userinfo (`scheme://host/db`);
+    //   - an empty password (`scheme://user:@host/db`);
+    //   - env-var interpolation and obvious placeholders, for example
+    //     `$DB_PASSWORD`, `${DB_PASSWORD}`, `$(DB_PASSWORD)`,
+    //     `{{DB_PASSWORD}}`, `{DB_PASSWORD}`, `%DB_PASSWORD%`, `<password>`,
+    //     `[password]`, `password`, `changeme`, `YOUR_PASSWORD`,
+    //     `YOURPASSWORD`, `REPLACE_ME` and `xxxxx`.
+    // The host part is required, so a bare `user:password@` mention without a
+    // URL scheme or host is not reported. A raw `/` in a password is not
+    // matched because it would be ambiguous with the URL path; valid
+    // connection strings percent-encode it (`%2F`), which is still detected.
+    pattern:
+      /\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|rediss?|amqps?):\/\/[^\s/:@?#]*:(?!\$(?:\{|\(|[A-Za-z_])|\{[A-Za-z_{]|<[^>\s]*>|\[[^\]\s]*\]|%[A-Za-z_][A-Za-z0-9_]*%|(?:password|passwd|pass|pwd|secret|changeme|change[_-]me|placeholder|example|your[_-]?(?:password|pass)|replace[_-]me|x{3,})(?=[@/?#]|$))[^\s@/?#]+@[^\s/?#@]+/i,
+  },
 ];
 
 function isBinary(buffer) {
