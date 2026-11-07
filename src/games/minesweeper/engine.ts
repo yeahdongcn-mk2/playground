@@ -272,7 +272,9 @@ export class MinesweeperEngine {
   private exploded: Cell | null = null;
 
   constructor(options: MinesweeperOptions = {}) {
-    this.config = validateConfig(options.config ?? DEFAULT_MINESWEEPER_CONFIG);
+    this.config = validateConfig(
+      options.config === undefined ? DEFAULT_MINESWEEPER_CONFIG : options.config,
+    );
     this.rng = options.rng ?? Math.random;
     this.initialMineIndexes = options.initialMines
       ? this.validateMines(options.initialMines)

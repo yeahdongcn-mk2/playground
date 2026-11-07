@@ -84,6 +84,13 @@ function visibleCells(engine: MinesweeperEngine): MinesweeperCell[] {
   return boardCells(engine).filter((cell) => cell.revealed);
 }
 
+/** Keys of every revealed cell in board order, sorted for stable comparison. */
+function revealedKeys(engine: MinesweeperEngine): string[] {
+  return visibleCells(engine)
+    .map(({ row, col }) => key(row, col))
+    .sort();
+}
+
 function adjacentMatrix(engine: MinesweeperEngine): number[][] {
   return engine.state.board.map((row) => row.map((cell) => cell.adjacentMines));
 }
@@ -788,6 +795,105 @@ const PRESET_CONFIGS: ReadonlyArray<readonly [string, MinesweeperConfig]> = [
   ['expert', EXPERT_CONFIG],
 ];
 
+/**
+ * Golden snapshots for the larger presets. The 9x9 goldens cannot exercise
+ * the per-instance `cols` indexing that computeAdjacentCounts and floodReveal
+ * use, so these fix the seed and a non-zero first click on both configured
+ * boards. Expected values were cross-checked against an independent
+ * neighbour scan and flood fill.
+ */
+const GOLDEN_CONFIGURED_SEED = 20241107;
+
+const GOLDEN_INTERMEDIATE_FIRST_CLICK: Cell = { row: 8, col: 8 };
+const GOLDEN_INTERMEDIATE_ADJACENT = [
+  [0, 1, 0, 1, 0, 0, 1, 2, 3, 0, 2, 2, 3, 0, 1, 0],
+  [0, 1, 1, 1, 0, 0, 2, 0, 0, 2, 3, 0, 0, 3, 1, 0],
+  [1, 1, 1, 1, 1, 1, 2, 0, 3, 2, 3, 0, 0, 3, 1, 0],
+  [1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 0, 3, 3, 0, 1, 0],
+  [1, 1, 1, 2, 2, 2, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0],
+  [0, 0, 0, 1, 0, 1, 1, 2, 2, 2, 1, 1, 0, 0, 0, 0],
+  [0, 0, 0, 1, 1, 1, 1, 0, 0, 2, 0, 2, 1, 1, 0, 0],
+  [0, 1, 1, 2, 1, 1, 1, 2, 2, 3, 2, 3, 0, 1, 0, 0],
+  [1, 2, 0, 2, 0, 1, 0, 0, 0, 2, 0, 3, 1, 1, 0, 0],
+  [1, 0, 2, 2, 1, 1, 1, 1, 2, 3, 0, 4, 2, 1, 0, 0],
+  [2, 2, 1, 0, 1, 2, 3, 0, 2, 0, 3, 0, 0, 1, 0, 0],
+  [0, 1, 0, 1, 2, 0, 0, 3, 2, 1, 2, 2, 2, 1, 0, 0],
+  [1, 2, 2, 3, 0, 4, 0, 3, 1, 0, 0, 0, 0, 0, 0, 0],
+  [0, 1, 0, 0, 3, 2, 3, 0, 2, 0, 0, 0, 0, 1, 1, 1],
+  [0, 1, 3, 0, 3, 1, 3, 0, 2, 0, 0, 0, 0, 1, 0, 1],
+  [0, 0, 1, 1, 2, 0, 2, 1, 1, 0, 0, 0, 0, 1, 1, 1],
+];
+const GOLDEN_INTERMEDIATE_REVEALED = [
+  '7,5', '7,6', '7,7', '7,8',
+  '7,9', '8,5', '8,6', '8,7',
+  '8,8', '8,9', '9,5', '9,6',
+  '9,7', '9,8', '9,9',
+];
+
+const GOLDEN_EXPERT_FIRST_CLICK: Cell = { row: 8, col: 15 };
+const GOLDEN_EXPERT_ADJACENT = [
+  [0, 1, 1, 0, 4, 0, 2, 1, 1, 2, 0, 1, 0, 1, 0, 2, 1, 1, 2, 0, 5, 0, 2, 1, 0, 0, 3, 1, 0, 0],
+  [2, 2, 3, 3, 0, 0, 3, 1, 0, 2, 1, 1, 0, 1, 1, 2, 0, 1, 3, 0, 0, 0, 3, 2, 4, 0, 0, 2, 1, 0],
+  [1, 0, 2, 0, 4, 0, 2, 1, 1, 2, 2, 3, 2, 1, 0, 1, 1, 2, 3, 0, 4, 2, 2, 0, 3, 3, 5, 0, 3, 1],
+  [1, 2, 3, 2, 2, 1, 1, 0, 1, 2, 0, 0, 0, 1, 0, 0, 0, 1, 0, 3, 2, 1, 2, 2, 4, 0, 4, 0, 0, 2],
+  [1, 2, 0, 2, 1, 1, 0, 0, 1, 0, 3, 3, 2, 1, 0, 0, 0, 1, 1, 3, 0, 2, 2, 0, 4, 0, 4, 3, 3, 0],
+  [1, 0, 2, 2, 0, 1, 0, 0, 1, 2, 2, 2, 1, 1, 0, 1, 1, 1, 1, 3, 0, 3, 3, 0, 3, 2, 0, 2, 2, 2],
+  [2, 2, 2, 3, 3, 3, 1, 1, 0, 2, 0, 4, 0, 2, 0, 1, 0, 1, 1, 0, 3, 0, 2, 1, 1, 1, 1, 2, 0, 1],
+  [0, 2, 1, 0, 0, 2, 0, 2, 1, 2, 0, 4, 0, 2, 0, 1, 1, 1, 1, 1, 3, 3, 3, 1, 0, 1, 1, 2, 2, 2],
+  [0, 2, 1, 2, 2, 2, 2, 0, 1, 1, 1, 2, 2, 2, 1, 0, 1, 2, 2, 1, 1, 0, 0, 3, 1, 3, 0, 2, 1, 0],
+  [2, 3, 1, 1, 0, 0, 2, 3, 3, 1, 0, 0, 1, 0, 2, 1, 3, 0, 0, 1, 2, 4, 0, 3, 0, 3, 0, 3, 2, 2],
+  [0, 4, 0, 3, 1, 0, 1, 0, 0, 1, 0, 0, 1, 1, 2, 0, 3, 0, 3, 1, 2, 0, 3, 2, 1, 2, 1, 2, 0, 1],
+  [2, 0, 0, 0, 2, 1, 2, 2, 2, 1, 0, 0, 0, 0, 1, 1, 2, 2, 2, 1, 3, 0, 3, 0, 0, 0, 1, 2, 2, 1],
+  [2, 3, 3, 2, 3, 0, 2, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 1, 2, 0, 2, 1, 1, 1, 1, 0, 1, 0],
+  [0, 1, 0, 1, 3, 0, 2, 0, 1, 0, 1, 0, 0, 0, 0, 1, 1, 2, 1, 1, 1, 2, 3, 4, 0, 2, 1, 1, 2, 1],
+  [1, 2, 1, 2, 0, 2, 1, 1, 2, 3, 2, 2, 2, 2, 2, 2, 0, 1, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 2, 0],
+  [0, 1, 0, 2, 1, 1, 0, 1, 0, 2, 0, 2, 0, 0, 2, 0, 2, 1, 0, 0, 0, 1, 2, 3, 2, 1, 0, 0, 2, 0],
+];
+const GOLDEN_EXPERT_REVEALED = [
+  '1,13', '1,14', '1,15', '2,13',
+  '2,14', '2,15', '2,16', '2,17',
+  '3,13', '3,14', '3,15', '3,16',
+  '3,17', '4,13', '4,14', '4,15',
+  '4,16', '4,17', '5,13', '5,14',
+  '5,15', '5,16', '5,17', '6,13',
+  '6,14', '6,15', '7,13', '7,14',
+  '7,15', '7,16', '8,13', '8,14',
+  '8,15', '8,16', '9,14', '9,15',
+  '9,16',
+];
+
+/**
+ * Build a configured board from the fixed seed, reveal the fixed first click
+ * and compare the whole adjacent-number matrix and both revealed views with
+ * the golden values.
+ */
+function expectConfiguredGolden(
+  config: MinesweeperConfig,
+  firstClick: Cell,
+  expectedAdjacent: readonly (readonly number[])[],
+  expectedRevealed: readonly string[],
+): void {
+  const engine = new MinesweeperEngine({
+    config,
+    rng: createSeededRng(GOLDEN_CONFIGURED_SEED),
+  });
+
+  const result = engine.reveal(firstClick.row, firstClick.col);
+
+  expect(result.hitMine).toBe(false);
+  expect(result.revealed.map(({ row, col }) => key(row, col)).sort()).toEqual(
+    expectedRevealed,
+  );
+  expect(adjacentMatrix(engine)).toEqual(expectedAdjacent);
+  expect(revealedKeys(engine)).toEqual(expectedRevealed);
+  expect(engine.state).toMatchObject({
+    rows: config.rows,
+    cols: config.cols,
+    mineCount: config.mines,
+    status: 'playing',
+  });
+}
+
 function configuredCells(config: MinesweeperConfig): Cell[] {
   const cells: Cell[] = [];
   for (let row = 0; row < config.rows; row += 1) {
@@ -911,6 +1017,26 @@ describe('configured boards', () => {
       expect(engine.state.board).toHaveLength(config.rows);
     });
   }
+});
+
+describe('configured board golden snapshots', () => {
+  it('keeps the exact seeded 16x16 adjacent numbers and flood reveal', () => {
+    expectConfiguredGolden(
+      INTERMEDIATE_CONFIG,
+      GOLDEN_INTERMEDIATE_FIRST_CLICK,
+      GOLDEN_INTERMEDIATE_ADJACENT,
+      GOLDEN_INTERMEDIATE_REVEALED,
+    );
+  });
+
+  it('keeps the exact seeded 16x30 adjacent numbers and flood reveal', () => {
+    expectConfiguredGolden(
+      EXPERT_CONFIG,
+      GOLDEN_EXPERT_FIRST_CLICK,
+      GOLDEN_EXPERT_ADJACENT,
+      GOLDEN_EXPERT_REVEALED,
+    );
+  });
 });
 
 describe('first-click safety policy', () => {
@@ -1077,6 +1203,9 @@ describe('config validation', () => {
   });
 
   it('rejects invalid configs at the engine constructor entry point', () => {
+    expect(
+      () => new MinesweeperEngine({ config: null as unknown as MinesweeperConfig }),
+    ).toThrow(/config must be an object, received null\./);
     expect(
       () => new MinesweeperEngine({ config: { ...BEGINNER_CONFIG, rows: 2 } }),
     ).toThrow(RangeError);
