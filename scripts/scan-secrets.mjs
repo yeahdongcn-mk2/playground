@@ -80,10 +80,13 @@ const RULES = [
     description: 'database URL with an inline password',
     // Credentials embedded in the authority of a database/broker URL:
     // `scheme://user:password@host`, for PostgreSQL, MySQL/MariaDB, MongoDB,
-    // Redis and AMQP. The scheme is the bare protocol plus an optional
-    // `+driver` suffix, so SQLAlchemy and async driver DSNs such as
-    // `postgresql+psycopg2`, `postgresql+asyncpg`, `mysql+pymysql`,
-    // `mysql+aiomysql`, `mariadb+pymysql` and `mongodb+srv` are covered too.
+    // Redis, AMQP, Microsoft SQL Server (`mssql`/`sqlserver`), CockroachDB,
+    // ClickHouse, Oracle and Neo4j. The scheme is the bare protocol plus an
+    // optional `+driver` suffix, so SQLAlchemy, JDBC-style, async and
+    // cluster/srv DSNs such as `postgresql+psycopg2`, `postgresql+asyncpg`,
+    // `mysql+pymysql`, `mysql+aiomysql`, `mariadb+pymysql`,
+    // `mssql+pyodbc`, `cockroachdb+psycopg2`, `clickhouse+native`,
+    // `oracle+oracledb`, `mongodb+srv` and `neo4j+srv` are covered too.
     // The username may be empty (Redis puts the password after a bare `:`).
     // The following are deliberately not reported so that connection strings
     // in docs and env templates do not trip the hook:
@@ -99,7 +102,7 @@ const RULES = [
     // matched because it would be ambiguous with the URL path; valid
     // connection strings percent-encode it (`%2F`), which is still detected.
     pattern:
-      /\b(?:postgres(?:ql)?|mysql|mariadb|mongodb|rediss?|amqps?)(?:\+[a-z0-9_]+)?:\/\/[^\s/:@?#]*:(?!\$(?:\{|\(|[A-Za-z_])|\{[A-Za-z_{]|<[^>\s]*>|\[[^\]\s]*\]|%[A-Za-z_][A-Za-z0-9_]*%|(?:password|passwd|pass|pwd|secret|changeme|change[_-]me|placeholder|example|your[_-]?(?:password|pass)|replace[_-]me|x{3,})(?=[@/?#]|$))[^\s@/?#]+@[^\s/?#@]+/i,
+      /\b(?:postgres(?:ql)?|mysql|mariadb|mongodb|rediss?|amqps?|mssql|sqlserver|cockroachdb|clickhouse|oracle|neo4j)(?:\+[a-z0-9_]+)?:\/\/[^\s/:@?#]*:(?!\$(?:\{|\(|[A-Za-z_])|\{[A-Za-z_{]|<[^>\s]*>|\[[^\]\s]*\]|%[A-Za-z_][A-Za-z0-9_]*%|(?:password|passwd|pass|pwd|secret|changeme|change[_-]me|placeholder|example|your[_-]?(?:password|pass)|replace[_-]me|x{3,})(?=[@/?#]|$))[^\s@/?#]+@[^\s/?#@]+/i,
   },
 ];
 
