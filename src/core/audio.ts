@@ -1,6 +1,6 @@
 import type { StorageService } from './storage';
 
-export type SoundEvent = 'start' | 'blip' | 'reset';
+export type SoundEvent = 'start' | 'blip' | 'reset' | 'reveal' | 'flag' | 'win' | 'mine';
 
 interface Tone {
   readonly frequencies: readonly number[];
@@ -13,6 +13,12 @@ const TONES: Readonly<Record<SoundEvent, Tone>> = {
   start: { frequencies: [392, 523], duration: 0.12, type: 'triangle', gain: 0.06 },
   blip: { frequencies: [660], duration: 0.06, type: 'sine', gain: 0.04 },
   reset: { frequencies: [523, 392], duration: 0.1, type: 'triangle', gain: 0.05 },
+  // Minesweeper feedback: a light reveal, a short flag tick, an ascending win
+  // and a buzzing descending mine. All synthesised, so no assets are added.
+  reveal: { frequencies: [880], duration: 0.05, type: 'sine', gain: 0.03 },
+  flag: { frequencies: [1175], duration: 0.04, type: 'square', gain: 0.035 },
+  win: { frequencies: [523, 659, 784], duration: 0.09, type: 'triangle', gain: 0.05 },
+  mine: { frequencies: [220, 165, 110], duration: 0.12, type: 'sawtooth', gain: 0.06 },
 };
 
 const SOUND_KEY = 'settings.sound';
