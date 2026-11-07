@@ -23,6 +23,25 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Set up Python for pre-commit
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pre-commit
+        run: pip install pre-commit
+
+      - name: Cache pre-commit environments
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+          restore-keys: |
+            pre-commit-${{ runner.os }}-
+
+      - name: Run pre-commit checks
+        run: pre-commit run --all-files --show-diff-on-failure
+
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
 
