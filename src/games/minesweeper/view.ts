@@ -591,6 +591,13 @@ export async function mountMinesweeper(
     }
 
     if (state.status !== lastStatus) {
+      // The win chime belongs to entering the won state. A first reveal can
+      // clear the whole board before the view ever observes "playing", so the
+      // transition may be ready -> won as well as playing -> won. A repeated
+      // sync, a restart or a board rebuild cannot play it again.
+      if (state.status === 'won' && lastStatus !== 'won') {
+        services.audio.play('win');
+      }
       if (state.status === 'playing') {
         announce('游戏开始');
       } else if (state.status === 'won') {
@@ -633,9 +640,9 @@ export async function mountMinesweeper(
     services.audio.unlock();
     const result = engine.reveal(row, col);
     if (result.hitMine) {
-      services.audio.play('reset');
+      services.audio.play('mine');
     } else if (result.revealed.length > 0) {
-      services.audio.play('blip');
+      services.audio.play('reveal');
     }
     sync();
   }
@@ -648,7 +655,7 @@ export async function mountMinesweeper(
     services.audio.unlock();
     const result = engine.toggleFlag(row, col);
     if (result.changed) {
-      services.audio.play('blip');
+      services.audio.play('flag');
     }
     sync();
   }
