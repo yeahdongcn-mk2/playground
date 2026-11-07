@@ -258,7 +258,7 @@ const vector = directions.vector(); // 对角线已归一化
 
 - `index.ts` 只放静态 `meta` 与 `mount()` 内的动态 `import('./view')`，并检查 `AbortSignal`；
 - `view.ts` 按当前难度配置（三档预设或自定义行列雷数）用原生 DOM 网格绘制棋盘，把纯规则引擎 `engine.ts` 的状态快照同步到 HUD、格子和结束遮罩；难度卡片用 `aria-pressed` 标记当前预设，自定义配置恰好等于某档时同步该档，非法输入只在 `role=alert` 错误区显示中文原因；
-- 预设与合法自定义共用同一条 `applyConfig()` 重建路径：停止旧计时器、取消待触发长按、隐藏遮罩并重置计时 / HUD / 焦点；非法自定义不重建棋局、不停止计时；
+- 预设与合法自定义共用同一条 `applyConfig()` 重建路径：停止旧计时器、取消待触发长按、隐藏遮罩、重置计时 / HUD，并在焦点原本位于遮罩内时把它移到当前预设或「开始自定义」按钮；非法自定义不重建棋局、不停止计时；
 - 棋盘用左右键交互：左键翻开、右键插旗并 `preventDefault()` 掉浏览器菜单；
 - 棋盘、难度选择器与按钮监听器挂在 `AbortController` 的 signal 上；`mountSignal` 的 abort 监听在 `destroy()` 中显式移除，计时器也在那里清理；
 - `?debug=1&rows=...&cols=...&mineCount=...&safeFirst=...` 提供只读状态与棋盘配置（另可用 `mines=row,col;...` 固定雷盘、`seed` 固定随机数；缺省、空串、非数字或非有限值回退为 1，只有显式 `seed=0` 才是 0），以及 e2e 专用的 `destroy()`，正常入口不安装调试 API。
@@ -307,7 +307,7 @@ Node.js `^22.12.0 || ^24.0.0 || >=26.0.0`（Vite 8 的要求）。CI（`.github/
 ## 14. 性能与已知限制
 
 - 大厅首屏不包含 Phaser；Phaser 只在进入使用 Phaser 的 2D 游戏时加载（本地构建 chunk 约 1.3 MB / 357 KB gzip），扫雷等 DOM 游戏不加载它。
-- 入口 JS 约 10.83 KB gzip；`check:budget` 断言入口不含引擎且小于 50 KB，全部 JS chunk 小于 450 KB gzip（当前约 402.58 KB gzip）。
+- 入口 JS 约 10.83 KB gzip；`check:budget` 断言入口不含引擎且小于 50 KB，全部 JS chunk 小于 450 KB gzip（当前约 402.59 KB gzip）。
 - 3D 尚未实现，Three.js 只在文档与目录层面预留。
 - 空白示例只演示框架能力；`src/games/snake/`、`src/games/tetris/`、`src/games/2048/`、`src/games/breakout/` 与 `src/games/minesweeper/` 是完整玩法参考（规则引擎、渲染器、响应式视图、测试）。扫雷是纯 DOM 参考，其余四款使用 Phaser 场景。
 - 打砖块固定 480×720 逻辑球场与 10 列砖块，没有道具、多球或在线排行榜；难度曲线由砖块行数与球速控制。

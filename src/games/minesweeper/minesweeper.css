@@ -321,7 +321,7 @@
 
 .minesweeper-preset {
   min-width: 0;
-  min-height: 40px;
+  min-height: 44px;
   padding: 8px 6px;
   border-radius: 12px;
   font-size: 0.82rem;
@@ -380,7 +380,7 @@
 
 .minesweeper-custom-submit {
   width: 100%;
-  min-height: 42px;
+  min-height: 44px;
   padding-inline: 10px;
 }
 

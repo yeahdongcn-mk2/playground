@@ -1,4 +1,5 @@
 import { expect, test } from './fixtures';
+import type { Page } from '@playwright/test';
 import {
   cellLocator,
   difficultyButton,
@@ -6,8 +7,27 @@ import {
   expectInsideViewport,
   expectNoHorizontalOverflow,
   openMinesweeper,
-  submitCustomDifficulty,
 } from './minesweeper-helpers';
+
+/** Submit the custom form with touch events, including the submit button. */
+async function submitCustomByTouch(
+  page: Page,
+  rows: number,
+  cols: number,
+  mines: number,
+): Promise<void> {
+  const fields = [
+    ['custom-rows', rows],
+    ['custom-cols', cols],
+    ['custom-mines', mines],
+  ] as const;
+  for (const [testId, value] of fields) {
+    const input = page.getByTestId(testId);
+    await input.tap();
+    await input.fill(String(value));
+  }
+  await page.getByTestId('custom-difficulty-submit').tap();
+}
 
 test.describe('minesweeper difficulty selector on a phone viewport', () => {
   test('presets and custom boards are operable by touch without horizontal overflow', async ({
@@ -40,7 +60,7 @@ test.describe('minesweeper difficulty selector on a phone viewport', () => {
     await expectActiveDifficulty(page, 'expert');
     await expectNoHorizontalOverflow(page);
 
-    await submitCustomDifficulty(page, 12, 12, 20);
+    await submitCustomByTouch(page, 12, 12, 20);
     await expect(page.locator('[data-cell]')).toHaveCount(144);
     await expect(page.getByTestId('board-summary')).toHaveText('12 × 12 · 20 雷');
     await expect(page.getByTestId('remaining-mines')).toHaveText('20');
@@ -53,7 +73,7 @@ test.describe('minesweeper difficulty selector on a phone viewport', () => {
     );
 
     // A rejected custom board stays a visible alert and does not rebuild.
-    await submitCustomDifficulty(page, 8, 8, 64);
+    await submitCustomByTouch(page, 8, 8, 64);
     const error = page.getByTestId('difficulty-error');
     await expect(error).toBeVisible();
     await expect(error).toHaveText('雷数必须小于格子总数（64）。');
@@ -89,7 +109,7 @@ test.describe('minesweeper difficulty selector on a phone viewport', () => {
     await expect(page.getByTestId('board-summary')).toHaveText('16 × 16 · 40 雷');
     await expectNoHorizontalOverflow(page);
 
-    await submitCustomDifficulty(page, 99, 9, 10);
+    await submitCustomByTouch(page, 99, 9, 10);
     const error = page.getByTestId('difficulty-error');
     await expect(error).toHaveText('行数必须是 5 到 30 之间的整数。');
     await expect(error).toBeVisible();

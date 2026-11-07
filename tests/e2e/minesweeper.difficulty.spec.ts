@@ -14,7 +14,6 @@ import {
   mineSignature,
   openMinesweeper,
   readState,
-  setDebugConfig,
   submitCustomDifficulty,
 } from './minesweeper-helpers';
 import {
@@ -35,6 +34,9 @@ test.describe('minesweeper difficulty selector', () => {
     await expect(page.locator('[data-cell]')).toHaveCount(81);
     await expect(page.getByTestId('board-summary')).toHaveText('9 × 9 · 10 雷');
     await expect(page.getByTestId('remaining-mines')).toHaveText('10');
+    // The sidebar restart must stay fully usable on the 1440×1000 desktop
+    // viewport: the difficulty card lives below it, not above it.
+    await expect(page.getByTestId('restart-button')).toBeInViewport({ ratio: 1 });
     await expectActiveDifficulty(page, 'beginner');
 
     // Dirty the beginner board and start its clock, so the rebuild must clear
@@ -199,6 +201,15 @@ test.describe('minesweeper difficulty selector', () => {
     await expect(page.getByTestId('status')).toHaveText('进行中');
     expect(await activeIntervalCount(page)).toBe(1);
 
+    // A 5×5 board leaves 16 mines at most once the 3×3 safe zone is reserved.
+    await submitCustomDifficulty(page, 5, 5, 17);
+    await expect(error).toHaveText(
+      '雷数过多：首点安全区占 9 格，最多只能放 16 颗雷。',
+    );
+    await expect(page.locator('[data-cell]')).toHaveCount(256);
+    await expect(page.getByTestId('status')).toHaveText('进行中');
+    expect(await activeIntervalCount(page)).toBe(1);
+
     // Blank and non-integer values are rejected instead of clamped.
     await submitCustomDifficulty(page, '', 9, 10);
     await expect(error).toHaveText('行数不能为空。');
@@ -213,6 +224,49 @@ test.describe('minesweeper difficulty selector', () => {
     await expectActiveDifficulty(page, 'beginner');
     await expect(page.locator('[data-cell]')).toHaveCount(81);
     await expect(page.getByTestId('status')).toHaveText('待开始');
+    await expect(page.getByTestId('timer')).toHaveText('0:00');
+    await expect(page.getByTestId('flag-count')).toHaveText('0');
+    await expectCleanBoard(page);
+    expect(await activeIntervalCount(page)).toBe(0);
+
+    // Restart is a fresh game action: it clears a stale alert and restores the
+    // form values to the active config instead of keeping the rejected input.
+    await submitCustomDifficulty(page, 8, 8, 64);
+    await expect(error).toBeVisible();
+    await page.getByTestId('restart-button').click();
+    await expect(error).toBeHidden();
+    await expect(page.getByTestId('custom-rows')).toHaveValue('9');
+    await expect(page.getByTestId('custom-cols')).toHaveValue('9');
+    await expect(page.getByTestId('custom-mines')).toHaveValue('10');
+    await expect(page.getByTestId('board-summary')).toHaveText('9 × 9 · 10 雷');
+    await expect(page.getByTestId('timer')).toHaveText('0:00');
+  });
+
+  test('Enter submits the custom form from a number input', async ({ page }) => {
+    await installIntervalProbe(page);
+    await openMinesweeper(page);
+
+    await page.getByTestId('custom-rows').fill('12');
+    await page.getByTestId('custom-cols').fill('12');
+    await page.getByTestId('custom-mines').fill('20');
+    await page.getByTestId('custom-rows').press('Enter');
+    await expect(page.locator('[data-cell]')).toHaveCount(144);
+    await expect(page.getByTestId('board-summary')).toHaveText('12 × 12 · 20 雷');
+    await expect(page.getByTestId('status')).toHaveText('待开始');
+    await expect(page.getByTestId('timer')).toHaveText('0:00');
+    expect(await activeIntervalCount(page)).toBe(0);
+
+    // Enter also owns the invalid path: only the alert changes.
+    await page.getByTestId('custom-rows').fill('8');
+    await page.getByTestId('custom-cols').fill('8');
+    await page.getByTestId('custom-mines').fill('64');
+    await page.getByTestId('custom-mines').press('Enter');
+    await expect(page.getByTestId('difficulty-error')).toBeVisible();
+    await expect(page.getByTestId('difficulty-error')).toHaveText(
+      '雷数必须小于格子总数（64）。',
+    );
+    await expect(page.locator('[data-cell]')).toHaveCount(144);
+    await expect(page.getByTestId('board-summary')).toHaveText('12 × 12 · 20 雷');
     await expect(page.getByTestId('timer')).toHaveText('0:00');
     expect(await activeIntervalCount(page)).toBe(0);
   });
@@ -284,15 +338,10 @@ test.describe('minesweeper difficulty selector', () => {
     await expect(page.getByTestId('status')).toHaveText('踩雷结束');
     await expect(page.getByTestId('overlay-primary')).toBeFocused();
 
-    // The debug seam exercises the same rebuild path the selector uses while
-    // the overlay owns focus. Focus must land on the new active preset, not on
-    // the button inside the now-hidden overlay.
-    await setDebugConfig(page, {
-      rows: 16,
-      cols: 16,
-      mines: 40,
-      firstClickSafe: true,
-    });
+    // A real preset click while the overlay owns focus: the click focuses the
+    // preset, the rebuild hides the overlay, and focus must stay on a visible
+    // control instead of the button inside the now-hidden overlay.
+    await difficultyButton(page, 'intermediate').click();
     await expect(page.getByTestId('overlay')).toBeHidden();
     await expect(difficultyButton(page, 'intermediate')).toBeFocused();
     await expectActiveDifficulty(page, 'intermediate');

@@ -5,17 +5,17 @@
 ## difficulty：扫雷难度选择（Issue #44 / 子任务 3）
 
 - Before 基线：`9f9aa54`（PR #57 合入「扫雷视图支持任意棋盘配置与安全重建」后的 `main`，也就是本子任务开始前的 `main`）。侧栏只有操作与本局状态卡片，没有难度控件。
-- After：本子任务分支 `agent/plan-44-t3` 的最终 head。侧栏新增「难度」卡片：初级 / 中级 / 高级三个预设按钮，以及行 / 列 / 雷数三个数字输入和「开始自定义」按钮；当前档以 `aria-pressed` 标记，非法自定义在 `role=alert` 区域显示中文错误。
+- After：本子任务分支 `agent/plan-44-t3` 的最终 head。侧栏在操作与本局状态卡片之后新增「难度」卡片：初级 / 中级 / 高级三个预设按钮，以及行 / 列 / 雷数三个数字输入和「开始自定义」按钮；当前档以 `aria-pressed` 标记，非法自定义在 `role=alert` 区域显示中文错误。
 - 视口 / 主题：桌面 1440×1000 CSS px，DPR 1，深色主题，`reducedMotion: reduce`；Before / After 使用同一固定雷盘（`?debug=1&mines=...`）、READY 状态，均为整页截图（`fullPage: true`）。
 - 生成 After：`npm run screenshots:minesweeper`（生产构建 + `vite preview`，固定雷盘走调试接缝）。该命令同时刷新大厅与桌面 / 手机玩法截图，因为大厅卡片描述和侧栏布局随难度选择更新。
-- 复现 Before：在 `9f9aa54` 的干净 worktree 里 `npm ci && npm run build`，用 `node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4186 --strictPort` 启动预览，运行 `node scripts/capture-minesweeper-screenshots.mjs`；脚本会以 After 文件名写出基线截图，把 `after-minesweeper-ready-desktop.png` 另存为 `before-minesweeper-ready-desktop.png` 即可。
+- 复现 Before：在 `9f9aa54` 的干净 worktree 里 `npm ci && npm run build`，用 `node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4186 --strictPort` 启动预览，再运行 `BASE_URL=http://127.0.0.1:4186 node scripts/capture-minesweeper-screenshots.mjs`。这里用默认 after 模式即可；不要加 `--before`，该模式服务于更早的、还没有扫雷路由的基线。脚本会以 After 文件名写出基线截图，把 `after-minesweeper-ready-desktop.png` 另存为 `before-minesweeper-ready-desktop.png` 即可。
 
 | 文件 | 场景 | 视口 / 主题 | 说明 |
 | --- | --- | --- | --- |
 | `before-minesweeper-ready-desktop.png` | 扫雷 READY（基线 `9f9aa54`） | 1440×1000 / 深色 / 整页 1440×1027 | 侧栏没有难度卡片；9×9 隐藏棋盘、HUD 与操作说明。 |
-| `after-minesweeper-ready-desktop.png` | 扫雷 READY（本子任务） | 1440×1000 / 深色 / 整页 1440×1320 | 侧栏新增难度卡片，初级预设为 `aria-pressed="true"`，自定义表单显示 9 / 9 / 10；棋盘与 HUD 仍是初级 READY。整页高度增加来自新增侧栏卡片。 |
+| `after-minesweeper-ready-desktop.png` | 扫雷 READY（本子任务） | 1440×1000 / 深色 / 整页 1440×1324 | 侧栏在操作与本局状态卡之后新增难度卡片，初级预设为 `aria-pressed="true"`，自定义表单显示 9 / 9 / 10；棋盘与 HUD 仍是初级 READY。整页高度增加来自新增侧栏卡片。 |
 
-本次同时刷新了 `after-hub-desktop.png` / `after-hub-mobile.png`（大厅卡片描述改为支持难度选择）与 4 张桌面玩法截图；手机玩法截图只显示首屏，侧栏难度卡片只露出顶部，行为由手机 e2e 覆盖。
+本次同时刷新了 `after-hub-desktop.png` / `after-hub-mobile.png`（大厅卡片描述改为支持难度选择）与 4 张桌面玩法截图；手机玩法截图只显示首屏，难度卡片位于侧栏下方、首屏不可见，其滚动后的可操作性由手机 e2e 覆盖。
 
 ### 证据限制
 
@@ -103,13 +103,13 @@
 | `after-hub-mobile.png` | 大厅（手机） | 390×844（DPR 2）/ 深色 | 整页单列布局，含扫雷卡片。 |
 | `after-minesweeper-ready-desktop.png` | 扫雷 READY | 1440×1000 / 深色 / 整页 | 9×9 隐藏棋盘、HUD、侧栏与操作提示；文件已由难度选择子任务刷新为含难度卡片的整页截图。 |
 | `after-minesweeper-playing-desktop.png` | 扫雷游玩中 | 1440×1000 / 深色 / 整页 | 翻开部分棋盘、一面旗子、剩余雷数与计时；侧栏含难度卡片。 |
-| `after-minesweeper-won-desktop.png` | 扫雷 CLEARED | 1440×1000 / 深色 | 固定雷盘翻开全部安全格后的胜利遮罩。 |
-| `after-minesweeper-lost-desktop.png` | 扫雷 BOOM | 1440×1000 / 深色 | 固定雷盘踩雷后的失败遮罩与全部雷。 |
+| `after-minesweeper-won-desktop.png` | 扫雷 CLEARED | 1440×1000 / 深色 / 整页 1440×1324 | 固定雷盘翻开全部安全格后的胜利遮罩；侧栏在状态卡后含难度卡片。 |
+| `after-minesweeper-lost-desktop.png` | 扫雷 BOOM | 1440×1000 / 深色 / 整页 1440×1324 | 固定雷盘踩雷后的失败遮罩与全部雷；侧栏在状态卡后含难度卡片。 |
 
 ### 证据限制
 
 - main 没有扫雷页面，所以 Before 只能对比大厅（同一视口 / 主题）与真实未注册路由，不能与旧版扫雷页面逐像素对比。
-- After 大厅截图已在最终 head 重新生成：`7b2f05b` 的 hub 文案改动会让旧图过期，本次刷新后桌面大厅为 1440×3422；4 张游戏页截图重跑后逐字节一致。
+- After 大厅截图已在最终 head 重新生成：`7b2f05b` 的 hub 文案改动会让旧图过期，当时刷新后桌面大厅为 1440×3422；4 张游戏页截图重跑后逐字节一致。后续难度选择子任务再次刷新了这些共用文件：桌面大厅变为 1440×3468，4 张桌面玩法截图变为整页 1440×1324 并含难度卡片（见文首 difficulty 小节）。
 - 本子任务只做桌面输入与桌面 e2e；手机端只刷新大厅截图，不覆盖手机端扫雷玩法。
 - 手机端为 Playwright 设备模拟（390×844、DPR 2、触摸、大厅整页截图），不是真实设备截图。
 - 截图来自生产构建；交互行为另有桌面 e2e 验证，不依赖截图比对。

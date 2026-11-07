@@ -40,7 +40,7 @@ const STATUS_LABELS: Readonly<Record<MinesweeperStatus, string>> = {
 /**
  * Render the three preset buttons with the active one pressed. The labels and
  * boards come from the difficulty module so the selector cannot drift from the
- * presets the parser and the lobby description use.
+ * presets the parser and the engine validate against.
  */
 function difficultyPresetButtonsHtml(config: Readonly<MinesweeperConfig>): string {
   const active = findDifficultyForConfig(config);
@@ -108,6 +108,31 @@ function viewHtml(config: Readonly<MinesweeperConfig>): string {
       </div>
 
       <aside class="minesweeper-panel" aria-label="操作与状态">
+        <div class="panel-card">
+          <p class="panel-kicker">CONTROLS</p>
+          <h2>操作</h2>
+          <dl class="control-list">
+            <div>
+              <dt><span class="pointer-glyph" aria-hidden="true"></span> 左键</dt>
+              <dd>翻开格子</dd>
+            </div>
+            <div><dt>右键</dt><dd>插旗 / 取消旗</dd></div>
+            <div><dt>触屏</dt><dd>轻点翻开 / 长按插旗</dd></div>
+            <div><dt>按钮</dt><dd>重开 / 返回大厅</dd></div>
+          </dl>
+        </div>
+
+        <div class="panel-card">
+          <p class="panel-kicker">STATUS</p>
+          <h2>本局</h2>
+          <p class="minesweeper-summary"><span>已插旗</span><strong data-testid="flag-count">0</strong></p>
+          <p class="minesweeper-summary"><span>棋盘</span><strong data-testid="board-summary">${config.rows} × ${config.cols} · ${config.mines} 雷</strong></p>
+          <div class="panel-actions">
+            <button class="button button--ghost" type="button" data-action="restart"
+              data-testid="restart-button">重开</button>
+          </div>
+        </div>
+
         <div class="panel-card minesweeper-difficulty" aria-labelledby="minesweeper-difficulty-title">
           <p class="panel-kicker">DIFFICULTY</p>
           <h2 id="minesweeper-difficulty-title">难度</h2>
@@ -142,31 +167,6 @@ function viewHtml(config: Readonly<MinesweeperConfig>): string {
             <p class="minesweeper-error" id="minesweeper-difficulty-error" role="alert"
               data-testid="difficulty-error" hidden></p>
           </form>
-        </div>
-
-        <div class="panel-card">
-          <p class="panel-kicker">CONTROLS</p>
-          <h2>操作</h2>
-          <dl class="control-list">
-            <div>
-              <dt><span class="pointer-glyph" aria-hidden="true"></span> 左键</dt>
-              <dd>翻开格子</dd>
-            </div>
-            <div><dt>右键</dt><dd>插旗 / 取消旗</dd></div>
-            <div><dt>触屏</dt><dd>轻点翻开 / 长按插旗</dd></div>
-            <div><dt>按钮</dt><dd>重开 / 返回大厅</dd></div>
-          </dl>
-        </div>
-
-        <div class="panel-card">
-          <p class="panel-kicker">STATUS</p>
-          <h2>本局</h2>
-          <p class="minesweeper-summary"><span>已插旗</span><strong data-testid="flag-count">0</strong></p>
-          <p class="minesweeper-summary"><span>棋盘</span><strong data-testid="board-summary">${config.rows} × ${config.cols} · ${config.mines} 雷</strong></p>
-          <div class="panel-actions">
-            <button class="button button--ghost" type="button" data-action="restart"
-              data-testid="restart-button">重开</button>
-          </div>
         </div>
 
         <p class="minesweeper-hint">全部安全格翻开即获胜；插旗数量可以超过雷数，剩余雷数会随之变为负数。</p>
@@ -542,8 +542,10 @@ export async function mountMinesweeper(
   }
 
   function showDifficultyError(message: string): void {
-    setText(difficultyError, message);
+    // Unhide the live region before filling it so assistive technology sees the
+    // alert appear with its text, rather than a text update on a hidden node.
     difficultyError.hidden = false;
+    setText(difficultyError, message);
   }
 
   function hideDifficultyError(): void {
@@ -775,6 +777,11 @@ export async function mountMinesweeper(
     stopClock();
     lastStatus = engine.currentStatus;
     sync();
+    // A rejected custom board can leave a stale alert and field values while
+    // the active game still uses the previous config. Restarting is a fresh
+    // game action, so clear that transient error and show the active config.
+    hideDifficultyError();
+    syncDifficultyControls();
     announce('游戏重新开始');
     // The overlay hides with focus still inside it, so move focus back to a
     // visible restart control once the new board is ready. On touch layouts the
