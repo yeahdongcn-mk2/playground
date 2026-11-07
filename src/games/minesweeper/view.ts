@@ -1,5 +1,6 @@
 import { query, setText } from '../../core/dom';
 import type { GameHandle, GameServices } from '../../core/game';
+import { resolveDebugSeed } from './debug';
 import {
   COLS,
   createSeededRng,
@@ -196,12 +197,15 @@ function parseDebugMines(raw: string | null): readonly Cell[] | undefined {
   return cells.length === MINE_COUNT ? cells : undefined;
 }
 
-/** Deterministic options for e2e runs, including a stable PRNG fallback. */
+/**
+ * Deterministic options for e2e runs, including a stable PRNG fallback.
+ * A missing or invalid `seed` uses 1; only an explicit finite value (such as
+ * `seed=0`) overrides it.
+ */
 function debugEngineOptions(): Pick<MinesweeperOptions, 'initialMines' | 'rng'> {
   const params = debugParams();
-  const seed = Number(params.get('seed'));
   return {
-    rng: createSeededRng(Number.isFinite(seed) ? seed : 1),
+    rng: createSeededRng(resolveDebugSeed(params.get('seed'))),
     initialMines: parseDebugMines(params.get('mines')),
   };
 }

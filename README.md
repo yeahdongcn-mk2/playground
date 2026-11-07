@@ -164,7 +164,7 @@ npm run dev
 | 「重开」/「再来一局」 | 重新开始整局 |
 | 「返回大厅」 | 回到首页 |
 
-扫雷用原生 DOM 网格渲染（`engine: 'dom'`），不加载 Phaser；它同样通过 hash 路由后的 query `?debug=1`（例如 `/#/games/minesweeper?debug=1`）安装调试接缝：只读状态、用 `mines=row,col;...` 固定雷盘（分号分隔单元格）、`seed` 固定随机数，以及 e2e 专用的 `destroy()` 销毁入口。正常入口不显示调试 UI，也不暴露调试 API。
+扫雷用原生 DOM 网格渲染（`engine: 'dom'`），不加载 Phaser；它同样通过 hash 路由后的 query `?debug=1`（例如 `/#/games/minesweeper?debug=1`）安装调试接缝：只读状态、用 `mines=row,col;...` 固定雷盘（分号分隔单元格）、`seed` 固定随机数（缺省、空串、非数字或非有限值回退为 1，只有显式 `seed=0` 才是 0），以及 e2e 专用的 `destroy()` 销毁入口。正常入口不显示调试 UI，也不暴露调试 API。
 
 触屏长按会抑制浏览器上下文菜单和文本选择，棋盘与格子也设置了 `touch-action: manipulation` 与 `user-select: none`；手机视口下 HUD、返回大厅和棋盘旁的重开入口都保持可见，页面不会横向滚动。
 
