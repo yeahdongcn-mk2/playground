@@ -260,6 +260,31 @@ interface HostingDesign {
   readonly reevaluateWhen: readonly string[];
 }
 
+interface ImplementationTask {
+  readonly id: string;
+  readonly category: string;
+  readonly title: string;
+  readonly detail: string;
+  readonly depends_on: readonly string[];
+  readonly acceptance: readonly string[];
+}
+
+interface ImplementationPlanContracts {
+  readonly roomStates: readonly string[];
+  readonly timersMs: Readonly<Record<string, number>>;
+  readonly hostingChoice: string;
+  readonly protocolVersion: number;
+}
+
+interface ImplementationPlan {
+  readonly version: number;
+  readonly status: string;
+  readonly sourceIssue: number;
+  readonly order: string;
+  readonly contracts: ImplementationPlanContracts;
+  readonly tasks: readonly ImplementationTask[];
+}
+
 /** Escape a marker before embedding it in a regular expression. */
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -285,11 +310,28 @@ const lifecycle = readJsonBlock('design:room-lifecycle') as LifecycleDesign;
 const protocol = readJsonBlock('design:protocol') as ProtocolDesign;
 const reconnect = readJsonBlock('design:reconnect') as ReconnectDesign;
 const hosting = readJsonBlock('design:hosting') as HostingDesign;
+const implementationPlan = readJsonBlock('design:implementation-plan') as ImplementationPlan;
 
 const STATES = lifecycle.states.map((state) => state.name);
 const STATE_SET = new Set(STATES);
 const TRANSITIONS = lifecycle.transitions;
 const EVENTS = new Set(TRANSITIONS.map((transition) => transition.event));
+const IMPLEMENTATION_TASKS = implementationPlan.tasks;
+const IMPLEMENTATION_IDS = IMPLEMENTATION_TASKS.map((task) => task.id);
+const TASK_INDEX = new Map(IMPLEMENTATION_IDS.map((id, index) => [id, index]));
+
+/** Extract one Markdown section from its heading up to the next given heading. */
+function sectionBetween(startHeading: string, endHeading: string): string {
+  const start = DESIGN.indexOf(startHeading);
+  if (start < 0) {
+    throw new Error(`Missing section ${startHeading} in ${DESIGN_PATH}.`);
+  }
+  const end = DESIGN.indexOf(endHeading, start + startHeading.length);
+  if (end < 0) {
+    throw new Error(`Missing section ${endHeading} after ${startHeading} in ${DESIGN_PATH}.`);
+  }
+  return DESIGN.slice(start, end);
+}
 
 function transitionTargets(): Map<string, string[]> {
   const adjacency = new Map<string, string[]>(STATES.map((name) => [name, []]));
@@ -779,6 +821,128 @@ describe('minesweeper online hosting selection design', () => {
     expect(stages.has('mvp')).toBe(true);
     for (const trigger of hosting.reevaluateWhen) {
       expect(trigger.trim().length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe('minesweeper online implementation plan design', () => {
+  it('lists complete tasks with stable ids and topological dependencies', () => {
+    expect(implementationPlan.version).toBe(1);
+    expect(implementationPlan.status).toBe('design-only');
+    expect(implementationPlan.sourceIssue).toBe(46);
+    expect(implementationPlan.order).toBe('topological');
+    expect(IMPLEMENTATION_TASKS.length).toBeGreaterThanOrEqual(6);
+    expect(new Set(IMPLEMENTATION_IDS).size).toBe(IMPLEMENTATION_IDS.length);
+
+    for (const task of IMPLEMENTATION_TASKS) {
+      expect(task.id.trim().length).toBeGreaterThan(0);
+      expect(task.category.trim().length).toBeGreaterThan(0);
+      expect(task.title.trim().length).toBeGreaterThan(0);
+      expect(task.detail.trim().length).toBeGreaterThan(0);
+      expect(Array.isArray(task.depends_on)).toBe(true);
+      expect(task.acceptance.length).toBeGreaterThan(0);
+      for (const item of task.acceptance) {
+        expect(item.trim().length).toBeGreaterThan(0);
+      }
+
+      const position = TASK_INDEX.get(task.id);
+      expect(position).toBeDefined();
+      for (const dependency of task.depends_on) {
+        const dependencyPosition = TASK_INDEX.get(dependency);
+        expect(dependencyPosition).toBeDefined();
+        if (dependencyPosition === undefined || position === undefined) {
+          continue;
+        }
+        expect(dependencyPosition).toBeLessThan(position);
+      }
+    }
+  });
+
+  it('covers the six required implementation categories', () => {
+    const categories = new Set(IMPLEMENTATION_TASKS.map((task) => task.category));
+    for (const category of ['engine', 'protocol', 'hosting', 'reconnect', 'client-ui', 'e2e']) {
+      expect(categories.has(category)).toBe(true);
+    }
+  });
+
+  it('has no dependency cycles', () => {
+    const byId = new Map(IMPLEMENTATION_TASKS.map((task) => [task.id, task]));
+    const visiting = new Set<string>();
+    const done = new Set<string>();
+    const visit = (id: string): void => {
+      if (done.has(id)) {
+        return;
+      }
+      if (visiting.has(id)) {
+        throw new Error(`Dependency cycle detected at ${id}.`);
+      }
+      visiting.add(id);
+      const task = byId.get(id);
+      if (task === undefined) {
+        throw new Error(`Unknown implementation task ${id}.`);
+      }
+      for (const dependency of task.depends_on) {
+        visit(dependency);
+      }
+      visiting.delete(id);
+      done.add(id);
+    };
+    for (const id of IMPLEMENTATION_IDS) {
+      visit(id);
+    }
+    expect(done.size).toBe(IMPLEMENTATION_IDS.length);
+  });
+
+  it('keeps the plan contracts aligned with lifecycle, protocol and hosting', () => {
+    expect([...implementationPlan.contracts.roomStates].sort()).toEqual([...STATES].sort());
+    for (const timer of ['join', 'turn', 'match']) {
+      expect(implementationPlan.contracts.timersMs[timer]).toBe(lifecycle.timers[timer]?.defaultMs);
+    }
+    expect(implementationPlan.contracts.hostingChoice).toBe(hosting.choice);
+    expect(implementationPlan.contracts.protocolVersion).toBe(protocol.version);
+  });
+});
+
+describe('minesweeper online single-player relationship and glossary', () => {
+  it('documents the parameterized engine reuse and single-player guarantees', () => {
+    const relationship = sectionBetween(
+      '## 2. 与现有单机玩法和规则引擎参数化的关系',
+      '## 3. 房间生命周期',
+    );
+    for (const reference of [
+      'MinesweeperConfig',
+      'createSeededRng',
+      'src/games/minesweeper/engine.ts',
+      'difficulty.ts',
+      'validateConfig',
+    ]) {
+      expect(relationship).toContain(reference);
+    }
+    for (const topic of ['不回归', '排行榜', '自定义难度']) {
+      expect(relationship).toContain(topic);
+    }
+  });
+
+  it('provides a chapter index and a glossary', () => {
+    expect(DESIGN).toContain('## 0. 章节索引');
+    expect(DESIGN).toContain('## 10. 术语表');
+
+    const index = sectionBetween('## 0. 章节索引', '## 1. 背景与范围');
+    for (const section of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+      expect(index).toContain(`#${section}-`);
+    }
+
+    const glossaryStart = DESIGN.indexOf('## 10. 术语表');
+    expect(glossaryStart).toBeGreaterThan(-1);
+    const glossary = DESIGN.slice(glossaryStart);
+    for (const term of [
+      'presence',
+      'seq',
+      '宽限期',
+      '脱敏快照',
+      'src/games/minesweeper/engine.ts',
+    ]) {
+      expect(glossary).toContain(term);
     }
   });
 });
