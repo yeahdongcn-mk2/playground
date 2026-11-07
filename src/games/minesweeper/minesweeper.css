@@ -359,18 +359,20 @@
   }
 }
 
-/* Narrow phones (Issue #39): 360px leaves a 336px shell, which shrinks a
-   9x9 cell below the 36px touch target. Shave 8px from each side of the
-   game page's 12px shell gutter and tighten the stage padding and board
-   gaps so the cells grow instead, while the HUD and compact restart stay
-   in the first screen. */
+/* Narrow phones (Issue #53): the supported minimum is 320px. The shared 24px
+   shell gutter leaves 296px at that width, which made a 9x9 cell about 32.7px.
+   Cancel the whole 12px gutter on both sides (never wider than the viewport)
+   and tighten the stage padding and board gaps so the cells grow. This yields
+   about 34.2px cells at 320px and 36.4px from 340px up; the 320-339px range is
+   the documented geometric fallback because 9 x 36px plus gaps and borders
+   cannot fit in 320px. The HUD and back link stay in the first screen. */
 @media (max-width: 400px) {
   .minesweeper-game {
-    margin-inline: -8px;
+    margin-inline: -12px;
   }
 
   .minesweeper-stage {
-    padding: 4px;
+    padding: 1px;
   }
 
   .minesweeper-board,

@@ -11,6 +11,8 @@ import { chromium, devices } from '@playwright/test';
  *   BASE_URL=http://127.0.0.1:4188 npm run screenshots:minesweeper:touch-before
  *   npm run screenshots:minesweeper:narrow
  *   BASE_URL=http://127.0.0.1:4189 npm run screenshots:minesweeper:narrow-before
+ *   npm run screenshots:minesweeper:min
+ *   BASE_URL=http://127.0.0.1:4189 npm run screenshots:minesweeper:min-before
  *
  * The after mode builds first (the npm script does) and serves the production
  * preview. The before mode must point BASE_URL at a main baseline preview;
@@ -18,9 +20,9 @@ import { chromium, devices } from '@playwright/test';
  * touch-before mode points BASE_URL at a preview of the commit before this
  * task's touch and mobile changes, where the page exists but only has
  * desktop-style pointer input, and captures the same phone game states. The
- * narrow modes capture the 360×740 ready state before and after the narrow
- * viewport fix; the before mode likewise needs BASE_URL at the baseline
- * preview.
+ * narrow modes capture the 360×740 ready state and the min modes capture the
+ * 320×640 ready state, before and after the narrow viewport fix; the before
+ * modes likewise need BASE_URL at the baseline preview.
  */
 
 const HOST = '127.0.0.1';
@@ -30,9 +32,15 @@ const OUTPUT = 'docs/screenshots';
 const TOUCH_BEFORE = process.argv.includes('--touch-before');
 const NARROW = process.argv.includes('--narrow');
 const NARROW_BEFORE = process.argv.includes('--narrow-before');
-const MODE = NARROW_BEFORE
+const MIN = process.argv.includes('--min');
+const MIN_BEFORE = process.argv.includes('--min-before');
+const IS_NARROW = NARROW || NARROW_BEFORE || MIN || MIN_BEFORE;
+const IS_NARROW_BEFORE = NARROW_BEFORE || MIN_BEFORE;
+const NARROW_VIEWPORT =
+  MIN || MIN_BEFORE ? { width: 320, height: 640 } : { width: 360, height: 740 };
+const MODE = IS_NARROW_BEFORE
   ? 'narrow-before'
-  : NARROW
+  : IS_NARROW
     ? 'narrow'
     : TOUCH_BEFORE
       ? 'touch-before'
@@ -323,14 +331,16 @@ async function captureTouchMobile(browser, prefix) {
 }
 
 /**
- * Capture the ready state at 360×740, the narrow viewport from Issue #39.
- * This pair isolates the narrow-layout change: same scene, viewport, dark
- * theme and reduced-motion setting before and after.
+ * Capture the ready state at a narrow phone viewport: 360×740 for the narrow
+ * mode and 320×640 for the min mode. Each pair isolates the narrow-layout
+ * change: same scene, viewport, dark theme and reduced-motion setting before
+ * and after.
  */
-async function captureNarrow(browser, prefix) {
+async function captureNarrow(browser, prefix, viewport) {
+  const { width, height } = viewport;
   const context = await browser.newContext({
-    viewport: { width: 360, height: 740 },
-    screen: { width: 360, height: 740 },
+    viewport,
+    screen: viewport,
     colorScheme: 'dark',
     deviceScaleFactor: 2,
     isMobile: true,
@@ -342,7 +352,7 @@ async function captureNarrow(browser, prefix) {
   await openTouchGame(ready, WIN_MINES);
   await ready.getByTestId('status').filter({ hasText: '待开始' }).waitFor();
   await settle(ready);
-  await capture(ready, `${prefix}-minesweeper-ready-360x740.png`, false);
+  await capture(ready, `${prefix}-minesweeper-ready-${width}x${height}.png`, false);
   await ready.close();
 
   await context.close();
@@ -362,7 +372,7 @@ if (MODE === 'touch-before' && !process.env.BASE_URL) {
 
 if (MODE === 'narrow-before' && !process.env.BASE_URL) {
   throw new Error(
-    'The narrow-before mode needs BASE_URL pointing at a preview of the pre-narrow-layout baseline commit (see docs/screenshots/README.md).',
+    'The narrow-before / min-before modes need BASE_URL pointing at a preview of the pre-narrow-layout baseline commit (see docs/screenshots/README.md).',
   );
 }
 
@@ -388,7 +398,11 @@ await mkdir(OUTPUT, { recursive: true });
 const browser = await chromium.launch();
 try {
   if (MODE === 'narrow' || MODE === 'narrow-before') {
-    await captureNarrow(browser, MODE === 'narrow-before' ? 'before' : 'after');
+    await captureNarrow(
+      browser,
+      MODE === 'narrow-before' ? 'before' : 'after',
+      NARROW_VIEWPORT,
+    );
   } else {
     if (MODE !== 'touch-before') {
       await captureDesktop(browser);
