@@ -133,6 +133,93 @@ interface ProtocolDesign {
   readonly messages: readonly DesignMessage[];
 }
 
+interface ReconnectHeartbeat {
+  readonly channel: string;
+  readonly intervalMs: number;
+  readonly missedBeats: number;
+  readonly detectMs: number;
+  readonly clock: string;
+  readonly onDetect: string;
+}
+
+interface ReconnectGrace {
+  readonly graceMs: number;
+  readonly startsAt: string;
+  readonly seatReserved: boolean;
+  readonly pauseOnDisconnect: boolean;
+  readonly pauseTimers: boolean;
+  readonly playingCurrent: string;
+  readonly playingOther: string;
+  readonly lobby: string;
+  readonly finished: string;
+}
+
+interface ReconnectForfeit {
+  readonly timer: string;
+  readonly timeoutMs: number;
+  readonly startsAt: string;
+  readonly when: string;
+  readonly outcome: string;
+}
+
+interface ReconnectRecovery {
+  readonly method: string;
+  readonly eventReplay: boolean;
+  readonly auth: string;
+  readonly includes: readonly string[];
+  readonly onFinished: string;
+  readonly onDissolved: string;
+}
+
+interface ReconnectIdempotency {
+  readonly reconnect: string;
+  readonly duplicateJoin: string;
+  readonly duplicateAction: string;
+  readonly duplicateTimeout: string;
+  readonly socketRace: string;
+}
+
+interface ReconnectHosting {
+  readonly topology: string;
+  readonly p2p: boolean;
+  readonly hostMigration: string;
+  readonly hostDisconnectInLobby: string;
+  readonly hostDisconnectInMatch: string;
+}
+
+interface ReconnectState {
+  readonly name: string;
+  readonly reconnect: string;
+  readonly reason: string;
+  readonly graceOutcome: string;
+  readonly recovery: string;
+}
+
+interface ReconnectOutcome {
+  readonly id: string;
+  readonly kind: string;
+  readonly from: string;
+  readonly event?: string;
+  readonly to: string;
+  readonly timer?: string;
+  readonly transition: string;
+  readonly recovery?: string;
+  readonly guard?: string;
+}
+
+interface ReconnectDesign {
+  readonly version: number;
+  readonly status: string;
+  readonly heartbeat: ReconnectHeartbeat;
+  readonly grace: ReconnectGrace;
+  readonly forfeit: ReconnectForfeit;
+  readonly recovery: ReconnectRecovery;
+  readonly idempotency: ReconnectIdempotency;
+  readonly hosting: ReconnectHosting;
+  readonly states: readonly ReconnectState[];
+  readonly outcomes: readonly ReconnectOutcome[];
+}
+
 /** Escape a marker before embedding it in a regular expression. */
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -156,6 +243,7 @@ function readJsonBlock(marker: string): unknown {
 
 const lifecycle = readJsonBlock('design:room-lifecycle') as LifecycleDesign;
 const protocol = readJsonBlock('design:protocol') as ProtocolDesign;
+const reconnect = readJsonBlock('design:reconnect') as ReconnectDesign;
 
 const STATES = lifecycle.states.map((state) => state.name);
 const STATE_SET = new Set(STATES);
@@ -405,5 +493,159 @@ describe('minesweeper online sync and adjudication protocol', () => {
     for (const name of ['requestId', 'roomId', 'protocolVersion', 'playerToken']) {
       expect(fieldNamesOf('join').has(name)).toBe(true);
     }
+  });
+});
+
+describe('minesweeper online disconnect and reconnect design', () => {
+  it('orders heartbeat detection before grace before forfeit', () => {
+    expect(reconnect.version).toBe(1);
+    const { detectMs } = reconnect.heartbeat;
+    const { graceMs } = reconnect.grace;
+    const { timeoutMs } = reconnect.forfeit;
+    for (const value of [detectMs, graceMs, timeoutMs]) {
+      expect(value).toBeGreaterThan(0);
+    }
+    expect(reconnect.heartbeat.intervalMs).toBeGreaterThan(0);
+    expect(reconnect.heartbeat.missedBeats).toBeGreaterThan(0);
+    expect(reconnect.heartbeat.intervalMs * reconnect.heartbeat.missedBeats).toBe(detectMs);
+    expect(detectMs).toBeLessThan(graceMs);
+    expect(graceMs).toBeLessThan(timeoutMs);
+    expect(graceMs).toBe(protocol.disconnect.graceMs);
+
+    const turnTimer = lifecycle.timers.turn;
+    expect(turnTimer).toBeDefined();
+    if (turnTimer === undefined) {
+      throw new Error('The design must declare the turn timer.');
+    }
+    expect(reconnect.forfeit.timer).toBe('turn');
+    expect(timeoutMs).toBe(turnTimer.defaultMs);
+  });
+
+  it('maps every room state to an explicit reconnect policy', () => {
+    const declared = new Set(STATES);
+    const names = reconnect.states.map((state) => state.name);
+    expect(new Set(names).size).toBe(names.length);
+    for (const name of STATES) {
+      expect(names).toContain(name);
+    }
+
+    const allowed = new Set(['waiting', 'ready', 'playing', 'finished']);
+    const rejected = new Set(['idle', 'dissolved']);
+    for (const state of reconnect.states) {
+      expect(declared.has(state.name)).toBe(true);
+      expect(['allowed', 'rejected']).toContain(state.reconnect);
+      if (allowed.has(state.name)) {
+        expect(state.reconnect).toBe('allowed');
+      }
+      if (rejected.has(state.name)) {
+        expect(state.reconnect).toBe('rejected');
+      }
+      expect(state.reason.length).toBeGreaterThan(0);
+      expect(state.graceOutcome.length).toBeGreaterThan(0);
+      expect(state.recovery.length).toBeGreaterThan(0);
+    }
+
+    const playing = reconnect.states.find((state) => state.name === 'playing');
+    expect(playing?.recovery).toBe(reconnect.recovery.method);
+    expect(reconnect.recovery.method).toBe('snapshot-at-current-seq');
+    expect(reconnect.recovery.eventReplay).toBe(false);
+    expect(reconnect.recovery.method).toBe(protocol.disconnect.resume);
+    expect(reconnect.recovery.onDissolved).toBe('room-not-found');
+    expect(reconnect.recovery.onFinished).toBe('end');
+  });
+
+  it('keeps every disconnect, timeout and reconnect outcome inside the state machine', () => {
+    const terminal = new Set(lifecycle.terminalStates);
+    const transitionsById = new Map(TRANSITIONS.map((transition) => [transition.id, transition]));
+
+    for (const outcome of reconnect.outcomes) {
+      expect(outcome.id.length).toBeGreaterThan(0);
+      expect(STATE_SET.has(outcome.from)).toBe(true);
+      expect(STATE_SET.has(outcome.to)).toBe(true);
+
+      if (outcome.transition === 'state-preserving') {
+        expect(outcome.from).toBe(outcome.to);
+        continue;
+      }
+      if (outcome.transition === 'rejected') {
+        expect(outcome.from).toBe(outcome.to);
+        expect(terminal.has(outcome.to)).toBe(true);
+        continue;
+      }
+
+      const transition = transitionsById.get(outcome.transition);
+      expect(transition).toBeDefined();
+      if (transition === undefined) {
+        continue;
+      }
+      expect(transition.from).toBe(outcome.from);
+      expect(transition.event).toBe(outcome.event);
+      expect(transition.to).toBe(outcome.to);
+      if (outcome.timer !== undefined) {
+        expect(transition.timer).toBe(outcome.timer);
+        expect(lifecycle.timers[outcome.timer]?.defaultMs ?? 0).toBeGreaterThan(0);
+      }
+    }
+
+    for (const id of [
+      'waiting-join-timeout',
+      'ready-join-timeout',
+      'playing-turn-timeout',
+      'playing-match-timeout',
+      'waiting-seat-release',
+      'ready-seat-release',
+      'waiting-host-dissolve',
+      'ready-host-dissolve',
+      'reconnect-playing',
+      'reconnect-finished',
+      'reconnect-dissolved',
+    ]) {
+      expect(reconnect.outcomes.some((outcome) => outcome.id === id)).toBe(true);
+    }
+
+    for (const state of ['waiting', 'ready', 'playing', 'finished', 'dissolved']) {
+      expect(
+        reconnect.outcomes.some((outcome) => outcome.kind === 'reconnect' && outcome.from === state),
+      ).toBe(true);
+    }
+
+    for (const outcome of reconnect.outcomes.filter((candidate) => candidate.from === 'playing')) {
+      expect(['playing', 'finished']).toContain(outcome.to);
+      expect(outcome.to).not.toBe('dissolved');
+    }
+
+    const forfeit = reconnect.outcomes.find((outcome) => outcome.id === 'playing-turn-timeout');
+    expect(forfeit?.to).toBe('finished');
+    expect(forfeit?.transition).toBe('t-turn-timeout');
+    expect(terminal.has(reconnect.forfeit.outcome)).toBe(true);
+
+    const dissolvedReconnect = reconnect.outcomes.find(
+      (outcome) => outcome.kind === 'reconnect' && outcome.from === 'dissolved',
+    );
+    expect(dissolvedReconnect?.transition).toBe('rejected');
+    expect(dissolvedReconnect?.recovery).toBe('room-not-found');
+  });
+
+  it('continues the match and makes reconnection idempotent', () => {
+    expect(reconnect.status).toBe('design-only');
+    expect(reconnect.grace.seatReserved).toBe(true);
+    expect(reconnect.grace.pauseOnDisconnect).toBe(false);
+    expect(reconnect.grace.pauseTimers).toBe(false);
+    expect(reconnect.grace.playingCurrent).toBe('forfeit');
+    expect(reconnect.grace.playingOther).toBe('wait-until-turn');
+    expect(reconnect.grace.lobby).toBe('release-seat-or-dissolve');
+    expect(reconnect.grace.finished).toBe('retain-result');
+    expect(reconnect.heartbeat.onDetect).toBe('offline');
+
+    for (const value of Object.values(reconnect.idempotency)) {
+      expect(value.length).toBeGreaterThan(0);
+    }
+    expect(reconnect.idempotency.duplicateAction).toBe('actionId-cache');
+    expect(reconnect.idempotency.duplicateTimeout).toBe('once-per-seq');
+
+    expect(reconnect.hosting.topology).toBe('server-authoritative');
+    expect(reconnect.hosting.p2p).toBe(false);
+    expect(reconnect.hosting.hostMigration).toBe('not-applicable');
+    expect(reconnect.hosting.hostDisconnectInLobby).toBe('dissolve');
   });
 });
