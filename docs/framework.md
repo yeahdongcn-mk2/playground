@@ -260,7 +260,7 @@ const vector = directions.vector(); // 对角线已归一化
 - `view.ts` 用原生 DOM 网格绘制 9×9 棋盘，把纯规则引擎 `engine.ts` 的状态快照同步到 HUD、格子和结束遮罩；
 - 棋盘用左右键交互：左键翻开、右键插旗并 `preventDefault()` 掉浏览器菜单；
 - 棋盘与按钮监听器挂在 `AbortController` 的 signal 上；`mountSignal` 的 abort 监听在 `destroy()` 中显式移除，计时器也在那里清理；
-- `?debug=1&mines=row,col;...` 提供只读状态、固定雷盘（另有 `seed`；缺省、空串或非数字回退为 1，只有显式 `seed=0` 才是 0）与 e2e 专用的 `destroy()`，正常入口不安装调试 API。
+- `?debug=1&mines=row,col;...` 提供只读状态、固定雷盘（另有 `seed`；缺省、空串、非数字或非有限值回退为 1，只有显式 `seed=0` 才是 0）与 e2e 专用的 `destroy()`，正常入口不安装调试 API。
 - 新增 DOM 游戏时不需要 Phaser；`meta.engine` 写 `'dom'`，大厅会自动显示对应的引擎标签。
 
 ## 11. 3D（Three.js）接入
