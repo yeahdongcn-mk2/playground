@@ -40,6 +40,31 @@ export const WIN_MINES: readonly Cell[] = [
 /** A blank corner whose flood fill reveals every safe cell. */
 export const WIN_CLICK = { row: 8, col: 8 } as const;
 
+/** Fixed first reveal used by the deterministic debug-seed regression tests. */
+export const FIRST_REVEAL = { row: 8, col: 8 } as const;
+
+/** Stable row-major signature of a snapshot's planted mine layout. */
+export function mineSignature(state: MinesweeperSnapshot): string {
+  return state.board
+    .flat()
+    .filter((cell) => cell.mine)
+    .map((cell) => `${cell.row},${cell.col}`)
+    .join(';');
+}
+
+/**
+ * Reveal the fixed first cell and return the resulting mine layout signature.
+ * The first reveal is always safe, so the game keeps playing.
+ */
+export async function revealFirstCellMines(page: Page): Promise<string> {
+  await cellLocator(page, FIRST_REVEAL.row, FIRST_REVEAL.col).click();
+  await expect(page.getByTestId('status')).toHaveText('进行中');
+  const state = await readState(page);
+  expect(state.status).toBe('playing');
+  expect(state.board.flat().filter((cell) => cell.mine)).toHaveLength(10);
+  return mineSignature(state);
+}
+
 export function cellLocator(page: Page, row: number, col: number): Locator {
   return page.getByTestId(`cell-${row}-${col}`);
 }
