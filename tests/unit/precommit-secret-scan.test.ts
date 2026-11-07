@@ -94,8 +94,12 @@ const DATABASE_URL_SCHEMES = [
   'amqps',
 ] as const;
 
-// Built at runtime so this test file itself stays clean for the scanner.
+// Shared fake password for the database URL fixtures, split so no literal
+// `scheme://user:password@host` value appears in this file.
 const FAKE_DB_PASSWORD = ['s3cr3t', 'password'].join('');
+// Percent-encoded `@` and `/`, which valid connection strings use instead of
+// the raw delimiters.
+const FAKE_DB_SPECIAL_PASSWORD = ['p%40ss', '%2Fword'].join('');
 
 describe('secret scan pre-commit hook', () => {
   it('is configured to scan every text file, not only staged changes', () => {
@@ -207,20 +211,26 @@ describe('secret scan pre-commit hook', () => {
   it('fails on database URLs with an inline password for every supported scheme', () => {
     const dir = makeTempDir();
     const fixture = join(dir, 'database-urls.txt');
-    const lines = DATABASE_URL_SCHEMES.map(
-      (scheme) => `DATABASE_URL=${scheme}://dbuser:${FAKE_DB_PASSWORD}@db.internal:5432/app`,
-    );
-    writeFileSync(fixture, `${lines.join('\n')}\n`);
+    const urls = [
+      ...DATABASE_URL_SCHEMES.map(
+        (scheme) => `${scheme}://dbuser:${FAKE_DB_PASSWORD}@db.internal:5432/app`,
+      ),
+      // Redis allows an empty username, with the password after a bare colon.
+      `redis://:${FAKE_DB_PASSWORD}@cache:6379/0`,
+      // Percent-encoded delimiters inside a password are still reported.
+      `postgres://dbuser:${FAKE_DB_SPECIAL_PASSWORD}@db.internal/app`,
+    ];
+    writeFileSync(fixture, `${urls.map((url) => `DATABASE_URL=${url}`).join('\n')}\n`);
 
     const failing = runScanner([fixture]);
     expect(failing.status).toBe(1);
     expect(failing.stderr).toContain('database-url-password');
-    expect(failing.stderr).toContain('database-urls.txt');
-    // Every scheme must be reported, not just the first line of the fixture.
-    const findings = failing.stderr
-      .split('\n')
-      .filter((line) => line.includes('database-url-password'));
-    expect(findings).toHaveLength(DATABASE_URL_SCHEMES.length);
+    // Every URL must be reported, not just the first line of the fixture.
+    for (const [index] of urls.entries()) {
+      expect(failing.stderr).toContain(
+        `database-urls.txt:${index + 1}: [database-url-password]`,
+      );
+    }
   });
 
   it('does not flag database URLs without real inline credentials', () => {
@@ -240,13 +250,31 @@ describe('secret scan pre-commit hook', () => {
       // Env-var interpolation and common documentation placeholders.
       'postgres://dbuser:${DB_PASSWORD}@db.internal/app',
       'postgres://dbuser:$DB_PASSWORD@db.internal/app',
+      'postgres://dbuser:$(DB_PASSWORD)@db.internal/app',
       'postgres://dbuser:{{DB_PASSWORD}}@db.internal/app',
+      'postgres://dbuser:{DB_PASSWORD}@db.internal/app',
+      'postgres://dbuser:%DB_PASSWORD%@db.internal/app',
       'postgres://dbuser:<password>@db.internal/app',
       'postgres://dbuser:[password]@db.internal/app',
       'postgres://dbuser:password@db.internal/app',
+      'postgres://dbuser:pass@db.internal/app',
+      'postgres://dbuser:passwd@db.internal/app',
+      'postgres://dbuser:pwd@db.internal/app',
+      'postgres://dbuser:secret@db.internal/app',
+      'postgres://dbuser:changeme@db.internal/app',
+      'postgres://dbuser:placeholder@db.internal/app',
+      'postgres://dbuser:example@db.internal/app',
+      'postgres://dbuser:xxx@db.internal/app',
+      'postgres://dbuser:xxxxx@db.internal/app',
+      'postgres://dbuser:YOURPASSWORD@db.internal/app',
       'mongodb://dbuser:CHANGE_ME@db.internal/app',
+      'redis://dbuser:YOUR_PASSWORD@cache:6379/0',
       'redis://dbuser:your_password@cache:6379/0',
       'amqp://dbuser:REPLACE_ME@broker:5672/vhost',
+      // A port/query combination that contains `@` is not userinfo.
+      'redis://cache:6379?notify=ops@example.com',
+      'postgres://localhost:5432?user=admin@example.com',
+      'postgres://host?user=a:b@c',
     ];
     writeFileSync(fixture, `${urls.map((url) => `DATABASE_URL=${url}`).join('\n')}\n`);
 
