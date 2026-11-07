@@ -328,24 +328,68 @@ test.describe('minesweeper difficulty selector', () => {
     await expectNoDebugSeam(page);
   });
 
-  test('switching away from a finished game moves focus out of the hidden overlay', async ({
+  test('rebuilding from a finished game moves focus out of the hidden overlay', async ({
     page,
   }) => {
     await openMinesweeper(page, { mines: LOSS_MINES });
+    // Pre-fill a board that equals the intermediate preset. Filling moves focus
+    // into the sidebar, but losing the game hands it back to the overlay, so
+    // the submit below really starts with focus inside the overlay.
+    await page.getByTestId('custom-rows').fill('16');
+    await page.getByTestId('custom-cols').fill('16');
+    await page.getByTestId('custom-mines').fill('40');
     await cellLocator(page, 7, 4).click();
     await expect(page.getByTestId('status')).toHaveText('进行中');
     await cellLocator(page, 0, 0).click();
     await expect(page.getByTestId('status')).toHaveText('踩雷结束');
     await expect(page.getByTestId('overlay-primary')).toBeFocused();
 
-    // A real preset click while the overlay owns focus: the click focuses the
-    // preset, the rebuild hides the overlay, and focus must stay on a visible
-    // control instead of the button inside the now-hidden overlay.
-    await difficultyButton(page, 'intermediate').click();
+    // Submit the form without clicking it. A click would move focus out of the
+    // overlay before `applyConfig()` runs, so the rescue branch would never be
+    // exercised; `requestSubmit()` keeps focus on the overlay button while
+    // firing the same submit listener a real submission uses.
+    await page.getByTestId('custom-difficulty-form').evaluate((form) => {
+      (form as HTMLFormElement).requestSubmit();
+    });
     await expect(page.getByTestId('overlay')).toBeHidden();
+    // The overlay button is hidden now, so focus must land on the active preset.
     await expect(difficultyButton(page, 'intermediate')).toBeFocused();
     await expectActiveDifficulty(page, 'intermediate');
     await expect(page.locator('[data-cell]')).toHaveCount(256);
+  });
+
+  test('a custom board submitted from the overlay focuses the custom submit', async ({
+    page,
+  }) => {
+    // 12×12 with 20 fixed mines is a valid custom board without a matching
+    // preset, so the rescue branch must fall back to the custom submit button.
+    const mines = [
+      { row: 0, col: 0 },
+      ...Array.from({ length: 12 }, (_, col) => ({ row: 4, col })),
+      ...Array.from({ length: 7 }, (_, col) => ({ row: 5, col })),
+    ];
+    await openMinesweeper(page, {
+      rows: 12,
+      cols: 12,
+      mineCount: 20,
+      mines,
+    });
+    await cellLocator(page, 7, 4).click();
+    await expect(page.getByTestId('status')).toHaveText('进行中');
+    await cellLocator(page, 0, 0).click();
+    await expect(page.getByTestId('status')).toHaveText('踩雷结束');
+    await expect(page.getByTestId('overlay-primary')).toBeFocused();
+
+    // The form already holds the active custom board, so submitting it while
+    // the overlay owns focus rebuilds the same board and moves focus to the
+    // visible custom submit button instead of the hidden overlay button.
+    await page.getByTestId('custom-difficulty-form').evaluate((form) => {
+      (form as HTMLFormElement).requestSubmit();
+    });
+    await expect(page.getByTestId('overlay')).toBeHidden();
+    await expect(page.getByTestId('custom-difficulty-submit')).toBeFocused();
+    await expectActiveDifficulty(page, null);
+    await expect(page.locator('[data-cell]')).toHaveCount(144);
   });
 
   test('a debug board marks its matching preset as pressed on load', async ({ page }) => {

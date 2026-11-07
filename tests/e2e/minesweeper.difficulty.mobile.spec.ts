@@ -1,5 +1,5 @@
 import { expect, test } from './fixtures';
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 import {
   cellLocator,
   difficultyButton,
@@ -8,6 +8,18 @@ import {
   expectNoHorizontalOverflow,
   openMinesweeper,
 } from './minesweeper-helpers';
+
+/** Assert a control meets the 44px touch-target contract on both axes. */
+async function expectMinTouchTarget(locator: Locator, label: string): Promise<void> {
+  const box = await locator.boundingBox();
+  expect(box, `${label} should have a bounding box`).not.toBeNull();
+  expect(box?.height ?? 0, `${label} should be at least 44px tall`).toBeGreaterThanOrEqual(
+    44,
+  );
+  expect(box?.width ?? 0, `${label} should be at least 44px wide`).toBeGreaterThanOrEqual(
+    44,
+  );
+}
 
 /** Submit the custom form with touch events, including the submit button. */
 async function submitCustomByTouch(
@@ -85,7 +97,7 @@ test.describe('minesweeper difficulty selector on a phone viewport', () => {
     await expectInsideViewport(page, error, 'difficulty error');
   });
 
-  test('the minimum 320px viewport keeps the selector and its error readable', async ({
+  test('the minimum 320px viewport keeps the selector, error and 16×30 expert board usable', async ({
     page,
   }) => {
     await page.setViewportSize({ width: 320, height: 640 });
@@ -104,9 +116,28 @@ test.describe('minesweeper difficulty selector on a phone viewport', () => {
       'preset buttons at 320px',
     );
 
+    // The 44px touch-target contract applies to the presets and the custom
+    // submit button; a screenshot is not an assertion.
+    for (const id of ['beginner', 'intermediate', 'expert'] as const) {
+      await expectMinTouchTarget(difficultyButton(page, id), `${id} preset`);
+    }
+    await expectMinTouchTarget(
+      page.getByTestId('custom-difficulty-submit'),
+      'custom submit',
+    );
+
     await difficultyButton(page, 'intermediate').tap();
     await expect(page.locator('[data-cell]')).toHaveCount(256);
     await expect(page.getByTestId('board-summary')).toHaveText('16 × 16 · 40 雷');
+    await expectNoHorizontalOverflow(page);
+
+    // The 16×30 expert board has the most columns, so its cells are the
+    // narrowest; assert the page still does not overflow at the minimum
+    // supported 320px width.
+    await difficultyButton(page, 'expert').tap();
+    await expect(page.locator('[data-cell]')).toHaveCount(480);
+    await expect(page.getByTestId('board-summary')).toHaveText('16 × 30 · 99 雷');
+    await expectActiveDifficulty(page, 'expert');
     await expectNoHorizontalOverflow(page);
 
     await submitCustomByTouch(page, 99, 9, 10);
@@ -114,11 +145,12 @@ test.describe('minesweeper difficulty selector on a phone viewport', () => {
     await expect(error).toHaveText('行数必须是 5 到 30 之间的整数。');
     await expect(error).toBeVisible();
     await expectInsideViewport(page, error, 'difficulty error at 320px');
-    await expect(page.locator('[data-cell]')).toHaveCount(256);
-    await expect(page.getByTestId('board-summary')).toHaveText('16 × 16 · 40 雷');
+    await expect(page.locator('[data-cell]')).toHaveCount(480);
+    await expect(page.getByTestId('board-summary')).toHaveText('16 × 30 · 99 雷');
     await expectNoHorizontalOverflow(page);
 
-    await cellLocator(page, 15, 15).tap();
+    // The far-corner expert cell must stay tappable at 320px.
+    await cellLocator(page, 15, 29).tap();
     await expect(page.getByTestId('status')).toHaveText('进行中');
   });
 });

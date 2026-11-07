@@ -5,7 +5,7 @@
 ## difficulty：扫雷难度选择（Issue #44 / 子任务 3）
 
 - Before 基线：`9f9aa54`（PR #57 合入「扫雷视图支持任意棋盘配置与安全重建」后的 `main`，也就是本子任务开始前的 `main`）。侧栏只有操作与本局状态卡片，没有难度控件。
-- After：本子任务分支 `agent/plan-44-t3` 的最终 head。侧栏在操作与本局状态卡片之后新增「难度」卡片：初级 / 中级 / 高级三个预设按钮，以及行 / 列 / 雷数三个数字输入和「开始自定义」按钮；当前档以 `aria-pressed` 标记，非法自定义在 `role=alert` 区域显示中文错误。
+- After：本子任务分支 `agent/plan-44-t3` 的提交 [`2933d26`](https://github.com/yeahdongcn-mk2/playground/commit/2933d26)（该提交含难度卡片 UI 修正并刷新了 After 截图）。侧栏在操作与本局状态卡片之后新增「难度」卡片：初级 / 中级 / 高级三个预设按钮，以及行 / 列 / 雷数三个数字输入和「开始自定义」按钮；当前档以 `aria-pressed` 标记，非法自定义在 `role=alert` 区域显示中文错误。其后审查修正只改 e2e 断言与文档，界面未变，PNG 与 `2933d26` 逐字节一致。
 - 视口 / 主题：桌面 1440×1000 CSS px，DPR 1，深色主题，`reducedMotion: reduce`；Before / After 使用同一固定雷盘（`?debug=1&mines=...`）、READY 状态，均为整页截图（`fullPage: true`）。
 - 生成 After：`npm run screenshots:minesweeper`（生产构建 + `vite preview`，固定雷盘走调试接缝）。该命令同时刷新大厅与桌面 / 手机玩法截图，因为大厅卡片描述和侧栏布局随难度选择更新。
 - 复现 Before：在 `9f9aa54` 的干净 worktree 里 `npm ci && npm run build`，用 `node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4186 --strictPort` 启动预览，再运行 `BASE_URL=http://127.0.0.1:4186 node scripts/capture-minesweeper-screenshots.mjs`。这里用默认 after 模式即可；不要加 `--before`，该模式服务于更早的、还没有扫雷路由的基线。脚本会以 After 文件名写出基线截图，把 `after-minesweeper-ready-desktop.png` 另存为 `before-minesweeper-ready-desktop.png` 即可。
