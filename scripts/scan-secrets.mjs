@@ -63,6 +63,18 @@ const RULES = [
     pattern:
       /\baws_secret_access_key['"]?\s*[:=]\s*['"`]?[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+=])/i,
   },
+  {
+    id: 'jwt-token',
+    description: 'JSON Web Token',
+    // JWT compact serialization is exactly three base64url segments separated
+    // by dots. A JWT header is a JSON object, so its base64url encoding always
+    // starts with `eyJ`; requiring that prefix plus all three segments keeps
+    // standalone base64 text and two-segment lookalikes out of the results.
+    // The signature length is intentionally not checked: docs and test
+    // fixtures use short example signatures. `(?![A-Za-z0-9_-])` avoids
+    // reporting a prefix of a longer base64url run.
+    pattern: /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?![A-Za-z0-9_-])/,
+  },
 ];
 
 function isBinary(buffer) {

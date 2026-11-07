@@ -72,6 +72,14 @@ const FAKE_PRIVATE_KEY_HEADER = ['-----BEGIN', 'RSA', 'PRIVATE', 'KEY-----'].joi
 // The public AWS documentation example key, split so this test file itself
 // stays clean for the scanner it exercises.
 const FAKE_AWS_SECRET_KEY = ['wJalrXUtnFEMI/K7MDENG', '/bPxRfiCYEXAMPLEKEY'].join('');
+// The public JWT example from the scanner issue, split so no line in this test
+// file looks like a complete token to the scanner it exercises.
+const FAKE_JWT_SEGMENTS = [
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9',
+  'eyJzdWIiOiIxMjM0In0',
+  'abc',
+];
+const FAKE_JWT = FAKE_JWT_SEGMENTS.join('.');
 
 describe('secret scan pre-commit hook', () => {
   it('is configured to scan every text file, not only staged changes', () => {
@@ -145,6 +153,34 @@ describe('secret scan pre-commit hook', () => {
         'export const aws_secret_access_key = process.env.AWS_SECRET_ACCESS_KEY;',
         `export const checksum = '${FAKE_AWS_SECRET_KEY}';`,
         `export const aws_secret_access_key = '${FAKE_AWS_SECRET_KEY.slice(0, 39)}';`,
+        '',
+      ].join('\n'),
+    );
+
+    expect(runScanner([fixture])).toEqual({ status: 0, stderr: '' });
+  });
+
+  it('fails on a three-segment JWT fixture starting with eyJ', () => {
+    const dir = makeTempDir();
+    const fixture = join(dir, 'jwt.ts');
+    writeFileSync(fixture, `export const token = '${FAKE_JWT}';\n`);
+
+    const failing = runScanner([fixture]);
+    expect(failing.status).toBe(1);
+    expect(failing.stderr).toContain('jwt-token');
+    expect(failing.stderr).toContain('jwt.ts');
+  });
+
+  it('does not flag incomplete JWT lookalikes or ordinary base64 text', () => {
+    const dir = makeTempDir();
+    const fixture = join(dir, 'jwt-near-misses.ts');
+    writeFileSync(
+      fixture,
+      [
+        `export const headerOnly = '${FAKE_JWT_SEGMENTS[0]}';`,
+        `export const twoSegments = '${FAKE_JWT_SEGMENTS.slice(0, 2).join('.')}';`,
+        `export const trailingDot = '${FAKE_JWT_SEGMENTS.slice(0, 2).join('.')}.';`,
+        "export const base64 = 'SGVsbG8sIHdvcmxkIQ==';",
         '',
       ].join('\n'),
     );
