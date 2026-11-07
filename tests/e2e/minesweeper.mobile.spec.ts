@@ -18,6 +18,7 @@ import {
   openMinesweeper,
   readState,
   readStatus,
+  setDebugConfig,
   startCellPress,
   tapCell,
   WIN_CLICK,
@@ -304,6 +305,43 @@ test.describe('minesweeper on a phone viewport', () => {
     await expect(page.getByTestId('flag-count')).toHaveText('0');
     await expectCleanBoard(page);
     expect(await readStatus(page)).toBe('ready');
+  });
+
+  test('rebuilding while a finger holds a cell keeps the long press cancelled and swallows its release click', async ({
+    page,
+  }) => {
+    await openMinesweeper(page, { mines: LOSS_MINES });
+    const held = await startCellPress(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
+    await page.waitForTimeout(120);
+
+    // Rebuild the board to 16x16 while the first gesture is still pending.
+    await setDebugConfig(page, {
+      rows: 16,
+      cols: 16,
+      mines: 40,
+      firstClickSafe: true,
+    });
+    await expect(page.locator('[data-cell]')).toHaveCount(256);
+    await expect(page.getByTestId('board-summary')).toHaveText('16 × 16 · 40 雷');
+    await expect(page.getByTestId('status')).toHaveText('待开始');
+
+    // The old 500 ms timer is gone, so holding past the threshold must not
+    // flag the rebuilt board.
+    await page.waitForTimeout(600);
+    await endCellPress(held);
+    // The release click belongs to the cancelled gesture and still targets the
+    // rebuilt board; it must be swallowed instead of revealing a cell.
+    await page.waitForTimeout(150);
+    await expect(page.getByTestId('status')).toHaveText('待开始');
+    await expect(page.getByTestId('flag-count')).toHaveText('0');
+    await expect(page.getByTestId('remaining-mines')).toHaveText('40');
+    await expectCleanBoard(page);
+    expect(await readStatus(page)).toBe('ready');
+    expect((await readState(page)).flaggedCount).toBe(0);
+
+    // The debug seam is still a debug-only test seam and is removed on destroy.
+    await destroyDebugGame(page);
+    await expectNoDebugSeam(page);
   });
 
   test('destroying the mount while a finger holds a cell cancels the pending long press', async ({

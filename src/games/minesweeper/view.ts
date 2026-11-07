@@ -2,14 +2,13 @@ import { query, setText } from '../../core/dom';
 import type { GameHandle, GameServices } from '../../core/game';
 import { resolveDebugSeed } from './debug';
 import {
-  COLS,
   createSeededRng,
-  isInBounds,
-  MINE_COUNT,
+  DEFAULT_MINESWEEPER_CONFIG,
   MinesweeperEngine,
-  ROWS,
+  validateConfig,
   type Cell,
   type MinesweeperCell,
+  type MinesweeperConfig,
   type MinesweeperOptions,
   type MinesweeperSnapshot,
   type MinesweeperStatus,
@@ -29,7 +28,9 @@ const STATUS_LABELS: Readonly<Record<MinesweeperStatus, string>> = {
   lost: '踩雷结束',
 };
 
-const VIEW_HTML = `
+/** Render the shell for one board configuration; the board itself is rebuilt later. */
+function viewHtml(config: Readonly<MinesweeperConfig>): string {
+  return `
   <section class="minesweeper-game" data-testid="minesweeper-game" data-status="ready">
     <div class="game-heading">
       <a class="back-link" href="#/">
@@ -42,7 +43,7 @@ const VIEW_HTML = `
       <dl class="minesweeper-hud" aria-label="游戏数据">
         <div class="minesweeper-stat">
           <dt>剩余雷数</dt>
-          <dd data-testid="remaining-mines">${MINE_COUNT}</dd>
+          <dd data-testid="remaining-mines">${config.mines}</dd>
         </div>
         <div class="minesweeper-stat">
           <dt>用时</dt>
@@ -57,9 +58,9 @@ const VIEW_HTML = `
 
     <div class="minesweeper-layout">
       <div class="minesweeper-main">
-        <div class="minesweeper-stage">
+        <div class="minesweeper-stage" data-testid="minesweeper-stage">
           <div class="minesweeper-board" data-testid="minesweeper-board" role="group"
-            aria-label="9 × 9 扫雷棋盘"></div>
+            aria-label="${config.rows} × ${config.cols} 扫雷棋盘"></div>
           <div class="minesweeper-overlay" data-testid="overlay" role="group"
             aria-labelledby="minesweeper-overlay-title" hidden>
             <div class="minesweeper-overlay-card">
@@ -102,7 +103,7 @@ const VIEW_HTML = `
           <p class="panel-kicker">STATUS</p>
           <h2>本局</h2>
           <p class="minesweeper-summary"><span>已插旗</span><strong data-testid="flag-count">0</strong></p>
-          <p class="minesweeper-summary"><span>棋盘</span><strong>9 × 9 · ${MINE_COUNT} 雷</strong></p>
+          <p class="minesweeper-summary"><span>棋盘</span><strong data-testid="board-summary">${config.rows} × ${config.cols} · ${config.mines} 雷</strong></p>
           <div class="panel-actions">
             <button class="button button--ghost" type="button" data-action="restart"
               data-testid="restart-button">重开</button>
@@ -115,10 +116,38 @@ const VIEW_HTML = `
     </div>
   </section>
 `;
+}
+
+/** Build the row-major button grid for one board configuration. */
+function boardHtml(config: Readonly<MinesweeperConfig>): string {
+  return Array.from({ length: config.rows }, (_, row) => {
+    const cells = Array.from({ length: config.cols }, (_, col) => {
+      const testId = `cell-${row}-${col}`;
+      return `<button class="minesweeper-cell" type="button"
+        data-cell data-row="${row}" data-col="${col}" data-state="hidden"
+        data-testid="${testId}" aria-label="第 ${row + 1} 行第 ${col + 1} 列，未翻开"></button>`;
+    }).join('');
+    return `<div class="minesweeper-row">${cells}</div>`;
+  }).join('');
+}
+
+/** Collect the buttons of a freshly rendered board in row-major order. */
+function cellButtonsFor(
+  board: HTMLElement,
+  config: Readonly<MinesweeperConfig>,
+): HTMLButtonElement[][] {
+  return Array.from({ length: config.rows }, (_, row) =>
+    Array.from({ length: config.cols }, (_, col) =>
+      query<HTMLButtonElement>(board, `[data-testid="cell-${row}-${col}"]`),
+    ),
+  );
+}
 
 interface MinesweeperDebugApi {
   gameId: 'minesweeper';
   getState: () => MinesweeperSnapshot;
+  /** Test seam: rebuild the mount with another board configuration. */
+  setConfig: (config: MinesweeperConfig) => void;
   /** Test seam: destroy the mount without waiting for a route change. */
   destroy: () => void;
 }
@@ -157,11 +186,67 @@ function debugParams(): URLSearchParams {
   );
 }
 
+/** Read one integer debug parameter, or null when the supplied token is invalid. */
+function parseDebugInteger(raw: string | null, fallback: number): number | null {
+  if (raw === null) {
+    return fallback;
+  }
+  const token = raw.trim();
+  if (!/^\d+$/.test(token)) {
+    return null;
+  }
+  const value = Number(token);
+  return Number.isSafeInteger(value) ? value : null;
+}
+
+/** Read the optional safe-first flag (`1`/`true` or `0`/`false`). */
+function parseDebugSafeFirst(raw: string | null): boolean | null {
+  if (raw === null) {
+    return true;
+  }
+  const token = raw.trim().toLowerCase();
+  if (token === '1' || token === 'true') {
+    return true;
+  }
+  if (token === '0' || token === 'false') {
+    return false;
+  }
+  return null;
+}
+
 /**
- * Parse a fixed mine layout, e.g. `mines=0,0;0,1;...`. Invalid or incomplete
- * layouts are ignored instead of surfacing a debug-only crash to the player.
+ * Resolve the board configuration from the debug query string. An invalid
+ * value or an invalid combination falls back to the classic beginner board
+ * instead of throwing while the view mounts.
  */
-function parseDebugMines(raw: string | null): readonly Cell[] | undefined {
+function resolveDebugConfig(): Readonly<MinesweeperConfig> {
+  const params = debugParams();
+  const rows = parseDebugInteger(params.get('rows'), DEFAULT_MINESWEEPER_CONFIG.rows);
+  const cols = parseDebugInteger(params.get('cols'), DEFAULT_MINESWEEPER_CONFIG.cols);
+  const mines = parseDebugInteger(
+    params.get('mineCount'),
+    DEFAULT_MINESWEEPER_CONFIG.mines,
+  );
+  const firstClickSafe = parseDebugSafeFirst(params.get('safeFirst'));
+  if (rows === null || cols === null || mines === null || firstClickSafe === null) {
+    return DEFAULT_MINESWEEPER_CONFIG;
+  }
+  try {
+    return validateConfig({ rows, cols, mines, firstClickSafe });
+  } catch {
+    return DEFAULT_MINESWEEPER_CONFIG;
+  }
+}
+
+/**
+ * Parse a fixed mine layout, e.g. `mines=0,0;0,1;...`, against the current
+ * board. Invalid or incomplete layouts are ignored instead of surfacing a
+ * debug-only crash to the player.
+ */
+function parseDebugMines(
+  raw: string | null,
+  config: Readonly<MinesweeperConfig>,
+): readonly Cell[] | undefined {
   if (!raw) {
     return undefined;
   }
@@ -184,17 +269,17 @@ function parseDebugMines(raw: string | null): readonly Cell[] | undefined {
     }
     const row = Number(rowToken);
     const col = Number(colToken);
-    if (!isInBounds(row, col)) {
+    if (row >= config.rows || col >= config.cols) {
       return undefined;
     }
-    const index = row * COLS + col;
+    const index = row * config.cols + col;
     if (seen.has(index)) {
       return undefined;
     }
     seen.add(index);
     cells.push({ row, col });
   }
-  return cells.length === MINE_COUNT ? cells : undefined;
+  return cells.length === config.mines ? cells : undefined;
 }
 
 /**
@@ -202,11 +287,16 @@ function parseDebugMines(raw: string | null): readonly Cell[] | undefined {
  * A missing or invalid `seed` uses 1; only an explicit finite value (such as
  * `seed=0`) overrides it.
  */
-function debugEngineOptions(): Pick<MinesweeperOptions, 'initialMines' | 'rng'> {
+function engineSeamOptions(
+  config: Readonly<MinesweeperConfig>,
+): Pick<MinesweeperOptions, 'initialMines' | 'rng'> {
+  if (!debugEnabled()) {
+    return {};
+  }
   const params = debugParams();
   return {
     rng: createSeededRng(resolveDebugSeed(params.get('seed'))),
-    initialMines: parseDebugMines(params.get('mines')),
+    initialMines: parseDebugMines(params.get('mines'), config),
   };
 }
 
@@ -274,9 +364,13 @@ export async function mountMinesweeper(
   if (mountSignal.aborted) {
     throw abortError();
   }
-  root.innerHTML = VIEW_HTML;
+  const initialConfig = debugEnabled()
+    ? resolveDebugConfig()
+    : DEFAULT_MINESWEEPER_CONFIG;
+  root.innerHTML = viewHtml(initialConfig);
 
   const gameRoot = query<HTMLElement>(root, '[data-testid="minesweeper-game"]');
+  const stageElement = query<HTMLElement>(root, '[data-testid="minesweeper-stage"]');
   const boardElement = query<HTMLElement>(root, '[data-testid="minesweeper-board"]');
   const overlay = query<HTMLElement>(root, '[data-testid="overlay"]');
   const overlayKicker = query<HTMLElement>(root, '[data-testid="overlay-kicker"]');
@@ -292,25 +386,8 @@ export async function mountMinesweeper(
   const flagCountElement = query<HTMLElement>(root, '[data-testid="flag-count"]');
   const timerElement = query<HTMLElement>(root, '[data-testid="timer"]');
   const statusElement = query<HTMLElement>(root, '[data-testid="status"]');
+  const boardSummary = query<HTMLElement>(root, '[data-testid="board-summary"]');
   const announcer = query<HTMLElement>(root, '[data-testid="announcer"]');
-
-  boardElement.innerHTML = Array.from({ length: ROWS }, (_, row) => {
-    const cells = Array.from({ length: COLS }, (_, col) => {
-      const testId = `cell-${row}-${col}`;
-      return `<button class="minesweeper-cell" type="button"
-        data-cell data-row="${row}" data-col="${col}" data-state="hidden"
-        data-testid="${testId}" aria-label="第 ${row + 1} 行第 ${col + 1} 列，未翻开"></button>`;
-    }).join('');
-    return `<div class="minesweeper-row">${cells}</div>`;
-  }).join('');
-
-  const cellButtons: HTMLButtonElement[][] = Array.from({ length: ROWS }, (_, row) =>
-    Array.from({ length: COLS }, (_, col) =>
-      query<HTMLButtonElement>(boardElement, `[data-testid="cell-${row}-${col}"]`),
-    ),
-  );
-
-  const engine = new MinesweeperEngine(debugEnabled() ? debugEngineOptions() : {});
 
   const controller = new AbortController();
   const listenerSignal = controller.signal;
@@ -319,7 +396,10 @@ export async function mountMinesweeper(
 
   let clock: number | null = null;
   let lastTickAt = 0;
-  let lastStatus: MinesweeperStatus = engine.currentStatus;
+  let lastStatus: MinesweeperStatus = 'ready';
+  let currentConfig: Readonly<MinesweeperConfig> = DEFAULT_MINESWEEPER_CONFIG;
+  let engine: MinesweeperEngine;
+  let cellButtons: HTMLButtonElement[][] = [];
 
   interface TouchGesture {
     readonly pointerId: number;
@@ -389,6 +469,63 @@ export async function mountMinesweeper(
       setText(timerElement, formatTime(engine.elapsedMs));
     }, CLOCK_INTERVAL_MS);
   }
+
+  /**
+   * Rebuild the whole game for `rawConfig`: stop the old clock, cancel the
+   * pending touch gesture while keeping its release-click suppression, replace
+   * the board DOM and engine, and reset the HUD. Board listeners live on the
+   * stable `boardElement` and listener signal, so this path never adds
+   * listeners or intervals.
+   */
+  function applyConfig(rawConfig: MinesweeperConfig): void {
+    let config: Readonly<MinesweeperConfig>;
+    try {
+      config = validateConfig(rawConfig);
+    } catch {
+      // Debug-only callers may pass anything; never leave a half-built board.
+      config = DEFAULT_MINESWEEPER_CONFIG;
+    }
+    currentConfig = config;
+
+    stopClock();
+    // Like restart, a rebuild must keep the suppression that cancelTouchGesture
+    // adds: the finger is still down and its release click will target the
+    // rebuilt board. Stale ids are consumed by their own click, cleared by the
+    // next pointerdown, or dropped by destroy.
+    cancelTouchGesture();
+
+    stageElement.style.setProperty('--rows', String(config.rows));
+    stageElement.style.setProperty('--cols', String(config.cols));
+    boardElement.setAttribute(
+      'aria-label',
+      `${config.rows} × ${config.cols} 扫雷棋盘`,
+    );
+    setText(boardSummary, `${config.rows} × ${config.cols} · ${config.mines} 雷`);
+
+    boardElement.innerHTML = boardHtml(config);
+    cellButtons = cellButtonsFor(boardElement, config);
+    engine = new MinesweeperEngine({
+      config,
+      ...engineSeamOptions(config),
+    });
+
+    // Reset every piece of per-game HUD and overlay state before syncing.
+    setText(remainingElement, String(config.mines));
+    setText(flagCountElement, '0');
+    setText(timerElement, formatTime(0));
+    setText(statusElement, STATUS_LABELS.ready);
+    setText(announcer, '');
+    setText(overlayKicker, 'RESULT');
+    setText(overlayTitle, '棋局结束');
+    setText(overlayBody, '点击「再来一局」重新开始。');
+    overlay.hidden = true;
+    gameRoot.dataset.status = 'ready';
+    lastStatus = engine.currentStatus;
+
+    sync();
+  }
+
+  applyConfig(initialConfig);
 
   function announce(message: string): void {
     setText(announcer, message);
@@ -478,7 +615,14 @@ export async function mountMinesweeper(
     }
     const row = Number(button.dataset.row);
     const col = Number(button.dataset.col);
-    return isInBounds(row, col) ? { row, col } : null;
+    return Number.isInteger(row) &&
+      Number.isInteger(col) &&
+      row >= 0 &&
+      row < currentConfig.rows &&
+      col >= 0 &&
+      col < currentConfig.cols
+      ? { row, col }
+      : null;
   }
 
   function reveal(row: number, col: number): void {
@@ -717,6 +861,7 @@ export async function mountMinesweeper(
     debugWindow().__playground = {
       gameId: 'minesweeper',
       getState: () => engine.state,
+      setConfig: (config) => applyConfig(config),
       destroy,
     };
   }
