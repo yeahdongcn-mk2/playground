@@ -591,6 +591,11 @@ export async function mountMinesweeper(
     }
 
     if (state.status !== lastStatus) {
+      // The win chime belongs to the playing -> won transition, so a repeated
+      // sync, a restart or a board rebuild cannot play it again.
+      if (lastStatus === 'playing' && state.status === 'won') {
+        services.audio.play('win');
+      }
       if (state.status === 'playing') {
         announce('游戏开始');
       } else if (state.status === 'won') {
@@ -633,9 +638,9 @@ export async function mountMinesweeper(
     services.audio.unlock();
     const result = engine.reveal(row, col);
     if (result.hitMine) {
-      services.audio.play('reset');
+      services.audio.play('mine');
     } else if (result.revealed.length > 0) {
-      services.audio.play('blip');
+      services.audio.play('reveal');
     }
     sync();
   }
@@ -648,7 +653,7 @@ export async function mountMinesweeper(
     services.audio.unlock();
     const result = engine.toggleFlag(row, col);
     if (result.changed) {
-      services.audio.play('blip');
+      services.audio.play('flag');
     }
     sync();
   }
