@@ -1,6 +1,7 @@
 import type { CDPSession, Locator, Page } from '@playwright/test';
 import type {
   Cell,
+  MinesweeperConfig,
   MinesweeperSnapshot,
 } from '../../src/games/minesweeper/engine';
 import { expect } from './fixtures';
@@ -12,6 +13,16 @@ export interface OpenMinesweeperOptions {
   readonly rawMines?: string;
   /** Seed for the deterministic debug PRNG. */
   readonly seed?: number;
+  /** Debug board configuration: rows, columns, mines and first-click policy. */
+  readonly rows?: number;
+  readonly cols?: number;
+  readonly mineCount?: number;
+  readonly safeFirst?: boolean;
+  /**
+   * Expected number of cells. Defaults to `rows * cols`; an explicit value
+   * lets a test assert the default board after an invalid config falls back.
+   */
+  readonly expectedCells?: number;
 }
 
 /** A mine wall on row 4 plus one mine in the corner. */
@@ -233,6 +244,18 @@ export async function openMinesweeper(
   if (options.seed !== undefined) {
     params.set('seed', String(options.seed));
   }
+  if (options.rows !== undefined) {
+    params.set('rows', String(options.rows));
+  }
+  if (options.cols !== undefined) {
+    params.set('cols', String(options.cols));
+  }
+  if (options.mineCount !== undefined) {
+    params.set('mineCount', String(options.mineCount));
+  }
+  if (options.safeFirst !== undefined) {
+    params.set('safeFirst', options.safeFirst ? '1' : '0');
+  }
 
   // Mark the current debug API so the wait below cannot accept the previous
   // mount's DOM after a hash-only goto (which does not reload the document).
@@ -255,8 +278,31 @@ export async function openMinesweeper(
     .toBe(true);
   await expect(page.getByTestId('minesweeper-game')).toBeVisible();
   await expect(page.getByTestId('minesweeper-board')).toBeVisible();
-  await expect(page.locator('[data-cell]')).toHaveCount(81);
+  const expectedCells =
+    options.expectedCells ?? (options.rows ?? 9) * (options.cols ?? 9);
+  await expect(page.locator('[data-cell]')).toHaveCount(expectedCells);
   await expect(page.getByTestId('status')).toHaveText('待开始');
+}
+
+/** Call the debug-only setConfig seam to rebuild the board. */
+export async function setDebugConfig(
+  page: Page,
+  config: MinesweeperConfig,
+): Promise<void> {
+  await page.evaluate((nextConfig) => {
+    const api = (
+      window as unknown as {
+        __playground?: {
+          gameId: string;
+          setConfig?: (config: MinesweeperConfig) => void;
+        };
+      }
+    ).__playground;
+    if (api?.gameId !== 'minesweeper' || !api.setConfig) {
+      throw new Error('Minesweeper debug setConfig seam is not available');
+    }
+    api.setConfig(nextConfig);
+  }, config);
 }
 
 export function readState(page: Page): Promise<MinesweeperSnapshot> {
