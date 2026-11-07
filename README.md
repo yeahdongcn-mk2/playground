@@ -41,6 +41,18 @@ npm run dev
 
 打开 <http://localhost:5173>，点击「开始贪食蛇」直接开玩；也可以在大厅选择「俄罗斯方块」「2048」「打砖块」「扫雷」，或点「进入空白画布」查看框架示例。
 
+### 本地 pre-commit
+
+CI 在类型检查、lint、单测与构建之前会先用 pre-commit 检查全仓库。建议首次克隆后安装同版本的钩子，让这些问题在提交前本地就能发现：
+
+```bash
+pip install pre-commit==4.7.0
+pre-commit install
+pre-commit run --all-files
+```
+
+pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和缓存键保持一致。升级时请同步更新 CI 的安装命令与缓存键、`.pre-commit-config.yaml` 顶部注释以及本节指引，然后运行 `npm run test:unit` 防止版本漂移。
+
 ## 贪食蛇玩法
 
 20 × 20 的棋盘，初始长度 3，向右移动。

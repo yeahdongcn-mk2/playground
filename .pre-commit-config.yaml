@@ -1,9 +1,13 @@
 # Baseline pre-commit checks shared by local contributors and CI.
 #
-# Usage:
-#   pip install pre-commit   (or: pipx install pre-commit)
+# Usage (pre-commit itself is pinned to the same version CI installs):
+#   pip install pre-commit==4.7.0   (or: pipx install pre-commit==4.7.0)
 #   pre-commit install
 #   pre-commit run --all-files
+#
+# When bumping that version, update the install command and cache key in
+# .github/workflows/ci.yml and the local instructions in README.md, then run
+# `npm run test:unit` to catch drift.
 #
 # The hook repository is pinned to a stable release; bump `rev` deliberately.
 repos:
