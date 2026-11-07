@@ -80,6 +80,49 @@ export function cellLocator(page: Page, row: number, col: number): Locator {
   return page.getByTestId(`cell-${row}-${col}`);
 }
 
+export type DifficultyId = 'beginner' | 'intermediate' | 'expert';
+
+/** The preset button for one built-in difficulty. */
+export function difficultyButton(page: Page, id: DifficultyId): Locator {
+  return page.getByTestId(`difficulty-${id}`);
+}
+
+/**
+ * Assert exactly one preset is pressed, or none for a custom board. The three
+ * built-in ids are checked every time so a stale `aria-pressed` is caught.
+ */
+export async function expectActiveDifficulty(
+  page: Page,
+  active: DifficultyId | null,
+): Promise<void> {
+  const ids: readonly DifficultyId[] = ['beginner', 'intermediate', 'expert'];
+  for (const id of ids) {
+    await expect(difficultyButton(page, id)).toHaveAttribute(
+      'aria-pressed',
+      String(id === active),
+    );
+  }
+}
+
+/** Fill the three custom fields and submit the form. */
+export async function submitCustomDifficulty(
+  page: Page,
+  rows: number | string,
+  cols: number | string,
+  mines: number | string,
+): Promise<void> {
+  await page.getByTestId('custom-rows').fill(String(rows));
+  await page.getByTestId('custom-cols').fill(String(cols));
+  await page.getByTestId('custom-mines').fill(String(mines));
+  await page.getByTestId('custom-difficulty-submit').click();
+}
+
+/** Wait until the live clock has advanced past a displayed 0:00. */
+export async function expectClockRunning(page: Page): Promise<void> {
+  await expect(page.getByTestId('status')).toHaveText('进行中');
+  await expect(page.getByTestId('timer')).not.toHaveText('0:00');
+}
+
 async function cellCenter(
   page: Page,
   row: number,

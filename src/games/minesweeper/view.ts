@@ -2,8 +2,17 @@ import { query, setText } from '../../core/dom';
 import type { GameHandle, GameServices } from '../../core/game';
 import { resolveDebugSeed } from './debug';
 import {
+  DIFFICULTY_PRESETS,
+  findDifficultyForConfig,
+  parseCustomDifficulty,
+} from './difficulty';
+import {
   createSeededRng,
   DEFAULT_MINESWEEPER_CONFIG,
+  MAX_COLS,
+  MAX_ROWS,
+  MIN_COLS,
+  MIN_ROWS,
   MinesweeperEngine,
   validateConfig,
   type Cell,
@@ -27,6 +36,20 @@ const STATUS_LABELS: Readonly<Record<MinesweeperStatus, string>> = {
   won: '胜利',
   lost: '踩雷结束',
 };
+
+/**
+ * Render the three preset buttons with the active one pressed. The labels and
+ * boards come from the difficulty module so the selector cannot drift from the
+ * presets the parser and the engine validate against.
+ */
+function difficultyPresetButtonsHtml(config: Readonly<MinesweeperConfig>): string {
+  const active = findDifficultyForConfig(config);
+  return DIFFICULTY_PRESETS.map(
+    (preset) => `<button class="button button--ghost minesweeper-preset" type="button"
+      data-difficulty="${preset.id}" data-testid="difficulty-${preset.id}"
+      aria-pressed="${String(preset.id === active)}">${preset.label}</button>`,
+  ).join('');
+}
 
 /** Render the shell for one board configuration; the board itself is rebuilt later. */
 function viewHtml(config: Readonly<MinesweeperConfig>): string {
@@ -108,6 +131,42 @@ function viewHtml(config: Readonly<MinesweeperConfig>): string {
             <button class="button button--ghost" type="button" data-action="restart"
               data-testid="restart-button">重开</button>
           </div>
+        </div>
+
+        <div class="panel-card minesweeper-difficulty" aria-labelledby="minesweeper-difficulty-title">
+          <p class="panel-kicker">DIFFICULTY</p>
+          <h2 id="minesweeper-difficulty-title">难度</h2>
+          <div class="minesweeper-presets" role="group" aria-label="预设难度"
+            data-testid="difficulty-presets">
+            ${difficultyPresetButtonsHtml(config)}
+          </div>
+          <form class="minesweeper-custom" data-testid="custom-difficulty-form"
+            aria-describedby="minesweeper-difficulty-error" novalidate>
+            <div class="minesweeper-custom-fields">
+              <div class="minesweeper-field">
+                <label for="minesweeper-custom-rows">行数</label>
+                <input id="minesweeper-custom-rows" type="number" inputmode="numeric"
+                  min="${MIN_ROWS}" max="${MAX_ROWS}" step="1" name="rows"
+                  value="${config.rows}" data-testid="custom-rows">
+              </div>
+              <div class="minesweeper-field">
+                <label for="minesweeper-custom-cols">列数</label>
+                <input id="minesweeper-custom-cols" type="number" inputmode="numeric"
+                  min="${MIN_COLS}" max="${MAX_COLS}" step="1" name="cols"
+                  value="${config.cols}" data-testid="custom-cols">
+              </div>
+              <div class="minesweeper-field">
+                <label for="minesweeper-custom-mines">雷数</label>
+                <input id="minesweeper-custom-mines" type="number" inputmode="numeric"
+                  min="1" step="1" name="mines"
+                  value="${config.mines}" data-testid="custom-mines">
+              </div>
+            </div>
+            <button class="button button--primary minesweeper-custom-submit" type="submit"
+              data-testid="custom-difficulty-submit">开始自定义</button>
+            <p class="minesweeper-error" id="minesweeper-difficulty-error" role="alert"
+              data-testid="difficulty-error" hidden></p>
+          </form>
         </div>
 
         <p class="minesweeper-hint">全部安全格翻开即获胜；插旗数量可以超过雷数，剩余雷数会随之变为负数。</p>
@@ -388,6 +447,18 @@ export async function mountMinesweeper(
   const statusElement = query<HTMLElement>(root, '[data-testid="status"]');
   const boardSummary = query<HTMLElement>(root, '[data-testid="board-summary"]');
   const announcer = query<HTMLElement>(root, '[data-testid="announcer"]');
+  const presetButtons = Array.from(
+    root.querySelectorAll<HTMLButtonElement>('button[data-difficulty]'),
+  );
+  const customForm = query<HTMLFormElement>(root, '[data-testid="custom-difficulty-form"]');
+  const rowsInput = query<HTMLInputElement>(root, '[data-testid="custom-rows"]');
+  const colsInput = query<HTMLInputElement>(root, '[data-testid="custom-cols"]');
+  const minesInput = query<HTMLInputElement>(root, '[data-testid="custom-mines"]');
+  const customSubmit = query<HTMLButtonElement>(
+    root,
+    '[data-testid="custom-difficulty-submit"]',
+  );
+  const difficultyError = query<HTMLElement>(root, '[data-testid="difficulty-error"]');
 
   const controller = new AbortController();
   const listenerSignal = controller.signal;
@@ -470,12 +541,43 @@ export async function mountMinesweeper(
     }, CLOCK_INTERVAL_MS);
   }
 
+  function showDifficultyError(message: string): void {
+    // Unhide the live region before filling it so assistive technology sees the
+    // alert appear with its text, rather than a text update on a hidden node.
+    difficultyError.hidden = false;
+    setText(difficultyError, message);
+  }
+
+  function hideDifficultyError(): void {
+    setText(difficultyError, '');
+    difficultyError.hidden = true;
+  }
+
+  /**
+   * Mark the preset matching `currentConfig` as pressed (or none for a custom
+   * board) and keep the custom fields showing the active rows, columns and
+   * mines. A custom board equal to a preset therefore lights that preset up.
+   */
+  function syncDifficultyControls(): void {
+    const active = findDifficultyForConfig(currentConfig);
+    for (const button of presetButtons) {
+      button.setAttribute(
+        'aria-pressed',
+        String(button.dataset.difficulty === active),
+      );
+    }
+    rowsInput.value = String(currentConfig.rows);
+    colsInput.value = String(currentConfig.cols);
+    minesInput.value = String(currentConfig.mines);
+  }
+
   /**
    * Rebuild the whole game for `rawConfig`: stop the old clock, cancel the
    * pending touch gesture while keeping its release-click suppression, replace
-   * the board DOM and engine, and reset the HUD. Board listeners live on the
-   * stable `boardElement` and listener signal, so this path never adds
-   * listeners or intervals.
+   * the board DOM and engine, reset the HUD and move focus out of the overlay
+   * if it was about to hide. Board, selector and form listeners live on the
+   * stable `boardElement` / `customForm` / `root` and the listener signal, so
+   * this path never adds listeners or intervals.
    */
   function applyConfig(rawConfig: MinesweeperConfig): void {
     let config: Readonly<MinesweeperConfig>;
@@ -485,7 +587,9 @@ export async function mountMinesweeper(
       // Debug-only callers may pass anything; never leave a half-built board.
       config = DEFAULT_MINESWEEPER_CONFIG;
     }
+    const focusWasInOverlay = overlay.contains(document.activeElement);
     currentConfig = config;
+    hideDifficultyError();
 
     stopClock();
     // Like restart, a rebuild must keep the suppression that cancelTouchGesture
@@ -522,7 +626,18 @@ export async function mountMinesweeper(
     gameRoot.dataset.status = 'ready';
     lastStatus = engine.currentStatus;
 
+    syncDifficultyControls();
     sync();
+
+    // Hiding the overlay while its restart button owns focus would leave focus
+    // on an invisible control. Move it to the selected preset (or the custom
+    // submit button for a custom board) instead.
+    if (focusWasInOverlay) {
+      const activePreset = presetButtons.find(
+        (button) => button.getAttribute('aria-pressed') === 'true',
+      );
+      (activePreset ?? customSubmit).focus();
+    }
   }
 
   applyConfig(initialConfig);
@@ -669,6 +784,11 @@ export async function mountMinesweeper(
     stopClock();
     lastStatus = engine.currentStatus;
     sync();
+    // A rejected custom board can leave a stale alert and field values while
+    // the active game still uses the previous config. Restarting is a fresh
+    // game action, so clear that transient error and show the active config.
+    hideDifficultyError();
+    syncDifficultyControls();
     announce('游戏重新开始');
     // The overlay hides with focus still inside it, so move focus back to a
     // visible restart control once the new board is ready. On touch layouts the
@@ -832,13 +952,48 @@ export async function mountMinesweeper(
   root.addEventListener(
     'click',
     (event) => {
-      const target =
-        event.target instanceof Element
-          ? event.target.closest<HTMLButtonElement>('button[data-action="restart"]')
-          : null;
-      if (target && root.contains(target)) {
+      if (!(event.target instanceof Element)) {
+        return;
+      }
+      const presetButton = event.target.closest<HTMLButtonElement>(
+        'button[data-difficulty]',
+      );
+      if (presetButton && root.contains(presetButton)) {
+        const preset = DIFFICULTY_PRESETS.find(
+          (candidate) => candidate.id === presetButton.dataset.difficulty,
+        );
+        if (preset) {
+          applyConfig(preset);
+        }
+        return;
+      }
+      const restartTarget = event.target.closest<HTMLButtonElement>(
+        'button[data-action="restart"]',
+      );
+      if (restartTarget && root.contains(restartTarget)) {
         restart();
       }
+    },
+    { signal: listenerSignal },
+  );
+
+  customForm.addEventListener(
+    'submit',
+    (event) => {
+      // Always own the submission so a rejected custom board never reloads the
+      // page or escapes the view. A parse failure only updates the alert; the
+      // current board, clock and preset selection stay untouched.
+      event.preventDefault();
+      const result = parseCustomDifficulty(
+        rowsInput.value,
+        colsInput.value,
+        minesInput.value,
+      );
+      if (!result.ok) {
+        showDifficultyError(result.message);
+        return;
+      }
+      applyConfig(result.config);
     },
     { signal: listenerSignal },
   );
