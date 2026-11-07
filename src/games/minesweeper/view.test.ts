@@ -105,8 +105,20 @@ function flagCell(root: HTMLElement, row: number, col: number): void {
   );
 }
 
+function clickRestart(root: HTMLElement): void {
+  const button = root.querySelector<HTMLButtonElement>('[data-testid="restart-button"]');
+  if (!button) {
+    throw new Error('Expected restart button');
+  }
+  button.click();
+}
+
 function statusOf(root: HTMLElement): string {
   return root.querySelector<HTMLElement>('[data-testid="minesweeper-game"]')?.dataset.status ?? '';
+}
+
+function winCalls(play: ReturnType<typeof vi.fn>): unknown[] {
+  return play.mock.calls.filter(([event]) => event === 'win');
 }
 
 /** Spy-backed services whose `enabled` getter throws if the view reads it. */
@@ -180,18 +192,38 @@ describe('minesweeper view sound feedback', () => {
     expect(unlock).toHaveBeenCalledTimes(2);
   });
 
-  it('does not play a tone for a reveal that changes nothing', async () => {
+  it('does not play a tone when revealing an already revealed cell', async () => {
     const { services, play } = createServices();
     const root = await mount(services);
 
-    clickCell(root, 2, 2);
+    // (0,1) touches the mine at (0,0), so this reveal stops at a numbered
+    // cell and the game stays in progress. Clicking the same cell again enters
+    // the engine's "already revealed" no-op branch instead of the won-state
+    // early return, which is the behavior under test.
+    clickCell(root, 0, 1);
+    expect(statusOf(root)).toBe('playing');
+    expect(cell(root, 0, 1).dataset.revealed).toBe('true');
     play.mockClear();
-    clickCell(root, 2, 2);
 
+    clickCell(root, 0, 1);
+
+    expect(statusOf(root)).toBe('playing');
     expect(play).not.toHaveBeenCalled();
   });
 
-  it('plays win exactly once for the playing -> won transition and never repeats it', async () => {
+  it('plays win exactly once when the first reveal clears the board', async () => {
+    const { services, play } = createServices();
+    const root = await mount(services);
+
+    // (2,2) flood-fills every safe cell, so the engine jumps from ready to won
+    // during the very first reveal and the view never observes "playing".
+    clickCell(root, 2, 2);
+
+    expect(statusOf(root)).toBe('won');
+    expect(play.mock.calls.map(([event]) => event)).toEqual(['reveal', 'win']);
+  });
+
+  it('plays win exactly once for the playing -> won transition and ignores input afterwards', async () => {
     const { services, play } = createServices();
     const root = await mount(services);
 
@@ -205,24 +237,44 @@ describe('minesweeper view sound feedback', () => {
     }
 
     expect(statusOf(root)).toBe('won');
-    const winCalls = (): unknown[] =>
-      play.mock.calls.filter(([event]) => event === 'win');
-    expect(winCalls()).toHaveLength(1);
+    expect(winCalls(play)).toHaveLength(1);
 
     // The winning reveal plays its reveal tone immediately before the chime.
     const events = play.mock.calls.map(([event]) => event);
     expect(events.at(-2)).toBe('reveal');
     expect(events.at(-1)).toBe('win');
 
-    // Further input after the win is ignored and must not replay the chime.
+    // Further input after the win is ignored: the status stays won, no mine or
+    // flag tone plays, and the chime never repeats.
     clickCell(root, MINE_ROW, MINE_COL);
     flagCell(root, 2, 2);
-    expect(winCalls()).toHaveLength(1);
+    expect(statusOf(root)).toBe('won');
+    expect(play).not.toHaveBeenCalledWith('mine');
+    expect(play).not.toHaveBeenCalledWith('flag');
+    expect(winCalls(play)).toHaveLength(1);
+  });
 
-    // Rebuilding the board resets the game without replaying the win.
+  it('plays win once per game and never replays it on restart or rebuild', async () => {
+    const { services, play } = createServices();
+    const root = await mount(services);
+
+    clickCell(root, 2, 2);
+    expect(statusOf(root)).toBe('won');
+    expect(winCalls(play)).toHaveLength(1);
+
+    // Restarting resets the board without replaying the previous game's chime.
+    clickRestart(root);
+    expect(statusOf(root)).toBe('ready');
+    expect(winCalls(play)).toHaveLength(1);
+
+    clickCell(root, 2, 2);
+    expect(statusOf(root)).toBe('won');
+    expect(winCalls(play)).toHaveLength(2);
+
+    // Rebuilding the board resets the game without replaying the chime either.
     debugApi()?.setConfig({ rows: ROWS, cols: COLS, mines: 1, firstClickSafe: false });
     expect(statusOf(root)).toBe('ready');
-    expect(winCalls()).toHaveLength(1);
+    expect(winCalls(play)).toHaveLength(2);
   });
 
   it('does not create an AudioContext while the global sound switch is off', async () => {

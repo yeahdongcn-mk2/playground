@@ -591,9 +591,11 @@ export async function mountMinesweeper(
     }
 
     if (state.status !== lastStatus) {
-      // The win chime belongs to the playing -> won transition, so a repeated
+      // The win chime belongs to entering the won state. A first reveal can
+      // clear the whole board before the view ever observes "playing", so the
+      // transition may be ready -> won as well as playing -> won. A repeated
       // sync, a restart or a board rebuild cannot play it again.
-      if (lastStatus === 'playing' && state.status === 'won') {
+      if (state.status === 'won' && lastStatus !== 'won') {
         services.audio.play('win');
       }
       if (state.status === 'playing') {
