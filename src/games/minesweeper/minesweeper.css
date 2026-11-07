@@ -359,6 +359,26 @@
   }
 }
 
+/* Narrow phones (Issue #39): 360px leaves a 336px shell, which shrinks a
+   9x9 cell below the 36px touch target. Shave 8px from each side of the
+   game page's 12px shell gutter and tighten the stage padding and board
+   gaps so the cells grow instead, while the HUD and compact restart stay
+   in the first screen. */
+@media (max-width: 400px) {
+  .minesweeper-game {
+    margin-inline: -8px;
+  }
+
+  .minesweeper-stage {
+    padding: 4px;
+  }
+
+  .minesweeper-board,
+  .minesweeper-row {
+    gap: 1px;
+  }
+}
+
 @media (hover: none) and (pointer: coarse) {
   /* Touch browsers can keep :hover after a tap; do not leave a lifted cell. */
   .minesweeper-cell:hover {

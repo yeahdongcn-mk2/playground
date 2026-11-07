@@ -2,6 +2,24 @@
 
 这些截图用于各期交付的 Before / After 视觉证据。全部由 Playwright Chromium 真实渲染，不是 mockup。
 
+## narrow：扫雷 360×740 窄屏触控目标（Issue #39 / 子任务 0）
+
+- Before 基线：`6ab15b1`（本条子任务开始前的 `main`）。360×740 下 9×9 格子约 33.5×33.5 px，低于 36 px 触控目标；页面无横向溢出，HUD 与重开入口已在首屏内。
+- After：本子任务分支 `agent/plan-39-t0`。`minesweeper.css` 新增 `max-width: 400px` 断点，收窄游戏页横向留白并压缩 stage padding / 棋盘 gap；360×740 下每格约 37.1×37.1 px，页面无横向溢出，HUD、返回大厅与 `mobile-restart-button` 仍在首屏内。桌面布局与游戏规则未改。
+- 视口 / 主题：360×740 CSS px，DPR 2，`isMobile: true`、`hasTouch: true`，深色主题，`reducedMotion: reduce`；同一固定雷盘、READY 状态，均为视口截图（`fullPage: false`）。
+- 生成 After：`npm run screenshots:minesweeper:narrow`（生产构建 + `vite preview`）。
+- 复现 Before：在 `6ab15b1` 的干净 worktree 里 `npm ci && npm run build`，用 `node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4189 --strictPort` 启动预览，然后在当前分支运行 `BASE_URL=http://127.0.0.1:4189 npm run screenshots:minesweeper:narrow-before`。
+
+| 文件 | 场景 | 视口 / 主题 | 说明 |
+| --- | --- | --- | --- |
+| `before-minesweeper-ready-360x740.png` | 扫雷 READY（360 窄屏） | 360×740 / 深色 | 修复前：格子约 33.5 px，HUD、返回大厅与重开入口可见。 |
+| `after-minesweeper-ready-360x740.png` | 扫雷 READY（360 窄屏） | 360×740 / 深色 | 修复后：格子约 37.1 px，横向无溢出，HUD、返回大厅与重开入口仍在首屏。 |
+
+### 证据限制
+
+- 手机端为 Playwright 设备模拟（360×740、DPR 2、触摸），不是真实设备截图。
+- 截图只证明静态视觉；`tests/e2e/minesweeper.mobile.spec.ts` 的 360×740 用例逐一断言 81 个格子 ≥36×36 px、`scrollWidth - innerWidth === 0`，并检查 HUD、返回大厅与重开入口在视口内。
+
 ## t7：扫雷触屏与手机布局（Issue #33 / 子任务 2）
 
 - Before 基线：`60bc3f3`（PR #36 合入扫雷 DOM 视图后、本子任务触屏与手机布局改动前）。页面已有桌面鼠标操作；手机视口下轻点可以翻开，但没有触屏插旗，重开按钮位于首屏之外。

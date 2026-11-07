@@ -9,13 +9,18 @@ import { chromium, devices } from '@playwright/test';
  *   npm run screenshots:minesweeper
  *   BASE_URL=http://127.0.0.1:4187 node scripts/capture-minesweeper-screenshots.mjs --before
  *   BASE_URL=http://127.0.0.1:4188 npm run screenshots:minesweeper:touch-before
+ *   npm run screenshots:minesweeper:narrow
+ *   BASE_URL=http://127.0.0.1:4189 npm run screenshots:minesweeper:narrow-before
  *
  * The after mode builds first (the npm script does) and serves the production
  * preview. The before mode must point BASE_URL at a main baseline preview;
  * main has no minesweeper route, so no debug seam is needed there. The
  * touch-before mode points BASE_URL at a preview of the commit before this
  * task's touch and mobile changes, where the page exists but only has
- * desktop-style pointer input, and captures the same phone game states.
+ * desktop-style pointer input, and captures the same phone game states. The
+ * narrow modes capture the 360×740 ready state before and after the narrow
+ * viewport fix; the before mode likewise needs BASE_URL at the baseline
+ * preview.
  */
 
 const HOST = '127.0.0.1';
@@ -23,11 +28,17 @@ const PORT = 4186;
 const ORIGIN = `http://${HOST}:${PORT}`;
 const OUTPUT = 'docs/screenshots';
 const TOUCH_BEFORE = process.argv.includes('--touch-before');
-const MODE = TOUCH_BEFORE
-  ? 'touch-before'
-  : process.argv.includes('--before')
-    ? 'before'
-    : 'after';
+const NARROW = process.argv.includes('--narrow');
+const NARROW_BEFORE = process.argv.includes('--narrow-before');
+const MODE = NARROW_BEFORE
+  ? 'narrow-before'
+  : NARROW
+    ? 'narrow'
+    : TOUCH_BEFORE
+      ? 'touch-before'
+      : process.argv.includes('--before')
+        ? 'before'
+        : 'after';
 const BASE_URL = process.env.BASE_URL ?? ORIGIN;
 
 // The same deterministic layouts as tests/e2e/minesweeper-helpers.ts: a mine
@@ -311,6 +322,32 @@ async function captureTouchMobile(browser, prefix) {
   await context.close();
 }
 
+/**
+ * Capture the ready state at 360×740, the narrow viewport from Issue #39.
+ * This pair isolates the narrow-layout change: same scene, viewport, dark
+ * theme and reduced-motion setting before and after.
+ */
+async function captureNarrow(browser, prefix) {
+  const context = await browser.newContext({
+    viewport: { width: 360, height: 740 },
+    screen: { width: 360, height: 740 },
+    colorScheme: 'dark',
+    deviceScaleFactor: 2,
+    isMobile: true,
+    hasTouch: true,
+    reducedMotion: 'reduce',
+  });
+
+  const ready = await context.newPage();
+  await openTouchGame(ready, WIN_MINES);
+  await ready.getByTestId('status').filter({ hasText: '待开始' }).waitFor();
+  await settle(ready);
+  await capture(ready, `${prefix}-minesweeper-ready-360x740.png`, false);
+  await ready.close();
+
+  await context.close();
+}
+
 if (MODE === 'before' && !process.env.BASE_URL) {
   throw new Error(
     'The before mode needs BASE_URL pointing at a preview of the main baseline (see docs/screenshots/README.md).',
@@ -320,6 +357,12 @@ if (MODE === 'before' && !process.env.BASE_URL) {
 if (MODE === 'touch-before' && !process.env.BASE_URL) {
   throw new Error(
     'The touch-before mode needs BASE_URL pointing at a preview of the pre-touch baseline commit (see docs/screenshots/README.md).',
+  );
+}
+
+if (MODE === 'narrow-before' && !process.env.BASE_URL) {
+  throw new Error(
+    'The narrow-before mode needs BASE_URL pointing at a preview of the pre-narrow-layout baseline commit (see docs/screenshots/README.md).',
   );
 }
 
@@ -344,14 +387,18 @@ if (!process.env.BASE_URL) {
 await mkdir(OUTPUT, { recursive: true });
 const browser = await chromium.launch();
 try {
-  if (MODE !== 'touch-before') {
-    await captureDesktop(browser);
-    await captureMobile(browser);
-  }
-  if (MODE === 'after') {
-    await captureTouchMobile(browser, 'after');
-  } else if (MODE === 'touch-before') {
-    await captureTouchMobile(browser, 'before');
+  if (MODE === 'narrow' || MODE === 'narrow-before') {
+    await captureNarrow(browser, MODE === 'narrow-before' ? 'before' : 'after');
+  } else {
+    if (MODE !== 'touch-before') {
+      await captureDesktop(browser);
+      await captureMobile(browser);
+    }
+    if (MODE === 'after') {
+      await captureTouchMobile(browser, 'after');
+    } else if (MODE === 'touch-before') {
+      await captureTouchMobile(browser, 'before');
+    }
   }
   console.log(`Captured ${MODE} minesweeper screenshots in ${OUTPUT}`);
 } finally {
