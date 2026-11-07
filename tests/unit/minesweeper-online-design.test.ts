@@ -260,9 +260,106 @@ interface HostingDesign {
   readonly reevaluateWhen: readonly string[];
 }
 
+interface ImplementationTask {
+  readonly id: string;
+  readonly category: string;
+  readonly title: string;
+  readonly detail: string;
+  readonly depends_on: readonly string[];
+  readonly handles_events: readonly string[];
+  readonly acceptance: readonly string[];
+}
+
+interface ImplementationPlanContracts {
+  readonly roomStates: readonly string[];
+  readonly timersMs: Readonly<Record<string, number>>;
+  readonly hostingChoice: string;
+  readonly protocolVersion: number;
+}
+
+interface ImplementationPlan {
+  readonly version: number;
+  readonly status: string;
+  readonly sourceIssue: number;
+  readonly order: string;
+  readonly contracts: ImplementationPlanContracts;
+  readonly tasks: readonly ImplementationTask[];
+}
+
+interface ChapterEntry {
+  readonly title: string;
+  readonly anchor: string;
+}
+
 /** Escape a marker before embedding it in a regular expression. */
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Build the anchor GitHub generates for a unique numbered chapter heading. */
+function githubAnchor(heading: string): string {
+  return heading
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\p{M}\p{Pc}\p{Pd}\s]/gu, '')
+    .replace(/\s/g, '-');
+}
+
+/** Parse numbered `## N. 标题` headings outside fenced code blocks. */
+function parseChapterHeadings(): Map<number, ChapterEntry> {
+  const headings = new Map<number, ChapterEntry>();
+  let inFence = false;
+  for (const line of DESIGN.split('\n')) {
+    if (line.startsWith('```')) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) {
+      continue;
+    }
+    const match = /^## (\d+)\. (.+)$/.exec(line);
+    if (match === null) {
+      continue;
+    }
+    const numberText = match[1];
+    const title = match[2];
+    if (numberText === undefined || title === undefined) {
+      continue;
+    }
+    const number = Number(numberText);
+    if (headings.has(number)) {
+      throw new Error(`Duplicate chapter heading ${number} in ${DESIGN_PATH}.`);
+    }
+    const trimmed = title.trim();
+    headings.set(number, {
+      title: trimmed,
+      anchor: githubAnchor(`${number}. ${trimmed}`),
+    });
+  }
+  return headings;
+}
+
+/** Parse the chapter-index table rows of the form `[N. 标题](#anchor)`. */
+function parseChapterIndex(index: string): Map<number, ChapterEntry> {
+  const entries = new Map<number, ChapterEntry>();
+  for (const line of index.split('\n')) {
+    const match = /^\|\s*\[(\d+)\. (.+?)\]\(#([^)]+)\)\s*\|/.exec(line);
+    if (match === null) {
+      continue;
+    }
+    const numberText = match[1];
+    const title = match[2];
+    const anchor = match[3];
+    if (numberText === undefined || title === undefined || anchor === undefined) {
+      continue;
+    }
+    const number = Number(numberText);
+    if (entries.has(number)) {
+      throw new Error(`Duplicate chapter index entry ${number} in ${DESIGN_PATH}.`);
+    }
+    entries.set(number, { title: title.trim(), anchor });
+  }
+  return entries;
 }
 
 /** Parse the JSON fenced block immediately after a design marker. */
@@ -285,11 +382,28 @@ const lifecycle = readJsonBlock('design:room-lifecycle') as LifecycleDesign;
 const protocol = readJsonBlock('design:protocol') as ProtocolDesign;
 const reconnect = readJsonBlock('design:reconnect') as ReconnectDesign;
 const hosting = readJsonBlock('design:hosting') as HostingDesign;
+const implementationPlan = readJsonBlock('design:implementation-plan') as ImplementationPlan;
 
 const STATES = lifecycle.states.map((state) => state.name);
 const STATE_SET = new Set(STATES);
 const TRANSITIONS = lifecycle.transitions;
 const EVENTS = new Set(TRANSITIONS.map((transition) => transition.event));
+const IMPLEMENTATION_TASKS = implementationPlan.tasks;
+const IMPLEMENTATION_IDS = IMPLEMENTATION_TASKS.map((task) => task.id);
+const TASK_INDEX = new Map(IMPLEMENTATION_IDS.map((id, index) => [id, index]));
+
+/** Extract one Markdown section from its heading up to the next given heading. */
+function sectionBetween(startHeading: string, endHeading: string): string {
+  const start = DESIGN.indexOf(startHeading);
+  if (start < 0) {
+    throw new Error(`Missing section ${startHeading} in ${DESIGN_PATH}.`);
+  }
+  const end = DESIGN.indexOf(endHeading, start + startHeading.length);
+  if (end < 0) {
+    throw new Error(`Missing section ${endHeading} after ${startHeading} in ${DESIGN_PATH}.`);
+  }
+  return DESIGN.slice(start, end);
+}
 
 function transitionTargets(): Map<string, string[]> {
   const adjacency = new Map<string, string[]>(STATES.map((name) => [name, []]));
@@ -779,6 +893,194 @@ describe('minesweeper online hosting selection design', () => {
     expect(stages.has('mvp')).toBe(true);
     for (const trigger of hosting.reevaluateWhen) {
       expect(trigger.trim().length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe('minesweeper online implementation plan design', () => {
+  it('lists complete tasks with stable ids and topological dependencies', () => {
+    expect(implementationPlan.version).toBe(1);
+    expect(implementationPlan.status).toBe('design-only');
+    expect(implementationPlan.sourceIssue).toBe(46);
+    expect(implementationPlan.order).toBe('topological');
+    expect(IMPLEMENTATION_TASKS.length).toBeGreaterThanOrEqual(6);
+    expect(new Set(IMPLEMENTATION_IDS).size).toBe(IMPLEMENTATION_IDS.length);
+
+    for (const task of IMPLEMENTATION_TASKS) {
+      expect(task.id.trim().length).toBeGreaterThan(0);
+      expect(task.category.trim().length).toBeGreaterThan(0);
+      expect(task.title.trim().length).toBeGreaterThan(0);
+      expect(task.detail.trim().length).toBeGreaterThan(0);
+      expect(Array.isArray(task.depends_on)).toBe(true);
+      expect(Array.isArray(task.handles_events)).toBe(true);
+      expect(Array.isArray(task.acceptance)).toBe(true);
+      expect(task.acceptance.length).toBeGreaterThan(0);
+      for (const item of task.acceptance) {
+        expect(item.trim().length).toBeGreaterThan(0);
+      }
+
+      const position = TASK_INDEX.get(task.id);
+      expect(position).toBeDefined();
+      for (const dependency of task.depends_on) {
+        const dependencyPosition = TASK_INDEX.get(dependency);
+        expect(dependencyPosition).toBeDefined();
+        if (dependencyPosition === undefined || position === undefined) {
+          continue;
+        }
+        expect(dependencyPosition).toBeLessThan(position);
+      }
+    }
+  });
+
+  it('assigns each lifecycle event to a single owner except the shared timeout', () => {
+    const declaredEvents = new Set(lifecycle.events.map((event) => event.name));
+    const owners = new Map<string, string[]>();
+
+    for (const task of IMPLEMENTATION_TASKS) {
+      const seen = new Set<string>();
+      for (const event of task.handles_events) {
+        expect(declaredEvents.has(event)).toBe(true);
+        expect(seen.has(event)).toBe(false);
+        seen.add(event);
+
+        const taskIds = owners.get(event) ?? [];
+        taskIds.push(task.id);
+        owners.set(event, taskIds);
+      }
+    }
+
+    for (const event of declaredEvents) {
+      const taskIds = owners.get(event) ?? [];
+      expect(taskIds.length).toBe(event === 'timeout' ? 2 : 1);
+    }
+    expect(owners.get('timeout')).toEqual(
+      expect.arrayContaining(['room-service', 'reconnect-timeout']),
+    );
+    expect(owners.get('rematch')).toEqual(['room-service']);
+  });
+
+  it('makes room-service own the rematch lifecycle event', () => {
+    const roomService = IMPLEMENTATION_TASKS.find((task) => task.id === 'room-service');
+    expect(roomService?.handles_events).toContain('rematch');
+    expect(roomService?.detail).toContain('rematch');
+    expect(roomService?.acceptance.some((item) => item.includes('rematch'))).toBe(true);
+  });
+
+  it('documents injectable engine construction in the engine adapter task', () => {
+    const engineAdapter = IMPLEMENTATION_TASKS.find((task) => task.id === 'engine-adapter');
+    expect(engineAdapter?.detail).toContain(
+      'new MinesweeperEngine({ config, rng: createSeededRng(seed) })',
+    );
+  });
+
+  it('covers the six required implementation categories', () => {
+    const categories = new Set(IMPLEMENTATION_TASKS.map((task) => task.category));
+    for (const category of ['engine', 'protocol', 'hosting', 'reconnect', 'client-ui', 'e2e']) {
+      expect(categories.has(category)).toBe(true);
+    }
+  });
+
+  it('has no dependency cycles', () => {
+    const byId = new Map(IMPLEMENTATION_TASKS.map((task) => [task.id, task]));
+    const visiting = new Set<string>();
+    const done = new Set<string>();
+    const visit = (id: string): void => {
+      if (done.has(id)) {
+        return;
+      }
+      if (visiting.has(id)) {
+        throw new Error(`Dependency cycle detected at ${id}.`);
+      }
+      visiting.add(id);
+      const task = byId.get(id);
+      if (task === undefined) {
+        throw new Error(`Unknown implementation task ${id}.`);
+      }
+      for (const dependency of task.depends_on) {
+        visit(dependency);
+      }
+      visiting.delete(id);
+      done.add(id);
+    };
+    for (const id of IMPLEMENTATION_IDS) {
+      visit(id);
+    }
+    expect(done.size).toBe(IMPLEMENTATION_IDS.length);
+  });
+
+  it('keeps the plan contracts aligned with lifecycle, protocol and hosting', () => {
+    expect([...implementationPlan.contracts.roomStates].sort()).toEqual([...STATES].sort());
+    for (const timer of ['join', 'turn', 'match']) {
+      expect(implementationPlan.contracts.timersMs[timer]).toBe(lifecycle.timers[timer]?.defaultMs);
+    }
+    expect(implementationPlan.contracts.hostingChoice).toBe(hosting.choice);
+    expect(implementationPlan.contracts.protocolVersion).toBe(protocol.version);
+  });
+});
+
+describe('minesweeper online single-player relationship and glossary', () => {
+  it('documents the parameterized engine reuse and single-player guarantees', () => {
+    const relationship = sectionBetween(
+      '## 2. 与现有单机玩法和规则引擎参数化的关系',
+      '## 3. 房间生命周期',
+    );
+    for (const reference of [
+      'MinesweeperConfig',
+      'createSeededRng',
+      'src/games/minesweeper/engine.ts',
+      'difficulty.ts',
+      'validateConfig',
+    ]) {
+      expect(relationship).toContain(reference);
+    }
+    expect(relationship).toContain(
+      'new MinesweeperEngine({ config, rng: createSeededRng(seed) })',
+    );
+    expect(relationship).not.toContain('new MinesweeperEngine(config)');
+    for (const topic of ['不回归', '排行榜', '自定义难度']) {
+      expect(relationship).toContain(topic);
+    }
+  });
+
+  it('provides a chapter index and a glossary', () => {
+    expect(DESIGN).toContain('## 0. 章节索引');
+    expect(DESIGN).toContain('## 10. 术语表');
+
+    const index = sectionBetween('## 0. 章节索引', '## 1. 背景与范围');
+
+    const headings = parseChapterHeadings();
+    const headingNumbers = [...headings.keys()]
+      .filter((number) => number !== 0)
+      .sort((a, b) => a - b);
+    for (const section of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+      expect(headingNumbers).toContain(section);
+    }
+
+    const entries = parseChapterIndex(index);
+    expect([...entries.keys()].sort((a, b) => a - b)).toEqual(headingNumbers);
+
+    for (const number of headingNumbers) {
+      const heading = headings.get(number);
+      const entry = entries.get(number);
+      expect(entry).toBeDefined();
+      if (heading === undefined || entry === undefined) {
+        continue;
+      }
+      expect(entry.title).toBe(heading.title);
+      expect(entry.anchor).toBe(heading.anchor);
+    }
+
+    const glossaryStart = DESIGN.indexOf('## 10. 术语表');
+    expect(glossaryStart).toBeGreaterThan(-1);
+    const glossary = DESIGN.slice(glossaryStart);
+    for (const term of [
+      'presence',
+      'seq',
+      '宽限期',
+      '脱敏快照',
+      'src/games/minesweeper/engine.ts',
+    ]) {
+      expect(glossary).toContain(term);
     }
   });
 });

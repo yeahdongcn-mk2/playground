@@ -1,8 +1,25 @@
 # 扫雷联机对战设计说明
 
-> 状态：设计稿（Issue #46 子任务 0、1、2，只出文档与契约测试，不写实现） · 范围：1v1 回合制联机扫雷
+> 状态：设计稿（Issue #46 设计子任务 1-4，只出文档与契约测试，不写实现；最终版含实现清单、术语表与章节索引） · 范围：1v1 回合制联机扫雷
 >
-> 本文定义房间生命周期、状态同步与裁决协议、超时与断线重连边界、承载方案选型，以及它们与现有单机扫雷规则引擎的关系。风格与 [贪食蛇设计说明](./snake-design.md)、[技术栈选型决策](./tech-stack-decision.md) 保持一致。
+> 本文定义房间生命周期、状态同步与裁决协议、超时与断线重连边界、承载方案选型、实现阶段 issue 清单，以及它们与现有单机扫雷规则引擎参数化的关系。风格与 [贪食蛇设计说明](./snake-design.md)、[技术栈选型决策](./tech-stack-decision.md) 保持一致。
+
+## 0. 章节索引
+
+| 章节 | 内容 |
+| --- | --- |
+| [1. 背景与范围](#1-背景与范围) | 现状、目标与不在范围内的内容 |
+| [2. 与现有单机玩法和规则引擎参数化的关系](#2-与现有单机玩法和规则引擎参数化的关系) | 复用什么、单机不回归的保障、排行榜与自定义难度的后续接入 |
+| [3. 房间生命周期](#3-房间生命周期) | 状态、事件、转移、三种时限与 `design:room-lifecycle` 契约 |
+| [4. 状态同步与裁决协议](#4-状态同步与裁决协议) | 回合制、共享棋盘、服务端权威、消息与 `design:protocol` 契约 |
+| [5. 断线与重连](#5-断线与重连) | 心跳、宽限、席位、恢复、幂等与 `design:reconnect` 契约 |
+| [6. 承载方案选型](#6-承载方案选型) | 候选方案、对比、选型、演进与 `design:hosting` 契约 |
+| [7. 测试与验收](#7-测试与验收) | 文档契约测试与验收命令 |
+| [8. 实现阶段 issue 清单](#8-实现阶段-issue-清单) | 依赖顺序、issue 内容与 `design:implementation-plan` 契约 |
+| [9. 非目标与后续风险](#9-非目标与后续风险) | 首版不做的内容 |
+| [10. 术语表](#10-术语表) | 房间、协议、重连与规则引擎术语 |
+
+阅读顺序建议：先读第 2 节确认复用的引擎边界，再按第 3 → 4 → 5 → 6 节理解契约；实现前读第 8 节的任务图。
 
 ## 1. 背景与范围
 
@@ -11,18 +28,21 @@
 - `MinesweeperConfig` 描述行、列、雷数与首点安全策略；
 - `validateConfig()` 统一校验棋盘边界与雷数容量；
 - `createSeededRng()` 提供可复现的 mulberry32 随机源；
-- `difficulty.ts` 提供初级、中级、高级三档预设，并复用同一套校验。
+- `src/games/minesweeper/difficulty.ts` 提供初级、中级、高级三档预设，并复用同一套校验。
 
-因此本设计不另起棋盘模型，而是在现有引擎之上增加一层「房间 + 协议 + 裁决」边界。本文要回答四件事：
+上述规则与校验都位于 `src/games/minesweeper/engine.ts`，联机层只调用，不复制一份棋盘逻辑。
+
+因此本设计不另起棋盘模型，而是在现有引擎之上增加一层「房间 + 协议 + 裁决」边界。本文要回答五件事：
 
 1. 房间从创建到销毁经过哪些状态，哪些事件推动转移，三种时限分别在何时生效、到期后如何处置；
 2. 同步采用回合制还是实时、棋盘是共享还是每人一份、谁裁决踩雷与胜负；
 3. 消息有哪些、字段是什么，行动如何排序、去重与冲突处理，确定性从哪来；
-4. 如何划分联机概念与单机状态模型，以及掉线检测、宽限期、重连恢复与宽限用尽后的结局。
+4. 如何划分联机概念与单机状态模型，以及掉线检测、宽限期、重连恢复与宽限用尽后的结局；
+5. 实现阶段按什么依赖顺序拆成哪些 issue，以及本文的术语与章节索引。
 
 不在本文范围内：具体服务端实现、房间匹配、账号体系、排行榜、观战、聊天、持久化、道具与自定义规则扩展。本文只固定契约；`src/` 运行时代码在本子任务中不改动。
 
-## 2. 与单机玩法和规则引擎的关系
+## 2. 与现有单机玩法和规则引擎参数化的关系
 
 ### 2.1 复用什么
 
@@ -30,12 +50,12 @@
 
 | 现有能力 | 联机用途 |
 | --- | --- |
-| `MinesweeperConfig` / `validateConfig` | 建房时校验房间配置；非法配置在 `create` 就被拒绝 |
-| `createSeededRng(seed)` | 服务端为每局创建确定性随机源；客户端不自行生成雷盘 |
+| `MinesweeperConfig` / `validateConfig`（`src/games/minesweeper/engine.ts`） | 建房时校验房间配置；非法配置在 `create` 就被拒绝 |
+| `createSeededRng(seed)`（同文件） | 服务端为每局创建确定性随机源；客户端不自行生成雷盘 |
 | `firstClickSafe` | 双方共享同一首点安全规则，首点必定安全 |
 | `MinesweeperEngine` | 服务端持有唯一权威棋盘，接受行动并产出快照 |
 | `MinesweeperSnapshot` | 作为服务端内部状态来源，投影成脱敏的客户端快照 |
-| `difficulty.ts` 预设 | 房间难度选项来源，仍通过 `validateConfig` 校验 |
+| `difficulty.ts` 预设（`src/games/minesweeper/difficulty.ts`） | 房间难度选项来源，仍通过 `validateConfig` 校验 |
 | `engine.test.ts` 的确定性用例 | 重放校验的基础：同一 seed、配置与行动顺序必须得到同一结果 |
 
 ### 2.2 不锁死现有单机状态模型
@@ -56,6 +76,26 @@
 - 客户端永远不本地生成雷盘，只渲染服务端快照；
 - 第一手翻开和后续所有行动都按 `seq` 记录，重放时按相同顺序喂给引擎；
 - 开局时服务端先公布 seed 的哈希承诺，结束后再公布 seed，便于事后审计。
+
+### 2.4 单机玩法不回归的保障
+
+联机是新增的独立入口与视图，单机扫雷继续走现有路径：
+
+- **状态模型不变**：`MinesweeperStatus` 仍只有 `ready` / `playing` / `won` / `lost`，`MinesweeperSnapshot` 不新增房间、玩家、socket 或计时字段；联机 DTO 在协议层单独定义。
+- **规则引擎不改语义**：不修改 `src/games/minesweeper/engine.ts` 的默认棋盘、首点安全与布雷时机；联机只通过 `new MinesweeperEngine({ config, rng: createSeededRng(seed) })` 注入 `MinesweeperConfig` 与 seed。
+- **入口与路由不变**：单机扫雷的调试参数、难度选择与视图行为保持现状；联机使用独立路由/视图并按需加载，不进入大厅首屏包。
+- **自动检查继续覆盖单机**：`engine.test.ts`、`difficulty.test.ts`、`view.test.ts` 与现有 e2e 保持通过；现有 `npm run lint` 的边界检查只覆盖 `src/core/`、`src/app/` 与游戏入口的既有依赖方向，联机层落地时需扩展 `scripts/check-boundaries.mjs` 以禁止游戏模块反向依赖联机层（见 #81）。
+- **部署不回归**：静态产物仍是默认发布物；联机房间服务是可选新增单元，房间服务不可用时单机与大厅仍可正常加载。
+- **文档契约测试**：本文的五个 `design:*` JSON 块由 `tests/unit/minesweeper-online-design.test.ts` 校验，状态名、时限与承载选择的改动会在 CI 中暴露。
+
+### 2.5 排行榜与自定义难度的后续接入
+
+本设计不实现排行榜与自定义难度，但保留接入点，避免以后返工：
+
+- **自定义难度**：单机的 `parseCustomDifficulty()` 已复用 `validateConfig()` 校验行、列、雷数与首点安全容量；联机建房可直接调用同一个校验函数，只接受 `MIN_ROWS`–`MAX_ROWS`、`MIN_COLS`–`MAX_COLS` 范围内且通过雷数与安全区检查的配置。首版联机固定 `firstClickSafe: true`；后续若要开放自定义，把校验后的 `MinesweeperConfig` 连同规则版本写入 `create` 与重放记录即可。
+- **难度预设**：`src/games/minesweeper/difficulty.ts` 的初级/中级/高级仍是房间难度选项来源；自定义配置通过同一 `validateConfig` 校验，不另写一套边界。
+- **排行榜**：首版 `end` 已携带 `matchId`、`winnerId`、`finalSnapshot` 与 seed，服务端保留 replay 记录；后续排行榜应以服务端权威结果为准，按「规则版本 + 配置（行/列/雷数/首点策略）+ 模式」分组，不接受客户端上报成绩。排行字段可以新增在结算服务或 `end` 的扩展字段中，不需要改动房间状态机、同步协议或 `MinesweeperStatus`。
+- **范围边界**：以上两项都需要新的产品决策（排行维度、账号/匿名、自定义参数范围），因此不在本设计或实现 issue 清单的首版范围内，只确认为兼容方向。
 
 ## 3. 房间生命周期
 
@@ -81,7 +121,7 @@
 | `action` | 当前回合玩家 | `playing → playing`；非法/过期行动不产生转移 |
 | `end` | 服务端 | `playing → finished`（踩雷、翻完安全格、认输或超时裁决） |
 | `timeout` | 服务端 | `waiting`/`ready → dissolved`，或 `playing → finished` |
-| `rematch` | 双方 | `finished → ready`，保留座位，换新 seed |
+| `rematch` | 双方 | `finished → ready`，保留座位，新一局在 `start` 时生成新 seed |
 | `leave` | 客户端 | 非对局阶段离房；对局中的连接断开不算房间事件 |
 | `dissolve` | 房主或服务端 | `waiting` / `ready` / `playing` / `finished → dissolved` |
 
@@ -99,7 +139,7 @@ idle ──create──▶ waiting ──join──▶ waiting ──ready(全�
 finished ──dissolve──▶ dissolved
 ```
 
-`playing` 中的 socket 断开只更新玩家 presence，不产生新的房间状态；只有 `timeout` 事件让房间进入 `finished` 或 `dissolved`。这是后续 t2 断线超时功能的边界，详见第 5 节。
+`playing` 中的 socket 断开只更新玩家 presence，不产生新的房间状态；只有 `timeout` 事件让房间进入 `finished` 或 `dissolved`。这是断线超时功能的边界，详见第 5 节。
 
 ### 3.3 契约 JSON
 
@@ -705,7 +745,7 @@ A/B: rematch ──────────▶ room_state(ready)
 - **重放**：服务端记录 `matchId`、`config`、`seed`、按 `seq` 排序的已接受行动（含第一次翻开）以及每步结果。重放时用同一 `createSeededRng(seed)`、同一 `firstClickSafe` 配置和同一行动顺序重新运行引擎，逐步比对快照摘要。开局时 `snapshot.seedHash` 公布 seed 的哈希承诺，`end` 时才随结果公布 seed 本身，防止客户端提前算雷。
 - **审计边界**：客户端只拿到脱敏快照，无法据此复原未翻开雷位；服务端日志是唯一事实来源。
 
-### 4.7 断线超时的状态边界（为 t2 预留）
+### 4.7 断线超时的状态边界（同步协议与断线语义的分界）
 
 断线与超时被刻意放在房间状态机之外，避免把「连接状态」误建模成「房间状态」：
 
@@ -718,7 +758,7 @@ A/B: rematch ──────────▶ room_state(ready)
 明确规则：
 
 - `playing` 中 socket 断开**不触发**房间转移；`disconnect.immediateRoomTransition` 固定为 `false`。
-- 连接层用心跳检测掉线（10 s 阈值），确认掉线后只更新该玩家的 presence，并启动 `disconnect.graceMs`（15 s）宽限计时；宽限内重连取消计时，棋局继续。
+- 连接层用 5 s 间隔、连续错过 2 次的心跳检测掉线（共 10 s 阈值），确认掉线后只更新该玩家的 presence，并启动 `disconnect.graceMs`（15 s）宽限计时；宽限内重连取消计时，棋局继续。
 - 若宽限期到期且轮到该玩家，服务端发出 `timeout(timer=turn)`，按回合超时判负；若未轮到该玩家，则只标记离线，等其回合再按 `turn` 时限处理。
 - `match` 时限不因断线暂停；断线不能用来逃避整局计时。
 - 只有服务端 `timeout` / `end` 事件能让房间离开 `playing`；连接层不得直接改房间状态。
@@ -726,7 +766,7 @@ A/B: rematch ──────────▶ room_state(ready)
 
 ## 5. 断线与重连
 
-第 4.7 节只固定了「断线不直接改房间状态」的边界；本章在 t1 的三种时限之上补齐掉线检测、宽限期、席位保留、重连恢复、幂等与房主掉线规则。下方 `design:reconnect` JSON 是这些阈值与结局的权威来源，文字与 JSON 冲突时以 JSON 为准。
+第 4.7 节只固定了「断线不直接改房间状态」的边界；本章在第 3.4 节的三种时限之上补齐掉线检测、宽限期、席位保留、重连恢复、幂等与房主掉线规则。下方 `design:reconnect` JSON 是这些阈值与结局的权威来源，文字与 JSON 冲突时以 JSON 为准。
 
 ### 5.1 心跳与掉线检测
 
@@ -1234,14 +1274,17 @@ A 与 B 是本次需要决定的两种承载方式；C、D 作为已评估的替
 
 ## 7. 测试与验收
 
-新增 `tests/unit/minesweeper-online-design.test.ts`，读取本文并解析四个标记块：
+新增/更新 `tests/unit/minesweeper-online-design.test.ts`，读取本文并解析五个标记块：
 
 - `design:room-lifecycle`：断言状态名唯一、初始态存在、每个转移的 `from`/`to` 都是已声明状态、所有状态从初始态可达、终态只允许重开/解散出边、创建/加入/就绪/开局/结束/超时六类事件都有转移、三种计时器都有对应超时转移。
 - `design:protocol`：断言同步模型为回合制、裁决为服务端、棋盘共享、seed 与首点安全约束、断线不直接改变房间状态；消息表中每条消息都有方向与非空字段，字段名唯一，且至少覆盖 `join`、`snapshot`、`action`、`end` 及完整房间生命周期消息。
 - `design:reconnect`：断言心跳检测 < 宽限 < 判负超时且三者均为正数、宽限值与 `design:protocol.disconnect.graceMs` 一致、判负超时与 `turn` 计时器一致；枚举的每个状态都在 `design:room-lifecycle` 中声明，重连/掉线/超时结局要么对应已有合法转移，要么停留在终态；恢复方式明确为全量快照或事件回放。
 - `design:hosting`：断言 `choice` 属于 `candidates`、每项候选 id 唯一、被否候选不在 `choice` 且都有非空理由、除 `choice` 外的候选都出现在 `rejected` 中；选型理由覆盖部署、成本、延迟、权威与反作弊、断线恢复、数据与隐私、可测试性、与静态部署的关系，每条理由都同时给出选用方案与被否方案；`references` 包含 `docs/tech-stack-decision.md` 与 `docs/framework.md`，演进阶段与重新评估条件非空，且 `choice` 的权威模型与 `design:protocol.hosting.requiresServer` 一致。
+- `design:implementation-plan`：断言版本与状态、任务 id 唯一、`title` / `detail` 非空、`acceptance` 是数组且每项非空、`depends_on` 与 `handles_events` 都是数组且只引用已声明成员、不存在依赖环、数组顺序满足依赖先后；每个 `design:room-lifecycle` 事件恰好有一个处理任务（`timeout` 由 `room-service` 与 `reconnect-timeout` 共同处理），且 `rematch` 归属 `room-service`；至少覆盖 `engine`、`protocol`、`hosting`、`reconnect`、`client-ui`、`e2e` 六类任务；`contracts.roomStates` ↔ `design:room-lifecycle`、`contracts.timersMs` ↔ `design:room-lifecycle.timers`、`contracts.hostingChoice` ↔ `design:hosting`、`contracts.protocolVersion` ↔ `design:protocol` 交叉一致。
+- **关系章节**：断言第 2 节正文出现 `MinesweeperConfig`、`createSeededRng`、`src/games/minesweeper/engine.ts`、`difficulty.ts` 与正确的 `new MinesweeperEngine({ config, rng: createSeededRng(seed) })` 构造示例，删除任一引用或写回错误构造签名测试即失败；同时确认该节说明单机不回归、排行榜与自定义难度的后续接入。
+- **索引与术语表**：断言第 0 节章节索引与第 10 节术语表存在；索引每一行的链接文本与 anchor 都从实际 `## N. 标题` 按 GitHub 标题 slug 规则（编号标题视为唯一）生成并逐项比较，重复编号、索引缺项或多出项都会失败；同时覆盖房间、协议、重连与规则引擎的关键术语。
 
-删掉任一标记块、改错状态名、把某条转移指向未声明状态、让断线结局引用未声明的房间状态，或把 `choice` 改成未列出的候选，测试就会失败。本子任务验收命令：
+删掉任一标记块、改错状态名、把某条转移指向未声明状态、让断线结局引用未声明的房间状态、把 `choice` 改成未列出的候选、让实现任务的依赖成环/引用未定义 id、让某个 lifecycle 事件没有归属任务或出现重复归属、把 `acceptance` 改成字符串，或改错索引链接与标题，测试就会失败。本子任务验收命令：
 
 ```bash
 npm run test:unit
@@ -1252,20 +1295,202 @@ npm run build
 
 测试只读文档，不修改 `src/` 运行时代码；因此不影响现有单机扫雷、其他游戏与大厅行为。
 
-## 8. 实现阶段拆分（供计划收口节点建单）
+## 8. 实现阶段 issue 清单
 
-本设计只固定契约；实现阶段建议按依赖顺序拆为：
+本节把设计拆成可按依赖顺序建单的实现任务。id 是稳定标识，计划收口节点可直接用 id 建 issue 或写成任务图；范围只覆盖 MVP，不包含第 9 节与第 2.5 节列出的排行榜、自定义难度、观战等后续项。每个任务的 `handles_events` 数组声明它直接处理的 `design:room-lifecycle` 事件；除 `timeout` 由 `room-service`（join 超时）与 `reconnect-timeout`（turn/match 超时）共享外，每个事件恰好归属一个任务，测试会断言这一点与 `rematch` 归属 `room-service`。
 
-1. **房间服务与传输骨架**：WebSocket 连接、`create`/`join`/`ready`/`start`、房间状态机、内存房间表；
-2. **权威对局与协议**：服务端引擎、seed 承诺、`action`/`snapshot`/`action_result`/`end`、`seq`/幂等/回合校验与重放日志；
-3. **断线重连与超时**（t2）：presence、心跳检测、15 s 宽限、`turn`/`match` 计时器、`timeout` 消息与重连快照（设计见第 5 节）；
-4. **客户端联机视图与 e2e**：入口、房间 UI、脱敏棋盘渲染、重连提示、断线/超时/重放端到端用例。
+| id | 标题 | 范围 | 依赖 |
+| --- | --- | --- | --- |
+| `engine-adapter` | 引擎适配：服务端复用纯规则引擎 | 用 `MinesweeperConfig` + seed 创建引擎、脱敏快照投影、重放日志；不改单机入口 | 无 |
+| `protocol-contracts` | 协议层：消息类型与序列化契约 | 把第 4 节消息固化为共享类型/校验器；统一 `seq`、`turnId`、`actionId` 语义 | `engine-adapter` |
+| `room-service` | 承载/服务端：独立 WebSocket 房间服务 | Node WebSocket 服务、内存房间表、房间 FSM、建房/加入/就绪/开局/离房/重开/解散、120 s `join` 计时器、`playerToken` | `protocol-contracts` |
+| `authoritative-match` | 权威对局与协议落地 | 服务端引擎实例、seed 承诺、`action`/`snapshot`/`action_result`/`end`、幂等、重放 | `room-service`、`engine-adapter` |
+| `reconnect-timeout` | 断线重连与超时 | presence、2×5 s 心跳、15 s 宽限、席位保留、`turn`/`match` 计时器、`timeout`、`snapshot-at-current-seq` 恢复 | `room-service`、`authoritative-match` |
+| `client-room-ui` | 客户端房间 UI 与联机棋盘 | 联机入口、房间/准备/结果/重开界面、脱敏棋盘、回合与倒计时、presence/重连提示；单机入口不变 | `protocol-contracts`、`room-service`、`authoritative-match` |
+| `deploy-docs` | 联机部署与文档登记 | 静态站点 + 独立房间服务的部署配置、环境变量、健康检查；更新 `docs/tech-stack-decision.md` 与 `docs/framework.md` 的范围表述 | `room-service` |
+| `online-e2e` | 联机端到端测试 | Playwright 双浏览器上下文覆盖创建→加入→就绪→开局→行动→结束、重连与超时；CI 不依赖外部账号 | `client-room-ui`、`reconnect-timeout` |
 
-依赖顺序为 1 → 2 → 3 → 4；第 2 步之前不应开始客户端联机视图，否则会为了临时协议反复改 UI。实际 issue 编号与拆分粒度由计划收口节点决定，本子任务不创建实现 issue。
+依赖分层（每一层的验收要点见下方 JSON；`depends_on` 只列直接前置任务，测试会校验拓扑顺序与无环）：
+
+```text
+第 1 层：engine-adapter
+第 2 层：protocol-contracts
+第 3 层：room-service
+第 4 层：authoritative-match、deploy-docs
+第 5 层：reconnect-timeout、client-room-ui
+第 6 层：online-e2e
+
+engine-adapter
+  └─▶ protocol-contracts
+        └─▶ room-service
+              ├─▶ authoritative-match ─┬─▶ reconnect-timeout ─┐
+              │                          └─▶ client-room-ui ───┼─▶ online-e2e
+              └─▶ deploy-docs
+```
+
+`design:implementation-plan` JSON 是任务图、门禁与契约快照的权威来源；文字、表格与 JSON 冲突时以 JSON 为准。下方的 `contracts` 冗余记录跨章节的状态名、时限与承载选择，测试会拿它和 lifecycle、protocol、hosting 三份契约 JSON 交叉校验，防止汇总时出现漂移。
+
+<!-- design:implementation-plan -->
+```json
+{
+  "version": 1,
+  "status": "design-only",
+  "sourceIssue": 46,
+  "order": "topological",
+  "contracts": {
+    "roomStates": ["idle", "waiting", "ready", "playing", "finished", "dissolved"],
+    "timersMs": {
+      "join": 120000,
+      "turn": 30000,
+      "match": 900000
+    },
+    "hostingChoice": "dedicated-room-service",
+    "protocolVersion": 1
+  },
+  "tasks": [
+    {
+      "id": "engine-adapter",
+      "category": "engine",
+      "title": "引擎适配：服务端复用纯规则引擎",
+      "detail": "在服务端用 new MinesweeperEngine({ config, rng: createSeededRng(seed) }) 创建引擎，提供从 MinesweeperSnapshot 到脱敏联机快照的投影，并记录可重放的 seed/config/有序行动日志；不修改 MinesweeperStatus、单机视图与默认 9×9 入口。",
+      "depends_on": [],
+      "handles_events": [],
+      "acceptance": [
+        "Node 环境不依赖 DOM 即可创建并推进引擎，首点安全与布雷时机与 src/games/minesweeper/engine.ts 一致",
+        "投影后的快照不包含未翻开的 mine 字段，end 前不泄漏 seed",
+        "同一 config、seed 与有序行动得到同一结果，重放比对通过",
+        "现有引擎、难度与视图单测保持通过"
+      ]
+    },
+    {
+      "id": "protocol-contracts",
+      "category": "protocol",
+      "title": "协议层：消息类型、字段与序列化契约",
+      "detail": "把第 4 节的消息表固化为共享 TypeScript 类型和运行时校验器，覆盖 create/join/ready/start/action/rematch/leave/room_state/snapshot/action_result/end/timeout/room_closed/error；统一 seq、turnId、actionId 的语义与错误码。",
+      "depends_on": ["engine-adapter"],
+      "handles_events": [],
+      "acceptance": [
+        "协议版本、消息方向与必填字段与 design:protocol 一致",
+        "非法消息返回 error 且不改变房间或棋盘状态",
+        "seq 单调、turnId 与 actionId 的去重语义有单元测试",
+        "共享类型可被服务端与客户端同时引用，不引入 DOM 依赖"
+      ]
+    },
+    {
+      "id": "room-service",
+      "category": "hosting",
+      "title": "承载/服务端：独立 WebSocket 房间服务",
+      "detail": "新增独立 Node WebSocket 房间服务：内存房间表、房间状态机、create/join/ready/start/leave/dissolve/rematch、120 s join 计时器、playerToken 签发与 room-not-found；finished → ready 的重开保留座位、重置 join 计时并清除本局结果，静态前端继续由静态托管提供，不引入数据库。",
+      "depends_on": ["protocol-contracts"],
+      "handles_events": ["create", "join", "ready", "start", "leave", "dissolve", "rematch", "timeout"],
+      "acceptance": [
+        "本任务负责的转移只能经 create/join/ready/start/leave/dissolve/rematch/timeout 触发；finished → ready 的 rematch 保留座位、重置 join 计时并清除本局结果，新一局在 start 时换新 seed 与权威棋盘，非法事件被拒绝且不改变状态",
+        "roomId 唯一，playerToken 只发给本人，未知房间返回 room-not-found",
+        "120 s join 超时解散房间并广播 timeout + room_closed（fake timers 测试）",
+        "房间表单实例内存态，服务重启视为 dissolved；无持久化依赖"
+      ]
+    },
+    {
+      "id": "authoritative-match",
+      "category": "protocol",
+      "title": "权威对局与协议落地",
+      "detail": "start 时生成 matchId/seed 并创建权威引擎；实现 seed 哈希承诺、action 校验与 snapshot/action_result/end 广播、seq/turnId/actionId 幂等、回合归属、踩雷/翻完/认输结算与按 seq 重放。",
+      "depends_on": ["room-service", "engine-adapter"],
+      "handles_events": ["action", "end"],
+      "acceptance": [
+        "非当前玩家、过期 seq、重复 actionId 与非法坐标均被拒绝，且不消耗回合",
+        "snapshot 脱敏，end 才公布 finalSnapshot 与 seed；seedHash 与 end.seed 对应",
+        "踩雷、翻完安全格、认输三种结局都产生 end 并进入 finished",
+        "同一 replay 记录重放得到相同快照摘要与结果",
+        "与 design:room-lifecycle 的 playing 自环、end 转移一致"
+      ]
+    },
+    {
+      "id": "reconnect-timeout",
+      "category": "reconnect",
+      "title": "断线重连与超时",
+      "detail": "实现 presence、5 s 心跳连续错过 2 次判 offline、15 s 宽限与席位保留、turn 30 s / match 15 min 计时器、timeout 消息、playerToken 重连与 snapshot-at-current-seq 恢复；断线不直接改变房间状态。",
+      "depends_on": ["room-service", "authoritative-match"],
+      "handles_events": ["timeout"],
+      "acceptance": [
+        "10 s 检测 < 15 s 宽限 < 30 s 回合判负，阈值与 design:reconnect 一致",
+        "宽限内重连恢复当前 seq 快照，不重放离线行动；重复 join/action/timeout 幂等",
+        "轮到掉线者时回合超时判负；未轮到则保留席位，match 计时不暂停",
+        "waiting/ready/finished/dissolved 的掉线结局与第 5.6 节一致",
+        "集成测试用 fake timers 覆盖检测、宽限与判负"
+      ]
+    },
+    {
+      "id": "client-room-ui",
+      "category": "client-ui",
+      "title": "客户端房间 UI 与联机棋盘",
+      "detail": "新增联机入口与房间界面：创建/加入、准备、开局、结果、重开与离房；渲染脱敏快照、当前回合、倒计时、presence 与重连提示。联机视图独立按需加载，不改单机扫雷入口。",
+      "depends_on": ["protocol-contracts", "room-service", "authoritative-match"],
+      "handles_events": [],
+      "acceptance": [
+        "创建/加入/准备/开局/结束/重开/离房流程可操作，错误显示可读错误码",
+        "棋盘只渲染服务端快照，不显示未翻开雷位；插旗/翻开按回合禁用",
+        "倒计时基于 deadlineAt 估算，不作为裁决依据；重连后恢复到当前 seq",
+        "单机扫雷入口、调试参数与难度选择行为不变",
+        "视图单测覆盖房间状态切换与快照渲染"
+      ]
+    },
+    {
+      "id": "deploy-docs",
+      "category": "hosting",
+      "title": "联机部署与文档登记",
+      "detail": "登记联机范围扩展：静态站点 + 独立房间服务的部署方式、同域反代或服务地址环境变量、健康检查与日志；同步更新 docs/tech-stack-decision.md 与 docs/framework.md 中的「实时对战非目标」表述。",
+      "depends_on": ["room-service"],
+      "handles_events": [],
+      "acceptance": [
+        "构建产物仍是 dist/，单机与大厅的部署链不变",
+        "文档明确联机服务的部署单元、配置项、健康检查与回滚方式",
+        "docs/tech-stack-decision.md 与 docs/framework.md 的范围表述和本设计一致，并链接本文",
+        "本地/CI 可按文档在无外部账号的情况下启动联机服务"
+      ]
+    },
+    {
+      "id": "online-e2e",
+      "category": "e2e",
+      "title": "联机端到端测试",
+      "detail": "用 Playwright 启动本地房间服务与静态站点，双浏览器上下文覆盖创建→加入→就绪→开局→轮流行动→结束，以及断线重连、回合超时判负、重复/非法行动。",
+      "depends_on": ["client-room-ui", "reconnect-timeout"],
+      "handles_events": [],
+      "acceptance": [
+        "e2e 在 CI 中不依赖外部账号、网络或第三方实时通道",
+        "覆盖完整开局到结算主流程，双方棋盘一致且踩雷方判负",
+        "覆盖断线重连恢复与回合超时判负（测试配置可缩短时限）",
+        "覆盖重复 actionId 与非法坐标被拒绝且状态不变",
+        "失败时保留 trace/截图，便于定位"
+      ]
+    }
+  ]
+}
+```
 
 ## 9. 非目标与后续风险
 
-- 不做账号、匹配队列、观战、聊天、排行榜与持久化；这些会改变房间/协议边界，需另立设计。
+- 不做账号、匹配队列、观战、聊天、排行榜与持久化；这些会改变房间/协议边界，需另立设计。排行榜与自定义难度的兼容方向见第 2.5 节。
 - 不做「同一 seed 各自棋盘」的速度赛；若要做，应作为独立模式并重新评估实时同步、公平性与反作弊。
 - 首版不做多实例房间迁移、断线跨节点恢复与回放分享；服务重启即 `dissolved`。
 - 首版只支持 2 人；`capacity` 固定在协议中，扩展到多人需要重新评估回合顺序、棋盘共享粒度与胜负条件。
+
+## 10. 术语表
+
+| 术语 | 含义 | 契约/位置 |
+| --- | --- | --- |
+| 房间（room） | 一次 1v1 对局的容器，由 `roomId` 标识 | 第 3 节 |
+| 房间 FSM | `idle → waiting → ready → playing → finished/dissolved` 的状态机 | `design:room-lifecycle` |
+| presence | 玩家在线状态（`online` / `reconnecting` / `offline`），不属于房间状态 | 第 4.7、5 节 |
+| `playerToken` | 服务端签发给单个玩家的重连凭证，只出现在发给本人的消息中 | 第 4.6 节 |
+| `matchId` | 一局对局的标识；重开生成新值 | 第 3.2 节 |
+| `seq` | 服务端为已接受行动/广播分配的单调序号 | `design:protocol.ordering` |
+| `turnId` | 当前回合标识；行动必须匹配当前回合 | `design:protocol.ordering` |
+| `actionId` | 客户端生成的幂等键，重复提交返回缓存结果 | `design:protocol.ordering` |
+| seed 承诺 | 开局公布 `sha256(seed)`，结束后才公布 seed | 第 2.3、4.6 节 |
+| 宽限期 | 检测掉线后保留席位、等待重连的 15 s 窗口 | `design:reconnect.grace` |
+| `snapshot-at-current-seq` | 重连时下发当前 `seq` 的全量脱敏快照，不重放离线行动 | `design:reconnect.recovery` |
+| 脱敏快照 | 只含已翻开格子的信息、不含未翻开雷位的客户端快照 | 第 4.2 节 |
+| 单机规则引擎 | `src/games/minesweeper/engine.ts` 中与 DOM 无关的棋盘规则与 `validateConfig` | 第 2 节 |
+| 难度预设 | `src/games/minesweeper/difficulty.ts` 的初级/中级/高级配置 | 第 2.1、2.5 节 |
+| 独立房间服务 | 承载权威房间与棋盘的 Node WebSocket 服务（`dedicated-room-service`） | 第 6 节 |
