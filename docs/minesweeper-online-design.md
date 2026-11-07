@@ -1,8 +1,8 @@
 # 扫雷联机对战设计说明
 
-> 状态：设计稿（Issue #46 子任务 0，只出文档与契约测试，不写实现） · 范围：1v1 回合制联机扫雷
+> 状态：设计稿（Issue #46 子任务 0、1，只出文档与契约测试，不写实现） · 范围：1v1 回合制联机扫雷
 >
-> 本文定义房间生命周期、状态同步与裁决协议、超时边界，以及它们与现有单机扫雷规则引擎的关系。风格与 [贪食蛇设计说明](./snake-design.md)、[技术栈选型决策](./tech-stack-decision.md) 保持一致。
+> 本文定义房间生命周期、状态同步与裁决协议、超时与断线重连边界，以及它们与现有单机扫雷规则引擎的关系。风格与 [贪食蛇设计说明](./snake-design.md)、[技术栈选型决策](./tech-stack-decision.md) 保持一致。
 
 ## 1. 背景与范围
 
@@ -18,7 +18,7 @@
 1. 房间从创建到销毁经过哪些状态，哪些事件推动转移，三种时限分别在何时生效、到期后如何处置；
 2. 同步采用回合制还是实时、棋盘是共享还是每人一份、谁裁决踩雷与胜负；
 3. 消息有哪些、字段是什么，行动如何排序、去重与冲突处理，确定性从哪来；
-4. 如何避免把联机概念塞进现有单机状态模型，并为后续「断线重连与超时」子任务留出清晰边界。
+4. 如何划分联机概念与单机状态模型，以及掉线检测、宽限期、重连恢复与宽限用尽后的结局。
 
 不在本文范围内：具体服务端实现、房间匹配、账号体系、排行榜、观战、聊天、持久化、道具与自定义规则扩展。本文只固定契约；`src/` 运行时代码在本子任务中不改动。
 
@@ -411,7 +411,7 @@ finished ──dissolve──▶ dissolved
 
 **为什么不是每人一份棋盘**：每人一份会带来多实例、双份快照、跨棋盘公平性和双方进度比较；共享棋盘则只有一个权威状态，冲突处理、观战、重放和断线恢复都更直接。代价是双方轮流行动、节奏较慢，首版接受这个取舍。
 
-**为什么不是主机权威或客户端上报加校验**：主机权威把裁决权交给其中一名玩家，主机断线、作弊或版本不一致都会阻塞整局；客户端上报加校验需要客户端维护完整雷盘（或至少可信状态），既泄漏信息又制造状态分歧。服务端权威的代价是必须有房间服务，这与「纯静态部署」的现状冲突，因此第 5 节单独说明承载方式。
+**为什么不是主机权威或客户端上报加校验**：主机权威把裁决权交给其中一名玩家，主机断线、作弊或版本不一致都会阻塞整局；客户端上报加校验需要客户端维护完整雷盘（或至少可信状态），既泄漏信息又制造状态分歧。服务端权威的代价是必须有房间服务，这与「纯静态部署」的现状冲突，因此第 6 节单独说明承载方式。
 
 ### 4.2 棋盘与可见性
 
@@ -718,13 +718,300 @@ A/B: rematch ──────────▶ room_state(ready)
 明确规则：
 
 - `playing` 中 socket 断开**不触发**房间转移；`disconnect.immediateRoomTransition` 固定为 `false`。
-- 断线只更新该玩家的 presence，并启动 `disconnect.graceMs`（15 s）宽限计时；宽限内重连取消计时，棋局继续。
+- 连接层用心跳检测掉线（10 s 阈值），确认掉线后只更新该玩家的 presence，并启动 `disconnect.graceMs`（15 s）宽限计时；宽限内重连取消计时，棋局继续。
 - 若宽限期到期且轮到该玩家，服务端发出 `timeout(timer=turn)`，按回合超时判负；若未轮到该玩家，则只标记离线，等其回合再按 `turn` 时限处理。
 - `match` 时限不因断线暂停；断线不能用来逃避整局计时。
 - 只有服务端 `timeout` / `end` 事件能让房间离开 `playing`；连接层不得直接改房间状态。
-- 重连恢复使用 `snapshot-at-current-seq`，不做“回滚到断线前”的语义；这是 t2 实现断线重连时需要遵守的边界。
+- 重连恢复使用 `snapshot-at-current-seq`，不做“回滚到断线前”的语义；具体检测阈值、宽限结局与恢复细节见第 5 节。
 
-## 5. 承载方案
+## 5. 断线与重连
+
+第 4.7 节只固定了「断线不直接改房间状态」的边界；本章在 t1 的三种时限之上补齐掉线检测、宽限期、席位保留、重连恢复、幂等与房主掉线规则。下方 `design:reconnect` JSON 是这些阈值与结局的权威来源，文字与 JSON 冲突时以 JSON 为准。
+
+### 5.1 心跳与掉线检测
+
+- 传输层使用 WebSocket 应用层 ping/pong：服务端每 5 s 发一次 `ping`，客户端在同一条连接上回 `pong`；服务端记录最后有效心跳时间，客户端时钟不参与判定。
+- 连续错过 2 个心跳周期（10 s）仍收不到有效 `pong`，服务端把该玩家 presence 置为 `offline`，并启动宽限计时。检测阈值 10 s 小于宽限 15 s，也小于回合时限 30 s。
+- 心跳只更新 presence，不产生房间事件，不改变 `seq`、`turnId`、`seed` 或棋盘；presence 是连接层状态，不进入 `RoomState`。
+- 单次丢包或后台节流不直接判掉线；必须连续错过 `missedBeats` 次心跳才进入 `offline`，避免把短暂抖动当成弃局。
+- 房间状态仍只有 `idle` / `waiting` / `ready` / `playing` / `finished` / `dissolved`；`online` / `reconnecting` / `offline` 只存在于连接层。
+
+### 5.2 宽限期、席位保留与暂停语义
+
+- 检测到掉线后启动 15 s 宽限（`graceMs`），席位保留：该 `playerToken` 对应的座位不会被其他玩家占用，`players` 中仍保留该玩家（presence 标记为 `offline`）。
+- 掉线期间**不暂停**：`turn` 与 `match` 计时器照常运行，`match` 时限不因掉线或重连重置。断线不能用来逃避整局时限，也不能让对手无限等待。
+- 宽限内重连：取消宽限计时，presence 回到 `online`，不产生房间转移，也不改变 `seq`；回合与整局计时器继续按原 `deadlineAt` 走。
+- 宽限用尽前不允许对手顶替该座位；`waiting` / `ready` 中的空位只有在服务端确认释放席位后才允许新玩家 `join`。
+- 客户端只展示服务端 `deadlineAt` 的倒计时，不能用自己的时钟提前或推迟判负。
+
+### 5.3 重连与状态恢复
+
+- 重连沿用 `join` 消息与 `playerToken`：客户端带原 token、`roomId`、协议版本重新 `join`；服务端校验 token 与房间，校验通过后把新 socket 绑定到原玩家，而不是创建新座位。
+- 恢复方式是**全量快照**：服务端下发当前 `room_state` 与当前 `seq` 的 `snapshot`（含 `turnPlayerId`、`turnId`、`seedHash`、`deadlineAt`、`matchDeadlineAt`、脱敏棋盘与计数），客户端整体重绘；不重放离线期间的增量事件，也不重发未确认行动。
+- 恢复粒度由房间状态决定：
+  - `waiting` / `ready`：恢复座位与 `room_state`；对局尚未开始，不产生棋盘快照。
+  - `playing`：恢复当前 `snapshot` 与房间状态；若离线期间本局已结束，则改为下发 `end` 结果与 `room_state(finished)`。
+  - `finished`：结果仍在保留窗口内时，恢复 `end` 结果与 `room_state(finished)`，并允许在窗口内接受 `rematch`。
+  - `dissolved`：房间已销毁，返回 `room-not-found` / `room_closed`，不恢复座位或结果。
+- 重连不改变状态机：`playing` 中重连仍是 `playing`，`finished` 中重连仍是 `finished`；只有 `timeout` / `end` / `rematch` / `dissolve` / `leave` 等既有事件能推动转移。
+- 同一 `playerToken` 只允许一个活动 socket：新连接建立时旧连接收到 `session-replaced` 并关闭，避免双端同时行动；后建立的连接不重置 `turn` / `match` 截止时间。
+
+### 5.4 幂等与重复提交
+
+- 重连本身幂等：同一 `playerToken` 在宽限内重复 `join` 只返回当前 `room_state` + `snapshot`，不重复占座、不新建玩家、不重置宽限计时。
+- `action` 幂等沿用第 4.5 节：`actionId` 在服务端保留窗口内只应用一次，重复提交返回缓存的 `action_result`，不增加 `seq` / `turnId`。
+- 重复 `timeout` 只按 `seq` 发布一次；客户端丢弃 `seq` 不大于本地已应用值的消息。
+- 宽限用尽触发的判负也只产生一个 `timeout` 与一个 `end`；重连与超时同时到达时由服务端串行队列决定先后，先被接受的一方生效，另一方按状态已变化拒绝，不产生第二个终态。
+
+### 5.5 房主掉线与主机迁移
+
+- 承载选型是服务端权威（第 6 节），**不是 P2P**；裁决、棋盘与计时器都在服务端，因此不存在「主机迁移」。房主掉线不会把权威状态交给其中一名玩家；若未来改成 P2P，需要重新设计权威与迁移规则，不属于本设计。
+- 房主在 `waiting` / `ready` 掉线：宽限内重连恢复房主身份；宽限用尽仍离线时，房间失去开局能力，按 `leave` 解散（`waiting → dissolved` 或 `ready → dissolved`）。
+- 非房主在 `waiting` / `ready` 掉线：宽限内恢复；宽限用尽后服务端释放席位，`waiting` 保持 `waiting`，`ready` 回到 `waiting`。被释放的 `playerToken` 失效，之后回来只能按新 `join` 处理（若房间仍有空位）。
+- 房主在 `playing` / `finished` 掉线：与普通玩家相同，对局继续；服务端仍持有权威棋盘，房主身份在剩余房间生命周期内保留，不转交他人。若房主在重开窗口内一直离线，房间按第 3.4 节的窗口规则 `dissolve`。
+
+### 5.6 宽限期用尽后的结局
+
+| 掉线时状态 | 掉线者 | 宽限用尽后的结局 | 房间转移 |
+| --- | --- | --- | --- |
+| `waiting` | 非房主 | 释放席位 | `waiting → waiting`（`leave`） |
+| `ready` | 非房主 | 释放席位，座位不再满 | `ready → waiting`（`leave`） |
+| `waiting` / `ready` | 房主 | 解散房间 | `→ dissolved`（`leave`） |
+| `playing` | 当前回合玩家 | 判负，对手获胜 | `playing → finished`（`timeout(turn)`） |
+| `playing` | 非当前回合玩家 | 保留席位；轮到他时按 `turn` 时限判负；若 `match` 先到期则按整局时限结算 | `playing → finished`（`timeout(turn\|match)`） |
+| `finished` | 任意 | 保留结果，不转移；重开窗口结束后解散 | 无（窗口结束走 `dissolve`） |
+| `dissolved` | 任意 | 不可恢复 | 无（`room-not-found`） |
+
+补充：
+
+- `playing` 中宽限用尽但未轮到掉线者时，不会立刻改房间状态；等服务端把回合交给他，再由 `turn` 计时器按 30 s 判负。`match` 时限先到则按第 3.4 节按进度判定，不因掉线特殊处理。
+- 双方都掉线时不另设「双方掉线」状态；仍由先到期的 `turn` / `match` 计时器产生 `finished`，由服务端串行队列保证只产生一个结果。
+- `join` 时限（120 s）与宽限期独立：宽限期只保留席位，不延长房间等待加入的总时限；`join` 到期仍然 `dissolved`。
+- 宽限用尽只对 `playing` 产生判负；`waiting` / `ready` 是释放席位或解散，不产生胜负。
+
+### 5.7 契约 JSON
+
+下方 `design:reconnect` JSON 是断线重连规则的权威来源；测试将它和 `design:room-lifecycle` / `design:protocol` 交叉校验。
+
+<!-- design:reconnect -->
+```json
+{
+  "version": 1,
+  "status": "design-only",
+  "heartbeat": {
+    "channel": "websocket-ping-pong",
+    "intervalMs": 5000,
+    "missedBeats": 2,
+    "detectMs": 10000,
+    "clock": "server",
+    "onDetect": "offline"
+  },
+  "grace": {
+    "graceMs": 15000,
+    "startsAt": "offline-detect",
+    "seatReserved": true,
+    "pauseOnDisconnect": false,
+    "pauseTimers": false,
+    "playingCurrent": "forfeit",
+    "playingOther": "wait-until-turn",
+    "lobby": "release-seat-or-dissolve",
+    "finished": "retain-result"
+  },
+  "forfeit": {
+    "timer": "turn",
+    "timeoutMs": 30000,
+    "startsAt": "turn-start",
+    "when": "offline-and-current-player",
+    "outcome": "finished"
+  },
+  "recovery": {
+    "method": "snapshot-at-current-seq",
+    "eventReplay": false,
+    "auth": "playerToken",
+    "includes": ["room_state", "snapshot", "deadlines", "presence"],
+    "onFinished": "end",
+    "onDissolved": "room-not-found"
+  },
+  "idempotency": {
+    "reconnect": "player-token",
+    "duplicateJoin": "reuse-seat",
+    "duplicateAction": "actionId-cache",
+    "duplicateTimeout": "once-per-seq",
+    "socketRace": "newest-wins"
+  },
+  "hosting": {
+    "topology": "server-authoritative",
+    "p2p": false,
+    "hostMigration": "not-applicable",
+    "hostDisconnectInLobby": "dissolve",
+    "hostDisconnectInMatch": "normal-player"
+  },
+  "states": [
+    {
+      "name": "idle",
+      "reconnect": "rejected",
+      "reason": "room-not-created",
+      "graceOutcome": "none",
+      "recovery": "room-not-found"
+    },
+    {
+      "name": "waiting",
+      "reconnect": "allowed",
+      "reason": "seat-reserved-within-grace",
+      "graceOutcome": "release-seat",
+      "recovery": "room-state"
+    },
+    {
+      "name": "ready",
+      "reconnect": "allowed",
+      "reason": "seat-reserved-within-grace",
+      "graceOutcome": "release-seat",
+      "recovery": "room-state"
+    },
+    {
+      "name": "playing",
+      "reconnect": "allowed",
+      "reason": "seat-reserved-within-grace",
+      "graceOutcome": "forfeit-or-wait-turn",
+      "recovery": "snapshot-at-current-seq"
+    },
+    {
+      "name": "finished",
+      "reconnect": "allowed",
+      "reason": "result-retained",
+      "graceOutcome": "retain-result",
+      "recovery": "end-result"
+    },
+    {
+      "name": "dissolved",
+      "reconnect": "rejected",
+      "reason": "terminal",
+      "graceOutcome": "none",
+      "recovery": "room-not-found"
+    }
+  ],
+  "outcomes": [
+    {
+      "id": "waiting-join-timeout",
+      "kind": "timeout",
+      "from": "waiting",
+      "event": "timeout",
+      "to": "dissolved",
+      "timer": "join",
+      "transition": "t-join-timeout-waiting",
+      "guard": "join 计时器到期仍未开局"
+    },
+    {
+      "id": "ready-join-timeout",
+      "kind": "timeout",
+      "from": "ready",
+      "event": "timeout",
+      "to": "dissolved",
+      "timer": "join",
+      "transition": "t-join-timeout-ready",
+      "guard": "join 计时器到期仍未开局"
+    },
+    {
+      "id": "playing-turn-timeout",
+      "kind": "forfeit",
+      "from": "playing",
+      "event": "timeout",
+      "to": "finished",
+      "timer": "turn",
+      "transition": "t-turn-timeout",
+      "guard": "回合到期，或宽限用尽且轮到掉线者"
+    },
+    {
+      "id": "playing-match-timeout",
+      "kind": "timeout",
+      "from": "playing",
+      "event": "timeout",
+      "to": "finished",
+      "timer": "match",
+      "transition": "t-match-timeout",
+      "guard": "整局计时器到期，按进度判定"
+    },
+    {
+      "id": "waiting-seat-release",
+      "kind": "seat-release",
+      "from": "waiting",
+      "event": "leave",
+      "to": "waiting",
+      "transition": "t-leave-waiting",
+      "guard": "非房主宽限用尽，释放席位但房间仍有空位"
+    },
+    {
+      "id": "ready-seat-release",
+      "kind": "seat-release",
+      "from": "ready",
+      "event": "leave",
+      "to": "waiting",
+      "transition": "t-leave-ready",
+      "guard": "非房主宽限用尽，座位不再满"
+    },
+    {
+      "id": "waiting-host-dissolve",
+      "kind": "host-disconnect",
+      "from": "waiting",
+      "event": "leave",
+      "to": "dissolved",
+      "transition": "t-leave-waiting-dissolve",
+      "guard": "房主宽限用尽，房间失去开局能力"
+    },
+    {
+      "id": "ready-host-dissolve",
+      "kind": "host-disconnect",
+      "from": "ready",
+      "event": "leave",
+      "to": "dissolved",
+      "transition": "t-leave-ready-dissolve",
+      "guard": "房主宽限用尽，房间失去开局能力"
+    },
+    {
+      "id": "reconnect-waiting",
+      "kind": "reconnect",
+      "from": "waiting",
+      "to": "waiting",
+      "transition": "state-preserving",
+      "recovery": "room-state"
+    },
+    {
+      "id": "reconnect-ready",
+      "kind": "reconnect",
+      "from": "ready",
+      "to": "ready",
+      "transition": "state-preserving",
+      "recovery": "room-state"
+    },
+    {
+      "id": "reconnect-playing",
+      "kind": "reconnect",
+      "from": "playing",
+      "to": "playing",
+      "transition": "state-preserving",
+      "recovery": "snapshot-at-current-seq"
+    },
+    {
+      "id": "reconnect-finished",
+      "kind": "reconnect",
+      "from": "finished",
+      "to": "finished",
+      "transition": "state-preserving",
+      "recovery": "end-result"
+    },
+    {
+      "id": "reconnect-dissolved",
+      "kind": "reconnect",
+      "from": "dissolved",
+      "to": "dissolved",
+      "transition": "rejected",
+      "recovery": "room-not-found"
+    }
+  ]
+}
+```
+
+## 6. 承载方案
 
 协议需要**共享权威状态**，纯静态前端无法单独承载：
 
@@ -742,14 +1029,15 @@ A/B: rematch ──────────▶ room_state(ready)
 - 静态站点与 WebSocket 服务可同域反向代理，也可通过环境变量配置 `VITE_...` 服务地址；具体变量在实现子任务中命名，本设计不引入运行时代码；
 - 断线重连只依赖 `playerToken`，不做跨实例迁移；服务重启视为房间 `dissolved`。
 
-## 6. 测试与验收
+## 7. 测试与验收
 
-新增 `tests/unit/minesweeper-online-design.test.ts`，读取本文并解析两个标记块：
+新增 `tests/unit/minesweeper-online-design.test.ts`，读取本文并解析三个标记块：
 
 - `design:room-lifecycle`：断言状态名唯一、初始态存在、每个转移的 `from`/`to` 都是已声明状态、所有状态从初始态可达、终态只允许重开/解散出边、创建/加入/就绪/开局/结束/超时六类事件都有转移、三种计时器都有对应超时转移。
 - `design:protocol`：断言同步模型为回合制、裁决为服务端、棋盘共享、seed 与首点安全约束、断线不直接改变房间状态；消息表中每条消息都有方向与非空字段，字段名唯一，且至少覆盖 `join`、`snapshot`、`action`、`end` 及完整房间生命周期消息。
+- `design:reconnect`：断言心跳检测 < 宽限 < 判负超时且三者均为正数、宽限值与 `design:protocol.disconnect.graceMs` 一致、判负超时与 `turn` 计时器一致；枚举的每个状态都在 `design:room-lifecycle` 中声明，重连/掉线/超时结局要么对应已有合法转移，要么停留在终态；恢复方式明确为全量快照或事件回放。
 
-删掉任一标记块、改错状态名或把某条转移指向未声明状态，测试就会失败。本子任务验收命令：
+删掉任一标记块、改错状态名、把某条转移指向未声明状态，或让断线结局引用未声明的房间状态，测试就会失败。本子任务验收命令：
 
 ```bash
 npm run test:unit
@@ -760,18 +1048,18 @@ npm run build
 
 测试只读文档，不修改 `src/` 运行时代码；因此不影响现有单机扫雷、其他游戏与大厅行为。
 
-## 7. 实现阶段拆分（供计划收口节点建单）
+## 8. 实现阶段拆分（供计划收口节点建单）
 
 本设计只固定契约；实现阶段建议按依赖顺序拆为：
 
 1. **房间服务与传输骨架**：WebSocket 连接、`create`/`join`/`ready`/`start`、房间状态机、内存房间表；
 2. **权威对局与协议**：服务端引擎、seed 承诺、`action`/`snapshot`/`action_result`/`end`、`seq`/幂等/回合校验与重放日志；
-3. **断线重连与超时**（t2）：presence、15 s 宽限、`turn`/`match` 计时器、`timeout` 消息与重连快照；
+3. **断线重连与超时**（t2）：presence、心跳检测、15 s 宽限、`turn`/`match` 计时器、`timeout` 消息与重连快照（设计见第 5 节）；
 4. **客户端联机视图与 e2e**：入口、房间 UI、脱敏棋盘渲染、重连提示、断线/超时/重放端到端用例。
 
 依赖顺序为 1 → 2 → 3 → 4；第 2 步之前不应开始客户端联机视图，否则会为了临时协议反复改 UI。实际 issue 编号与拆分粒度由计划收口节点决定，本子任务不创建实现 issue。
 
-## 8. 非目标与后续风险
+## 9. 非目标与后续风险
 
 - 不做账号、匹配队列、观战、聊天、排行榜与持久化；这些会改变房间/协议边界，需另立设计。
 - 不做「同一 seed 各自棋盘」的速度赛；若要做，应作为独立模式并重新评估实时同步、公平性与反作弊。
