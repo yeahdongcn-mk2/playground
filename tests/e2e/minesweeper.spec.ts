@@ -187,6 +187,13 @@ test.describe('minesweeper gameplay', () => {
     await expect(page.getByTestId('status')).toHaveText('进行中');
     const fallbackSignature = mineSignature(await readState(page));
     expect(signatures).toEqual(malformedLayouts.map(() => fallbackSignature));
+
+    // A missing seed must resolve to the documented default seed 1, so an
+    // explicit `seed=1` run has to plant exactly the same fallback board.
+    await openMinesweeper(page, { seed: 1 });
+    await cellLocator(page, 8, 8).click();
+    await expect(page.getByTestId('status')).toHaveText('进行中');
+    expect(mineSignature(await readState(page))).toBe(fallbackSignature);
   });
 
   test('hitting a mine ends the game, reveals every mine, freezes the clock and restarts', async ({
