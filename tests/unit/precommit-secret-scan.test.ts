@@ -69,6 +69,9 @@ afterEach(() => {
 // it exercises.
 const FAKE_AWS_KEY = ['AKIA', 'IOSFODNN7EXAMPLE'].join('');
 const FAKE_PRIVATE_KEY_HEADER = ['-----BEGIN', 'RSA', 'PRIVATE', 'KEY-----'].join(' ');
+// The public AWS documentation example key, split so this test file itself
+// stays clean for the scanner it exercises.
+const FAKE_AWS_SECRET_KEY = ['wJalrXUtnFEMI/K7MDENG', '/bPxRfiCYEXAMPLEKEY'].join('');
 
 describe('secret scan pre-commit hook', () => {
   it('is configured to scan every text file, not only staged changes', () => {
@@ -113,6 +116,40 @@ describe('secret scan pre-commit hook', () => {
 
     writeFileSync(fixture, "export const greeting = 'hello';\n");
     expect(runScanner([fixture]).status).toBe(0);
+  });
+
+  it('fails on aws_secret_access_key assignments with a 40-character base64 value', () => {
+    const dir = makeTempDir();
+    const fixtures = [
+      ['lowercase.ts', `export const aws_secret_access_key = '${FAKE_AWS_SECRET_KEY}';\n`],
+      ['uppercase.env', `AWS_SECRET_ACCESS_KEY=${FAKE_AWS_SECRET_KEY}\n`],
+    ] as const;
+
+    for (const [name, content] of fixtures) {
+      const fixture = join(dir, name);
+      writeFileSync(fixture, content);
+
+      const failing = runScanner([fixture]);
+      expect(failing.status).toBe(1);
+      expect(failing.stderr).toContain('aws-secret-access-key');
+      expect(failing.stderr).toContain(name);
+    }
+  });
+
+  it('does not flag bare or short AWS secret key lookalikes', () => {
+    const dir = makeTempDir();
+    const fixture = join(dir, 'near-misses.ts');
+    writeFileSync(
+      fixture,
+      [
+        'export const aws_secret_access_key = process.env.AWS_SECRET_ACCESS_KEY;',
+        `export const checksum = '${FAKE_AWS_SECRET_KEY}';`,
+        `export const aws_secret_access_key = '${FAKE_AWS_SECRET_KEY.slice(0, 39)}';`,
+        '',
+      ].join('\n'),
+    );
+
+    expect(runScanner([fixture])).toEqual({ status: 0, stderr: '' });
   });
 
   it('fails on fixtures containing common private key headers', () => {

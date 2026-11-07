@@ -52,6 +52,17 @@ const RULES = [
     description: 'npm access token',
     pattern: /\bnpm_[A-Za-z0-9]{36}\b/,
   },
+  {
+    id: 'aws-secret-access-key',
+    description: 'AWS secret access key',
+    // Only the named assignment is matched: the `aws_secret_access_key` key
+    // followed by `=`/`:` and exactly 40 base64 characters (quotes around the
+    // key and value are optional). A bare 40-character string is deliberately
+    // not flagged, because that would be a generic entropy rule and would also
+    // match checksums, hashes and test fixtures.
+    pattern:
+      /\baws_secret_access_key['"]?\s*[:=]\s*['"`]?[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+=])/i,
+  },
 ];
 
 function isBinary(buffer) {
