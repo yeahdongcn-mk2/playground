@@ -266,6 +266,7 @@ interface ImplementationTask {
   readonly title: string;
   readonly detail: string;
   readonly depends_on: readonly string[];
+  readonly events: readonly string[];
   readonly acceptance: readonly string[];
 }
 
@@ -288,6 +289,15 @@ interface ImplementationPlan {
 /** Escape a marker before embedding it in a regular expression. */
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Apply GitHub's heading-slug rules closely enough for the numbered chapters. */
+function githubAnchor(heading: string): string {
+  return heading
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\p{M}\s-]/gu, '')
+    .replace(/\s+/g, '-');
 }
 
 /** Parse the JSON fenced block immediately after a design marker. */
@@ -840,6 +850,8 @@ describe('minesweeper online implementation plan design', () => {
       expect(task.title.trim().length).toBeGreaterThan(0);
       expect(task.detail.trim().length).toBeGreaterThan(0);
       expect(Array.isArray(task.depends_on)).toBe(true);
+      expect(Array.isArray(task.events)).toBe(true);
+      expect(Array.isArray(task.acceptance)).toBe(true);
       expect(task.acceptance.length).toBeGreaterThan(0);
       for (const item of task.acceptance) {
         expect(item.trim().length).toBeGreaterThan(0);
@@ -856,6 +868,40 @@ describe('minesweeper online implementation plan design', () => {
         expect(dependencyPosition).toBeLessThan(position);
       }
     }
+  });
+
+  it('assigns every lifecycle event to at least one implementation task', () => {
+    const declaredEvents = new Set(lifecycle.events.map((event) => event.name));
+    const owners = new Map<string, string[]>();
+
+    for (const task of IMPLEMENTATION_TASKS) {
+      const seen = new Set<string>();
+      for (const event of task.events) {
+        expect(declaredEvents.has(event)).toBe(true);
+        expect(seen.has(event)).toBe(false);
+        seen.add(event);
+
+        const taskIds = owners.get(event) ?? [];
+        taskIds.push(task.id);
+        owners.set(event, taskIds);
+      }
+    }
+
+    for (const event of declaredEvents) {
+      expect(owners.get(event)?.length ?? 0).toBeGreaterThan(0);
+    }
+
+    const roomService = IMPLEMENTATION_TASKS.find((task) => task.id === 'room-service');
+    expect(roomService?.events).toContain('rematch');
+    expect(roomService?.detail).toContain('rematch');
+    expect(roomService?.acceptance.some((item) => item.includes('rematch'))).toBe(true);
+  });
+
+  it('documents injectable engine construction in the engine adapter task', () => {
+    const engineAdapter = IMPLEMENTATION_TASKS.find((task) => task.id === 'engine-adapter');
+    expect(engineAdapter?.detail).toContain(
+      'new MinesweeperEngine({ config, rng: createSeededRng(seed) })',
+    );
   });
 
   it('covers the six required implementation categories', () => {
@@ -918,6 +964,10 @@ describe('minesweeper online single-player relationship and glossary', () => {
     ]) {
       expect(relationship).toContain(reference);
     }
+    expect(relationship).toContain(
+      'new MinesweeperEngine({ config, rng: createSeededRng(seed) })',
+    );
+    expect(relationship).not.toContain('new MinesweeperEngine(config)');
     for (const topic of ['不回归', '排行榜', '自定义难度']) {
       expect(relationship).toContain(topic);
     }
@@ -928,8 +978,48 @@ describe('minesweeper online single-player relationship and glossary', () => {
     expect(DESIGN).toContain('## 10. 术语表');
 
     const index = sectionBetween('## 0. 章节索引', '## 1. 背景与范围');
-    for (const section of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
-      expect(index).toContain(`#${section}-`);
+
+    const headings = new Map<number, { title: string; anchor: string }>();
+    for (const line of DESIGN.split('\n')) {
+      const match = /^## (\d+)\. (.+)$/.exec(line);
+      if (match === null) {
+        continue;
+      }
+      const number = match[1];
+      const title = match[2];
+      if (number === undefined || title === undefined || Number(number) === 0) {
+        continue;
+      }
+      headings.set(Number(number), {
+        title: title.trim(),
+        anchor: githubAnchor(`${number}. ${title.trim()}`),
+      });
+    }
+    const headingNumbers = [...headings.keys()].sort((a, b) => a - b);
+    expect(headingNumbers).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+
+    const entries = new Map<number, { title: string; anchor: string }>();
+    for (const line of index.split('\n')) {
+      const match = /^\| \[(\d+)\. ([^\]]+)\]\(#([^)]+)\) \|/.exec(line);
+      if (match === null) {
+        continue;
+      }
+      const number = match[1];
+      const title = match[2];
+      const anchor = match[3];
+      if (number === undefined || title === undefined || anchor === undefined) {
+        continue;
+      }
+      expect(entries.has(Number(number))).toBe(false);
+      entries.set(Number(number), { title: title.trim(), anchor });
+    }
+    expect([...entries.keys()].sort((a, b) => a - b)).toEqual(headingNumbers);
+
+    for (const [number, heading] of headings) {
+      const entry = entries.get(number);
+      expect(entry).toBeDefined();
+      expect(entry?.title).toBe(heading.title);
+      expect(entry?.anchor).toBe(heading.anchor);
     }
 
     const glossaryStart = DESIGN.indexOf('## 10. 术语表');
