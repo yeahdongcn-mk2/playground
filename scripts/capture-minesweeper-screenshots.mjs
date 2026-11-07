@@ -13,6 +13,8 @@ import { chromium, devices } from '@playwright/test';
  *   BASE_URL=http://127.0.0.1:4189 npm run screenshots:minesweeper:narrow-before
  *   npm run screenshots:minesweeper:min
  *   BASE_URL=http://127.0.0.1:4189 npm run screenshots:minesweeper:min-before
+ *   npm run screenshots:minesweeper:restart
+ *   BASE_URL=http://127.0.0.1:4191 npm run screenshots:minesweeper:restart-before
  *
  * The after mode builds first (the npm script does) and serves the production
  * preview. The before mode must point BASE_URL at a main baseline preview;
@@ -20,9 +22,10 @@ import { chromium, devices } from '@playwright/test';
  * touch-before mode points BASE_URL at a preview of the commit before this
  * task's touch and mobile changes, where the page exists but only has
  * desktop-style pointer input, and captures the same phone game states. The
- * narrow modes capture the 360×740 ready state and the min modes capture the
- * 320×640 ready state, before and after the narrow viewport fix; the before
- * modes likewise need BASE_URL at the baseline preview.
+ * narrow modes capture the 360×740 ready state, the min modes capture the
+ * 320×640 ready state and the restart modes capture the same 320×640 ready
+ * state after the short-screen vertical compression; the before modes
+ * likewise need BASE_URL at the baseline preview.
  */
 
 const HOST = '127.0.0.1';
@@ -34,10 +37,17 @@ const NARROW = process.argv.includes('--narrow');
 const NARROW_BEFORE = process.argv.includes('--narrow-before');
 const MIN = process.argv.includes('--min');
 const MIN_BEFORE = process.argv.includes('--min-before');
-const IS_NARROW = NARROW || NARROW_BEFORE || MIN || MIN_BEFORE;
-const IS_NARROW_BEFORE = NARROW_BEFORE || MIN_BEFORE;
+const RESTART = process.argv.includes('--restart');
+const RESTART_BEFORE = process.argv.includes('--restart-before');
+const IS_COMPACT = RESTART || RESTART_BEFORE;
+const IS_NARROW =
+  NARROW || NARROW_BEFORE || MIN || MIN_BEFORE || RESTART || RESTART_BEFORE;
+const IS_NARROW_BEFORE = NARROW_BEFORE || MIN_BEFORE || RESTART_BEFORE;
 const NARROW_VIEWPORT =
-  MIN || MIN_BEFORE ? { width: 320, height: 640 } : { width: 360, height: 740 };
+  MIN || MIN_BEFORE || IS_COMPACT
+    ? { width: 320, height: 640 }
+    : { width: 360, height: 740 };
+const NARROW_FILE_SUFFIX = IS_COMPACT ? '-restart' : '';
 const MODE = IS_NARROW_BEFORE
   ? 'narrow-before'
   : IS_NARROW
@@ -47,6 +57,8 @@ const MODE = IS_NARROW_BEFORE
       : process.argv.includes('--before')
         ? 'before'
         : 'after';
+/** Human-readable mode for the log; restart reuses the narrow capture path. */
+const MODE_LABEL = RESTART_BEFORE ? 'restart-before' : RESTART ? 'restart' : MODE;
 const BASE_URL = process.env.BASE_URL ?? ORIGIN;
 
 // The same deterministic layouts as tests/e2e/minesweeper-helpers.ts: a mine
@@ -332,11 +344,12 @@ async function captureTouchMobile(browser, prefix) {
 
 /**
  * Capture the ready state at a narrow phone viewport: 360×740 for the narrow
- * mode and 320×640 for the min mode. Each pair isolates the narrow-layout
- * change: same scene, viewport, dark theme and reduced-motion setting before
- * and after.
+ * mode, 320×640 for the min mode and 320×640 for the restart mode. Each pair
+ * isolates one layout change: same scene, viewport, dark theme and
+ * reduced-motion setting before and after. The restart mode uses its own file
+ * suffix so it does not overwrite the min mode's earlier evidence.
  */
-async function captureNarrow(browser, prefix, viewport) {
+async function captureNarrow(browser, prefix, viewport, fileNameSuffix = '') {
   const { width, height } = viewport;
   const context = await browser.newContext({
     viewport,
@@ -352,7 +365,11 @@ async function captureNarrow(browser, prefix, viewport) {
   await openTouchGame(ready, WIN_MINES);
   await ready.getByTestId('status').filter({ hasText: '待开始' }).waitFor();
   await settle(ready);
-  await capture(ready, `${prefix}-minesweeper-ready-${width}x${height}.png`, false);
+  await capture(
+    ready,
+    `${prefix}-minesweeper-ready-${width}x${height}${fileNameSuffix}.png`,
+    false,
+  );
   await ready.close();
 
   await context.close();
@@ -372,7 +389,7 @@ if (MODE === 'touch-before' && !process.env.BASE_URL) {
 
 if (MODE === 'narrow-before' && !process.env.BASE_URL) {
   throw new Error(
-    'The narrow-before / min-before modes need BASE_URL pointing at a preview of the pre-narrow-layout baseline commit (see docs/screenshots/README.md).',
+    'The narrow-before / min-before / restart-before modes need BASE_URL pointing at the matching baseline preview (see docs/screenshots/README.md).',
   );
 }
 
@@ -402,6 +419,7 @@ try {
       browser,
       MODE === 'narrow-before' ? 'before' : 'after',
       NARROW_VIEWPORT,
+      NARROW_FILE_SUFFIX,
     );
   } else {
     if (MODE !== 'touch-before') {
@@ -414,7 +432,7 @@ try {
       await captureTouchMobile(browser, 'before');
     }
   }
-  console.log(`Captured ${MODE} minesweeper screenshots in ${OUTPUT}`);
+  console.log(`Captured ${MODE_LABEL} minesweeper screenshots in ${OUTPUT}`);
 } finally {
   await browser.close();
   server?.kill();
