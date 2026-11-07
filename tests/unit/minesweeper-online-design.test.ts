@@ -220,6 +220,46 @@ interface ReconnectDesign {
   readonly outcomes: readonly ReconnectOutcome[];
 }
 
+interface HostingCandidate {
+  readonly id: string;
+  readonly title: string;
+  readonly description: string;
+  readonly staticFrontend: boolean;
+  readonly ownServer: boolean;
+  readonly thirdPartyRealtime: boolean;
+  readonly authority: string;
+}
+
+interface HostingRejection {
+  readonly id: string;
+  readonly reason: string;
+}
+
+interface HostingReason {
+  readonly dimension: string;
+  readonly label: string;
+  readonly choice: string;
+  readonly alternative: string;
+}
+
+interface HostingEvolutionStage {
+  readonly stage: string;
+  readonly change: string;
+  readonly invariant: string;
+}
+
+interface HostingDesign {
+  readonly version: number;
+  readonly status: string;
+  readonly choice: string;
+  readonly candidates: readonly HostingCandidate[];
+  readonly rejected: readonly HostingRejection[];
+  readonly reasons: readonly HostingReason[];
+  readonly references: readonly string[];
+  readonly evolution: readonly HostingEvolutionStage[];
+  readonly reevaluateWhen: readonly string[];
+}
+
 /** Escape a marker before embedding it in a regular expression. */
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -244,6 +284,7 @@ function readJsonBlock(marker: string): unknown {
 const lifecycle = readJsonBlock('design:room-lifecycle') as LifecycleDesign;
 const protocol = readJsonBlock('design:protocol') as ProtocolDesign;
 const reconnect = readJsonBlock('design:reconnect') as ReconnectDesign;
+const hosting = readJsonBlock('design:hosting') as HostingDesign;
 
 const STATES = lifecycle.states.map((state) => state.name);
 const STATE_SET = new Set(STATES);
@@ -647,5 +688,97 @@ describe('minesweeper online disconnect and reconnect design', () => {
     expect(reconnect.hosting.p2p).toBe(false);
     expect(reconnect.hosting.hostMigration).toBe('not-applicable');
     expect(reconnect.hosting.hostDisconnectInLobby).toBe('dissolve');
+  });
+});
+
+describe('minesweeper online hosting selection design', () => {
+  it('selects one listed candidate and rejects every other candidate with a reason', () => {
+    expect(hosting.version).toBe(1);
+    expect(hosting.status).toBe('design-only');
+
+    const ids = hosting.candidates.map((candidate) => candidate.id);
+    expect(ids.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toContain(hosting.choice);
+    for (const id of ['dedicated-room-service', 'third-party-realtime']) {
+      expect(ids).toContain(id);
+    }
+
+    const chosen = hosting.candidates.find((candidate) => candidate.id === hosting.choice);
+    expect(chosen).toBeDefined();
+    if (chosen === undefined) {
+      throw new Error('The chosen hosting candidate must be listed.');
+    }
+    expect(chosen.authority).toBe('server');
+    expect(chosen.ownServer).toBe(true);
+    expect(chosen.staticFrontend).toBe(true);
+
+    expect(hosting.rejected.length).toBeGreaterThan(0);
+    const rejectedIds = new Set<string>();
+    for (const rejection of hosting.rejected) {
+      expect(ids).toContain(rejection.id);
+      expect(rejection.id).not.toBe(hosting.choice);
+      expect(rejection.reason.trim().length).toBeGreaterThan(0);
+      expect(rejectedIds.has(rejection.id)).toBe(false);
+      rejectedIds.add(rejection.id);
+    }
+    for (const id of ids) {
+      if (id !== hosting.choice) {
+        expect(rejectedIds.has(id)).toBe(true);
+      }
+    }
+  });
+
+  it('compares every required dimension with reasons for both options', () => {
+    const required = [
+      'deployment-ops',
+      'cost',
+      'latency',
+      'authority-anti-cheat',
+      'disconnect-recovery',
+      'data-privacy',
+      'testability',
+      'static-deployment-alignment',
+    ];
+    const dimensions = hosting.reasons.map((reason) => reason.dimension);
+    expect(new Set(dimensions).size).toBe(dimensions.length);
+    for (const dimension of required) {
+      expect(dimensions).toContain(dimension);
+    }
+    for (const reason of hosting.reasons) {
+      expect(reason.label.trim().length).toBeGreaterThan(0);
+      expect(reason.choice.trim().length).toBeGreaterThan(0);
+      expect(reason.alternative.trim().length).toBeGreaterThan(0);
+    }
+    const alignment = hosting.reasons.find(
+      (reason) => reason.dimension === 'static-deployment-alignment',
+    );
+    expect(alignment?.label).toContain('静态');
+  });
+
+  it('keeps the hosting decision, references and evolution path coherent', () => {
+    expect(hosting.references).toEqual(
+      expect.arrayContaining(['docs/tech-stack-decision.md', 'docs/framework.md']),
+    );
+
+    expect(protocol.hosting.requiresServer).toBe(true);
+    expect(protocol.hosting.staticHostingOnly).toBe(false);
+    expect(protocol.hosting.reason.trim().length).toBeGreaterThan(0);
+    const chosen = hosting.candidates.find((candidate) => candidate.id === hosting.choice);
+    expect(chosen?.ownServer).toBe(protocol.hosting.requiresServer);
+
+    expect(hosting.evolution.length).toBeGreaterThan(0);
+    const stages = new Set<string>();
+    for (const stage of hosting.evolution) {
+      expect(stage.stage.trim().length).toBeGreaterThan(0);
+      expect(stage.change.trim().length).toBeGreaterThan(0);
+      expect(stage.invariant.trim().length).toBeGreaterThan(0);
+      expect(stages.has(stage.stage)).toBe(false);
+      stages.add(stage.stage);
+    }
+    expect(stages.has('mvp')).toBe(true);
+    for (const trigger of hosting.reevaluateWhen) {
+      expect(trigger.trim().length).toBeGreaterThan(0);
+    }
   });
 });
