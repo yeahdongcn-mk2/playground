@@ -26,12 +26,14 @@ const PLACEHOLDER_PASSWORD_SHAPES = String.raw`\$(?:\{|\(|[A-Za-z_])|\{[A-Za-z_{
 
 // SQL Server JDBC escapes values containing `;`, `{`, `}` or `=` by wrapping
 // them in braces, for example `password={S3cr3t;!}`. A JDBC value that starts
-// with `{` is therefore not automatically a template placeholder: a template
-// must be a name-like value such as `{DB_PASSWORD}` closed by `}` (also
-// `{{DB_PASSWORD}}`), so brace-escaped real values containing `;` or
-// punctuation are still reported. The URL-userinfo branch keeps the looser
-// shape above.
-const PLACEHOLDER_JDBC_SHAPES = String.raw`\$(?:\{|\(|[A-Za-z_])|\{\{?[A-Z_][A-Z0-9_]*\}\}?|<[^>\s]*>|\[[^\]\s]*\]|%[A-Za-z_][A-Za-z0-9_]*%`;
+// with `{` is therefore not automatically a template placeholder. Only a
+// name-like template is exempt: a placeholder word with an optional suffix
+// (`{password123}`), a name with an underscore/hyphen separator
+// (`{DB_PASSWORD}`, `{DB-PASSWORD}`) or another known placeholder shape
+// (`{...}`, `{*****}`, `{__PASSWORD__}`, `{%s}`). Other brace values such as
+// `{S3cr3t}` or `{ABC123}` are reported as real brace-escaped passwords.
+// The URL-userinfo branch keeps the looser shape above.
+const PLACEHOLDER_JDBC_SHAPES = String.raw`\$(?:\{|\(|[A-Za-z_])|\{\{?(?:(?:${PLACEHOLDER_PASSWORD_WORDS})[A-Za-z0-9]*|[A-Za-z][A-Za-z0-9]*(?:[_-][A-Za-z0-9]+)+|\.{3,}|\*+|__[A-Za-z0-9_]*__|%s)\}\}?|<[^>\s]*>|\[[^\]\s]*\]|%[A-Za-z_][A-Za-z0-9_]*%`;
 
 const RULES = [
   {
@@ -128,9 +130,11 @@ const RULES = [
     //     `%s`, `__PASSWORD__`, `*****` and `...` placeholders.
     // A JDBC placeholder word counts when the whole value is that word, so
     // values terminated by `;`, `&`, `?`, a closing quote or other punctuation
-    // are still placeholders. Brace-escaped SQL Server values such as
-    // `{S3cr3t;!}` are real values and are reported: only a name-like brace
-    // template such as `{DB_PASSWORD}` is treated as a placeholder.
+    // are still placeholders, while a value continuing after such punctuation
+    // (for example `pass!word` or `changeme:abc`) is reported. Brace-escaped
+    // SQL Server values are reported unless they match a name-like template
+    // such as `{DB_PASSWORD}` or `{password123}`; `{S3cr3t}` and `{ABC123}`
+    // are real values.
     // The host part is required, so a bare `user:password@` mention without a
     // URL scheme or host is not reported. A raw `/` in a password is not
     // matched because it would be ambiguous with the URL path; valid
@@ -139,7 +143,7 @@ const RULES = [
     // `jdbc:<scheme>://` prefix) keeps the original behaviour and is not
     // reported only because it contains a password property.
     pattern: new RegExp(
-      String.raw`\b(?:(?:postgres(?:ql)?|mysql|mariadb|mongodb|rediss?|amqps?|mssql|sqlserver|cockroachdb|clickhouse|oracle|neo4j)(?:\+[a-z0-9_]+)?:\/\/[^\s/:@?#]*:(?!${PLACEHOLDER_PASSWORD_SHAPES}|(?:${PLACEHOLDER_PASSWORD_WORDS})(?=[@/?#]|$))[^\s@/?#]+@[^\s/?#@]+|jdbc:[a-z0-9]+:\/\/\S*?[;?&]password=(?!${PLACEHOLDER_JDBC_SHAPES}|%[A-Za-z]|__[A-Za-z0-9_]*__|\*+|\.{3,}|(?:${PLACEHOLDER_PASSWORD_WORDS})(?![A-Za-z0-9_-]))[^\s;?&]+)`,
+      String.raw`\b(?:(?:postgres(?:ql)?|mysql|mariadb|mongodb|rediss?|amqps?|mssql|sqlserver|cockroachdb|clickhouse|oracle|neo4j)(?:\+[a-z0-9_]+)?:\/\/[^\s/:@?#]*:(?!${PLACEHOLDER_PASSWORD_SHAPES}|(?:${PLACEHOLDER_PASSWORD_WORDS})(?=[@/?#]|$))[^\s@/?#]+@[^\s/?#@]+|jdbc:[a-z0-9]+:\/\/\S*?[;?&]password=(?!${PLACEHOLDER_JDBC_SHAPES}|%[A-Za-z]|__[A-Za-z0-9_]*__|\*+|\.{3,}|(?:${PLACEHOLDER_PASSWORD_WORDS})(?![^\s;?&]*[A-Za-z0-9_-]))[^\s;?&]+)`,
       'i',
     ),
   },

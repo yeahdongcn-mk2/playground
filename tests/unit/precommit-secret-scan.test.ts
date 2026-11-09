@@ -129,6 +129,19 @@ const FAKE_JDBC_PASSWORD = ['S3cr3t', '!'].join('');
 // them in braces. Built at runtime so this test file itself does not contain a
 // complete real-looking value.
 const FAKE_JDBC_BRACE_ESCAPED_PASSWORD = `{${FAKE_JDBC_PASSWORD};!}`;
+// A brace-wrapped mixed-case word is a real escaped value, not one of the
+// template forms the rule excludes. Built from parts so this test file itself
+// stays clean for the scanner it exercises.
+const FAKE_JDBC_BRACE_WORD_PASSWORD = ['{', 'S3cr3t', '}'].join('');
+// Real values that start with a placeholder word but continue after
+// punctuation. Only a value that is the whole placeholder word is exempt, so
+// these must still be reported.
+const FAKE_JDBC_PLACEHOLDER_PREFIX_PASSWORDS = [
+  ['pass', '!word'],
+  ['secret', '!2024'],
+  ['example', '.org'],
+  ['changeme', ':abc'],
+].map((parts) => parts.join(''));
 // Used to build a fixture line whose password property is empty at end of URL.
 const EMPTY_JDBC_PASSWORD = '';
 // Percent-encoded `@` and `/`, which valid connection strings use instead of
@@ -296,8 +309,15 @@ describe('secret scan pre-commit hook', () => {
       // SQL Server JDBC brace-escapes values containing `;`/`{}`/`=`; the
       // escaped value is a real password, not a `{...}` template placeholder.
       `jdbc:sqlserver://host:1433;databaseName=app;user=sa;password=${FAKE_JDBC_BRACE_ESCAPED_PASSWORD}`,
+      // A bare brace-wrapped word is not one of the name-like template forms.
+      `jdbc:sqlserver://host:1433;databaseName=app;user=sa;password=${FAKE_JDBC_BRACE_WORD_PASSWORD}`,
       // PostgreSQL/MySQL JDBC URLs put properties in the query string.
       `jdbc:postgresql://db.internal:5432/app?user=sa&password=${FAKE_JDBC_PASSWORD}`,
+      // A placeholder word only exempts the whole value; a real password that
+      // continues after punctuation must still be reported.
+      ...FAKE_JDBC_PLACEHOLDER_PREFIX_PASSWORDS.map(
+        (password) => `jdbc:sqlserver://host:1433;user=sa;password=${password}`,
+      ),
     ];
     writeFileSync(fixture, `${urls.map((url) => `DATABASE_URL=${url}`).join('\n')}\n`);
 
@@ -346,10 +366,16 @@ describe('secret scan pre-commit hook', () => {
       'jdbc:sqlserver://host;databaseName=app;user=sa;password=changeme,',
       // A placeholder word at the very end of the URL is still the whole value.
       'jdbc:sqlserver://host:1433;databaseName=app;user=sa;password=password',
-      // All-uppercase/underscore brace templates remain placeholders; a mixed
-      // case brace value would be reported as a real password (see above).
+      // Name-like brace templates remain placeholders: placeholder words with
+      // a suffix, underscore/hyphen-separated names and other placeholder
+      // shapes. Brace-wrapped real values are reported (see the positive test).
       'jdbc:sqlserver://host:1433;databaseName=app;user=sa;password={DB_PASSWORD}',
       'jdbc:sqlserver://host:1433;databaseName=app;user=sa;password={{DB_PASSWORD}}',
+      'jdbc:sqlserver://host:1433;databaseName=app;user=sa;password={db_password}',
+      'jdbc:sqlserver://host:1433;databaseName=app;user=sa;password={DB-PASSWORD}',
+      'jdbc:sqlserver://host:1433;databaseName=app;user=sa;password={password123}',
+      'jdbc:sqlserver://host:1433;databaseName=app;user=sa;password={...}',
+      'jdbc:sqlserver://host:1433;databaseName=app;user=sa;password={__PASSWORD__}',
       // Property text without a `jdbc:<scheme>://` prefix keeps the previous
       // non-matching behaviour.
       'sqlserver://host:1433;databaseName=app;user=sa;password=real-looking-value',
