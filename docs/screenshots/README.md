@@ -74,7 +74,7 @@
 - After：本子任务分支 `agent/plan-44-t3` 的提交 [`2933d26`](https://github.com/yeahdongcn-mk2/playground/commit/2933d26)（该提交含难度卡片 UI 修正并刷新了 After 截图）。侧栏在操作与本局状态卡片之后新增「难度」卡片：初级 / 中级 / 高级三个预设按钮，以及行 / 列 / 雷数三个数字输入和「开始自定义」按钮；当前档以 `aria-pressed` 标记，非法自定义在 `role=alert` 区域显示中文错误。其后审查修正只改 e2e 断言与文档；合并 `main` 后在本分支重新生成截图，桌面 After PNG 仍与 `2933d26` 逐字节一致（sha256 `88d1fb28…`）。
 - 视口 / 主题：桌面 1440×1000 CSS px，DPR 1，深色主题，`reducedMotion: reduce`；Before / After 使用同一固定雷盘（`?debug=1&mines=...`）、READY 状态，均为整页截图（`fullPage: true`）。
 - 生成 After：`npm run screenshots:minesweeper`（生产构建 + `vite preview`，固定雷盘走调试接缝）。该命令同时刷新大厅与桌面 / 手机玩法截图，因为大厅卡片描述和侧栏布局随难度选择更新。
-- 复现 Before：在 `9f9aa54` 的干净 worktree 里 `npm ci && npm run build`，用 `node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4186 --strictPort` 启动预览，再运行 `BASE_URL=http://127.0.0.1:4186 node scripts/capture-minesweeper-screenshots.mjs`。这里用默认 after 模式即可；不要加 `--before`，该模式服务于更早的、还没有扫雷路由的基线。脚本会以 After 文件名写出基线截图，把 `after-minesweeper-ready-desktop.png` 另存为 `before-minesweeper-ready-desktop.png` 即可。
+- 复现 Before：在 `9f9aa54` 的干净 worktree 里 `npm ci && npm run build`，用 `node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4186 --strictPort` 启动预览，再运行 `BASE_URL=http://127.0.0.1:4186 node scripts/capture-minesweeper-screenshots.mjs`。这里用默认 after 模式即可；通用 `--before` 模式已删除（显式传入会报错并以非零状态退出），它原先只服务于更早的、还没有扫雷路由的基线。脚本会以 After 文件名写出基线截图，把 `after-minesweeper-ready-desktop.png` 另存为 `before-minesweeper-ready-desktop.png` 即可。
 
 | 文件 | 场景 | 视口 / 主题 | 说明 |
 | --- | --- | --- | --- |
@@ -168,7 +168,7 @@
 - After：PR #36（分支 `agent/plan-33-t1`）。大厅 After 截图捕获于提交 [`e75da7b`](https://github.com/yeahdongcn-mk2/playground/commit/e75da7bddb6172bd44b6ef7cd0edfb6911364258)，4 张玩法 After 截图重跑后与该提交内容逐字节一致；其后提交只更新本文档与测试，不改变界面。PR 描述中附有 Before / After 截图链接。后续 t7 子任务因侧栏新增「触屏」操作行、扫雷卡片新增触屏说明，重新生成了 4 张桌面玩法截图与大厅截图；桌面鼠标左键 / 右键行为未变。
 - 视口 / 主题：桌面 1440×1000、手机 390×844（DPR 2），深色主题，`reducedMotion: reduce`。桌面与手机大厅均为整页截图（`fullPage: true`），Before / After 用同一口径。
 - 生成：`npm run screenshots:minesweeper`（生产构建 + `vite preview`，固定雷盘走 `?debug=1&mines=row,col;...` 调试接缝）。
-- 复现 Before：在 `cdd2200` 的干净 worktree 里 `npm ci && npm run build`，用 `node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4187 --strictPort` 启动预览，然后在当前分支运行 `BASE_URL=http://127.0.0.1:4187 npm run screenshots:minesweeper:before`。
+- Before 来源：该组 Before 图在通用 `--before` 模式移除前，于 `cdd2200` 的干净 worktree 里用当时的扫雷截图命令生成。通用模式与对应的 npm 命令现已删除，脚本会对 `--before` 明确报错并以非零状态退出，因此这 3 张 Before 图只作为 `cdd2200` 的历史证据保留，不再由当前脚本复现。
 
 ### Before（main `cdd2200`，没有扫雷）
 
@@ -194,6 +194,7 @@
 ### 证据限制
 
 - main 没有扫雷页面，所以 Before 只能对比大厅（同一视口 / 主题）与真实未注册路由，不能与旧版扫雷页面逐像素对比。
+- 通用 `--before` 模式及其 npm 命令已删除；上表 3 张 Before 图是 `cdd2200` 的历史证据，不再由当前脚本生成。
 - After 大厅截图已在最终 head 重新生成：`7b2f05b` 的 hub 文案改动会让旧图过期，当时刷新后桌面大厅为 1440×3422；4 张游戏页截图重跑后逐字节一致。后续难度选择子任务再次刷新了这些共用文件：桌面大厅变为 1440×3468，4 张桌面玩法截图变为整页 1440×1324 并含难度卡片（见文首 difficulty 小节）。
 - 本子任务只做桌面输入与桌面 e2e；手机端只刷新大厅截图，不覆盖手机端扫雷玩法。
 - 手机端为 Playwright 设备模拟（390×844、DPR 2、触摸、大厅整页截图），不是真实设备截图。

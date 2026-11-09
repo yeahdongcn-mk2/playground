@@ -7,7 +7,6 @@ import { chromium, devices } from '@playwright/test';
  * Capture the Before / After evidence for the minesweeper integration.
  *
  *   npm run screenshots:minesweeper
- *   BASE_URL=http://127.0.0.1:4187 node scripts/capture-minesweeper-screenshots.mjs --before
  *   BASE_URL=http://127.0.0.1:4188 npm run screenshots:minesweeper:touch-before
  *   npm run screenshots:minesweeper:narrow
  *   BASE_URL=http://127.0.0.1:4189 npm run screenshots:minesweeper:narrow-before
@@ -19,18 +18,29 @@ import { chromium, devices } from '@playwright/test';
  *   BASE_URL=http://127.0.0.1:4193 npm run screenshots:minesweeper:large-before
  *
  * The after mode builds first (the npm script does) and serves the production
- * preview. The before mode must point BASE_URL at a main baseline preview;
- * main has no minesweeper route, so no debug seam is needed there. The
- * touch-before mode points BASE_URL at a preview of the commit before this
- * task's touch and mobile changes, where the page exists but only has
- * desktop-style pointer input, and captures the same phone game states. The
- * narrow modes capture the 360×740 ready state, the min modes capture the
+ * preview. The touch-before mode points BASE_URL at a preview of the commit
+ * before this task's touch and mobile changes, where the page exists but only
+ * has desktop-style pointer input, and captures the same phone game states.
+ * The narrow modes capture the 360×740 ready state, the min modes capture the
  * 320×640 ready state and the restart modes capture the same 320×640 ready
  * state after the short-screen vertical compression; the large modes capture
  * the 16×30 expert board at 320×640 and 360×640 to show the narrow-screen
- * degradation hint. The before modes likewise need BASE_URL at the baseline
- * preview.
+ * degradation hint. The before variants likewise need BASE_URL at their
+ * baseline preview.
+ *
+ * The generic --before mode has been removed: it captured a main baseline
+ * that had no minesweeper route. Its screenshots remain as historical
+ * evidence, but passing --before is rejected instead of being treated as the
+ * after mode.
  */
+
+if (process.argv.slice(2).includes('--before')) {
+  console.error(
+    'The generic --before mode has been removed: its baseline (main without a minesweeper route) is historical evidence only. ' +
+      'Use --touch-before, --narrow-before, --min-before, --restart-before or --large-before for their own baselines, or omit the flag to capture After screenshots.',
+  );
+  process.exit(1);
+}
 
 const HOST = '127.0.0.1';
 const PORT = 4186;
@@ -69,9 +79,7 @@ const MODE = LARGE_BEFORE
         ? 'narrow'
         : TOUCH_BEFORE
           ? 'touch-before'
-          : process.argv.includes('--before')
-            ? 'before'
-            : 'after';
+          : 'after';
 /** Human-readable mode for the log; restart reuses the narrow capture path. */
 const MODE_LABEL = RESTART_BEFORE ? 'restart-before' : RESTART ? 'restart' : MODE;
 const BASE_URL = process.env.BASE_URL ?? ORIGIN;
@@ -175,48 +183,33 @@ async function captureDesktop(browser) {
     reducedMotion: 'reduce',
   });
 
-  if (MODE === 'before') {
-    const hub = await context.newPage();
-    await hub.goto(`${BASE_URL}/`, { waitUntil: 'networkidle' });
-    await settle(hub);
-    await capture(hub, 'before-minesweeper-hub-desktop.png', true);
-    await hub.close();
+  const hub = await context.newPage();
+  await hub.goto(`${BASE_URL}/`, { waitUntil: 'networkidle' });
+  await hub.getByTestId('game-card-minesweeper').waitFor();
+  await settle(hub);
+  await capture(hub, 'after-hub-desktop.png', true);
+  await hub.close();
 
-    const route = await context.newPage();
-    await route.goto(`${BASE_URL}/#/games/minesweeper`, { waitUntil: 'networkidle' });
-    await route.getByText('没有找到这个游戏').waitFor();
-    await settle(route);
-    await capture(route, 'before-minesweeper-route-desktop.png', true);
-    await route.close();
-  } else {
-    const hub = await context.newPage();
-    await hub.goto(`${BASE_URL}/`, { waitUntil: 'networkidle' });
-    await hub.getByTestId('game-card-minesweeper').waitFor();
-    await settle(hub);
-    await capture(hub, 'after-hub-desktop.png', true);
-    await hub.close();
+  // A fresh page per state avoids a hash-remount race between screenshots.
+  const ready = await context.newPage();
+  await openReady(ready);
+  await capture(ready, 'after-minesweeper-ready-desktop.png', true);
+  await ready.close();
 
-    // A fresh page per state avoids a hash-remount race between screenshots.
-    const ready = await context.newPage();
-    await openReady(ready);
-    await capture(ready, 'after-minesweeper-ready-desktop.png', true);
-    await ready.close();
+  const playing = await context.newPage();
+  await openPlaying(playing);
+  await capture(playing, 'after-minesweeper-playing-desktop.png', true);
+  await playing.close();
 
-    const playing = await context.newPage();
-    await openPlaying(playing);
-    await capture(playing, 'after-minesweeper-playing-desktop.png', true);
-    await playing.close();
+  const lost = await context.newPage();
+  await openLost(lost);
+  await capture(lost, 'after-minesweeper-lost-desktop.png', true);
+  await lost.close();
 
-    const lost = await context.newPage();
-    await openLost(lost);
-    await capture(lost, 'after-minesweeper-lost-desktop.png', true);
-    await lost.close();
-
-    const won = await context.newPage();
-    await openWon(won);
-    await capture(won, 'after-minesweeper-won-desktop.png', true);
-    await won.close();
-  }
+  const won = await context.newPage();
+  await openWon(won);
+  await capture(won, 'after-minesweeper-won-desktop.png', true);
+  await won.close();
 
   await context.close();
 }
@@ -231,23 +224,13 @@ async function captureMobile(browser) {
     reducedMotion: 'reduce',
   });
 
-  if (MODE === 'before') {
-    // Full-page so the single-column card grid (where minesweeper will appear)
-    // is visible; a 390x844 viewport only reaches the hero.
-    const hub = await context.newPage();
-    await hub.goto(`${BASE_URL}/`, { waitUntil: 'networkidle' });
-    await settle(hub);
-    await capture(hub, 'before-minesweeper-hub-mobile.png', true);
-    await hub.close();
-  } else {
-    // Same full-page framing as the Before hub so the new card is comparable.
-    const hub = await context.newPage();
-    await hub.goto(`${BASE_URL}/`, { waitUntil: 'networkidle' });
-    await hub.getByTestId('game-card-minesweeper').waitFor();
-    await settle(hub);
-    await capture(hub, 'after-hub-mobile.png', true);
-    await hub.close();
-  }
+  // Same full-page framing as the historical Before hub so the new card is comparable.
+  const hub = await context.newPage();
+  await hub.goto(`${BASE_URL}/`, { waitUntil: 'networkidle' });
+  await hub.getByTestId('game-card-minesweeper').waitFor();
+  await settle(hub);
+  await capture(hub, 'after-hub-mobile.png', true);
+  await hub.close();
 
   await context.close();
 }
@@ -437,12 +420,6 @@ async function captureLarge(browser, prefix) {
     await page.close();
     await context.close();
   }
-}
-
-if (MODE === 'before' && !process.env.BASE_URL) {
-  throw new Error(
-    'The before mode needs BASE_URL pointing at a preview of the main baseline (see docs/screenshots/README.md).',
-  );
 }
 
 if (MODE === 'touch-before' && !process.env.BASE_URL) {
