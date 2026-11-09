@@ -24,6 +24,28 @@
 - 截图只证明静态视觉；写入 / 刷新保留、失败不写入、慢成绩不覆盖、切换难度与损坏数据回退由 `src/games/minesweeper/view.test.ts` 覆盖，胜利刷新保留、失败不记录与 320px 长标签无溢出由 `tests/e2e/minesweeper.spec.ts` / `minesweeper.mobile.spec.ts` 在生产构建上验证。
 - Before 基线已有存储模块，但还没有榜单 UI；本组 Before / After 只证明视觉差异，不证明存储逻辑（由存储模块自身的单测覆盖）。
 
+## scores-clear：扫雷最高用时「清空记录」（Issue #45 / 子任务 2）
+
+- Before 基线：`289d76d`（子任务 1 合入后的 `main`，也就是本子任务开始前的 `main`）。最高用时卡片已有预设 / 自定义成绩与「还没有记录」空态，但没有任何清空入口。
+- After：本子任务分支 `agent/plan-45-t2` 的提交 [`8ca28f7`](https://github.com/yeahdongcn-mk2/playground/commit/8ca28f7)。最高用时卡片底部新增「清空记录」按钮（`data-testid="clear-scores-button"`、可访问名称「清空记录」）：有记录时可用，空榜时保持可见但禁用；点击后整张榜立即回到空态并通过现有 announcer 播报，只删除扫雷成绩键，其它游戏 / 设置存储保持不变。
+- 视口 / 主题：桌面 1440×1000 CSS px、DPR 1；手机 320×640 CSS px、DPR 2、`isMobile: true`、`hasTouch: true`；两者均为深色主题、`reducedMotion: reduce`，Before / After 使用同一 URL、同一固定初级雷盘、同一预置自定义记录与同一 WON 状态，均为整页截图（`fullPage: true`）。
+- 生成 After：`npm run screenshots:minesweeper:scores-clear`（生产构建 + `vite preview`）。
+- 预览端口：与 scores 相同，默认 `4192`；共享主机或并行 worktree 用 `PREVIEW_PORT=4193 npm run screenshots:minesweeper:scores-clear` 覆盖。
+- 复现 Before：在 `289d76d` 的干净 worktree 里 `npm ci && npm run build`，用 `node node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4193 --strictPort` 启动预览，再运行 `BASE_URL=http://127.0.0.1:4193 npm run screenshots:minesweeper:scores-clear-before`（Before 模式不启动 preview，端口以 `BASE_URL` 为准；脚本会确认基线有榜单卡片但没有清空按钮）。
+
+| 文件 | 场景 | 视口 / 主题 | 说明 |
+| --- | --- | --- | --- |
+| `before-minesweeper-clear-scores-desktop.png` | 扫雷 WON（基线 `289d76d`） | 1440×1000 / 深色 / 整页 1440×1606 | 最高用时卡片有初级成绩、预设占位与长自定义记录，但底部没有清空入口；胜利遮罩与固定雷盘和 After 相同。 |
+| `after-minesweeper-clear-scores-desktop.png` | 扫雷 WON（本子任务） | 1440×1000 / 深色 / 整页 1440×1661 | 卡片底部新增可用的「清空记录」按钮；记录内容、遮罩与基线一致，新增按钮使整页高度增加。 |
+| `before-minesweeper-clear-scores-320x640.png` | 扫雷 WON（320×640 基线 `289d76d`） | 320×640 / 深色 / 整页 640×4098 | 手机整页截图同样没有清空入口，长自定义标签照常换行，页面无横向溢出。 |
+| `after-minesweeper-clear-scores-320x640.png` | 扫雷 WON（320×640 本子任务） | 320×640 / 深色 / 整页 640×4210 | 手机端新增的「清空记录」按钮仍位于卡片内，320px 下无横向溢出；页面高度增加来自新增按钮。 |
+
+### 证据限制
+
+- 截图只证明有记录时按钮可见且可用这一静态视觉；空榜禁用、点击后立即空态与播报、只删扫雷键与刷新后仍为空由 `src/games/minesweeper/view.test.ts` 与 `tests/e2e/minesweeper.spec.ts` 在生产构建上验证。
+- Before 基线已经包含最高用时榜，因此这组 Before / After 只证明清空入口的视觉差异，不重复证明榜单本身的视觉（见上一节 scores）。
+- 手机端为 Playwright 320×640 触摸模拟（DPR 2），不是真实设备截图。
+
 ## difficulty：扫雷难度选择（Issue #44 / 子任务 3）
 
 - Before 基线：`9f9aa54`（PR #57 合入「扫雷视图支持任意棋盘配置与安全重建」后的 `main`，也就是本子任务开始前的 `main`）。侧栏只有操作与本局状态卡片，没有难度控件。
