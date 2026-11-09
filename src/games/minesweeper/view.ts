@@ -194,6 +194,11 @@ function viewHtml(config: Readonly<MinesweeperConfig>): string {
           <div class="minesweeper-scores-custom" data-testid="scores-custom" hidden>
             <dl class="minesweeper-scores-list" data-testid="scores-custom-list"></dl>
           </div>
+          <div class="panel-actions minesweeper-scores-actions">
+            <button class="button button--ghost" type="button"
+              data-action="clear-scores" data-testid="clear-scores-button"
+              aria-label="清空记录">清空记录</button>
+          </div>
         </div>
 
         <p class="minesweeper-hint">全部安全格翻开即获胜；插旗数量可以超过雷数，剩余雷数会随之变为负数。</p>
@@ -490,6 +495,10 @@ export async function mountMinesweeper(
   const scoresPresets = query<HTMLElement>(root, '[data-testid="scores-presets"]');
   const scoresCustom = query<HTMLElement>(root, '[data-testid="scores-custom"]');
   const scoresCustomList = query<HTMLElement>(root, '[data-testid="scores-custom-list"]');
+  const clearScoresButton = query<HTMLButtonElement>(
+    root,
+    '[data-testid="clear-scores-button"]',
+  );
   const presetScoreElements = DIFFICULTY_PRESETS.map((preset) => ({
     preset,
     element: query<HTMLElement>(root, `[data-testid="score-${preset.id}-time"]`),
@@ -649,6 +658,16 @@ export async function mountMinesweeper(
         return row;
       }),
     );
+    // The button stays in the DOM on an empty table so the card does not shift
+    // when the last record appears or disappears.
+    clearScoresButton.disabled = entries.length === 0;
+  }
+
+  /** Clear the local best-time table and show the empty state immediately. */
+  function clearScores(): void {
+    scores.clear();
+    renderScores();
+    announce('最高用时记录已清空');
   }
 
   /**
@@ -1067,6 +1086,13 @@ export async function mountMinesweeper(
       );
       if (restartTarget && root.contains(restartTarget)) {
         restart();
+        return;
+      }
+      const clearTarget = event.target.closest<HTMLButtonElement>(
+        'button[data-action="clear-scores"]',
+      );
+      if (clearTarget && root.contains(clearTarget)) {
+        clearScores();
       }
     },
     { signal: listenerSignal },

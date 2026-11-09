@@ -10,12 +10,16 @@ import { assertPortAvailable, parsePreviewPort } from './lib/preview-port.mjs';
  *   npm run screenshots:minesweeper:scores
  *   BASE_URL=http://127.0.0.1:4192 node scripts/capture-minesweeper-scores-screenshots.mjs --before
  *
+ * Pass `--clear` for the clear-records follow-up: the After run requires the
+ * enabled 「清空记录」 action in the populated panel, while `--before` must point
+ * at the revision that already had the leaderboard but no clear action.
+ *
  * The after mode builds first (the npm script does) and serves the production
  * preview. The before mode must point BASE_URL at a preview of the baseline
- * revision (the commit before this task), which has the storage module but no
- * leaderboard panel. Both modes open the same fixed beginner board, win it with
- * one click at (8, 8) and seed a long custom-board record, so the only visible
- * difference between Before and After is the new sidebar card.
+ * revision (the commit before this task). Both modes open the same fixed
+ * beginner board, win it with one click at (8, 8) and seed a long custom-board
+ * record, so the only visible difference between Before and After is the new
+ * sidebar action.
  *
  * The preview port is 4192 by default; on a shared host set `PREVIEW_PORT` to a
  * free port instead of editing this file. When that port is already taken, the
@@ -28,6 +32,8 @@ const PORT = parsePreviewPort();
 const ORIGIN = `http://${HOST}:${PORT}`;
 const OUTPUT = 'docs/screenshots';
 const BEFORE = process.argv.includes('--before');
+const CLEAR = process.argv.includes('--clear');
+const FILE_PREFIX = CLEAR ? 'minesweeper-clear-scores' : 'minesweeper-scores';
 const BASE_URL = process.env.BASE_URL ?? ORIGIN;
 
 // Same deterministic beginner layout as tests/e2e/minesweeper-helpers.ts:
@@ -124,10 +130,20 @@ async function openWin(page) {
   await page.getByTestId('overlay-title').filter({ hasText: '扫雷成功' }).waitFor();
 
   if (BEFORE) {
-    // A baseline without the new card is required; otherwise a wrong BASE_URL
-    // would silently save an "after" UI under a before filename.
     const panel = await page.getByTestId('scores-panel').count();
-    if (panel !== 0) {
+    if (CLEAR) {
+      // The clear-records baseline already has the panel; only the action is
+      // missing. A wrong BASE_URL must fail instead of saving an After UI under
+      // a before filename.
+      const clearButton = await page.getByTestId('clear-scores-button').count();
+      if (panel !== 1 || clearButton !== 0) {
+        throw new Error(
+          'Clear-records Before baseline must have the scores panel but no clear action; point BASE_URL at the revision just before this task.',
+        );
+      }
+    } else if (panel !== 0) {
+      // A baseline without the new card is required; otherwise a wrong BASE_URL
+      // would silently save an "after" UI under a before filename.
       throw new Error(
         'Before baseline already has the scores panel; point BASE_URL at the pre-leaderboard revision.',
       );
@@ -140,6 +156,16 @@ async function openWin(page) {
       .filter({ hasNotText: '—' })
       .waitFor();
     await page.getByTestId('scores-custom').waitFor();
+    if (CLEAR) {
+      const clearButton = page.getByTestId('clear-scores-button');
+      await clearButton.waitFor();
+      if (await clearButton.isDisabled()) {
+        throw new Error('After capture expected the enabled clear action');
+      }
+      if ((await clearButton.getAttribute('aria-label')) !== '清空记录') {
+        throw new Error('Clear action is missing its accessible name');
+      }
+    }
   }
   await settle(page);
 }
@@ -156,7 +182,7 @@ async function captureDesktop(browser) {
   await openWin(page);
   await capture(
     page,
-    `${BEFORE ? 'before' : 'after'}-minesweeper-scores-desktop.png`,
+    `${BEFORE ? 'before' : 'after'}-${FILE_PREFIX}-desktop.png`,
   );
   await context.close();
 }
@@ -176,7 +202,7 @@ async function captureMobile(browser) {
   await openWin(page);
   await capture(
     page,
-    `${BEFORE ? 'before' : 'after'}-minesweeper-scores-320x640.png`,
+    `${BEFORE ? 'before' : 'after'}-${FILE_PREFIX}-320x640.png`,
   );
   await context.close();
 }
