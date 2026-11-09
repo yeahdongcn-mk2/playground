@@ -294,6 +294,8 @@ src/
       engine.test.ts       Vitest 单元测试
       difficulty.ts        难度预设、配置匹配与自定义难度解析
       difficulty.test.ts   难度预设 / 自定义解析单元测试
+      scores.ts            本地最高用时存储（版本化、按预设 / 自定义棋盘分桶、损坏数据容错）
+      scores.test.ts       最高用时存取 / 分桶 / 容错单元测试
       view.ts              DOM 网格、难度选择、HUD、结束遮罩、左右键 / 触屏与测试接缝
       index.ts             GameModule 元数据与懒加载入口
       minesweeper.css      游戏页样式（随游戏 chunk 加载）
@@ -351,7 +353,7 @@ games/<game>/scene → 对应引擎（动态 import）
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过
-npm run test:unit    # 307 passed（含贪食蛇 21、俄罗斯方块 38、2048 35、打砖块 39、扫雷 87 个规则 / 难度 / 调试用例）
+npm run test:unit    # 334 passed（含贪食蛇 21、俄罗斯方块 38、2048 35、打砖块 39、扫雷 114 个规则 / 难度 / 成绩 / 调试用例）
 npm run build        # 通过
 npm run check:budget # 通过（入口 10.91 KB gzip，全部 JS 402.67 KB gzip）
 npm run test:e2e     # 108 passed（桌面 82 + 手机 26）
