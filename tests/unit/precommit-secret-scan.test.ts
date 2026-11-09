@@ -133,6 +133,13 @@ const FAKE_JDBC_BRACE_ESCAPED_PASSWORD = `{${FAKE_JDBC_PASSWORD};!}`;
 // template forms the rule excludes. Built from parts so this test file itself
 // stays clean for the scanner it exercises.
 const FAKE_JDBC_BRACE_WORD_PASSWORD = ['{', 'S3cr3t', '}'].join('');
+// Brace-wrapped mixed-case values with `_`/`-` separators. The rule treats
+// separator-joined names as templates, so these real-looking values are
+// deliberately not reported; the trade-off is pinned by a test below.
+const FAKE_JDBC_BRACE_SEPARATOR_PASSWORDS = [
+  ['{', 'S3cr3t', '_2024', '}'],
+  ['{', 'S3cr3t', '-2024', '}'],
+].map((parts) => parts.join(''));
 // Real values that start with a placeholder word but continue after
 // punctuation. Only a value that is the whole placeholder word is exempt, so
 // these must still be reported.
@@ -376,12 +383,35 @@ describe('secret scan pre-commit hook', () => {
       'jdbc:sqlserver://host:1433;databaseName=app;user=sa;password={password123}',
       'jdbc:sqlserver://host:1433;databaseName=app;user=sa;password={...}',
       'jdbc:sqlserver://host:1433;databaseName=app;user=sa;password={__PASSWORD__}',
+      // Masked and printf-style brace placeholders are templates too, even
+      // though other brace values are reported; these pin the `*****`/`%s`
+      // branches inside the brace shape.
+      'jdbc:sqlserver://host:1433;databaseName=app;user=sa;password={*****}',
+      'jdbc:sqlserver://host:1433;databaseName=app;user=sa;password={%s}',
       // Property text without a `jdbc:<scheme>://` prefix keeps the previous
       // non-matching behaviour.
       'sqlserver://host:1433;databaseName=app;user=sa;password=real-looking-value',
       'some-key=value;password=real-looking-value',
     ];
     writeFileSync(fixture, `${urls.map((url) => `DATABASE_URL=${url}`).join('\n')}\n`);
+
+    expect(runScanner([fixture])).toEqual({ status: 0, stderr: '' });
+  });
+
+  it('treats underscore/hyphen-separated brace values as templates (documented trade-off)', () => {
+    const dir = makeTempDir();
+    const fixture = join(dir, 'jdbc-brace-name-tradeoff.txt');
+    // `{DB_PASSWORD}`/`{DB-PASSWORD}` and real values such as
+    // `{S3cr3t_2024}`/`{S3cr3t-2024}` are indistinguishable to the rule, so it
+    // exempts both kinds to keep templates quiet. Tightening this behaviour
+    // must also update the rule comment in scripts/scan-secrets.mjs and this
+    // expectation.
+    writeFileSync(
+      fixture,
+      `${FAKE_JDBC_BRACE_SEPARATOR_PASSWORDS.map(
+        (password) => `DATABASE_URL=jdbc:sqlserver://host:1433;user=sa;password=${password}`,
+      ).join('\n')}\n`,
+    );
 
     expect(runScanner([fixture])).toEqual({ status: 0, stderr: '' });
   });

@@ -31,7 +31,10 @@ const PLACEHOLDER_PASSWORD_SHAPES = String.raw`\$(?:\{|\(|[A-Za-z_])|\{[A-Za-z_{
 // (`{password123}`), a name with an underscore/hyphen separator
 // (`{DB_PASSWORD}`, `{DB-PASSWORD}`) or another known placeholder shape
 // (`{...}`, `{*****}`, `{__PASSWORD__}`, `{%s}`). Other brace values such as
-// `{S3cr3t}` or `{ABC123}` are reported as real brace-escaped passwords.
+// `{S3cr3t}` or `{ABC123}` are reported as real brace-escaped passwords. A
+// brace value with `_`/`-` separators is treated as a template even when its
+// segments are mixed case, so `{S3cr3t_2024}` is not reported; that is an
+// accepted trade-off for keeping `{DB_PASSWORD}`/`{DB-PASSWORD}` quiet.
 // The URL-userinfo branch keeps the looser shape above.
 const PLACEHOLDER_JDBC_SHAPES = String.raw`\$(?:\{|\(|[A-Za-z_])|\{\{?(?:(?:${PLACEHOLDER_PASSWORD_WORDS})[A-Za-z0-9]*|[A-Za-z][A-Za-z0-9]*(?:[_-][A-Za-z0-9]+)+|\.{3,}|\*+|__[A-Za-z0-9_]*__|%s)\}\}?|<[^>\s]*>|\[[^\]\s]*\]|%[A-Za-z_][A-Za-z0-9_]*%`;
 
@@ -134,7 +137,13 @@ const RULES = [
     // (for example `pass!word` or `changeme:abc`) is reported. Brace-escaped
     // SQL Server values are reported unless they match a name-like template
     // such as `{DB_PASSWORD}` or `{password123}`; `{S3cr3t}` and `{ABC123}`
-    // are real values.
+    // are real values. Values with `_`/`-` separators are always treated as
+    // templates, even when mixed case, so a brace-escaped real password such
+    // as `{S3cr3t_2024}` is deliberately not reported: template names and
+    // real values are indistinguishable there, and keeping `{DB_PASSWORD}` /
+    // `{DB-PASSWORD}` quiet matters more for documentation and env templates.
+    // The trade-off is pinned by a test, so tightening the rule also requires
+    // updating that test and this comment.
     // The host part is required, so a bare `user:password@` mention without a
     // URL scheme or host is not reported. A raw `/` in a password is not
     // matched because it would be ambiguous with the URL path; valid
