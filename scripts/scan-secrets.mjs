@@ -24,7 +24,7 @@ const PLACEHOLDER_PASSWORD_WORDS = String.raw`password|passwd|pass|pwd|secret|ch
 // password, so they are listed separately in
 // PLACEHOLDER_PASSWORD_WHOLE_SHAPES below; the JDBC property branch applies
 // the same whole-value rule to its bare values. JDBC property values
-// additionally treat brace-wrapped values as placeholders.
+// additionally treat whole-value brace-wrapped values as placeholders.
 const PLACEHOLDER_PASSWORD_SHAPES = String.raw`\$(?:\{|\(|[A-Za-z_])|\{[A-Za-z_{]|<[^>\s]*>|\[[^\]\s]*\]|%[A-Za-z_][A-Za-z0-9_]*%`;
 
 // `__UPPER_SNAKE__` names are templates only when a known placeholder word or
@@ -54,18 +54,22 @@ const PLACEHOLDER_PASSWORD_WHOLE_SHAPES = String.raw`\*+|\.{3,}|${PLACEHOLDER_PA
 // SQL Server JDBC escapes values containing `;`, `{`, `}` or `=` by wrapping
 // them in braces, for example `password={S3cr3t;!}`. A JDBC value that starts
 // with `{` is therefore not automatically a template placeholder. Only a
-// name-like template is exempt: a placeholder word with an optional suffix
-// (`{password123}`), a name with an underscore/hyphen separator
-// (`{DB_PASSWORD}`, `{DB-PASSWORD}`) or another known placeholder shape
-// (`{...}`, `{*****}`, `{__PASSWORD__}`, `{__DB_PASSWORD__}`, `{%s}`). Other
-// brace values such as `{S3cr3t}` or `{ABC123}` are reported as real brace-escaped
-// passwords. A brace value with `_`/`-` separators is treated as a template even
-// when its segments are mixed case, so `{S3cr3t_2024}` is not reported; that is
-// an accepted trade-off for keeping `{DB_PASSWORD}`/`{DB-PASSWORD}` quiet.
-// Dunder names use the same placeholder-word shape as the URL branch, so
-// `{__S3cr3t__}` is reported. The URL-userinfo branch keeps the looser
-// non-dunder brace shape above.
-const PLACEHOLDER_JDBC_SHAPES = String.raw`\$(?:\{|\(|[A-Za-z_])|\{\{?(?:(?:${PLACEHOLDER_PASSWORD_WORDS})[A-Za-z0-9]*|[A-Za-z][A-Za-z0-9]*(?:[_-][A-Za-z0-9]+)+|\.{3,}|\*+|${PLACEHOLDER_PASSWORD_DUNDER_SHAPES}|%s)\}\}?|<[^>\s]*>|\[[^\]\s]*\]|%[A-Za-z_][A-Za-z0-9_]*%`;
+// template that fills the whole value is exempt: a name-like placeholder word
+// with an optional suffix (`{password123}`), a name with an
+// underscore/hyphen separator (`{DB_PASSWORD}`, `{DB-PASSWORD}`) or another
+// whole-value placeholder shape (`{...}`, `{*****}`, `{__PASSWORD__}`,
+// `{__DB_PASSWORD__}`, `{%s}`, `{%d}`, `{%i}`, `{%f}`). Other brace values such
+// as `{S3cr3t}` or `{ABC123}` are reported as real brace-escaped passwords, and
+// so is a brace template followed by more content (`{password123}x`). A brace
+// value with `_`/`-` separators is treated as a template even when its segments
+// are mixed case, so `{S3cr3t_2024}` is not reported; that is an accepted
+// trade-off for keeping `{DB_PASSWORD}`/`{DB-PASSWORD}` quiet. Dunder names use
+// the same placeholder-word shape as the URL branch, so `{__S3cr3t__}` is
+// reported. The brace shape only counts when no further value characters
+// follow it; the URL-userinfo branch keeps the looser non-dunder brace shape
+// above.
+const PLACEHOLDER_JDBC_BRACE_SHAPES = String.raw`\{\{?(?:(?:${PLACEHOLDER_PASSWORD_WORDS})[A-Za-z0-9]*|[A-Za-z][A-Za-z0-9]*(?:[_-][A-Za-z0-9]+)+|\.{3,}|\*+|${PLACEHOLDER_PASSWORD_DUNDER_SHAPES}|%[sdif])\}\}?`;
+const PLACEHOLDER_JDBC_SHAPES = String.raw`\$(?:\{|\(|[A-Za-z_])|${PLACEHOLDER_JDBC_BRACE_SHAPES}(?![^\s;?&]*[A-Za-z0-9_-])|<[^>\s]*>|\[[^\]\s]*\]|%[A-Za-z_][A-Za-z0-9_]*%`;
 
 const RULES = [
   {
@@ -183,15 +187,18 @@ const RULES = [
     //     values the whole value ends at whitespace, `;`, `?` or `&`, so a
     //     placeholder followed by another property or a closing quote stays
     //     exempt while `*S3cr3t`, `...S3cr3t`, `%s3cr3t` and `%d3cr3t` are
-    //     reported. The JDBC property branch additionally treats brace-wrapped
-    //     values as placeholders.
+    //     reported. The JDBC property branch additionally treats whole-value
+    //     brace-wrapped values as placeholders.
     // A JDBC placeholder word counts when the whole value is that word, so
     // values terminated by `;`, `&`, `?`, a closing quote or other punctuation
     // are still placeholders, while a value continuing after such punctuation
     // (for example `pass!word` or `changeme:abc`) is reported. Brace-escaped
-    // SQL Server values are reported unless they match a name-like template
-    // such as `{DB_PASSWORD}` or `{password123}`; `{S3cr3t}`, `{ABC123}` and
-    // `{__S3cr3t__}` are real values. Values with `_`/`-` separators are always
+    // SQL Server values are reported unless the whole value is a name-like
+    // template such as `{DB_PASSWORD}` or `{password123}` or another brace
+    // placeholder shape such as `{...}`, `{*****}`, `{__PASSWORD__}` or
+    // `{%s}`/`{%d}`/`{%i}`/`{%f}`; a brace template followed by more content
+    // (for example `{password123}x`) is reported, as are `{S3cr3t}`, `{ABC123}`
+    // and `{__S3cr3t__}`. Values with `_`/`-` separators are always
     // treated as templates, even when mixed case, so a brace-escaped real
     // password such as `{S3cr3t_2024}` is deliberately not reported: template
     // names and real values are indistinguishable there, and keeping

@@ -187,6 +187,22 @@ const FAKE_JDBC_PLACEHOLDER_SHAPE_PREFIX_PASSWORDS = [
   [ELLIPSIS_PASSWORD_PLACEHOLDER, 'S3cr3t'],
   ...PRINTF_PASSWORD_PLACEHOLDERS.map((placeholder) => [placeholder, '3cr3t']),
 ].map((parts) => parts.join(''));
+// Real brace-escaped values that start with a whole-value brace template but
+// continue after the closing brace. Only a value that is exactly the brace
+// template is exempt, so these must still be reported. Built from parts so this
+// test file itself stays clean for the scanner it exercises.
+const FAKE_JDBC_BRACE_PLACEHOLDER_PREFIX_PASSWORDS = [
+  ['{', '__PASSWORD__', '}x'],
+  ['{', ELLIPSIS_PASSWORD_PLACEHOLDER, '}x'],
+  ['{', MASKED_PASSWORD_PLACEHOLDER, '}x'],
+  ...PRINTF_PASSWORD_PLACEHOLDERS.map((placeholder) => ['{', placeholder, '}x']),
+  ['{', 'DB_PASSWORD', '}x'],
+  ['{', 'password123', '}x'],
+].map((parts) => parts.join(''));
+// A brace-wrapped alphanumeric word is a real escaped value, not one of the
+// template forms. Built from parts so this test file itself stays clean for the
+// scanner it exercises.
+const FAKE_JDBC_BRACE_ALPHANUMERIC_PASSWORD = ['{', 'ABC123', '}'].join('');
 // Oracle thin puts the credentials in the path (`user/password@host`) instead
 // of a `user:password@` authority. The prefix, suffix and passwords are built
 // from parts so no complete inline-credential URL appears in this test file.
@@ -485,6 +501,8 @@ describe('secret scan pre-commit hook', () => {
       `jdbc:sqlserver://host:1433;databaseName=app;user=sa;password=${FAKE_JDBC_BRACE_ESCAPED_PASSWORD}`,
       // A bare brace-wrapped word is not one of the name-like template forms.
       `jdbc:sqlserver://host:1433;databaseName=app;user=sa;password=${FAKE_JDBC_BRACE_WORD_PASSWORD}`,
+      // A brace-wrapped alphanumeric word is a real value too.
+      `jdbc:sqlserver://host:1433;databaseName=app;user=sa;password=${FAKE_JDBC_BRACE_ALPHANUMERIC_PASSWORD}`,
       // A dunder name without a placeholder word segment is a real value, both
       // bare and brace-escaped; narrowing the `__...__` wildcard must not
       // exempt it.
@@ -505,6 +523,12 @@ describe('secret scan pre-commit hook', () => {
       // value in the JDBC property branch too; a real password that continues
       // after the shape must still be reported.
       ...FAKE_JDBC_PLACEHOLDER_SHAPE_PREFIX_PASSWORDS.map(
+        (password) =>
+          `jdbc:mysql://db.internal:3306/app;user=sa;password=${password};useSSL=false`,
+      ),
+      // A brace template only exempts the whole value; a real password that
+      // continues after the closing brace must still be reported.
+      ...FAKE_JDBC_BRACE_PLACEHOLDER_PREFIX_PASSWORDS.map(
         (password) =>
           `jdbc:mysql://db.internal:3306/app;user=sa;password=${password};useSSL=false`,
       ),
@@ -529,6 +553,13 @@ describe('secret scan pre-commit hook', () => {
       MASKED_PASSWORD_PLACEHOLDER,
       ELLIPSIS_PASSWORD_PLACEHOLDER,
       ...PRINTF_PASSWORD_PLACEHOLDERS,
+      // Brace-escaped whole-value placeholders, including the printf shapes
+      // expanded to `%d`/`%i`/`%f` inside the braces.
+      '{__PASSWORD__}',
+      ...[MASKED_PASSWORD_PLACEHOLDER, ELLIPSIS_PASSWORD_PLACEHOLDER].map(
+        (placeholder) => `{${placeholder}}`,
+      ),
+      ...PRINTF_PASSWORD_PLACEHOLDERS.map((placeholder) => `{${placeholder}}`),
     ];
     // Cover values terminated by another `;`/`&` property and values at the end
     // of the URL, because the whole-value check must not depend on position.
