@@ -15,6 +15,8 @@ import { chromium, devices } from '@playwright/test';
  *   BASE_URL=http://127.0.0.1:4189 npm run screenshots:minesweeper:min-before
  *   npm run screenshots:minesweeper:restart
  *   BASE_URL=http://127.0.0.1:4191 npm run screenshots:minesweeper:restart-before
+ *   npm run screenshots:minesweeper:large
+ *   BASE_URL=http://127.0.0.1:4193 npm run screenshots:minesweeper:large-before
  *
  * The after mode builds first (the npm script does) and serves the production
  * preview. The before mode must point BASE_URL at a main baseline preview;
@@ -24,8 +26,10 @@ import { chromium, devices } from '@playwright/test';
  * desktop-style pointer input, and captures the same phone game states. The
  * narrow modes capture the 360×740 ready state, the min modes capture the
  * 320×640 ready state and the restart modes capture the same 320×640 ready
- * state after the short-screen vertical compression; the before modes
- * likewise need BASE_URL at the baseline preview.
+ * state after the short-screen vertical compression; the large modes capture
+ * the 16×30 expert board at 320×640 and 360×640 to show the narrow-screen
+ * degradation hint. The before modes likewise need BASE_URL at the baseline
+ * preview.
  */
 
 const HOST = '127.0.0.1';
@@ -39,6 +43,8 @@ const MIN = process.argv.includes('--min');
 const MIN_BEFORE = process.argv.includes('--min-before');
 const RESTART = process.argv.includes('--restart');
 const RESTART_BEFORE = process.argv.includes('--restart-before');
+const LARGE = process.argv.includes('--large');
+const LARGE_BEFORE = process.argv.includes('--large-before');
 const IS_COMPACT = RESTART || RESTART_BEFORE;
 const IS_NARROW =
   NARROW || NARROW_BEFORE || MIN || MIN_BEFORE || RESTART || RESTART_BEFORE;
@@ -47,16 +53,25 @@ const NARROW_VIEWPORT =
   MIN || MIN_BEFORE || IS_COMPACT
     ? { width: 320, height: 640 }
     : { width: 360, height: 740 };
+/** Narrow viewports that show the large-board degradation hint. */
+const LARGE_VIEWPORTS = [
+  { width: 320, height: 640 },
+  { width: 360, height: 640 },
+];
 const NARROW_FILE_SUFFIX = IS_COMPACT ? '-restart' : '';
-const MODE = IS_NARROW_BEFORE
-  ? 'narrow-before'
-  : IS_NARROW
-    ? 'narrow'
-    : TOUCH_BEFORE
-      ? 'touch-before'
-      : process.argv.includes('--before')
-        ? 'before'
-        : 'after';
+const MODE = LARGE_BEFORE
+  ? 'large-before'
+  : LARGE
+    ? 'large'
+    : IS_NARROW_BEFORE
+      ? 'narrow-before'
+      : IS_NARROW
+        ? 'narrow'
+        : TOUCH_BEFORE
+          ? 'touch-before'
+          : process.argv.includes('--before')
+            ? 'before'
+            : 'after';
 /** Human-readable mode for the log; restart reuses the narrow capture path. */
 const MODE_LABEL = RESTART_BEFORE ? 'restart-before' : RESTART ? 'restart' : MODE;
 const BASE_URL = process.env.BASE_URL ?? ORIGIN;
@@ -375,6 +390,55 @@ async function captureNarrow(browser, prefix, viewport, fileNameSuffix = '') {
   await context.close();
 }
 
+/**
+ * Capture the 16×30 large-board state at the two narrow viewports that show
+ * the degradation hint. The before baseline has no `board-size-warning`
+ * element, so the same screenshot framing exposes only the missing hint; the
+ * board itself stays identically scaled.
+ */
+async function openLargeBoard(page) {
+  const query = new URLSearchParams({
+    debug: '1',
+    rows: '16',
+    cols: '30',
+    mineCount: '99',
+    safeFirst: '1',
+  });
+  await page.goto(`${BASE_URL}/#/games/minesweeper?${query.toString()}`, {
+    waitUntil: 'networkidle',
+  });
+  await page.locator('[data-cell]').first().waitFor();
+  await page.getByTestId('overlay').waitFor({ state: 'hidden' });
+  await page.getByTestId('status').filter({ hasText: '待开始' }).waitFor();
+  if (MODE === 'large') {
+    await page.getByTestId('board-size-warning').waitFor({ state: 'visible' });
+  }
+  await settle(page);
+}
+
+async function captureLarge(browser, prefix) {
+  for (const viewport of LARGE_VIEWPORTS) {
+    const context = await browser.newContext({
+      viewport,
+      screen: viewport,
+      colorScheme: 'dark',
+      deviceScaleFactor: 2,
+      isMobile: true,
+      hasTouch: true,
+      reducedMotion: 'reduce',
+    });
+    const page = await context.newPage();
+    await openLargeBoard(page);
+    await capture(
+      page,
+      `${prefix}-minesweeper-large-board-${viewport.width}x${viewport.height}.png`,
+      false,
+    );
+    await page.close();
+    await context.close();
+  }
+}
+
 if (MODE === 'before' && !process.env.BASE_URL) {
   throw new Error(
     'The before mode needs BASE_URL pointing at a preview of the main baseline (see docs/screenshots/README.md).',
@@ -390,6 +454,12 @@ if (MODE === 'touch-before' && !process.env.BASE_URL) {
 if (MODE === 'narrow-before' && !process.env.BASE_URL) {
   throw new Error(
     'The narrow-before / min-before / restart-before modes need BASE_URL pointing at the matching baseline preview (see docs/screenshots/README.md).',
+  );
+}
+
+if (MODE === 'large-before' && !process.env.BASE_URL) {
+  throw new Error(
+    'The large-before mode needs BASE_URL pointing at a preview of the baseline before the large-board warning commit (see docs/screenshots/README.md).',
   );
 }
 
@@ -414,7 +484,9 @@ if (!process.env.BASE_URL) {
 await mkdir(OUTPUT, { recursive: true });
 const browser = await chromium.launch();
 try {
-  if (MODE === 'narrow' || MODE === 'narrow-before') {
+  if (MODE === 'large' || MODE === 'large-before') {
+    await captureLarge(browser, MODE === 'large-before' ? 'before' : 'after');
+  } else if (MODE === 'narrow' || MODE === 'narrow-before') {
     await captureNarrow(
       browser,
       MODE === 'narrow-before' ? 'before' : 'after',
