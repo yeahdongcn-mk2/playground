@@ -351,7 +351,7 @@ games/<game>/scene → 对应引擎（动态 import）
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过
-npm run test:unit    # 272 passed（含贪食蛇 21、俄罗斯方块 38、2048 35、打砖块 39、扫雷 79 个规则 / 难度 / 调试用例）
+npm run test:unit    # 307 passed（含贪食蛇 21、俄罗斯方块 38、2048 35、打砖块 39、扫雷 87 个规则 / 难度 / 调试用例）
 npm run build        # 通过
 npm run check:budget # 通过（入口 10.91 KB gzip，全部 JS 402.67 KB gzip）
 npm run test:e2e     # 108 passed（桌面 82 + 手机 26）
