@@ -339,6 +339,74 @@ test.describe('minesweeper gameplay', () => {
     await expect(score).toHaveText(best);
   });
 
+  test('clearing best times empties the table, keeps other storage and survives a reload', async ({
+    page,
+  }) => {
+    await openMinesweeper(page, { mines: SPLIT_MINES });
+    // Seed unrelated keys in the same namespaced store after navigation so they
+    // are real persisted values rather than init-script re-seeds on reload.
+    await page.evaluate(() => {
+      localStorage.setItem('playground:v1:snake.highscore', '42');
+      localStorage.setItem('playground:v1:settings.sound', 'off');
+      localStorage.setItem('playground:v1:snake.lastPlayed', '1700000000000');
+    });
+
+    const clearButton = page.getByTestId('clear-scores-button');
+    await expect(clearButton).toBeVisible();
+    await expect(clearButton).toBeDisabled();
+    await expect(clearButton).toHaveAccessibleName('清空记录');
+    await expect(page.getByTestId('scores-empty')).toBeVisible();
+
+    // Win once so there is something to clear.
+    await cellLocator(page, 8, 0).click();
+    await expect(page.getByTestId('status')).toHaveText('进行中');
+    await page.waitForTimeout(1_200);
+    await cellLocator(page, 8, 8).click();
+    await expect(page.getByTestId('status')).toHaveText('胜利');
+    await expect(page.getByTestId('scores-empty')).toBeHidden();
+    await expect(clearButton).toBeEnabled();
+
+    await clearButton.click();
+    await expect(page.getByTestId('scores-empty')).toBeVisible();
+    await expect(page.getByTestId('scores-presets')).toBeHidden();
+    await expect(page.getByTestId('scores-custom')).toBeHidden();
+    // The action stays visible (and only disabled) on the empty table, so no
+    // separate entry appears or disappears and the card keeps the same action.
+    await expect(clearButton).toBeVisible();
+    await expect(clearButton).toBeDisabled();
+    await expect(page.getByTestId('announcer')).toHaveText('最高用时记录已清空');
+
+    const readStorage = (): Promise<Record<string, string | null>> =>
+      page.evaluate(() => ({
+        scores: localStorage.getItem('playground:v1:minesweeper.scores'),
+        snakeHighScore: localStorage.getItem('playground:v1:snake.highscore'),
+        sound: localStorage.getItem('playground:v1:settings.sound'),
+        lastPlayed: localStorage.getItem('playground:v1:snake.lastPlayed'),
+      }));
+    await expect
+      .poll(readStorage)
+      .toEqual({
+        scores: null,
+        snakeHighScore: '42',
+        sound: 'off',
+        lastPlayed: '1700000000000',
+      });
+
+    // A reload remounts from localStorage: the empty state must stay empty and
+    // the unrelated keys must still be there.
+    await page.reload();
+    await expect(page.getByTestId('minesweeper-game')).toBeVisible();
+    await expect(page.getByTestId('status')).toHaveText('待开始');
+    await expect(page.getByTestId('scores-empty')).toBeVisible();
+    await expect(clearButton).toBeDisabled();
+    await expect.poll(readStorage).toEqual({
+      scores: null,
+      snakeHighScore: '42',
+      sound: 'off',
+      lastPlayed: '1700000000000',
+    });
+  });
+
   test('a loss does not record a best time, even after a reload', async ({ page }) => {
     await openMinesweeper(page, { mines: LOSS_MINES });
     await cellLocator(page, LOSS_SAFE_CLICK.row, LOSS_SAFE_CLICK.col).click();

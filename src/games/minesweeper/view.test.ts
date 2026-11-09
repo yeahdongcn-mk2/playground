@@ -224,6 +224,20 @@ function isHidden(root: HTMLElement, testId: string): boolean {
   return element.hasAttribute('hidden');
 }
 
+function clearScoresButton(root: HTMLElement): HTMLButtonElement {
+  const button = root.querySelector<HTMLButtonElement>(
+    '[data-testid="clear-scores-button"]',
+  );
+  if (!button) {
+    throw new Error('Expected clear-scores button');
+  }
+  return button;
+}
+
+function announcerText(root: HTMLElement): string {
+  return root.querySelector<HTMLElement>('[data-testid="announcer"]')?.textContent ?? '';
+}
+
 function clickDifficulty(root: HTMLElement, id: string): void {
   const button = root.querySelector<HTMLButtonElement>(`[data-testid="difficulty-${id}"]`);
   if (!button) {
@@ -435,6 +449,58 @@ describe('minesweeper best-time leaderboard', () => {
     expect(isHidden(root, 'scores-presets')).toBe(true);
     expect(isHidden(root, 'scores-custom')).toBe(true);
     expect(store.getItem(SCORES_STORE_KEY)).toBeNull();
+  });
+
+  it('keeps the clear action visible but disabled on an empty table', async () => {
+    const { services } = createServices();
+    const root = await mount(services);
+
+    const button = clearScoresButton(root);
+    expect(button.hidden).toBe(false);
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute('aria-label')).toBe('清空记录');
+
+    // A disabled button cannot run the clear action.
+    button.click();
+    expect(isHidden(root, 'scores-empty')).toBe(false);
+    expect(announcerText(root)).toBe('');
+  });
+
+  it('clears every score in one click while other game and settings keys survive', async () => {
+    const { services, store } = createServices();
+    store.setItem('playground:v1:snake.highscore', '42');
+    store.setItem('playground:v1:settings.sound', 'off');
+    store.setItem('playground:v1:snake.lastPlayed', '1700000000000');
+    const scores = createMinesweeperScores(services.storage);
+    scores.record(bucketForConfig(BEGINNER_CONFIG), 1_200);
+    scores.record(
+      bucketForConfig({ rows: 12, cols: 12, mines: 20, firstClickSafe: true }),
+      7_000,
+    );
+
+    const root = await mount(services);
+    expect(isHidden(root, 'scores-empty')).toBe(true);
+    expect(isHidden(root, 'scores-presets')).toBe(false);
+    expect(scoreText(root, 'beginner')).toBe('0:01');
+    expect(scoreText(root, 'custom:12x12x20:safe')).toBe('0:07');
+
+    const button = clearScoresButton(root);
+    expect(button.disabled).toBe(false);
+    button.click();
+
+    // The panel switches to the empty state right away and the whole score key
+    // is gone; a second click is harmless because the button is disabled again.
+    expect(isHidden(root, 'scores-empty')).toBe(false);
+    expect(isHidden(root, 'scores-presets')).toBe(true);
+    expect(isHidden(root, 'scores-custom')).toBe(true);
+    expect(store.getItem(SCORES_STORE_KEY)).toBeNull();
+    expect(button.disabled).toBe(true);
+    expect(announcerText(root)).toBe('最高用时记录已清空');
+
+    // Other games and settings share the same underlying store and must remain.
+    expect(store.getItem('playground:v1:snake.highscore')).toBe('42');
+    expect(store.getItem('playground:v1:settings.sound')).toBe('off');
+    expect(store.getItem('playground:v1:snake.lastPlayed')).toBe('1700000000000');
   });
 
   it('records the winning time immediately for the active bucket', async () => {
