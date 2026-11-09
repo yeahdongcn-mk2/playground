@@ -19,10 +19,17 @@ import { readFileSync } from 'node:fs';
 // such as `password123` are still reported.
 const PLACEHOLDER_PASSWORD_WORDS = String.raw`password|passwd|pass|pwd|secret|changeme|change[_-]me|placeholder|example|your[_-]?(?:password|pass)|replace[_-]me|x{3,}`;
 
-// Interpolation/template placeholder shapes used for URL userinfo. JDBC
-// property values additionally treat `%s`, `__NAME__` and masked `*****`
-// values as placeholders.
+// Interpolation/template placeholder shapes used for URL userinfo. Masked and
+// printf-style forms only count when they are the whole password, so they are
+// listed separately in PLACEHOLDER_PASSWORD_WHOLE_SHAPES below. JDBC property
+// values additionally treat `...` and brace-wrapped values as placeholders.
 const PLACEHOLDER_PASSWORD_SHAPES = String.raw`\$(?:\{|\(|[A-Za-z_])|\{[A-Za-z_{]|<[^>\s]*>|\[[^\]\s]*\]|%[A-Za-z_][A-Za-z0-9_]*%`;
+
+// Masked and printf-style values that are placeholders only when they fill the
+// whole URL userinfo password (`*****`, `__PASSWORD__`, `%s`). Requiring the
+// `@` delimiter keeps a real password that merely starts with one of those
+// shapes, for example `%s3cr3t`, reported as a secret.
+const PLACEHOLDER_PASSWORD_WHOLE_SHAPES = String.raw`\*+|__[A-Za-z0-9_]*__|%s`;
 
 // SQL Server JDBC escapes values containing `;`, `{`, `}` or `=` by wrapping
 // them in braces, for example `password={S3cr3t;!}`. A JDBC value that starts
@@ -129,8 +136,13 @@ const RULES = [
     //     `$DB_PASSWORD`, `${DB_PASSWORD}`, `$(DB_PASSWORD)`,
     //     `{{DB_PASSWORD}}`, `{DB_PASSWORD}`, `%DB_PASSWORD%`, `<password>`,
     //     `[password]`, `password`, `changeme`, `YOUR_PASSWORD`,
-    //     `YOURPASSWORD`, `REPLACE_ME` and `xxxxx`, plus the JDBC-style
-    //     `%s`, `__PASSWORD__`, `*****` and `...` placeholders.
+    //     `YOURPASSWORD`, `REPLACE_ME` and `xxxxx`;
+    //   - masked and printf-style placeholders that fill the whole URL
+    //     userinfo password: `*****`, `__PASSWORD__` and `%s`. These only
+    //     count as the exact value, so a real password that merely starts
+    //     with one of those shapes (for example `%s3cr3t`) is still reported.
+    //     The JDBC property branch additionally treats `...` and
+    //     brace-wrapped values as placeholders.
     // A JDBC placeholder word counts when the whole value is that word, so
     // values terminated by `;`, `&`, `?`, a closing quote or other punctuation
     // are still placeholders, while a value continuing after such punctuation
@@ -152,7 +164,7 @@ const RULES = [
     // `jdbc:<scheme>://` prefix) keeps the original behaviour and is not
     // reported only because it contains a password property.
     pattern: new RegExp(
-      String.raw`\b(?:(?:postgres(?:ql)?|mysql|mariadb|mongodb|rediss?|amqps?|mssql|sqlserver|cockroachdb|clickhouse|oracle|neo4j)(?:\+[a-z0-9_]+)?:\/\/[^\s/:@?#]*:(?!${PLACEHOLDER_PASSWORD_SHAPES}|(?:${PLACEHOLDER_PASSWORD_WORDS})(?=[@/?#]|$))[^\s@/?#]+@[^\s/?#@]+|jdbc:[a-z0-9]+:\/\/\S*?[;?&]password=(?!${PLACEHOLDER_JDBC_SHAPES}|%[A-Za-z]|__[A-Za-z0-9_]*__|\*+|\.{3,}|(?:${PLACEHOLDER_PASSWORD_WORDS})(?![^\s;?&]*[A-Za-z0-9_-]))[^\s;?&]+)`,
+      String.raw`\b(?:(?:postgres(?:ql)?|mysql|mariadb|mongodb|rediss?|amqps?|mssql|sqlserver|cockroachdb|clickhouse|oracle|neo4j)(?:\+[a-z0-9_]+)?:\/\/[^\s/:@?#]*:(?!${PLACEHOLDER_PASSWORD_SHAPES}|(?:${PLACEHOLDER_PASSWORD_WHOLE_SHAPES})(?=@)|(?:${PLACEHOLDER_PASSWORD_WORDS})(?=[@/?#]|$))[^\s@/?#]+@[^\s/?#@]+|jdbc:[a-z0-9]+:\/\/\S*?[;?&]password=(?!${PLACEHOLDER_JDBC_SHAPES}|%[A-Za-z]|__[A-Za-z0-9_]*__|\*+|\.{3,}|(?:${PLACEHOLDER_PASSWORD_WORDS})(?![^\s;?&]*[A-Za-z0-9_-]))[^\s;?&]+)`,
       'i',
     ),
   },

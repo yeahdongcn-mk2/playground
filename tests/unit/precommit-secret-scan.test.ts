@@ -306,6 +306,53 @@ describe('secret scan pre-commit hook', () => {
     }
   });
 
+  it('does not flag masked or printf-style placeholders in the database URL password slot', () => {
+    const dir = makeTempDir();
+    const fixture = join(dir, 'database-url-placeholders.txt');
+    const urls = [
+      'postgres://dbuser:*****@db.internal/app',
+      'postgres://dbuser:__PASSWORD__@db.internal/app',
+      'postgres://dbuser:%s@db.internal/app',
+      // The same placeholder shapes are exempt for every supported scheme and
+      // for the empty-username Redis form, not only for bare `postgres`.
+      'postgresql+psycopg2://dbuser:%s@db.internal/app',
+      'mysql://dbuser:__PASSWORD__@db.internal/app?ssl=true',
+      'redis://:*****@cache:6379/0',
+    ];
+    writeFileSync(fixture, `${urls.map((url) => `DATABASE_URL=${url}`).join('\n')}\n`);
+
+    expect(runScanner([fixture])).toEqual({ status: 0, stderr: '' });
+  });
+
+  it('still flags real database URL passwords that start with placeholder shapes', () => {
+    const dir = makeTempDir();
+    const fixture = join(dir, 'database-url-placeholder-prefixes.txt');
+    // `*****`, `__PASSWORD__` and `%s` only exempt the whole password value.
+    // Real passwords that merely start with the same characters, plus the
+    // regular real and percent-encoded forms, must still be reported.
+    const passwords = [
+      FAKE_JDBC_PASSWORD, // `S3cr3t!`
+      FAKE_DB_SPECIAL_PASSWORD, // percent-encoded `@` and `/`
+      ['%s', '3cr3t'].join(''),
+      ['*', 'S3cr3t'].join(''),
+      ['__PASSWORD__', 'x'].join(''),
+    ];
+    const urls = passwords.map(
+      (password) => `postgres://dbuser:${password}@db.internal/app`,
+    );
+    writeFileSync(fixture, `${urls.map((url) => `DATABASE_URL=${url}`).join('\n')}\n`);
+
+    const failing = runScanner([fixture]);
+    expect(failing.status).toBe(1);
+    expect(failing.stderr).toContain('database-url-password');
+    // Every URL must be reported, not just the first line of the fixture.
+    for (const [index] of urls.entries()) {
+      expect(failing.stderr).toContain(
+        `database-url-placeholder-prefixes.txt:${index + 1}: [database-url-password]`,
+      );
+    }
+  });
+
   it('fails on JDBC property-style connection strings with a real password property', () => {
     const dir = makeTempDir();
     const fixture = join(dir, 'jdbc-database-urls.txt');
