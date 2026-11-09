@@ -125,6 +125,10 @@ const FAKE_DB_PASSWORD = ['s3cr3t', 'password'].join('');
 // Fake JDBC property value, split so no complete `password=...` property
 // appears literally in this file.
 const FAKE_JDBC_PASSWORD = ['S3cr3t', '!'].join('');
+// SQL Server JDBC escapes values containing `;`, `{`, `}` or `=` by wrapping
+// them in braces. Built at runtime so this test file itself does not contain a
+// complete real-looking value.
+const FAKE_JDBC_BRACE_ESCAPED_PASSWORD = `{${FAKE_JDBC_PASSWORD};!}`;
 // Used to build a fixture line whose password property is empty at end of URL.
 const EMPTY_JDBC_PASSWORD = '';
 // Percent-encoded `@` and `/`, which valid connection strings use instead of
@@ -289,6 +293,9 @@ describe('secret scan pre-commit hook', () => {
       // SQL Server puts properties after `;`.
       `jdbc:sqlserver://host:1433;databaseName=app;user=sa;password=${FAKE_JDBC_PASSWORD}`,
       `jdbc:mysql://db.internal:3306/app;user=sa;password=${FAKE_JDBC_PASSWORD};useSSL=false`,
+      // SQL Server JDBC brace-escapes values containing `;`/`{}`/`=`; the
+      // escaped value is a real password, not a `{...}` template placeholder.
+      `jdbc:sqlserver://host:1433;databaseName=app;user=sa;password=${FAKE_JDBC_BRACE_ESCAPED_PASSWORD}`,
       // PostgreSQL/MySQL JDBC URLs put properties in the query string.
       `jdbc:postgresql://db.internal:5432/app?user=sa&password=${FAKE_JDBC_PASSWORD}`,
     ];
@@ -315,9 +322,10 @@ describe('secret scan pre-commit hook', () => {
       // of the URL.
       'jdbc:sqlserver://host:1433;databaseName=app;user=sa;password=;useSSL=false',
       `jdbc:sqlserver://host:1433;databaseName=app;user=sa;password=${EMPTY_JDBC_PASSWORD}`,
-      // Env-var interpolation, masking and template placeholders. Each value
-      // is followed by another property so this test file does not contain a
-      // complete `password=<placeholder>` property itself.
+      // Env-var interpolation, masking and template placeholders. Most values
+      // are followed by another property, so the placeholder is terminated by
+      // `;` or `&` rather than by the end of the line; the whole-value check
+      // must not depend on the value ending there.
       'jdbc:sqlserver://host:1433;databaseName=app;user=sa;password=${DB_PASSWORD};useSSL=false',
       'jdbc:postgresql://db.internal:5432/app?user=sa&password=${DB_PASSWORD}&ssl=false',
       'jdbc:mysql://db.internal:3306/app;user=sa;password=*****;useSSL=false',
@@ -325,6 +333,23 @@ describe('secret scan pre-commit hook', () => {
       'jdbc:mysql://db.internal:3306/app;user=sa;password=%s;useSSL=false',
       'jdbc:mysql://db.internal:3306/app;user=sa;password=password;useSSL=false',
       'jdbc:mysql://db.internal:3306/app;user=sa;password=...;useSSL=false',
+      // Query-string values end at `&`; trailing punctuation must not turn a
+      // placeholder word into a reported secret.
+      'jdbc:postgresql://db.internal:5432/app?user=sa&password=changeme&ssl=false',
+      'jdbc:postgresql://db.internal:5432/app?user=sa&password=password&ssl=false',
+      'jdbc:postgresql://db.internal:5432/app?user=sa&password=changeme?ssl=false',
+      // Configuration files often wrap the connection string in quotes, and
+      // prose/markdown may end it with a period, bracket or comma.
+      '"jdbc:sqlserver://host:1433;databaseName=app;user=sa;password=changeme"',
+      'jdbc:sqlserver://host:1433;databaseName=app;user=sa;password=changeme.',
+      'jdbc:sqlserver://host:1433;databaseName=app;user=sa;password=changeme)',
+      'jdbc:sqlserver://host;databaseName=app;user=sa;password=changeme,',
+      // A placeholder word at the very end of the URL is still the whole value.
+      'jdbc:sqlserver://host:1433;databaseName=app;user=sa;password=password',
+      // All-uppercase/underscore brace templates remain placeholders; a mixed
+      // case brace value would be reported as a real password (see above).
+      'jdbc:sqlserver://host:1433;databaseName=app;user=sa;password={DB_PASSWORD}',
+      'jdbc:sqlserver://host:1433;databaseName=app;user=sa;password={{DB_PASSWORD}}',
       // Property text without a `jdbc:<scheme>://` prefix keeps the previous
       // non-matching behaviour.
       'sqlserver://host:1433;databaseName=app;user=sa;password=real-looking-value',
