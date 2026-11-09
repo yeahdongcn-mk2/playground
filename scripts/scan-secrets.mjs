@@ -26,13 +26,15 @@ const PLACEHOLDER_PASSWORD_WORDS = String.raw`password|passwd|pass|pwd|secret|ch
 // placeholders.
 const PLACEHOLDER_PASSWORD_SHAPES = String.raw`\$(?:\{|\(|[A-Za-z_])|\{[A-Za-z_{]|<[^>\s]*>|\[[^\]\s]*\]|%[A-Za-z_][A-Za-z0-9_]*%`;
 
-// `__UPPER_SNAKE__` names are templates only when one of their
-// underscore-separated segments is a known placeholder word, so
-// `__PASSWORD__`, `__DB_PASSWORD__` and `__API_PASSWD__` are exempt while a
-// real password such as `__S3cr3t__` is still reported. A bare `__...__`
-// wildcard would exempt any such real value and is deliberately avoided. The
-// JDBC branch also requires the template to be the whole value, so a value
-// such as `__PASSWORD__x` is still reported there.
+// `__UPPER_SNAKE__` names are templates only when a known placeholder word or
+// phrase makes up one or more underscore/hyphen-separated segments, so
+// `__PASSWORD__`, `__DB_PASSWORD__` and `__CHANGE_ME__` are exempt while a real
+// password such as `__S3cr3t__` is still reported. A name whose placeholder
+// word is only part of a longer segment (`__DBPASSWORD__`, `__PASSWORD123__`)
+// is reported too. A bare `__...__` wildcard would exempt any such real value
+// and is deliberately avoided. The JDBC branch also requires the template to
+// be the whole value, so a value such as `__PASSWORD__x` is still reported
+// there.
 const PLACEHOLDER_PASSWORD_DUNDER_SHAPES = String.raw`__(?:[A-Za-z0-9]+_)*(?:${PLACEHOLDER_PASSWORD_WORDS})(?:_[A-Za-z0-9]+)*__`;
 
 // Masked, dunder and printf-style values that are placeholders only when they

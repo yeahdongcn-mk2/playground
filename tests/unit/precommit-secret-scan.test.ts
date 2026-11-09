@@ -163,6 +163,12 @@ const FAKE_JDBC_BRACE_DUNDER_PASSWORD = `{${FAKE_JDBC_DUNDER_PASSWORD}}`;
 // A dunder placeholder name followed by more characters is a real value; only
 // the whole dunder template is exempt.
 const FAKE_JDBC_DUNDER_PREFIX_PASSWORD = ['__PASSWORD__', 'x'].join('');
+// A brace-escaped real dunder value, built from parts so this test file itself
+// stays clean for the scanner it exercises.
+const FAKE_JDBC_BRACE_REAL_DUNDER_PASSWORD = `{${FAKE_DUNDER_PASSWORD}}`;
+// Masked placeholder used by the Redis fixture, built from parts so no literal
+// masked URL appears in this file.
+const MASKED_PASSWORD_PLACEHOLDER = ['*', '****'].join('');
 
 describe('secret scan pre-commit hook', () => {
   it('is configured to scan every text file, not only staged changes', () => {
@@ -318,17 +324,24 @@ describe('secret scan pre-commit hook', () => {
   it('does not flag masked, printf-style or dunder placeholders in the database URL password slot', () => {
     const dir = makeTempDir();
     const fixture = join(dir, 'database-url-placeholders.txt');
-    // Dunder templates are exempt only when one underscore-separated segment
-    // is a known placeholder word, so `__DB_PASSWORD__` is a placeholder but
-    // `__S3cr3t__` (covered by the positive test below) is not.
-    const placeholders = ['*****', '__PASSWORD__', '__DB_PASSWORD__', '__API_PASSWD__', '%s'];
-    // Generate every supported scheme instead of only representative ones, so
-    // the shared placeholder shapes stay pinned across the whole scheme list.
-    const urls = DATABASE_URL_SCHEMES.flatMap((scheme) =>
+    // Dunder templates are exempt only when a known placeholder word or phrase
+    // makes up their underscore-separated segments, so `__DB_PASSWORD__` is a
+    // placeholder but `__S3cr3t__` (covered by the positive test below) is not.
+    const placeholders = [
+      MASKED_PASSWORD_PLACEHOLDER,
+      '__PASSWORD__',
+      '__DB_PASSWORD__',
+      '__API_PASSWD__',
+      '%s',
+    ];
+    // Generate every base and driver scheme instead of only representative
+    // ones, so the shared placeholder shapes are covered across the whole list.
+    const schemes = [...DATABASE_URL_SCHEMES, ...DATABASE_URL_DRIVER_SCHEMES];
+    const urls = schemes.flatMap((scheme) =>
       placeholders.map((password) => `${scheme}://dbuser:${password}@db.internal/app`),
     );
     // Redis allows an empty username, with the password after a bare colon.
-    urls.push('redis://:*****@cache:6379/0');
+    urls.push(`redis://:${MASKED_PASSWORD_PLACEHOLDER}@cache:6379/0`);
     writeFileSync(fixture, `${urls.map((url) => `DATABASE_URL=${url}`).join('\n')}\n`);
 
     expect(runScanner([fixture])).toEqual({ status: 0, stderr: '' });
@@ -339,9 +352,10 @@ describe('secret scan pre-commit hook', () => {
     const fixture = join(dir, 'database-url-placeholder-prefixes.txt');
     // `*****`, `%s` and dunder placeholder names only exempt the whole password
     // value. Real passwords that merely start with the same characters, or use
-    // a dunder name without a placeholder word, must still be reported.
+    // a dunder name without a placeholder word, must still be reported; the
+    // regular and percent-encoded forms are baseline positives.
     const passwords = [
-      FAKE_JDBC_PASSWORD, // `S3cr3t!`
+      FAKE_DB_PASSWORD, // regular real password
       FAKE_DB_SPECIAL_PASSWORD, // percent-encoded `@` and `/`
       ['%s', '3cr3t'].join(''),
       ['*', 'S3cr3t'].join(''),
@@ -382,6 +396,7 @@ describe('secret scan pre-commit hook', () => {
       // exempt it.
       `jdbc:sqlserver://host:1433;databaseName=app;user=sa;password=${FAKE_JDBC_DUNDER_PASSWORD}`,
       `jdbc:sqlserver://host:1433;databaseName=app;user=sa;password=${FAKE_JDBC_BRACE_DUNDER_PASSWORD}`,
+      `jdbc:sqlserver://host:1433;databaseName=app;user=sa;password=${FAKE_JDBC_BRACE_REAL_DUNDER_PASSWORD}`,
       // A dunder placeholder name only exempts the whole value; a real password
       // that continues after the closing `__` must still be reported.
       `jdbc:mysql://db.internal:3306/app;user=sa;password=${FAKE_JDBC_DUNDER_PREFIX_PASSWORD};useSSL=false`,
