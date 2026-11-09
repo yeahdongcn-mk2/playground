@@ -335,9 +335,12 @@
 }
 
 /* Best-time panel. Rows are label / time pairs that wrap long custom board
-   labels instead of widening the sidebar; the time column never wraps. */
+   labels instead of widening the sidebar; the time column never wraps. Only
+   this card gets a min-content floor of zero; the other panel cards keep their
+   previous sizing contract. */
 .minesweeper-scores {
   display: grid;
+  min-width: 0;
   gap: 8px;
 }
 
@@ -398,10 +401,6 @@
   font-variant-numeric: tabular-nums;
   font-weight: 600;
   white-space: nowrap;
-}
-
-.minesweeper-panel > .panel-card {
-  min-width: 0;
 }
 
 .minesweeper-custom {

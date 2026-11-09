@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { chromium } from '@playwright/test';
+import { assertPortAvailable, parsePreviewPort } from './lib/preview-port.mjs';
 
 /**
  * Capture the Before / After evidence for the Minesweeper best-time leaderboard.
@@ -15,10 +16,15 @@ import { chromium } from '@playwright/test';
  * leaderboard panel. Both modes open the same fixed beginner board, win it with
  * one click at (8, 8) and seed a long custom-board record, so the only visible
  * difference between Before and After is the new sidebar card.
+ *
+ * The preview port is 4192 by default; on a shared host set `PREVIEW_PORT` to a
+ * free port instead of editing this file. When that port is already taken, the
+ * script fails with an explicit bind error instead of quietly talking to the
+ * other server.
  */
 
 const HOST = '127.0.0.1';
-const PORT = 4192;
+const PORT = parsePreviewPort();
 const ORIGIN = `http://${HOST}:${PORT}`;
 const OUTPUT = 'docs/screenshots';
 const BEFORE = process.argv.includes('--before');
@@ -50,9 +56,23 @@ const SEEDED_SCORES = {
 
 let server = null;
 
-async function waitForServer(url, timeoutMs = 30_000) {
+/** Error shown when the preview dies before the capture can connect to it. */
+function previewStartupError(detail) {
+  const suffix = detail.trim() === '' ? '' : `\n${detail.trim()}`;
+  return new Error(
+    `The preview server exited before ${ORIGIN} became ready. ` +
+      `Port ${PORT} may be taken by another process; set PREVIEW_PORT to a ` +
+      `free port (for example PREVIEW_PORT=${PORT + 1}).${suffix}`,
+  );
+}
+
+async function waitForServer(url, { timeoutMs = 30_000, failure } = {}) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    const failureDetail = failure?.();
+    if (failureDetail != null) {
+      throw previewStartupError(failureDetail);
+    }
     try {
       const response = await fetch(url);
       if (response.ok) {
@@ -63,7 +83,12 @@ async function waitForServer(url, timeoutMs = 30_000) {
     }
     await delay(250);
   }
-  throw new Error(`Timed out waiting for ${url}`);
+  const failureDetail = failure?.();
+  throw new Error(
+    `Timed out waiting for ${url}. If the preview is on another port, set ` +
+      `PREVIEW_PORT to match it.` +
+      (failureDetail == null ? '' : `\n${failureDetail}`),
+  );
 }
 
 async function settle(page) {
@@ -160,6 +185,12 @@ await mkdir(OUTPUT, { recursive: true });
 
 try {
   if (!BEFORE) {
+    // Fail with the real cause when the port is taken; otherwise the readiness
+    // probe would connect to the other server and an unrelated locator timeout
+    // would be reported much later.
+    await assertPortAvailable(PORT, HOST);
+    let stderr = '';
+    let startupFailure = null;
     server = spawn(
       process.execPath,
       [
@@ -171,9 +202,23 @@ try {
         String(PORT),
         '--strictPort',
       ],
-      { stdio: 'ignore' },
+      { stdio: ['ignore', 'pipe', 'pipe'] },
     );
-    await waitForServer(ORIGIN);
+    server.stderr?.setEncoding('utf8');
+    server.stderr?.on('data', (chunk) => {
+      stderr = `${stderr}${chunk}`.slice(-4000);
+    });
+    server.once('error', (error) => {
+      startupFailure = `Failed to spawn the preview server: ${error.message}`;
+    });
+    server.once('close', (code, signal) => {
+      startupFailure ??=
+        `vite preview stopped (exit code ${code}, signal ${signal ?? 'none'}).` +
+        (stderr.trim() === '' ? '' : `\n${stderr.trim()}`);
+    });
+    await waitForServer(ORIGIN, {
+      failure: () => startupFailure,
+    });
   }
 
   const browser = await chromium.launch();

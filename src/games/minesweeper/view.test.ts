@@ -486,6 +486,36 @@ describe('minesweeper best-time leaderboard', () => {
     expect(scoreWrites()).toHaveLength(1);
   });
 
+  it('re-reads the stored table on restart instead of keeping the old DOM', async () => {
+    const { services, store } = createServices();
+    const root = await mount(services);
+    // The mounted view starts from an empty table; this DOM snapshot is what a
+    // stale restart would keep showing.
+    expect(isHidden(root, 'scores-empty')).toBe(false);
+    expect(scoreText(root, 'beginner')).toBe('—');
+
+    // Another tab records a best time while this view is open. Restart must
+    // re-read storage: without renderScores() the empty state and the
+    // placeholder would survive even though the store has a record.
+    createMinesweeperScores(services.storage).record(
+      bucketForConfig(BEGINNER_CONFIG),
+      1_200,
+    );
+    clickRestart(root);
+    expect(isHidden(root, 'scores-empty')).toBe(true);
+    expect(isHidden(root, 'scores-presets')).toBe(false);
+    expect(scoreText(root, 'beginner')).toBe('0:01');
+
+    // The same re-read must notice corruption written by another tab and drop
+    // the whole table instead of rendering the previous rows.
+    store.setItem(SCORES_STORE_KEY, '{not-json');
+    clickRestart(root);
+    expect(isHidden(root, 'scores-empty')).toBe(false);
+    expect(isHidden(root, 'scores-presets')).toBe(true);
+    expect(isHidden(root, 'scores-custom')).toBe(true);
+    expect(store.getItem(SCORES_STORE_KEY)).toBeNull();
+  });
+
   it('keeps a faster stored time when a later win is slower', async () => {
     vi.useFakeTimers({
       toFake: [
