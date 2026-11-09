@@ -174,6 +174,10 @@ const MASKED_PASSWORD_PLACEHOLDER = ['*', '****'].join('');
 // starts with `...` is still reported. Built at runtime so this test file
 // itself stays clean for the scanner it exercises.
 const ELLIPSIS_PASSWORD_PLACEHOLDER = '.'.repeat(3);
+// printf conversion specifiers used as documentation placeholders. Only the
+// whole password value is exempt, so a real password such as `%d3cr3t` is still
+// reported. The URL userinfo and Oracle thin branches share this shape list.
+const PRINTF_PASSWORD_PLACEHOLDERS = ['%s', '%d', '%i', '%f'] as const;
 // Oracle thin puts the credentials in the path (`user/password@host`) instead
 // of a `user:password@` authority. The prefix, suffix and passwords are built
 // from parts so no complete inline-credential URL appears in this test file.
@@ -187,7 +191,7 @@ const ORACLE_THIN_PLACEHOLDERS = [
   'password',
   '${DB_PASSWORD}',
   '*****',
-  '%s',
+  ...PRINTF_PASSWORD_PLACEHOLDERS,
   '__PASSWORD__',
   '__DB_PASSWORD__',
   '%DB_PASSWORD%',
@@ -363,7 +367,7 @@ describe('secret scan pre-commit hook', () => {
       '__PASSWORD__',
       '__DB_PASSWORD__',
       '__API_PASSWD__',
-      '%s',
+      ...PRINTF_PASSWORD_PLACEHOLDERS,
     ];
     // Generate every base and driver scheme instead of only representative
     // ones, so the shared placeholder shapes are covered across the whole list.
@@ -381,14 +385,17 @@ describe('secret scan pre-commit hook', () => {
   it('still flags real database URL passwords that resemble placeholder shapes', () => {
     const dir = makeTempDir();
     const fixture = join(dir, 'database-url-placeholder-prefixes.txt');
-    // `*****`, `%s` and dunder placeholder names only exempt the whole password
-    // value. Real passwords that merely start with the same characters, or use
-    // a dunder name without a placeholder word, must still be reported; the
-    // regular and percent-encoded forms are baseline positives.
+    // `*****`, printf placeholders and dunder placeholder names only exempt the
+    // whole password value. Real passwords that merely start with the same
+    // characters, or use a dunder name without a placeholder word, must still be
+    // reported; the regular and percent-encoded forms are baseline positives.
     const passwords = [
       FAKE_DB_PASSWORD, // regular real password
       FAKE_DB_SPECIAL_PASSWORD, // percent-encoded `@` and `/`
-      ['%s', '3cr3t'].join(''),
+      FAKE_ORACLE_THIN_PASSWORD, // `S3cr3t!`
+      ...PRINTF_PASSWORD_PLACEHOLDERS.map((placeholder) =>
+        [placeholder, '3cr3t'].join(''),
+      ),
       ['*', 'S3cr3t'].join(''),
       ['__PASSWORD__', 'x'].join(''),
       FAKE_DUNDER_PASSWORD, // `__S3cr3t__`
@@ -590,7 +597,9 @@ describe('secret scan pre-commit hook', () => {
       FAKE_ORACLE_THIN_PASSWORD,
       ORACLE_THIN_PASSWORD,
       FAKE_ORACLE_THIN_SPECIAL_PASSWORD,
-      ['%s', '3cr3t'].join(''),
+      ...PRINTF_PASSWORD_PLACEHOLDERS.map((placeholder) =>
+        [placeholder, '3cr3t'].join(''),
+      ),
       ['__PASSWORD__', 'x'].join(''),
     ].map(oracleThinUrl);
     writeFileSync(fixture, `${contents.join('\n')}\n`);

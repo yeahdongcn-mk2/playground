@@ -39,10 +39,14 @@ const PLACEHOLDER_PASSWORD_DUNDER_SHAPES = String.raw`__(?:[A-Za-z0-9]+_)*(?:${P
 
 // Masked, ellipsis, dunder and printf-style values that are placeholders only
 // when they fill the whole URL userinfo password (`*****`, `...`,
-// `__PASSWORD__`, `%s`). Requiring the `@` delimiter keeps a real password
-// that merely starts with one of those shapes, for example `%s3cr3t` or
-// `...S3cr3t`, reported as a secret.
-const PLACEHOLDER_PASSWORD_WHOLE_SHAPES = String.raw`\*+|\.{3,}|${PLACEHOLDER_PASSWORD_DUNDER_SHAPES}|%s`;
+// `__PASSWORD__`, `%s`, `%d`, `%i`, `%f`). The printf shapes are the string
+// and integer/float conversion specifiers commonly used in format strings, so
+// `%d` is a placeholder but a real password that continues after it, for
+// example `%d3cr3t`, is not. The rule regex is case-insensitive, so uppercase
+// forms such as `%S` and `%D` are exempt too. Requiring the `@` delimiter keeps
+// a real password that merely starts with one of those shapes, for example
+// `%s3cr3t` or `...S3cr3t`, reported as a secret.
+const PLACEHOLDER_PASSWORD_WHOLE_SHAPES = String.raw`\*+|\.{3,}|${PLACEHOLDER_PASSWORD_DUNDER_SHAPES}|%[sdif]`;
 
 // SQL Server JDBC escapes values containing `;`, `{`, `}` or `=` by wrapping
 // them in braces, for example `password={S3cr3t;!}`. A JDBC value that starts
@@ -149,9 +153,9 @@ const RULES = [
     // empty-value exclusions as the URL userinfo branch. URLs without
     // credentials (`jdbc:oracle:thin:@host:1521:orcl`), with an empty password
     // (`jdbc:oracle:thin:scott/@host:1521:orcl`) or with a whole-value
-    // placeholder (`${DB_PASSWORD}`, `*****`, `%s`, `__PASSWORD__`,
-    // `password`, ...) are not reported, while real values such as `S3cr3t!`
-    // and percent-encoded forms such as `p%40ss` are.
+    // placeholder (`${DB_PASSWORD}`, `*****`, `%s`/`%d`/`%i`/`%f`,
+    // `__PASSWORD__`, `password`, ...) are not reported, while real values such
+    // as `S3cr3t!` and percent-encoded forms such as `p%40ss` are.
     //
     // The following are deliberately not reported so that connection strings
     // in docs and env templates do not trip the hook:
@@ -164,15 +168,16 @@ const RULES = [
     //     `[password]`, `password`, `changeme`, `YOUR_PASSWORD`,
     //     `YOURPASSWORD`, `REPLACE_ME` and `xxxxx`;
     //   - masked, ellipsis and printf-style placeholders that fill the whole
-    //     URL userinfo password: `*****`, `...`, `%s` and dunder templates
-    //     whose underscore-separated segments include a placeholder word, for
-    //     example `__PASSWORD__`, `__DB_PASSWORD__` and `__API_PASSWD__`.
-    //     These only count as the exact value, so a real password that merely
-    //     starts with one of those shapes (for example `...S3cr3t`, `%s3cr3t`
-    //     or `__PASSWORD__x`) is still reported, as is a dunder value without
-    //     a placeholder word such as `__S3cr3t__`. The Oracle thin password
-    //     slot shares these whole-value shapes. The JDBC property branch
-    //     additionally treats brace-wrapped values as placeholders.
+    //     URL userinfo password: `*****`, `...`, `%s`, `%d`, `%i`, `%f` and
+    //     dunder templates whose underscore-separated segments include a
+    //     placeholder word, for example `__PASSWORD__`, `__DB_PASSWORD__` and
+    //     `__API_PASSWD__`. These only count as the exact value, so a real
+    //     password that merely starts with one of those shapes (for example
+    //     `...S3cr3t`, `%d3cr3t` or `__PASSWORD__x`) is still reported, as is
+    //     a dunder value without a placeholder word such as `__S3cr3t__`. The
+    //     Oracle thin password slot shares these whole-value shapes. The JDBC
+    //     property branch additionally treats brace-wrapped values as
+    //     placeholders.
     // A JDBC placeholder word counts when the whole value is that word, so
     // values terminated by `;`, `&`, `?`, a closing quote or other punctuation
     // are still placeholders, while a value continuing after such punctuation
