@@ -160,6 +160,9 @@ const FAKE_DB_SPECIAL_PASSWORD = ['p%40ss', '%2Fword'].join('');
 const FAKE_DUNDER_PASSWORD = ['__', 'S3cr3t', '__'].join('');
 const FAKE_JDBC_DUNDER_PASSWORD = ['__', 'DB_S3cr3t', '__'].join('');
 const FAKE_JDBC_BRACE_DUNDER_PASSWORD = `{${FAKE_JDBC_DUNDER_PASSWORD}}`;
+// A dunder placeholder name followed by more characters is a real value; only
+// the whole dunder template is exempt.
+const FAKE_JDBC_DUNDER_PREFIX_PASSWORD = ['__PASSWORD__', 'x'].join('');
 
 describe('secret scan pre-commit hook', () => {
   it('is configured to scan every text file, not only staged changes', () => {
@@ -379,6 +382,9 @@ describe('secret scan pre-commit hook', () => {
       // exempt it.
       `jdbc:sqlserver://host:1433;databaseName=app;user=sa;password=${FAKE_JDBC_DUNDER_PASSWORD}`,
       `jdbc:sqlserver://host:1433;databaseName=app;user=sa;password=${FAKE_JDBC_BRACE_DUNDER_PASSWORD}`,
+      // A dunder placeholder name only exempts the whole value; a real password
+      // that continues after the closing `__` must still be reported.
+      `jdbc:mysql://db.internal:3306/app;user=sa;password=${FAKE_JDBC_DUNDER_PREFIX_PASSWORD};useSSL=false`,
       // PostgreSQL/MySQL JDBC URLs put properties in the query string.
       `jdbc:postgresql://db.internal:5432/app?user=sa&password=${FAKE_JDBC_PASSWORD}`,
       // A placeholder word only exempts the whole value; a real password that

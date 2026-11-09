@@ -30,7 +30,9 @@ const PLACEHOLDER_PASSWORD_SHAPES = String.raw`\$(?:\{|\(|[A-Za-z_])|\{[A-Za-z_{
 // underscore-separated segments is a known placeholder word, so
 // `__PASSWORD__`, `__DB_PASSWORD__` and `__API_PASSWD__` are exempt while a
 // real password such as `__S3cr3t__` is still reported. A bare `__...__`
-// wildcard would exempt any such real value and is deliberately avoided.
+// wildcard would exempt any such real value and is deliberately avoided. The
+// JDBC branch also requires the template to be the whole value, so a value
+// such as `__PASSWORD__x` is still reported there.
 const PLACEHOLDER_PASSWORD_DUNDER_SHAPES = String.raw`__(?:[A-Za-z0-9]+_)*(?:${PLACEHOLDER_PASSWORD_WORDS})(?:_[A-Za-z0-9]+)*__`;
 
 // Masked, dunder and printf-style values that are placeholders only when they
@@ -178,7 +180,7 @@ const RULES = [
     // `jdbc:<scheme>://` prefix) keeps the original behaviour and is not
     // reported only because it contains a password property.
     pattern: new RegExp(
-      String.raw`\b(?:(?:postgres(?:ql)?|mysql|mariadb|mongodb|rediss?|amqps?|mssql|sqlserver|cockroachdb|clickhouse|oracle|neo4j)(?:\+[a-z0-9_]+)?:\/\/[^\s/:@?#]*:(?!${PLACEHOLDER_PASSWORD_SHAPES}|(?:${PLACEHOLDER_PASSWORD_WHOLE_SHAPES})(?=@)|(?:${PLACEHOLDER_PASSWORD_WORDS})(?=[@/?#]|$))[^\s@/?#]+@[^\s/?#@]+|jdbc:[a-z0-9]+:\/\/\S*?[;?&]password=(?!${PLACEHOLDER_JDBC_SHAPES}|%[A-Za-z]|${PLACEHOLDER_PASSWORD_DUNDER_SHAPES}|\*+|\.{3,}|(?:${PLACEHOLDER_PASSWORD_WORDS})(?![^\s;?&]*[A-Za-z0-9_-]))[^\s;?&]+)`,
+      String.raw`\b(?:(?:postgres(?:ql)?|mysql|mariadb|mongodb|rediss?|amqps?|mssql|sqlserver|cockroachdb|clickhouse|oracle|neo4j)(?:\+[a-z0-9_]+)?:\/\/[^\s/:@?#]*:(?!${PLACEHOLDER_PASSWORD_SHAPES}|(?:${PLACEHOLDER_PASSWORD_WHOLE_SHAPES})(?=@)|(?:${PLACEHOLDER_PASSWORD_WORDS})(?=[@/?#]|$))[^\s@/?#]+@[^\s/?#@]+|jdbc:[a-z0-9]+:\/\/\S*?[;?&]password=(?!${PLACEHOLDER_JDBC_SHAPES}|%[A-Za-z]|${PLACEHOLDER_PASSWORD_DUNDER_SHAPES}(?![^\s;?&]*[A-Za-z0-9_-])|\*+|\.{3,}|(?:${PLACEHOLDER_PASSWORD_WORDS})(?![^\s;?&]*[A-Za-z0-9_-]))[^\s;?&]+)`,
       'i',
     ),
   },
