@@ -14,6 +14,16 @@
  */
 import { readFileSync } from 'node:fs';
 
+// Documentation/env-template values that are never treated as a real password.
+// The common words only count when the whole value is that word, so values
+// such as `password123` are still reported.
+const PLACEHOLDER_PASSWORD_WORDS = String.raw`password|passwd|pass|pwd|secret|changeme|change[_-]me|placeholder|example|your[_-]?(?:password|pass)|replace[_-]me|x{3,}`;
+
+// Interpolation/template placeholder shapes shared by URL userinfo and JDBC
+// property values. JDBC values additionally treat `%s`, `__NAME__` and masked
+// `*****` values as placeholders.
+const PLACEHOLDER_PASSWORD_SHAPES = String.raw`\$(?:\{|\(|[A-Za-z_])|\{[A-Za-z_{]|<[^>\s]*>|\[[^\]\s]*\]|%[A-Za-z_][A-Za-z0-9_]*%`;
+
 const RULES = [
   {
     id: 'aws-access-key-id',
@@ -88,21 +98,36 @@ const RULES = [
     // `mssql+pyodbc`, `cockroachdb+psycopg2`, `clickhouse+native`,
     // `oracle+oracledb`, `mongodb+srv` and `neo4j+srv` are covered too.
     // The username may be empty (Redis puts the password after a bare `:`).
+    //
+    // JDBC property-style connections are covered as well: any
+    // `jdbc:<scheme>://` URL whose properties contain a real `password=` value
+    // is reported, with properties separated by `;` (SQL Server style) or by
+    // `?`/`&` (PostgreSQL/MySQL style). This applies to every scheme in the
+    // list above, for example
+    // `jdbc:sqlserver://host;databaseName=app;user=sa;password=...`.
+    //
     // The following are deliberately not reported so that connection strings
     // in docs and env templates do not trip the hook:
     //   - URLs without userinfo (`scheme://host/db`);
-    //   - an empty password (`scheme://user:@host/db`);
+    //   - JDBC URLs without a `password=` property;
+    //   - an empty password (`scheme://user:@host/db`, `...;password=`);
     //   - env-var interpolation and obvious placeholders, for example
     //     `$DB_PASSWORD`, `${DB_PASSWORD}`, `$(DB_PASSWORD)`,
     //     `{{DB_PASSWORD}}`, `{DB_PASSWORD}`, `%DB_PASSWORD%`, `<password>`,
     //     `[password]`, `password`, `changeme`, `YOUR_PASSWORD`,
-    //     `YOURPASSWORD`, `REPLACE_ME` and `xxxxx`.
+    //     `YOURPASSWORD`, `REPLACE_ME` and `xxxxx`, plus the JDBC-style
+    //     `%s`, `__PASSWORD__`, `*****` and `...` placeholders.
     // The host part is required, so a bare `user:password@` mention without a
     // URL scheme or host is not reported. A raw `/` in a password is not
     // matched because it would be ambiguous with the URL path; valid
     // connection strings percent-encode it (`%2F`), which is still detected.
-    pattern:
-      /\b(?:postgres(?:ql)?|mysql|mariadb|mongodb|rediss?|amqps?|mssql|sqlserver|cockroachdb|clickhouse|oracle|neo4j)(?:\+[a-z0-9_]+)?:\/\/[^\s/:@?#]*:(?!\$(?:\{|\(|[A-Za-z_])|\{[A-Za-z_{]|<[^>\s]*>|\[[^\]\s]*\]|%[A-Za-z_][A-Za-z0-9_]*%|(?:password|passwd|pass|pwd|secret|changeme|change[_-]me|placeholder|example|your[_-]?(?:password|pass)|replace[_-]me|x{3,})(?=[@/?#]|$))[^\s@/?#]+@[^\s/?#@]+/i,
+    // Non-JDBC property text (for example `server=...;password=...` without a
+    // `jdbc:<scheme>://` prefix) keeps the original behaviour and is not
+    // reported only because it contains a password property.
+    pattern: new RegExp(
+      String.raw`\b(?:(?:postgres(?:ql)?|mysql|mariadb|mongodb|rediss?|amqps?|mssql|sqlserver|cockroachdb|clickhouse|oracle|neo4j)(?:\+[a-z0-9_]+)?:\/\/[^\s/:@?#]*:(?!${PLACEHOLDER_PASSWORD_SHAPES}|(?:${PLACEHOLDER_PASSWORD_WORDS})(?=[@/?#]|$))[^\s@/?#]+@[^\s/?#@]+|jdbc:[a-z0-9]+:\/\/\S*?[;?&]password=(?!${PLACEHOLDER_PASSWORD_SHAPES}|%[A-Za-z]|__[A-Za-z0-9_]*__|\*+|\.{3,}|(?:${PLACEHOLDER_PASSWORD_WORDS})(?=[;\s]|$))[^\s;?&]+)`,
+      'i',
+    ),
   },
 ];
 

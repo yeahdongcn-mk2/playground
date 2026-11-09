@@ -122,6 +122,11 @@ const DATABASE_URL_DRIVER_SCHEMES = [
 // Shared fake password for the database URL fixtures, split so no literal
 // `scheme://user:password@host` value appears in this file.
 const FAKE_DB_PASSWORD = ['s3cr3t', 'password'].join('');
+// Fake JDBC property value, split so no complete `password=...` property
+// appears literally in this file.
+const FAKE_JDBC_PASSWORD = ['S3cr3t', '!'].join('');
+// Used to build a fixture line whose password property is empty at end of URL.
+const EMPTY_JDBC_PASSWORD = '';
 // Percent-encoded `@` and `/`, which valid connection strings use instead of
 // the raw delimiters.
 const FAKE_DB_SPECIAL_PASSWORD = ['p%40ss', '%2Fword'].join('');
@@ -275,6 +280,59 @@ describe('secret scan pre-commit hook', () => {
         `driver-database-urls.txt:${index + 1}: [database-url-password]`,
       );
     }
+  });
+
+  it('fails on JDBC property-style connection strings with a real password property', () => {
+    const dir = makeTempDir();
+    const fixture = join(dir, 'jdbc-database-urls.txt');
+    const urls = [
+      // SQL Server puts properties after `;`.
+      `jdbc:sqlserver://host:1433;databaseName=app;user=sa;password=${FAKE_JDBC_PASSWORD}`,
+      `jdbc:mysql://db.internal:3306/app;user=sa;password=${FAKE_JDBC_PASSWORD};useSSL=false`,
+      // PostgreSQL/MySQL JDBC URLs put properties in the query string.
+      `jdbc:postgresql://db.internal:5432/app?user=sa&password=${FAKE_JDBC_PASSWORD}`,
+    ];
+    writeFileSync(fixture, `${urls.map((url) => `DATABASE_URL=${url}`).join('\n')}\n`);
+
+    const failing = runScanner([fixture]);
+    expect(failing.status).toBe(1);
+    expect(failing.stderr).toContain('database-url-password');
+    // Every URL must be reported, not just the first line of the fixture.
+    for (const [index] of urls.entries()) {
+      expect(failing.stderr).toContain(
+        `jdbc-database-urls.txt:${index + 1}: [database-url-password]`,
+      );
+    }
+  });
+
+  it('does not flag JDBC connection strings without a real password property', () => {
+    const dir = makeTempDir();
+    const fixture = join(dir, 'jdbc-database-url-near-misses.txt');
+    const urls = [
+      // No password property at all.
+      'jdbc:sqlserver://host:1433;databaseName=app;user=sa',
+      // An explicitly empty password, before another property and at the end
+      // of the URL.
+      'jdbc:sqlserver://host:1433;databaseName=app;user=sa;password=;useSSL=false',
+      `jdbc:sqlserver://host:1433;databaseName=app;user=sa;password=${EMPTY_JDBC_PASSWORD}`,
+      // Env-var interpolation, masking and template placeholders. Each value
+      // is followed by another property so this test file does not contain a
+      // complete `password=<placeholder>` property itself.
+      'jdbc:sqlserver://host:1433;databaseName=app;user=sa;password=${DB_PASSWORD};useSSL=false',
+      'jdbc:postgresql://db.internal:5432/app?user=sa&password=${DB_PASSWORD}&ssl=false',
+      'jdbc:mysql://db.internal:3306/app;user=sa;password=*****;useSSL=false',
+      'jdbc:mysql://db.internal:3306/app;user=sa;password=__PASSWORD__;useSSL=false',
+      'jdbc:mysql://db.internal:3306/app;user=sa;password=%s;useSSL=false',
+      'jdbc:mysql://db.internal:3306/app;user=sa;password=password;useSSL=false',
+      'jdbc:mysql://db.internal:3306/app;user=sa;password=...;useSSL=false',
+      // Property text without a `jdbc:<scheme>://` prefix keeps the previous
+      // non-matching behaviour.
+      'sqlserver://host:1433;databaseName=app;user=sa;password=real-looking-value',
+      'some-key=value;password=real-looking-value',
+    ];
+    writeFileSync(fixture, `${urls.map((url) => `DATABASE_URL=${url}`).join('\n')}\n`);
+
+    expect(runScanner([fixture])).toEqual({ status: 0, stderr: '' });
   });
 
   it('does not flag database URLs without real inline credentials', () => {
