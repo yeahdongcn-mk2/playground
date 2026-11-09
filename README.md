@@ -360,7 +360,7 @@ npm run typecheck    # 通过
 npm run lint         # 通过
 npm run test:unit    # 348 passed（含贪食蛇 21、俄罗斯方块 38、2048 35、打砖块 39、扫雷 128 个规则 / 难度 / 成绩 / 视图 / 调试用例）
 npm run build        # 通过
-npm run check:budget # 通过（入口 10.91 KB gzip，全部 JS 404.00 KB gzip）
+npm run check:budget # 通过（入口 10.91 KB gzip，全部 JS 403.97 KB gzip）
 npm run test:e2e     # 111 passed（桌面 84 + 手机 27）
 ```
 
