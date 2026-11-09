@@ -25,6 +25,13 @@ import {
   trackProbeTarget,
 } from './fixtures';
 
+// A mine wall at column 4 splits the board into two safe regions, so winning
+// takes two reveals and the pause between them records a non-zero time.
+const SPLIT_MINES = [
+  { row: 0, col: 0 },
+  ...Array.from({ length: 9 }, (_, row) => ({ row, col: 4 })),
+];
+
 test.describe('minesweeper gameplay', () => {
   test('hub card opens the game, shows the ready HUD, and the back link returns to the hub', async ({
     page,
@@ -293,6 +300,69 @@ test.describe('minesweeper gameplay', () => {
     await expect(page.locator('[data-state="hidden"]')).toHaveCount(81);
     await expect(page.getByTestId('restart-button')).toBeFocused();
     await expectCleanBoard(page);
+  });
+
+  test('a win records a non-zero best time that survives a reload', async ({ page }) => {
+    await openMinesweeper(page, { mines: SPLIT_MINES });
+    const score = page.getByTestId('score-beginner-time');
+    await expect(page.getByTestId('scores-empty')).toBeVisible();
+
+    // The first reveal clears only the left safe region. Wait past a timer tick
+    // so the winning time is genuinely non-zero rather than 0:00.
+    await cellLocator(page, 8, 0).click();
+    await expect(page.getByTestId('status')).toHaveText('进行中');
+    await page.waitForTimeout(1_200);
+    await expect(page.getByTestId('timer')).not.toHaveText('0:00');
+
+    await cellLocator(page, 8, 8).click();
+    await expect(page.getByTestId('status')).toHaveText('胜利');
+    await expect(page.getByTestId('scores-empty')).toBeHidden();
+    await expect(score).toHaveText(/^\d+:\d{2}$/);
+    const best = (await score.textContent()) ?? '';
+    expect(best).not.toBe('—');
+    expect(best).not.toBe('0:00');
+
+    const stored = await page.evaluate(() =>
+      JSON.parse(
+        localStorage.getItem('playground:v1:minesweeper.scores') ?? 'null',
+      ),
+    );
+    expect(stored.version).toBe(1);
+    expect(typeof stored.records.beginner).toBe('number');
+    expect(stored.records.beginner).toBeGreaterThan(0);
+
+    // A document reload remounts the game from localStorage; the same fixed
+    // board URL is preserved, so the row must show the same best time.
+    await page.reload();
+    await expect(page.getByTestId('minesweeper-game')).toBeVisible();
+    await expect(page.getByTestId('status')).toHaveText('待开始');
+    await expect(score).toHaveText(best);
+  });
+
+  test('a loss does not record a best time, even after a reload', async ({ page }) => {
+    await openMinesweeper(page, { mines: LOSS_MINES });
+    await cellLocator(page, LOSS_SAFE_CLICK.row, LOSS_SAFE_CLICK.col).click();
+    await expect(page.getByTestId('status')).toHaveText('进行中');
+    await cellLocator(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col).click();
+    await expect(page.getByTestId('status')).toHaveText('踩雷结束');
+
+    await expect(page.getByTestId('scores-empty')).toBeVisible();
+    for (const id of ['beginner', 'intermediate', 'expert'] as const) {
+      await expect(page.getByTestId(`score-${id}-time`)).toHaveText('—');
+    }
+    const stored = await page.evaluate(() =>
+      localStorage.getItem('playground:v1:minesweeper.scores'),
+    );
+    expect(stored).toBeNull();
+
+    await page.reload();
+    await expect(page.getByTestId('status')).toHaveText('待开始');
+    await expect(page.getByTestId('scores-empty')).toBeVisible();
+    expect(
+      await page.evaluate(() =>
+        localStorage.getItem('playground:v1:minesweeper.scores'),
+      ),
+    ).toBeNull();
   });
 
   test('the restart button resets a running game', async ({ page }) => {

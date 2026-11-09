@@ -2,6 +2,28 @@
 
 这些截图用于各期交付的 Before / After 视觉证据。全部由 Playwright Chromium 真实渲染，不是 mockup。
 
+## scores：扫雷本地最高用时榜（Issue #45 / 子任务 1）
+
+- Before 基线：`a60062e`（存储模块 #82 合入后的 `main`，也就是本子任务开始前的 `main`）。侧栏只有操作、本局与难度卡片，还没有最高用时卡片；`localStorage` 里预置的成绩键会被忽略。
+- After：本子任务分支 `agent/plan-45-t1` 的提交 [`338d06c`](https://github.com/yeahdongcn-mk2/playground/commit/338d06c)（含审查修正与最终截图）。侧栏在难度卡片之后新增「最高用时」卡片：三档预设按初级 / 中级 / 高级固定顺序展示，没有记录的档位显示 `—`；自定义棋盘按配置单列并显示长标签；整张榜为空时显示「还没有记录」。截图场景先向本机存储预置一条 30×30 / 100 雷（首点不安全）的自定义记录，再以固定初级雷盘从 (8, 8) 一次获胜，因此 After 面板同时显示新写入的初级成绩、未记录预设的占位与一条自定义成绩。
+- 视口 / 主题：桌面 1440×1000 CSS px、DPR 1；手机 320×640 CSS px、DPR 2、`isMobile: true`、`hasTouch: true`；两者均为深色主题、`reducedMotion: reduce`，Before / After 使用同一 URL、同一固定雷盘、同一 WON 状态，均为整页截图（`fullPage: true`）。
+- 生成 After：`npm run screenshots:minesweeper:scores`（生产构建 + `vite preview`）。
+- 预览端口：默认 `4192`，共享主机或并行 worktree 用 `PREVIEW_PORT=4193 npm run screenshots:minesweeper:scores` 覆盖。端口已被占用时脚本会在启动 preview 前明确报错并提示 `PREVIEW_PORT`，不会再静默连到别人的 preview、之后才以无关的定位器超时报错。
+- 复现 Before：在 `a60062e` 的干净 worktree 里 `npm ci && npm run build`，用 `node node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4192 --strictPort` 启动预览，再运行 `BASE_URL=http://127.0.0.1:4192 npm run screenshots:minesweeper:scores-before`（Before 模式不启动 preview，端口以 `BASE_URL` 为准）。
+
+| 文件 | 场景 | 视口 / 主题 | 说明 |
+| --- | --- | --- | --- |
+| `before-minesweeper-scores-desktop.png` | 扫雷 WON（基线 `a60062e`） | 1440×1000 / 深色 / 整页 1440×1324 | 侧栏没有最高用时卡片；胜利遮罩、固定雷盘与 After 相同。 |
+| `after-minesweeper-scores-desktop.png` | 扫雷 WON（本子任务） | 1440×1000 / 深色 / 整页 1440×1606 | 难度卡片后新增最高用时卡片：初级显示刚写入的用时，中级 / 高级显示 `—`，自定义区显示预置的 30×30 / 100 雷（首点不安全）记录。 |
+| `before-minesweeper-scores-320x640.png` | 扫雷 WON（320×640 基线 `a60062e`） | 320×640 / 深色 / 整页 640×3580 | 手机整页截图没有最高用时卡片，页面无横向溢出。 |
+| `after-minesweeper-scores-320x640.png` | 扫雷 WON（320×640 本子任务） | 320×640 / 深色 / 整页 640×4098 | 长自定义标签在卡片内换行，320px 下页面无横向溢出；新增卡片使整页高度增加。 |
+
+### 证据限制
+
+- 手机端为 Playwright 320×640 触摸模拟（DPR 2），不是真实设备截图。
+- 截图只证明静态视觉；写入 / 刷新保留、失败不写入、慢成绩不覆盖、切换难度与损坏数据回退由 `src/games/minesweeper/view.test.ts` 覆盖，胜利刷新保留、失败不记录与 320px 长标签无溢出由 `tests/e2e/minesweeper.spec.ts` / `minesweeper.mobile.spec.ts` 在生产构建上验证。
+- Before 基线已有存储模块，但还没有榜单 UI；本组 Before / After 只证明视觉差异，不证明存储逻辑（由存储模块自身的单测覆盖）。
+
 ## difficulty：扫雷难度选择（Issue #44 / 子任务 3）
 
 - Before 基线：`9f9aa54`（PR #57 合入「扫雷视图支持任意棋盘配置与安全重建」后的 `main`，也就是本子任务开始前的 `main`）。侧栏只有操作与本局状态卡片，没有难度控件。

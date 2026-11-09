@@ -22,6 +22,7 @@ import {
   type MinesweeperSnapshot,
   type MinesweeperStatus,
 } from './engine';
+import { bucketForConfig, createMinesweeperScores } from './scores';
 import './minesweeper.css';
 
 const CLOCK_INTERVAL_MS = 250;
@@ -48,6 +49,19 @@ function difficultyPresetButtonsHtml(config: Readonly<MinesweeperConfig>): strin
     (preset) => `<button class="button button--ghost minesweeper-preset" type="button"
       data-difficulty="${preset.id}" data-testid="difficulty-${preset.id}"
       aria-pressed="${String(preset.id === active)}">${preset.label}</button>`,
+  ).join('');
+}
+
+/**
+ * Render the three preset score rows from the same list the selector and the
+ * score store use, so ids, labels and order cannot drift.
+ */
+function scorePresetRowsHtml(): string {
+  return DIFFICULTY_PRESETS.map(
+    (preset) => `<div class="minesweeper-score" data-score-bucket="${preset.id}">
+              <dt>${preset.label}</dt>
+              <dd data-testid="score-${preset.id}-time">—</dd>
+            </div>`,
   ).join('');
 }
 
@@ -167,6 +181,19 @@ function viewHtml(config: Readonly<MinesweeperConfig>): string {
             <p class="minesweeper-error" id="minesweeper-difficulty-error" role="alert"
               data-testid="difficulty-error" hidden></p>
           </form>
+        </div>
+
+        <div class="panel-card minesweeper-scores" data-testid="scores-panel"
+          aria-labelledby="minesweeper-scores-title">
+          <p class="panel-kicker">BEST TIMES</p>
+          <h2 id="minesweeper-scores-title">最高用时</h2>
+          <p class="minesweeper-scores-empty" data-testid="scores-empty">还没有记录</p>
+          <dl class="minesweeper-scores-list" data-testid="scores-presets" hidden>
+            ${scorePresetRowsHtml()}
+          </dl>
+          <div class="minesweeper-scores-custom" data-testid="scores-custom" hidden>
+            <dl class="minesweeper-scores-list" data-testid="scores-custom-list"></dl>
+          </div>
         </div>
 
         <p class="minesweeper-hint">全部安全格翻开即获胜；插旗数量可以超过雷数，剩余雷数会随之变为负数。</p>
@@ -459,6 +486,15 @@ export async function mountMinesweeper(
     '[data-testid="custom-difficulty-submit"]',
   );
   const difficultyError = query<HTMLElement>(root, '[data-testid="difficulty-error"]');
+  const scoresEmpty = query<HTMLElement>(root, '[data-testid="scores-empty"]');
+  const scoresPresets = query<HTMLElement>(root, '[data-testid="scores-presets"]');
+  const scoresCustom = query<HTMLElement>(root, '[data-testid="scores-custom"]');
+  const scoresCustomList = query<HTMLElement>(root, '[data-testid="scores-custom-list"]');
+  const presetScoreElements = DIFFICULTY_PRESETS.map((preset) => ({
+    preset,
+    element: query<HTMLElement>(root, `[data-testid="score-${preset.id}-time"]`),
+  }));
+  const scores = createMinesweeperScores(services.storage);
 
   const controller = new AbortController();
   const listenerSignal = controller.signal;
@@ -572,6 +608,60 @@ export async function mountMinesweeper(
   }
 
   /**
+   * Re-render the best-time panel from storage.
+   *
+   * Presets keep their fixed order (initial difficulty, then intermediate and
+   * expert) and show a dash when only other buckets have records; custom boards
+   * are one row each and only appear once they have a record. An empty table
+   * shows the empty-state copy instead of three dash rows. Restarting or
+   * switching difficulty only re-reads the table, so the board cannot be lost.
+   */
+  function renderScores(): void {
+    const entries = scores.list();
+    const presetIds: ReadonlySet<string> = new Set(
+      DIFFICULTY_PRESETS.map((preset) => preset.id),
+    );
+    const bestByBucket = new Map(
+      entries.map((entry) => [entry.bucket.id, entry.elapsedMs] as const),
+    );
+
+    scoresEmpty.hidden = entries.length > 0;
+    scoresPresets.hidden = entries.length === 0;
+    for (const { preset, element } of presetScoreElements) {
+      const elapsedMs = bestByBucket.get(preset.id);
+      setText(element, elapsedMs === undefined ? '—' : formatTime(elapsedMs));
+    }
+
+    const customEntries = entries.filter(
+      (entry) => !presetIds.has(entry.bucket.id),
+    );
+    scoresCustom.hidden = customEntries.length === 0;
+    scoresCustomList.replaceChildren(
+      ...customEntries.map((entry) => {
+        const row = document.createElement('div');
+        row.className = 'minesweeper-score';
+        row.dataset.scoreBucket = entry.bucket.id;
+        const label = document.createElement('dt');
+        label.textContent = entry.bucket.label;
+        const time = document.createElement('dd');
+        time.textContent = formatTime(entry.elapsedMs);
+        row.append(label, time);
+        return row;
+      }),
+    );
+  }
+
+  /**
+   * Persist the finishing time once per game. `scores.record` ignores invalid
+   * values and non-improving times, so a repeated sync or a stale transition
+   * cannot write twice.
+   */
+  function recordWin(elapsedMs: number): void {
+    scores.record(bucketForConfig(currentConfig), elapsedMs);
+    renderScores();
+  }
+
+  /**
    * Rebuild the whole game for `rawConfig`: stop the old clock, cancel the
    * pending touch gesture while keeping its release-click suppression, replace
    * the board DOM and engine, reset the HUD and move focus out of the overlay
@@ -627,6 +717,7 @@ export async function mountMinesweeper(
     lastStatus = engine.currentStatus;
 
     syncDifficultyControls();
+    renderScores();
     sync();
 
     // Hiding the overlay while its restart button owns focus would leave focus
@@ -709,8 +800,11 @@ export async function mountMinesweeper(
       // The win chime belongs to entering the won state. A first reveal can
       // clear the whole board before the view ever observes "playing", so the
       // transition may be ready -> won as well as playing -> won. A repeated
-      // sync, a restart or a board rebuild cannot play it again.
+      // sync, a restart or a board rebuild cannot play it again. The same
+      // one-shot transition is what records the best time, so a lost game and
+      // a restart never touch the table.
       if (state.status === 'won' && lastStatus !== 'won') {
+        recordWin(state.elapsedMs);
         services.audio.play('win');
       }
       if (state.status === 'playing') {
@@ -789,6 +883,7 @@ export async function mountMinesweeper(
     // game action, so clear that transient error and show the active config.
     hideDifficultyError();
     syncDifficultyControls();
+    renderScores();
     announce('游戏重新开始');
     // The overlay hides with focus still inside it, so move focus back to a
     // visible restart control once the new board is ready. On touch layouts the

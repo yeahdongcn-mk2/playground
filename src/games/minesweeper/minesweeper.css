@@ -334,6 +334,75 @@
   box-shadow: inset 0 0 0 1px rgba(34, 211, 238, 0.24);
 }
 
+/* Best-time panel. Rows are label / time pairs that wrap long custom board
+   labels instead of widening the sidebar; the time column never wraps. Only
+   this card gets a min-content floor of zero; the other panel cards keep their
+   previous sizing contract. */
+.minesweeper-scores {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.minesweeper-scores h2 {
+  margin-bottom: 2px;
+}
+
+.minesweeper-scores-empty {
+  padding: 2px 0;
+  color: var(--dim);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.minesweeper-scores-list[hidden],
+.minesweeper-scores-custom[hidden] {
+  display: none;
+}
+
+.minesweeper-scores-list,
+.minesweeper-scores-custom {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  margin: 0;
+}
+
+.minesweeper-scores-custom {
+  padding-top: 6px;
+  border-top: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.minesweeper-score {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 0;
+  border-bottom: 1px dashed rgba(148, 163, 184, 0.12);
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.minesweeper-score:last-child {
+  border-bottom: 0;
+}
+
+.minesweeper-score dt {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.minesweeper-score dd {
+  flex: none;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .minesweeper-custom {
   display: grid;
   gap: 8px;

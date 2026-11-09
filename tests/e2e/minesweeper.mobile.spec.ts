@@ -115,6 +115,36 @@ test.describe('minesweeper on a phone viewport', () => {
     expect(cellBox?.width ?? 0).toBeCloseTo(cellBox?.height ?? 0, 1);
   });
 
+  test('renders the longest custom best-time label without horizontal overflow', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 320, height: 640 });
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        'playground:v1:minesweeper.scores',
+        JSON.stringify({
+          version: 1,
+          records: { 'custom:30x30x100:unsafe': 125_000 },
+        }),
+      );
+    });
+    await openMinesweeper(page, { mines: LOSS_MINES });
+
+    const row = page.locator('[data-score-bucket="custom:30x30x100:unsafe"]');
+    await expect(row).toContainText('自定义 30×30 / 100 雷（首点不安全）');
+    await expect(row).toContainText('2:05');
+    await expectNoHorizontalOverflow(page);
+
+    // The longest label must wrap inside the card instead of widening the
+    // 320px document; the panel itself has to stay inside the viewport.
+    const card = await page.getByTestId('scores-panel').boundingBox();
+    expect(card, 'score panel should have a bounding box').not.toBeNull();
+    if (card) {
+      expect(card.x).toBeGreaterThanOrEqual(0);
+      expect(card.x + card.width).toBeLessThanOrEqual(320.5);
+    }
+  });
+
   for (const viewport of NARROW_VIEWPORTS) {
     test(`keeps the board usable and overflow-free on a ${viewport.label} phone viewport`, async ({
       page,
