@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { StorageService, type KeyValueStore } from '../../core/storage';
 import { DIFFICULTY_PRESETS } from './difficulty';
 import { DEFAULT_MINESWEEPER_CONFIG } from './engine';
@@ -105,17 +105,34 @@ describe('MinesweeperScores', () => {
     expect(reloaded.best(beginner)).toBe(42_000);
   });
 
-  it('keeps only the shortest time and ignores longer or equal ones', () => {
-    const { scores } = createScores();
+  it('keeps the best time when a longer time is recorded', () => {
+    const { store, scores } = createScores();
     const beginner = bucketForConfig(DEFAULT_MINESWEEPER_CONFIG);
 
     scores.record(beginner, 9_000);
+    const storedBefore = store.values.get(RAW_KEY);
+
     scores.record(beginner, 12_000);
-    scores.record(beginner, 9_000);
+
     expect(scores.best(beginner)).toBe(9_000);
+    expect(store.values.get(RAW_KEY)).toBe(storedBefore);
 
     scores.record(beginner, 5_000);
     expect(scores.best(beginner)).toBe(5_000);
+  });
+
+  it('ignores an equal time without rewriting storage', () => {
+    const { store, scores } = createScores();
+    const beginner = bucketForConfig(DEFAULT_MINESWEEPER_CONFIG);
+    const setItem = vi.spyOn(store, 'setItem');
+
+    scores.record(beginner, 9_000);
+    expect(setItem).toHaveBeenCalledTimes(1);
+
+    scores.record(beginner, 9_000);
+
+    expect(setItem).toHaveBeenCalledTimes(1);
+    expect(scores.best(beginner)).toBe(9_000);
   });
 
   it('round-trips an unsafe custom bucket and rebuilds its label', () => {
@@ -173,9 +190,18 @@ describe('MinesweeperScores', () => {
     const expert = bucketForConfig({ rows: 16, cols: 30, mines: 99, firstClickSafe: true });
     const smallCustom = bucketForConfig({ rows: 10, cols: 10, mines: 15, firstClickSafe: true });
     const largeCustom = bucketForConfig({ rows: 12, cols: 12, mines: 20, firstClickSafe: true });
+    const largeCustomUnsafe = bucketForConfig({
+      rows: 12,
+      cols: 12,
+      mines: 20,
+      firstClickSafe: false,
+    });
 
     scores.record(expert, 30_000);
     scores.record(beginner, 10_000);
+    // Record the unsafe pair first: only the first-click tie-break can put the
+    // safe board ahead, so a comparator that drops it leaves this order intact.
+    scores.record(largeCustomUnsafe, 45_000);
     scores.record(largeCustom, 40_000);
     scores.record(intermediate, 20_000);
     scores.record(smallCustom, 15_000);
@@ -185,6 +211,7 @@ describe('MinesweeperScores', () => {
     expect(scores.best(expert)).toBe(30_000);
     expect(scores.best(smallCustom)).toBe(15_000);
     expect(scores.best(largeCustom)).toBe(40_000);
+    expect(scores.best(largeCustomUnsafe)).toBe(45_000);
 
     expect(scores.list().map((entry) => entry.bucket.id)).toEqual([
       'beginner',
@@ -192,6 +219,7 @@ describe('MinesweeperScores', () => {
       'expert',
       smallCustom.id,
       largeCustom.id,
+      largeCustomUnsafe.id,
     ]);
   });
 
@@ -250,6 +278,20 @@ describe('MinesweeperScores', () => {
     expect(scores.best(beginner)).toBeNull();
     expect(store.values.has(RAW_KEY)).toBe(false);
     expect(store.values.get(OTHER_KEY)).toBe('keep');
+  });
+
+  it('repairs corrupt data when a new best time is recorded', () => {
+    const { store, scores } = createScores();
+    const beginner = bucketForConfig(DEFAULT_MINESWEEPER_CONFIG);
+    store.setItem(RAW_KEY, '{not-json');
+
+    scores.record(beginner, 5_000);
+
+    expect(scores.best(beginner)).toBe(5_000);
+    expect(JSON.parse(store.values.get(RAW_KEY) ?? '')).toEqual({
+      version: SCORES_VERSION,
+      records: { beginner: 5_000 },
+    });
   });
 
   it('never throws when the underlying store throws', () => {

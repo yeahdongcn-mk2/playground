@@ -196,12 +196,14 @@ function compareEntries(left: ScoreEntry, right: ScoreEntry): number {
 
   const leftConfig = left.bucket.config;
   const rightConfig = right.bucket.config;
+  // Bucket ids are canonical, so two boards with the same rows, columns, mine
+  // count and first-click policy always share an id. The policy is therefore
+  // the only reachable tie-break after the dimension comparisons.
   return (
     leftConfig.rows - rightConfig.rows ||
     leftConfig.cols - rightConfig.cols ||
     leftConfig.mines - rightConfig.mines ||
-    Number(rightConfig.firstClickSafe) - Number(leftConfig.firstClickSafe) ||
-    left.bucket.id.localeCompare(right.bucket.id)
+    Number(rightConfig.firstClickSafe) - Number(leftConfig.firstClickSafe)
   );
 }
 
