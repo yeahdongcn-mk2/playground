@@ -23,7 +23,6 @@
     "screenshots:breakout": "npm run build && node scripts/capture-breakout-screenshots.mjs",
     "screenshots:breakout:before": "node scripts/capture-breakout-screenshots.mjs --before",
     "screenshots:minesweeper": "npm run build && node scripts/capture-minesweeper-screenshots.mjs",
-    "screenshots:minesweeper:before": "node scripts/capture-minesweeper-screenshots.mjs --before",
     "screenshots:minesweeper:touch-before": "node scripts/capture-minesweeper-screenshots.mjs --touch-before",
     "screenshots:minesweeper:narrow": "npm run build && node scripts/capture-minesweeper-screenshots.mjs --narrow",
     "screenshots:minesweeper:narrow-before": "node scripts/capture-minesweeper-screenshots.mjs --narrow-before",

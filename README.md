@@ -226,7 +226,6 @@ pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和
 | `npm run screenshots:breakout` | 构建后生成打砖块大厅与 ready / playing / levelclear / gameover 截图 |
 | `npm run screenshots:breakout:before` | 用 `BASE_URL` 指定的 main 预览生成打砖块 Before 截图 |
 | `npm run screenshots:minesweeper` | 构建后生成扫雷大厅、桌面玩法与 Pixel 7 手机玩法截图 |
-| `npm run screenshots:minesweeper:before` | 用 `BASE_URL` 指定的 main 预览生成扫雷 Before 截图 |
 | `npm run screenshots:minesweeper:touch-before` | 用 `BASE_URL` 指定的触屏改动前基线生成手机扫雷 Before 截图 |
 | `npm run screenshots:minesweeper:narrow` | 构建后生成 360×740 扫雷窄屏 ready 截图 |
 | `npm run screenshots:minesweeper:narrow-before` | 用 `BASE_URL` 指定的窄屏改动前基线生成 360×740 Before 截图 |
@@ -240,6 +239,8 @@ pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和
 | `npm run screenshots:minesweeper:scores-before` | 用 `BASE_URL` 指定的改动前基线生成最高用时榜 Before 截图 |
 | `npm run screenshots:minesweeper:scores-clear` | 构建后生成带「清空记录」入口的最高用时榜 After 截图 |
 | `npm run screenshots:minesweeper:scores-clear-before` | 用 `BASE_URL` 指定的「清空记录」改动前基线生成 Before 截图 |
+
+扫雷截图脚本不再提供通用 `--before` 模式：显式传入会报错并以非零状态退出；`touch-before` / `narrow-before` / `min-before` / `restart-before` / `large-before` 等模式保留，分别指向各自的历史基线。
 
 首次运行端到端测试前需要安装浏览器：
 
@@ -363,7 +364,7 @@ games/<game>/scene → 对应引擎（动态 import）
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过
-npm run test:unit    # 361 passed（含贪食蛇 21、俄罗斯方块 38、2048 35、打砖块 39、扫雷 132 个规则 / 难度 / 成绩 / 视图 / 调试用例，以及截图脚本端口 9 例）
+npm run test:unit    # 366 passed（含贪食蛇 21、俄罗斯方块 38、2048 35、打砖块 39、扫雷 132 个规则 / 难度 / 成绩 / 视图 / 调试用例，以及截图脚本端口 9 例、截图模式 5 例）
 npm run build        # 通过
 npm run check:budget # 通过（入口 10.90 KB gzip，全部 JS 404.23 KB gzip）
 npm run test:e2e     # 114 passed（桌面 85 + 手机 29）
