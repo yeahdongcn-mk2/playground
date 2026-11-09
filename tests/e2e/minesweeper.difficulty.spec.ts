@@ -34,6 +34,13 @@ test.describe('minesweeper difficulty selector', () => {
     await expect(page.locator('[data-cell]')).toHaveCount(81);
     await expect(page.getByTestId('board-summary')).toHaveText('9 × 9 · 10 雷');
     await expect(page.getByTestId('remaining-mines')).toHaveText('10');
+    // The large-board warning is a narrow-screen affordance; the desktop
+    // 1440px layout stays unchanged even after switching to a wide board.
+    await expect(page.getByTestId('minesweeper-game')).toHaveAttribute(
+      'data-large-board',
+      'false',
+    );
+    await expect(page.getByTestId('board-size-warning')).toBeHidden();
     // The sidebar restart must stay fully usable on the 1440×1000 desktop
     // viewport: the difficulty card lives below it, not above it.
     await expect(page.getByTestId('restart-button')).toBeInViewport({ ratio: 1 });
@@ -56,6 +63,11 @@ test.describe('minesweeper difficulty selector', () => {
       'aria-label',
       '16 × 16 扫雷棋盘',
     );
+    await expect(page.getByTestId('minesweeper-game')).toHaveAttribute(
+      'data-large-board',
+      'true',
+    );
+    await expect(page.getByTestId('board-size-warning')).toBeHidden();
     await expect(page.getByTestId('status')).toHaveText('待开始');
     await expect(page.getByTestId('timer')).toHaveText('0:00');
     await expect(page.getByTestId('overlay')).toBeHidden();
@@ -74,6 +86,11 @@ test.describe('minesweeper difficulty selector', () => {
       'aria-label',
       '16 × 30 扫雷棋盘',
     );
+    await expect(page.getByTestId('minesweeper-game')).toHaveAttribute(
+      'data-large-board',
+      'true',
+    );
+    await expect(page.getByTestId('board-size-warning')).toBeHidden();
     await expect(page.getByTestId('status')).toHaveText('待开始');
     await expect(page.getByTestId('timer')).toHaveText('0:00');
     await expectActiveDifficulty(page, 'expert');
@@ -87,6 +104,11 @@ test.describe('minesweeper difficulty selector', () => {
     await expect(page.locator('[data-cell]')).toHaveCount(81);
     await expect(page.getByTestId('remaining-mines')).toHaveText('10');
     await expect(page.getByTestId('board-summary')).toHaveText('9 × 9 · 10 雷');
+    await expect(page.getByTestId('minesweeper-game')).toHaveAttribute(
+      'data-large-board',
+      'false',
+    );
+    await expect(page.getByTestId('board-size-warning')).toBeHidden();
     await expectActiveDifficulty(page, 'beginner');
     await expectCleanBoard(page);
     expect(await activeIntervalCount(page)).toBe(0);

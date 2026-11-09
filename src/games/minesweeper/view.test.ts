@@ -383,6 +383,46 @@ describe('minesweeper view sound feedback', () => {
   });
 });
 
+describe('minesweeper large-board warning', () => {
+  function largeBoardState(root: HTMLElement): string | undefined {
+    return root.querySelector<HTMLElement>('[data-testid="minesweeper-game"]')
+      ?.dataset.largeBoard;
+  }
+
+  it('marks boards wider than nine columns and exposes readable warning copy', async () => {
+    const { services } = createServices();
+    const root = await mount(services);
+
+    const warning = root.querySelector<HTMLElement>(
+      '[data-testid="board-size-warning"]',
+    );
+    expect(warning).not.toBeNull();
+    expect(warning?.getAttribute('role')).toBe('status');
+    expect(warning?.textContent).toContain('≥36px');
+    expect(warning?.textContent).toContain('9×9');
+    expect(warning?.textContent).toContain('横屏');
+    expect(warning?.textContent).toContain('更小的棋盘');
+
+    // The default 5×5 debug board is not a large board; the preset 9×9 stays
+    // at the guaranteed width, while a wide custom board flips the state.
+    expect(largeBoardState(root)).toBe('false');
+    debugApi()?.setConfig(BEGINNER_CONFIG);
+    expect(largeBoardState(root)).toBe('false');
+    debugApi()?.setConfig({
+      rows: 16,
+      cols: 30,
+      mines: 99,
+      firstClickSafe: true,
+    });
+    expect(largeBoardState(root)).toBe('true');
+
+    // Switching back to 9×9 must clear the state, not just leave the warning
+    // hidden by CSS.
+    debugApi()?.setConfig(BEGINNER_CONFIG);
+    expect(largeBoardState(root)).toBe('false');
+  });
+});
+
 describe('minesweeper best-time leaderboard', () => {
   it('starts from an empty table with the empty-state copy', async () => {
     const { services, store } = createServices();
