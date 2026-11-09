@@ -178,6 +178,15 @@ const ELLIPSIS_PASSWORD_PLACEHOLDER = '.'.repeat(3);
 // whole password value is exempt, so a real password such as `%d3cr3t` is still
 // reported. The URL userinfo and Oracle thin branches share this shape list.
 const PRINTF_PASSWORD_PLACEHOLDERS = ['%s', '%d', '%i', '%f'] as const;
+// Real JDBC property passwords that start with a masked, ellipsis or printf
+// placeholder shape but continue afterwards. The JDBC property branch exempts
+// only the exact placeholder value, so these must still be reported. Built from
+// parts so this test file itself stays clean for the scanner it exercises.
+const FAKE_JDBC_PLACEHOLDER_SHAPE_PREFIX_PASSWORDS = [
+  ['*', 'S3cr3t'],
+  [ELLIPSIS_PASSWORD_PLACEHOLDER, 'S3cr3t'],
+  ...PRINTF_PASSWORD_PLACEHOLDERS.map((placeholder) => [placeholder, '3cr3t']),
+].map((parts) => parts.join(''));
 // Oracle thin puts the credentials in the path (`user/password@host`) instead
 // of a `user:password@` authority. The prefix, suffix and passwords are built
 // from parts so no complete inline-credential URL appears in this test file.
@@ -492,6 +501,13 @@ describe('secret scan pre-commit hook', () => {
       ...FAKE_JDBC_PLACEHOLDER_PREFIX_PASSWORDS.map(
         (password) => `jdbc:sqlserver://host:1433;user=sa;password=${password}`,
       ),
+      // Masked, ellipsis and printf placeholder shapes only exempt the whole
+      // value in the JDBC property branch too; a real password that continues
+      // after the shape must still be reported.
+      ...FAKE_JDBC_PLACEHOLDER_SHAPE_PREFIX_PASSWORDS.map(
+        (password) =>
+          `jdbc:mysql://db.internal:3306/app;user=sa;password=${password};useSSL=false`,
+      ),
     ];
     writeFileSync(fixture, `${urls.map((url) => `DATABASE_URL=${url}`).join('\n')}\n`);
 
@@ -504,6 +520,26 @@ describe('secret scan pre-commit hook', () => {
         `jdbc-database-urls.txt:${index + 1}: [database-url-password]`,
       );
     }
+  });
+
+  it('does not flag whole-value masked, ellipsis and printf placeholders in JDBC properties', () => {
+    const dir = makeTempDir();
+    const fixture = join(dir, 'jdbc-placeholder-shapes.txt');
+    const placeholders = [
+      MASKED_PASSWORD_PLACEHOLDER,
+      ELLIPSIS_PASSWORD_PLACEHOLDER,
+      ...PRINTF_PASSWORD_PLACEHOLDERS,
+    ];
+    // Cover values terminated by another `;`/`&` property and values at the end
+    // of the URL, because the whole-value check must not depend on position.
+    const urls = placeholders.flatMap((password) => [
+      `jdbc:mysql://db.internal:3306/app;user=sa;password=${password};useSSL=false`,
+      `jdbc:postgresql://db.internal:5432/app?user=sa&password=${password}&ssl=false`,
+      `jdbc:sqlserver://host:1433;databaseName=app;user=sa;password=${password}`,
+    ]);
+    writeFileSync(fixture, `${urls.map((url) => `DATABASE_URL=${url}`).join('\n')}\n`);
+
+    expect(runScanner([fixture])).toEqual({ status: 0, stderr: '' });
   });
 
   it('does not flag JDBC connection strings without a real password property', () => {
