@@ -40,11 +40,12 @@ const WIN_MINES = [
 ].join(';');
 
 const SCORES_KEY = 'playground:v1:minesweeper.scores';
-// A 30x30 board keeps the longest custom label the UI can render, so the mobile
-// capture also exercises the wrapping rule that prevents horizontal overflow.
+// A 30x30 board with the unsafe-first-click policy carries the longest custom
+// label the UI can render ("…（首点不安全）"), so the mobile capture also
+// exercises the wrapping rule that prevents horizontal overflow.
 const SEEDED_SCORES = {
   version: 1,
-  records: { 'custom:30x30x100:safe': 125_000 },
+  records: { 'custom:30x30x100:unsafe': 125_000 },
 };
 
 let server = null;
@@ -97,7 +98,16 @@ async function openWin(page) {
   await page.getByTestId('cell-8-8').click();
   await page.getByTestId('overlay-title').filter({ hasText: '扫雷成功' }).waitFor();
 
-  if (!BEFORE) {
+  if (BEFORE) {
+    // A baseline without the new card is required; otherwise a wrong BASE_URL
+    // would silently save an "after" UI under a before filename.
+    const panel = await page.getByTestId('scores-panel').count();
+    if (panel !== 0) {
+      throw new Error(
+        'Before baseline already has the scores panel; point BASE_URL at the pre-leaderboard revision.',
+      );
+    }
+  } else {
     // Wait for the freshly recorded beginner time and the seeded custom row so
     // the screenshot shows the populated panel, not an empty state.
     await page

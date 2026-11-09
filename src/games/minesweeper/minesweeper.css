@@ -352,7 +352,6 @@
   line-height: 1.5;
 }
 
-.minesweeper-scores-empty[hidden],
 .minesweeper-scores-list[hidden],
 .minesweeper-scores-custom[hidden] {
   display: none;

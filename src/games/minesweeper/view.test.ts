@@ -209,15 +209,19 @@ function scoreRow(root: HTMLElement, bucketId: string): HTMLElement | null {
 }
 
 function scoreText(root: HTMLElement, bucketId: string): string {
-  return scoreRow(root, bucketId)?.querySelector('dd')?.textContent ?? '';
+  const row = scoreRow(root, bucketId);
+  if (!row) {
+    throw new Error(`Expected a score row for ${bucketId}`);
+  }
+  return row.querySelector('dd')?.textContent ?? '';
 }
 
 function isHidden(root: HTMLElement, testId: string): boolean {
-  return (
-    root
-      .querySelector(`[data-testid="${testId}"]`)
-      ?.hasAttribute('hidden') ?? true
-  );
+  const element = root.querySelector(`[data-testid="${testId}"]`);
+  if (!element) {
+    throw new Error(`Expected ${testId}`);
+  }
+  return element.hasAttribute('hidden');
 }
 
 function clickDifficulty(root: HTMLElement, id: string): void {
@@ -446,7 +450,7 @@ describe('minesweeper best-time leaderboard', () => {
     expect(statusOf(root)).toBe('lost');
     expect(isHidden(root, 'scores-empty')).toBe(false);
     expect(isHidden(root, 'scores-presets')).toBe(true);
-    expect(scoreText(root, CUSTOM_BUCKET)).toBe('');
+    expect(scoreRow(root, CUSTOM_BUCKET)).toBeNull();
     expect(store.getItem(SCORES_STORE_KEY)).toBeNull();
   });
 
@@ -459,14 +463,26 @@ describe('minesweeper best-time leaderboard', () => {
 
     clickCell(root, 2, 2);
     expect(statusOf(root)).toBe('won');
+    const shown = scoreText(root, CUSTOM_BUCKET);
     expect(scoreWrites()).toHaveLength(1);
 
     clickRestart(root);
     expect(statusOf(root)).toBe('ready');
+    expect(scoreText(root, CUSTOM_BUCKET)).toBe(shown);
     expect(scoreWrites()).toHaveLength(1);
 
-    debugApi()?.setConfig(BEGINNER_CONFIG);
+    const api = debugApi();
+    expect(api).toBeDefined();
+    api?.setConfig(BEGINNER_CONFIG);
     expect(statusOf(root)).toBe('ready');
+    // Prove the rebuild really happened instead of letting a missing debug
+    // seam make the optional call a silent no-op.
+    expect(root.querySelectorAll('[data-cell]')).toHaveLength(81);
+    expect(
+      root
+        .querySelector<HTMLButtonElement>('[data-testid="difficulty-beginner"]')
+        ?.getAttribute('aria-pressed'),
+    ).toBe('true');
     expect(scoreWrites()).toHaveLength(1);
   });
 
@@ -507,6 +523,39 @@ describe('minesweeper best-time leaderboard', () => {
     }
   });
 
+  it('records the real elapsed time for a timed win', async () => {
+    vi.useFakeTimers({
+      toFake: [
+        'setTimeout',
+        'clearTimeout',
+        'setInterval',
+        'clearInterval',
+        'performance',
+        'Date',
+      ],
+    });
+    try {
+      const { services } = createServices();
+      const scores = createMinesweeperScores(services.storage);
+      const beginner = bucketForConfig(BEGINNER_CONFIG);
+      const root = await mount(services, PRESET_LOSS_HASH);
+
+      clickCell(root, PRESET_SAFE_CLICK.row, PRESET_SAFE_CLICK.col);
+      expect(statusOf(root)).toBe('playing');
+      vi.advanceTimersByTime(2_500);
+      winRemainingSafeCells(root);
+
+      expect(statusOf(root)).toBe('won');
+      const elapsedMs = gameState().elapsedMs;
+      expect(elapsedMs).toBeGreaterThanOrEqual(2_500);
+      expect(scoreText(root, 'beginner')).toBe(displayTime(elapsedMs));
+      expect(scoreText(root, 'beginner')).not.toBe('0:00');
+      expect(scores.best(beginner)).toBe(elapsedMs);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps every bucket when the difficulty changes and shows the matching rows', async () => {
     const { services } = createServices();
     const scores = createMinesweeperScores(services.storage);
@@ -528,7 +577,7 @@ describe('minesweeper best-time leaderboard', () => {
       '自定义 12×12 / 20 雷',
     );
     // The mounted 5x5 board itself has no record, so it is not listed.
-    expect(scoreText(root, CUSTOM_BUCKET)).toBe('');
+    expect(scoreRow(root, CUSTOM_BUCKET)).toBeNull();
 
     clickDifficulty(root, 'beginner');
     expect(statusOf(root)).toBe('ready');

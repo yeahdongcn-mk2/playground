@@ -52,6 +52,19 @@ function difficultyPresetButtonsHtml(config: Readonly<MinesweeperConfig>): strin
   ).join('');
 }
 
+/**
+ * Render the three preset score rows from the same list the selector and the
+ * score store use, so ids, labels and order cannot drift.
+ */
+function scorePresetRowsHtml(): string {
+  return DIFFICULTY_PRESETS.map(
+    (preset) => `<div class="minesweeper-score" data-score-bucket="${preset.id}">
+              <dt>${preset.label}</dt>
+              <dd data-testid="score-${preset.id}-time">—</dd>
+            </div>`,
+  ).join('');
+}
+
 /** Render the shell for one board configuration; the board itself is rebuilt later. */
 function viewHtml(config: Readonly<MinesweeperConfig>): string {
   return `
@@ -176,18 +189,7 @@ function viewHtml(config: Readonly<MinesweeperConfig>): string {
           <h2 id="minesweeper-scores-title">最高用时</h2>
           <p class="minesweeper-scores-empty" data-testid="scores-empty">还没有记录</p>
           <dl class="minesweeper-scores-list" data-testid="scores-presets" hidden>
-            <div class="minesweeper-score" data-score-bucket="beginner">
-              <dt>初级</dt>
-              <dd data-testid="score-beginner-time">—</dd>
-            </div>
-            <div class="minesweeper-score" data-score-bucket="intermediate">
-              <dt>中级</dt>
-              <dd data-testid="score-intermediate-time">—</dd>
-            </div>
-            <div class="minesweeper-score" data-score-bucket="expert">
-              <dt>高级</dt>
-              <dd data-testid="score-expert-time">—</dd>
-            </div>
+            ${scorePresetRowsHtml()}
           </dl>
           <div class="minesweeper-scores-custom" data-testid="scores-custom" hidden>
             <dl class="minesweeper-scores-list" data-testid="scores-custom-list"></dl>
@@ -488,12 +490,10 @@ export async function mountMinesweeper(
   const scoresPresets = query<HTMLElement>(root, '[data-testid="scores-presets"]');
   const scoresCustom = query<HTMLElement>(root, '[data-testid="scores-custom"]');
   const scoresCustomList = query<HTMLElement>(root, '[data-testid="scores-custom-list"]');
-  const presetScoreElements: ReadonlyMap<string, HTMLElement> = new Map(
-    DIFFICULTY_PRESETS.map((preset) => [
-      preset.id,
-      query<HTMLElement>(root, `[data-testid="score-${preset.id}-time"]`),
-    ]),
-  );
+  const presetScoreElements = DIFFICULTY_PRESETS.map((preset) => ({
+    preset,
+    element: query<HTMLElement>(root, `[data-testid="score-${preset.id}-time"]`),
+  }));
   const scores = createMinesweeperScores(services.storage);
 
   const controller = new AbortController();
@@ -627,11 +627,7 @@ export async function mountMinesweeper(
 
     scoresEmpty.hidden = entries.length > 0;
     scoresPresets.hidden = entries.length === 0;
-    for (const preset of DIFFICULTY_PRESETS) {
-      const element = presetScoreElements.get(preset.id);
-      if (element === undefined) {
-        continue;
-      }
+    for (const { preset, element } of presetScoreElements) {
       const elapsedMs = bestByBucket.get(preset.id);
       setText(element, elapsedMs === undefined ? '—' : formatTime(elapsedMs));
     }
@@ -887,6 +883,7 @@ export async function mountMinesweeper(
     // game action, so clear that transient error and show the active config.
     hideDifficultyError();
     syncDifficultyControls();
+    renderScores();
     announce('游戏重新开始');
     // The overlay hides with focus still inside it, so move focus back to a
     // visible restart control once the new board is ready. On touch layouts the

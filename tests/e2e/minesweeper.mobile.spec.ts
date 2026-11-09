@@ -124,14 +124,14 @@ test.describe('minesweeper on a phone viewport', () => {
         'playground:v1:minesweeper.scores',
         JSON.stringify({
           version: 1,
-          records: { 'custom:30x30x100:safe': 125_000 },
+          records: { 'custom:30x30x100:unsafe': 125_000 },
         }),
       );
     });
     await openMinesweeper(page, { mines: LOSS_MINES });
 
-    const row = page.locator('[data-score-bucket="custom:30x30x100:safe"]');
-    await expect(row).toContainText('自定义 30×30 / 100 雷');
+    const row = page.locator('[data-score-bucket="custom:30x30x100:unsafe"]');
+    await expect(row).toContainText('自定义 30×30 / 100 雷（首点不安全）');
     await expect(row).toContainText('2:05');
     await expectNoHorizontalOverflow(page);
 

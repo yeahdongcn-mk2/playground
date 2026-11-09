@@ -25,6 +25,13 @@ import {
   trackProbeTarget,
 } from './fixtures';
 
+// A mine wall at column 4 splits the board into two safe regions, so winning
+// takes two reveals and the pause between them records a non-zero time.
+const SPLIT_MINES = [
+  { row: 0, col: 0 },
+  ...Array.from({ length: 9 }, (_, row) => ({ row, col: 4 })),
+];
+
 test.describe('minesweeper gameplay', () => {
   test('hub card opens the game, shows the ready HUD, and the back link returns to the hub', async ({
     page,
@@ -295,17 +302,25 @@ test.describe('minesweeper gameplay', () => {
     await expectCleanBoard(page);
   });
 
-  test('a win records a best time that survives a reload', async ({ page }) => {
-    await openMinesweeper(page, { mines: WIN_MINES });
+  test('a win records a non-zero best time that survives a reload', async ({ page }) => {
+    await openMinesweeper(page, { mines: SPLIT_MINES });
     const score = page.getByTestId('score-beginner-time');
     await expect(page.getByTestId('scores-empty')).toBeVisible();
 
-    await cellLocator(page, WIN_CLICK.row, WIN_CLICK.col).click();
+    // The first reveal clears only the left safe region. Wait past a timer tick
+    // so the winning time is genuinely non-zero rather than 0:00.
+    await cellLocator(page, 8, 0).click();
+    await expect(page.getByTestId('status')).toHaveText('进行中');
+    await page.waitForTimeout(1_200);
+    await expect(page.getByTestId('timer')).not.toHaveText('0:00');
+
+    await cellLocator(page, 8, 8).click();
     await expect(page.getByTestId('status')).toHaveText('胜利');
     await expect(page.getByTestId('scores-empty')).toBeHidden();
     await expect(score).toHaveText(/^\d+:\d{2}$/);
     const best = (await score.textContent()) ?? '';
     expect(best).not.toBe('—');
+    expect(best).not.toBe('0:00');
 
     const stored = await page.evaluate(() =>
       JSON.parse(
@@ -314,6 +329,7 @@ test.describe('minesweeper gameplay', () => {
     );
     expect(stored.version).toBe(1);
     expect(typeof stored.records.beginner).toBe('number');
+    expect(stored.records.beginner).toBeGreaterThan(0);
 
     // A document reload remounts the game from localStorage; the same fixed
     // board URL is preserved, so the row must show the same best time.
