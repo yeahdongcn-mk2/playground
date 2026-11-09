@@ -141,6 +141,17 @@ const RULES = [
     // list above, for example
     // `jdbc:sqlserver://host;databaseName=app;user=sa;password=...`.
     //
+    // Oracle thin URLs carry the credentials in the path instead of a
+    // `user:password@` authority, so they need their own branch. The form
+    // `jdbc:oracle:thin:<user>/<password>@<host>:<port>:<sid>` is reported, and
+    // the password between `/` and `@` reuses the same placeholder and
+    // empty-value exclusions as the URL userinfo branch. URLs without
+    // credentials (`jdbc:oracle:thin:@host:1521:orcl`), with an empty password
+    // (`jdbc:oracle:thin:scott/@host:1521:orcl`) or with a whole-value
+    // placeholder (`${DB_PASSWORD}`, `*****`, `%s`, `__PASSWORD__`,
+    // `password`, ...) are not reported, while real values such as `S3cr3t!`
+    // and percent-encoded forms such as `p%40ss` are.
+    //
     // The following are deliberately not reported so that connection strings
     // in docs and env templates do not trip the hook:
     //   - URLs without userinfo (`scheme://host/db`);
@@ -182,7 +193,7 @@ const RULES = [
     // `jdbc:<scheme>://` prefix) keeps the original behaviour and is not
     // reported only because it contains a password property.
     pattern: new RegExp(
-      String.raw`\b(?:(?:postgres(?:ql)?|mysql|mariadb|mongodb|rediss?|amqps?|mssql|sqlserver|cockroachdb|clickhouse|oracle|neo4j)(?:\+[a-z0-9_]+)?:\/\/[^\s/:@?#]*:(?!${PLACEHOLDER_PASSWORD_SHAPES}|(?:${PLACEHOLDER_PASSWORD_WHOLE_SHAPES})(?=@)|(?:${PLACEHOLDER_PASSWORD_WORDS})(?=[@/?#]|$))[^\s@/?#]+@[^\s/?#@]+|jdbc:[a-z0-9]+:\/\/\S*?[;?&]password=(?!${PLACEHOLDER_JDBC_SHAPES}|%[A-Za-z]|${PLACEHOLDER_PASSWORD_DUNDER_SHAPES}(?![^\s;?&]*[A-Za-z0-9_-])|\*+|\.{3,}|(?:${PLACEHOLDER_PASSWORD_WORDS})(?![^\s;?&]*[A-Za-z0-9_-]))[^\s;?&]+)`,
+      String.raw`\b(?:(?:postgres(?:ql)?|mysql|mariadb|mongodb|rediss?|amqps?|mssql|sqlserver|cockroachdb|clickhouse|oracle|neo4j)(?:\+[a-z0-9_]+)?:\/\/[^\s/:@?#]*:(?!${PLACEHOLDER_PASSWORD_SHAPES}|(?:${PLACEHOLDER_PASSWORD_WHOLE_SHAPES})(?=@)|(?:${PLACEHOLDER_PASSWORD_WORDS})(?=[@/?#]|$))[^\s@/?#]+@[^\s/?#@]+|jdbc:oracle:thin:[^\s/:@?#]*\/(?!${PLACEHOLDER_PASSWORD_SHAPES}|(?:${PLACEHOLDER_PASSWORD_WHOLE_SHAPES})(?=@)|(?:${PLACEHOLDER_PASSWORD_WORDS})(?=[@/?#]|$))[^\s@/?#]+@[^\s/:@?#]+:\d+:\w+|jdbc:[a-z0-9]+:\/\/\S*?[;?&]password=(?!${PLACEHOLDER_JDBC_SHAPES}|%[A-Za-z]|${PLACEHOLDER_PASSWORD_DUNDER_SHAPES}(?![^\s;?&]*[A-Za-z0-9_-])|\*+|\.{3,}|(?:${PLACEHOLDER_PASSWORD_WORDS})(?![^\s;?&]*[A-Za-z0-9_-]))[^\s;?&]+)`,
       'i',
     ),
   },

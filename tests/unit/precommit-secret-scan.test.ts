@@ -169,6 +169,32 @@ const FAKE_JDBC_BRACE_REAL_DUNDER_PASSWORD = `{${FAKE_DUNDER_PASSWORD}}`;
 // Masked placeholder used by the Redis fixture, built from parts so no literal
 // masked URL appears in this file.
 const MASKED_PASSWORD_PLACEHOLDER = ['*', '****'].join('');
+// Oracle thin puts the credentials in the path (`user/password@host`) instead
+// of a `user:password@` authority. The prefix, suffix and passwords are built
+// from parts so no complete inline-credential URL appears in this test file.
+const ORACLE_THIN_URL_PREFIX = ['jdbc', 'oracle', 'thin', 'scott'].join(':') + '/';
+const ORACLE_THIN_URL_SUFFIX = '@host:1521:orcl';
+// The Issue's `scott/tiger@host:1521:orcl` example password.
+const ORACLE_THIN_PASSWORD = ['tiger'].join('');
+const FAKE_ORACLE_THIN_PASSWORD = ['S3cr3t', '!'].join('');
+const FAKE_ORACLE_THIN_SPECIAL_PASSWORD = ['p', '%40', 'ss'].join('');
+const ORACLE_THIN_PLACEHOLDERS = [
+  'password',
+  '${DB_PASSWORD}',
+  '*****',
+  '%s',
+  '__PASSWORD__',
+  '__DB_PASSWORD__',
+  '%DB_PASSWORD%',
+  '<password>',
+  '[password]',
+  'changeme',
+  'YOUR_PASSWORD',
+] as const;
+
+function oracleThinUrl(password: string): string {
+  return `DATABASE_URL=${ORACLE_THIN_URL_PREFIX}${password}${ORACLE_THIN_URL_SUFFIX}`;
+}
 
 describe('secret scan pre-commit hook', () => {
   it('is configured to scan every text file, not only staged changes', () => {
@@ -498,6 +524,48 @@ describe('secret scan pre-commit hook', () => {
         (password) => `DATABASE_URL=jdbc:sqlserver://host:1433;user=sa;password=${password}`,
       ).join('\n')}\n`,
     );
+
+    expect(runScanner([fixture])).toEqual({ status: 0, stderr: '' });
+  });
+
+  it('fails on Oracle thin connection strings with a real inline password', () => {
+    const dir = makeTempDir();
+    const fixture = join(dir, 'oracle-thin-urls.txt');
+    // The Issue's `scott/tiger@host:1521:orcl` example plus real values that
+    // resemble placeholder prefixes; the whole-value check must not exempt
+    // them.
+    const contents = [
+      FAKE_ORACLE_THIN_PASSWORD,
+      ORACLE_THIN_PASSWORD,
+      FAKE_ORACLE_THIN_SPECIAL_PASSWORD,
+      ['%s', '3cr3t'].join(''),
+      ['__PASSWORD__', 'x'].join(''),
+    ].map(oracleThinUrl);
+    writeFileSync(fixture, `${contents.join('\n')}\n`);
+
+    const failing = runScanner([fixture]);
+    expect(failing.status).toBe(1);
+    expect(failing.stderr).toContain('database-url-password');
+    // Every URL must be reported, not just the first line of the fixture.
+    for (const [index] of contents.entries()) {
+      expect(failing.stderr).toContain(
+        `oracle-thin-urls.txt:${index + 1}: [database-url-password]`,
+      );
+    }
+  });
+
+  it('does not flag Oracle thin connection strings without real inline credentials', () => {
+    const dir = makeTempDir();
+    const fixture = join(dir, 'oracle-thin-near-misses.txt');
+    const urls = [
+      // No credentials at all.
+      `${['jdbc', 'oracle', 'thin'].join(':')}:@host:1521:orcl`,
+      // An explicitly empty password.
+      `${ORACLE_THIN_URL_PREFIX}${ORACLE_THIN_URL_SUFFIX}`,
+      // Whole-value placeholders follow the same rules as URL userinfo.
+      ...ORACLE_THIN_PLACEHOLDERS.map(oracleThinUrl),
+    ];
+    writeFileSync(fixture, `${urls.join('\n')}\n`);
 
     expect(runScanner([fixture])).toEqual({ status: 0, stderr: '' });
   });
