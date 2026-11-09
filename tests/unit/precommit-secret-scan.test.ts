@@ -154,6 +154,12 @@ const EMPTY_JDBC_PASSWORD = '';
 // Percent-encoded `@` and `/`, which valid connection strings use instead of
 // the raw delimiters.
 const FAKE_DB_SPECIAL_PASSWORD = ['p%40ss', '%2Fword'].join('');
+// Dunder names without a placeholder word segment are real values, not
+// templates. Built from parts so this test file itself stays clean for the
+// scanner it exercises.
+const FAKE_DUNDER_PASSWORD = ['__', 'S3cr3t', '__'].join('');
+const FAKE_JDBC_DUNDER_PASSWORD = ['__', 'DB_S3cr3t', '__'].join('');
+const FAKE_JDBC_BRACE_DUNDER_PASSWORD = `{${FAKE_JDBC_DUNDER_PASSWORD}}`;
 
 describe('secret scan pre-commit hook', () => {
   it('is configured to scan every text file, not only staged changes', () => {
@@ -306,36 +312,39 @@ describe('secret scan pre-commit hook', () => {
     }
   });
 
-  it('does not flag masked or printf-style placeholders in the database URL password slot', () => {
+  it('does not flag masked, printf-style or dunder placeholders in the database URL password slot', () => {
     const dir = makeTempDir();
     const fixture = join(dir, 'database-url-placeholders.txt');
-    const urls = [
-      'postgres://dbuser:*****@db.internal/app',
-      'postgres://dbuser:__PASSWORD__@db.internal/app',
-      'postgres://dbuser:%s@db.internal/app',
-      // The same placeholder shapes are exempt for every supported scheme and
-      // for the empty-username Redis form, not only for bare `postgres`.
-      'postgresql+psycopg2://dbuser:%s@db.internal/app',
-      'mysql://dbuser:__PASSWORD__@db.internal/app?ssl=true',
-      'redis://:*****@cache:6379/0',
-    ];
+    // Dunder templates are exempt only when one underscore-separated segment
+    // is a known placeholder word, so `__DB_PASSWORD__` is a placeholder but
+    // `__S3cr3t__` (covered by the positive test below) is not.
+    const placeholders = ['*****', '__PASSWORD__', '__DB_PASSWORD__', '__API_PASSWD__', '%s'];
+    // Generate every supported scheme instead of only representative ones, so
+    // the shared placeholder shapes stay pinned across the whole scheme list.
+    const urls = DATABASE_URL_SCHEMES.flatMap((scheme) =>
+      placeholders.map((password) => `${scheme}://dbuser:${password}@db.internal/app`),
+    );
+    // Redis allows an empty username, with the password after a bare colon.
+    urls.push('redis://:*****@cache:6379/0');
     writeFileSync(fixture, `${urls.map((url) => `DATABASE_URL=${url}`).join('\n')}\n`);
 
     expect(runScanner([fixture])).toEqual({ status: 0, stderr: '' });
   });
 
-  it('still flags real database URL passwords that start with placeholder shapes', () => {
+  it('still flags real database URL passwords that resemble placeholder shapes', () => {
     const dir = makeTempDir();
     const fixture = join(dir, 'database-url-placeholder-prefixes.txt');
-    // `*****`, `__PASSWORD__` and `%s` only exempt the whole password value.
-    // Real passwords that merely start with the same characters, plus the
-    // regular real and percent-encoded forms, must still be reported.
+    // `*****`, `%s` and dunder placeholder names only exempt the whole password
+    // value. Real passwords that merely start with the same characters, or use
+    // a dunder name without a placeholder word, must still be reported.
     const passwords = [
       FAKE_JDBC_PASSWORD, // `S3cr3t!`
       FAKE_DB_SPECIAL_PASSWORD, // percent-encoded `@` and `/`
       ['%s', '3cr3t'].join(''),
       ['*', 'S3cr3t'].join(''),
       ['__PASSWORD__', 'x'].join(''),
+      FAKE_DUNDER_PASSWORD, // `__S3cr3t__`
+      FAKE_JDBC_DUNDER_PASSWORD, // `__DB_S3cr3t__`
     ];
     const urls = passwords.map(
       (password) => `postgres://dbuser:${password}@db.internal/app`,
@@ -365,6 +374,11 @@ describe('secret scan pre-commit hook', () => {
       `jdbc:sqlserver://host:1433;databaseName=app;user=sa;password=${FAKE_JDBC_BRACE_ESCAPED_PASSWORD}`,
       // A bare brace-wrapped word is not one of the name-like template forms.
       `jdbc:sqlserver://host:1433;databaseName=app;user=sa;password=${FAKE_JDBC_BRACE_WORD_PASSWORD}`,
+      // A dunder name without a placeholder word segment is a real value, both
+      // bare and brace-escaped; narrowing the `__...__` wildcard must not
+      // exempt it.
+      `jdbc:sqlserver://host:1433;databaseName=app;user=sa;password=${FAKE_JDBC_DUNDER_PASSWORD}`,
+      `jdbc:sqlserver://host:1433;databaseName=app;user=sa;password=${FAKE_JDBC_BRACE_DUNDER_PASSWORD}`,
       // PostgreSQL/MySQL JDBC URLs put properties in the query string.
       `jdbc:postgresql://db.internal:5432/app?user=sa&password=${FAKE_JDBC_PASSWORD}`,
       // A placeholder word only exempts the whole value; a real password that
@@ -404,6 +418,8 @@ describe('secret scan pre-commit hook', () => {
       'jdbc:postgresql://db.internal:5432/app?user=sa&password=${DB_PASSWORD}&ssl=false',
       'jdbc:mysql://db.internal:3306/app;user=sa;password=*****;useSSL=false',
       'jdbc:mysql://db.internal:3306/app;user=sa;password=__PASSWORD__;useSSL=false',
+      'jdbc:mysql://db.internal:3306/app;user=sa;password=__DB_PASSWORD__;useSSL=false',
+      'jdbc:mysql://db.internal:3306/app;user=sa;password=__API_PASSWD__;useSSL=false',
       'jdbc:mysql://db.internal:3306/app;user=sa;password=%s;useSSL=false',
       'jdbc:mysql://db.internal:3306/app;user=sa;password=password;useSSL=false',
       'jdbc:mysql://db.internal:3306/app;user=sa;password=...;useSSL=false',
@@ -422,7 +438,8 @@ describe('secret scan pre-commit hook', () => {
       'jdbc:sqlserver://host:1433;databaseName=app;user=sa;password=password',
       // Name-like brace templates remain placeholders: placeholder words with
       // a suffix, underscore/hyphen-separated names and other placeholder
-      // shapes. Brace-wrapped real values are reported (see the positive test).
+      // shapes. Dunder names need a placeholder word segment too. Brace-wrapped
+      // real values are reported (see the positive test).
       'jdbc:sqlserver://host:1433;databaseName=app;user=sa;password={DB_PASSWORD}',
       'jdbc:sqlserver://host:1433;databaseName=app;user=sa;password={{DB_PASSWORD}}',
       'jdbc:sqlserver://host:1433;databaseName=app;user=sa;password={db_password}',
@@ -430,6 +447,7 @@ describe('secret scan pre-commit hook', () => {
       'jdbc:sqlserver://host:1433;databaseName=app;user=sa;password={password123}',
       'jdbc:sqlserver://host:1433;databaseName=app;user=sa;password={...}',
       'jdbc:sqlserver://host:1433;databaseName=app;user=sa;password={__PASSWORD__}',
+      'jdbc:sqlserver://host:1433;databaseName=app;user=sa;password={__DB_PASSWORD__}',
       // Masked and printf-style brace placeholders are templates too, even
       // though other brace values are reported; these pin the `*****`/`%s`
       // branches inside the brace shape.
