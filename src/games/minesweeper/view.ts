@@ -26,6 +26,8 @@ import { bucketForConfig, createMinesweeperScores } from './scores';
 import './minesweeper.css';
 
 const CLOCK_INTERVAL_MS = 250;
+/** The only board width whose narrow-screen cells keep the ≥36px promise. */
+const TOUCH_TARGET_GUARANTEED_COLS = 9;
 /** Hold this long on a touchscreen to toggle a flag instead of revealing. */
 const LONG_PRESS_MS = 500;
 /** Moving further than this while holding cancels the long press (e.g. scroll). */
@@ -109,6 +111,10 @@ function viewHtml(config: Readonly<MinesweeperConfig>): string {
             </div>
           </div>
         </div>
+        <p class="minesweeper-board-size-warning" data-testid="board-size-warning"
+          role="status">
+          大棋盘在窄屏下按比例缩小，≥36px 的触控目标只对 9×9 保证；建议横屏或改用更小的棋盘。
+        </p>
         <p class="minesweeper-hint minesweeper-pointer-hint">
           左键翻开格子，右键插旗标记地雷。第一次翻开总是安全的，雷区在第一次翻开后生成。
         </p>
@@ -709,6 +715,9 @@ export async function mountMinesweeper(
 
     stageElement.style.setProperty('--rows', String(config.rows));
     stageElement.style.setProperty('--cols', String(config.cols));
+    // Only 9×9 keeps the 36px touch-target guarantee; the narrow-screen warning
+    // is keyed off this state instead of duplicating the column check in CSS.
+    gameRoot.dataset.largeBoard = String(config.cols > TOUCH_TARGET_GUARANTEED_COLS);
     boardElement.setAttribute(
       'aria-label',
       `${config.rows} × ${config.cols} 扫雷棋盘`,

@@ -41,6 +41,37 @@ async function submitCustomByTouch(
   await page.getByTestId('custom-difficulty-submit').tap();
 }
 
+/**
+ * Narrow viewports that still have to explain the large-board degradation.
+ * 320 is the supported minimum and 360 is the common short screen; both stay
+ * inside the 560px warning breakpoint.
+ */
+const LARGE_BOARD_VIEWPORTS = [
+  { width: 320, height: 640, label: '320x640' },
+  { width: 360, height: 640, label: '360x640' },
+] as const;
+
+/** Assert the large-board warning state, including readable copy when shown. */
+async function expectLargeBoardWarning(
+  page: Page,
+  visible: boolean,
+): Promise<void> {
+  const warning = page.getByTestId('board-size-warning');
+  if (!visible) {
+    await expect(warning).toBeHidden();
+    return;
+  }
+  await expect(warning).toBeVisible();
+  await expect(warning).toHaveAttribute('role', 'status');
+  await expect(warning).toContainText('≥36px');
+  await expect(warning).toContainText('横屏');
+  await expect(warning).toContainText('更小的棋盘');
+  // It must be readable, not just present: scroll it into view and check it
+  // fits the viewport without causing horizontal overflow.
+  await warning.scrollIntoViewIfNeeded();
+  await expectInsideViewport(page, warning, 'large-board warning');
+}
+
 test.describe('minesweeper difficulty selector on a phone viewport', () => {
   test('presets and custom boards are operable by touch without horizontal overflow', async ({
     page,
@@ -153,4 +184,57 @@ test.describe('minesweeper difficulty selector on a phone viewport', () => {
     await cellLocator(page, 15, 29).tap();
     await expect(page.getByTestId('status')).toHaveText('进行中');
   });
+
+  for (const viewport of LARGE_BOARD_VIEWPORTS) {
+    test(`large boards explain the scaled cells on ${viewport.label} and 9×9 hides the hint`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await openMinesweeper(page);
+      const game = page.getByTestId('minesweeper-game');
+
+      // The initial 9×9 board keeps its exact layout and the warning hidden.
+      await expect(page.locator('[data-cell]')).toHaveCount(81);
+      await expect(page.getByTestId('board-summary')).toHaveText('9 × 9 · 10 雷');
+      await expect(game).toHaveAttribute('data-large-board', 'false');
+      await expectLargeBoardWarning(page, false);
+      await expectNoHorizontalOverflow(page);
+
+      // Built-in 16×30 expert: 480 cells, visible hint, no horizontal scroll
+      // and the far corner still taps into the playing state.
+      await difficultyButton(page, 'expert').tap();
+      await expect(page.locator('[data-cell]')).toHaveCount(480);
+      await expect(page.getByTestId('board-summary')).toHaveText('16 × 30 · 99 雷');
+      await expectActiveDifficulty(page, 'expert');
+      await expect(game).toHaveAttribute('data-large-board', 'true');
+      await expectLargeBoardWarning(page, true);
+      await expectNoHorizontalOverflow(page);
+
+      await cellLocator(page, 15, 29).tap();
+      await expect(page.getByTestId('status')).toHaveText('进行中');
+
+      // A custom board with more than nine columns takes the same scaled path
+      // and keeps its own cells tappable.
+      await submitCustomByTouch(page, 10, 12, 15);
+      await expect(page.locator('[data-cell]')).toHaveCount(120);
+      await expect(page.getByTestId('board-summary')).toHaveText('10 × 12 · 15 雷');
+      await expectActiveDifficulty(page, null);
+      await expect(game).toHaveAttribute('data-large-board', 'true');
+      await expectLargeBoardWarning(page, true);
+      await expectNoHorizontalOverflow(page);
+
+      await cellLocator(page, 9, 11).tap();
+      await expect(page.getByTestId('status')).toHaveText('进行中');
+
+      // Back to 9×9: the state clears and the hint disappears again without
+      // changing the board size or introducing horizontal scroll.
+      await difficultyButton(page, 'beginner').tap();
+      await expect(page.locator('[data-cell]')).toHaveCount(81);
+      await expect(page.getByTestId('board-summary')).toHaveText('9 × 9 · 10 雷');
+      await expectActiveDifficulty(page, 'beginner');
+      await expect(game).toHaveAttribute('data-large-board', 'false');
+      await expectLargeBoardWarning(page, false);
+      await expectNoHorizontalOverflow(page);
+    });
+  }
 });

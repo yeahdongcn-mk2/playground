@@ -249,6 +249,23 @@
   margin-top: 18px;
 }
 
+/* Large-board degradation hint (Issue #60). The 36px touch-target promise
+   only covers 9×9, so a board with more than nine columns explains its scaled
+   cells on narrow screens. It stays out of the layout everywhere else, which
+   keeps the 9×9 first screen and the wide layouts pixel-stable. */
+.minesweeper-board-size-warning {
+  display: none;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(251, 191, 36, 0.36);
+  border-radius: 10px;
+  background: rgba(251, 191, 36, 0.1);
+  color: #fde68a;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  text-align: center;
+}
+
 .minesweeper-hint {
   margin-top: 12px;
   padding: 0 4px;
@@ -508,6 +525,12 @@
 }
 
 @media (max-width: 560px) {
+  /* The warning is only present on narrow screens for boards wider than 9
+     columns; 9×9 and the wide layout never render it. */
+  .minesweeper-game[data-large-board="true"] .minesweeper-board-size-warning {
+    display: block;
+  }
+
   .minesweeper-hud {
     gap: 6px;
   }

@@ -2,6 +2,28 @@
 
 这些截图用于各期交付的 Before / After 视觉证据。全部由 Playwright Chromium 真实渲染，不是 mockup。
 
+## large-board：扫雷窄屏大棋盘降级提示（Issue #60）
+
+- Before 基线：`289d76d`（本子任务开始前的 `main`）。16×30 棋盘按现有方式自适应铺满、页面无横向溢出、右下角格子可点按，但窄屏没有任何大棋盘降级提示。
+- After：本子任务分支 `agent/plan-60-t1`。`src/games/minesweeper/view.ts` 在列数 > 9 时给 `.minesweeper-game` 设置 `data-large-board="true"`，并在棋盘下加入 `role="status"` 的中文提示 `data-testid="board-size-warning"`；`src/games/minesweeper/minesweeper.css` 只在 `max-width: 560px` 且 `data-large-board="true"` 时显示。9×9 与宽屏布局不变，提示不改变棋盘尺寸，也不引入横向滚动。
+- 视口 / 主题：320×640 与 360×640 CSS px，DPR 2、`isMobile: true`、`hasTouch: true`、深色主题、`reducedMotion: reduce`；同一 URL（`#/games/minesweeper?debug=1&rows=16&cols=30&mineCount=99&safeFirst=1`）、同一 16×30 READY 棋盘，均为视口截图（`fullPage: false`）。
+- 生成 After：`npm run screenshots:minesweeper:large`（生产构建 + `vite preview`）。
+- 复现 Before：在 `289d76d` 的干净 worktree 里 `npm ci && npm run build`，用 `node node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4193 --strictPort` 启动预览，然后在当前分支运行 `BASE_URL=http://127.0.0.1:4193 npm run screenshots:minesweeper:large-before`（Before 模式不启动 preview，端口以 `BASE_URL` 为准）。
+
+| 文件 | 场景 | 视口 / 主题 | 说明 |
+| --- | --- | --- | --- |
+| `before-minesweeper-large-board-320x640.png` | 16×30 READY（基线 `289d76d`） | 320×640 / 深色 | 大棋盘按比例铺满，棋盘下方没有降级提示。 |
+| `after-minesweeper-large-board-320x640.png` | 16×30 READY（本子任务） | 320×640 / 深色 | 棋盘位置与格子尺寸不变，新增中文提示：≥36px 只对 9×9 保证，建议横屏或改用更小的棋盘。 |
+| `before-minesweeper-large-board-360x640.png` | 16×30 READY（基线 `289d76d`） | 360×640 / 深色 | 同 320×640 场景，无降级提示。 |
+| `after-minesweeper-large-board-360x640.png` | 16×30 READY（本子任务） | 360×640 / 深色 | 同 320×640 场景，提示可见且页面无横向溢出。 |
+
+### 证据限制
+
+- 手机端为 Playwright 设备模拟（320×640 / 360×640、DPR 2、触摸），不是真实设备截图。
+- 截图只证明静态视觉；提示显隐、棋盘格数、无横向溢出、右下角格子 tap 后进入「进行中」、切回 9×9 隐藏由 `tests/e2e/minesweeper.difficulty.mobile.spec.ts` 在生产构建上验证；宽屏隐藏由 `tests/e2e/minesweeper.difficulty.spec.ts` 验证。
+- Before / After 的棋盘外框、stage 与首尾格子包围盒逐项一致（320×640 下 board 316×166.66、360×640 下 356×188）；棋盘截图仅 ≤0.5% 像素因抗锯齿有 ≤2 的差异，证明提示没有改变棋盘尺寸。
+- 额外本地核对：320×640 / 360×640 / 412×839 的 9×9 READY 整屏截图在 Before / After 间逐字节一致（相同设备参数与主题），说明提示隐藏时首屏布局未变。
+
 ## scores：扫雷本地最高用时榜（Issue #45 / 子任务 1）
 
 - Before 基线：`a60062e`（存储模块 #82 合入后的 `main`，也就是本子任务开始前的 `main`）。侧栏只有操作、本局与难度卡片，还没有最高用时卡片；`localStorage` 里预置的成绩键会被忽略。
