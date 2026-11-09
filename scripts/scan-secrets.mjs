@@ -19,10 +19,29 @@ import { readFileSync } from 'node:fs';
 // such as `password123` are still reported.
 const PLACEHOLDER_PASSWORD_WORDS = String.raw`password|passwd|pass|pwd|secret|changeme|change[_-]me|placeholder|example|your[_-]?(?:password|pass)|replace[_-]me|x{3,}`;
 
-// Interpolation/template placeholder shapes used for URL userinfo. JDBC
-// property values additionally treat `%s`, `__NAME__` and masked `*****`
-// values as placeholders.
+// Interpolation/template placeholder shapes used for URL userinfo. Masked,
+// dunder and printf-style forms only count when they are the whole password,
+// so they are listed separately in PLACEHOLDER_PASSWORD_WHOLE_SHAPES below.
+// JDBC property values additionally treat `...` and brace-wrapped values as
+// placeholders.
 const PLACEHOLDER_PASSWORD_SHAPES = String.raw`\$(?:\{|\(|[A-Za-z_])|\{[A-Za-z_{]|<[^>\s]*>|\[[^\]\s]*\]|%[A-Za-z_][A-Za-z0-9_]*%`;
+
+// `__UPPER_SNAKE__` names are templates only when a known placeholder word or
+// phrase makes up one or more underscore/hyphen-separated segments, so
+// `__PASSWORD__`, `__DB_PASSWORD__` and `__CHANGE_ME__` are exempt while a real
+// password such as `__S3cr3t__` is still reported. A name whose placeholder
+// word is only part of a longer segment (`__DBPASSWORD__`, `__PASSWORD123__`)
+// is reported too. A bare `__...__` wildcard would exempt any such real value
+// and is deliberately avoided. The JDBC branch also requires the template to
+// be the whole value, so a value such as `__PASSWORD__x` is still reported
+// there.
+const PLACEHOLDER_PASSWORD_DUNDER_SHAPES = String.raw`__(?:[A-Za-z0-9]+_)*(?:${PLACEHOLDER_PASSWORD_WORDS})(?:_[A-Za-z0-9]+)*__`;
+
+// Masked, dunder and printf-style values that are placeholders only when they
+// fill the whole URL userinfo password (`*****`, `__PASSWORD__`, `%s`).
+// Requiring the `@` delimiter keeps a real password that merely starts with
+// one of those shapes, for example `%s3cr3t`, reported as a secret.
+const PLACEHOLDER_PASSWORD_WHOLE_SHAPES = String.raw`\*+|${PLACEHOLDER_PASSWORD_DUNDER_SHAPES}|%s`;
 
 // SQL Server JDBC escapes values containing `;`, `{`, `}` or `=` by wrapping
 // them in braces, for example `password={S3cr3t;!}`. A JDBC value that starts
@@ -30,13 +49,15 @@ const PLACEHOLDER_PASSWORD_SHAPES = String.raw`\$(?:\{|\(|[A-Za-z_])|\{[A-Za-z_{
 // name-like template is exempt: a placeholder word with an optional suffix
 // (`{password123}`), a name with an underscore/hyphen separator
 // (`{DB_PASSWORD}`, `{DB-PASSWORD}`) or another known placeholder shape
-// (`{...}`, `{*****}`, `{__PASSWORD__}`, `{%s}`). Other brace values such as
-// `{S3cr3t}` or `{ABC123}` are reported as real brace-escaped passwords. A
-// brace value with `_`/`-` separators is treated as a template even when its
-// segments are mixed case, so `{S3cr3t_2024}` is not reported; that is an
-// accepted trade-off for keeping `{DB_PASSWORD}`/`{DB-PASSWORD}` quiet.
-// The URL-userinfo branch keeps the looser shape above.
-const PLACEHOLDER_JDBC_SHAPES = String.raw`\$(?:\{|\(|[A-Za-z_])|\{\{?(?:(?:${PLACEHOLDER_PASSWORD_WORDS})[A-Za-z0-9]*|[A-Za-z][A-Za-z0-9]*(?:[_-][A-Za-z0-9]+)+|\.{3,}|\*+|__[A-Za-z0-9_]*__|%s)\}\}?|<[^>\s]*>|\[[^\]\s]*\]|%[A-Za-z_][A-Za-z0-9_]*%`;
+// (`{...}`, `{*****}`, `{__PASSWORD__}`, `{__DB_PASSWORD__}`, `{%s}`). Other
+// brace values such as `{S3cr3t}` or `{ABC123}` are reported as real brace-escaped
+// passwords. A brace value with `_`/`-` separators is treated as a template even
+// when its segments are mixed case, so `{S3cr3t_2024}` is not reported; that is
+// an accepted trade-off for keeping `{DB_PASSWORD}`/`{DB-PASSWORD}` quiet.
+// Dunder names use the same placeholder-word shape as the URL branch, so
+// `{__S3cr3t__}` is reported. The URL-userinfo branch keeps the looser
+// non-dunder brace shape above.
+const PLACEHOLDER_JDBC_SHAPES = String.raw`\$(?:\{|\(|[A-Za-z_])|\{\{?(?:(?:${PLACEHOLDER_PASSWORD_WORDS})[A-Za-z0-9]*|[A-Za-z][A-Za-z0-9]*(?:[_-][A-Za-z0-9]+)+|\.{3,}|\*+|${PLACEHOLDER_PASSWORD_DUNDER_SHAPES}|%s)\}\}?|<[^>\s]*>|\[[^\]\s]*\]|%[A-Za-z_][A-Za-z0-9_]*%`;
 
 const RULES = [
   {
@@ -129,19 +150,28 @@ const RULES = [
     //     `$DB_PASSWORD`, `${DB_PASSWORD}`, `$(DB_PASSWORD)`,
     //     `{{DB_PASSWORD}}`, `{DB_PASSWORD}`, `%DB_PASSWORD%`, `<password>`,
     //     `[password]`, `password`, `changeme`, `YOUR_PASSWORD`,
-    //     `YOURPASSWORD`, `REPLACE_ME` and `xxxxx`, plus the JDBC-style
-    //     `%s`, `__PASSWORD__`, `*****` and `...` placeholders.
+    //     `YOURPASSWORD`, `REPLACE_ME` and `xxxxx`;
+    //   - masked and printf-style placeholders that fill the whole URL
+    //     userinfo password: `*****`, `%s` and dunder templates whose
+    //     underscore-separated segments include a placeholder word, for
+    //     example `__PASSWORD__`, `__DB_PASSWORD__` and `__API_PASSWD__`.
+    //     These only count as the exact value, so a real password that merely
+    //     starts with one of those shapes (for example `%s3cr3t` or
+    //     `__PASSWORD__x`) is still reported, as is a dunder value without a
+    //     placeholder word such as `__S3cr3t__`. The JDBC property branch
+    //     additionally treats `...` and brace-wrapped values as placeholders.
     // A JDBC placeholder word counts when the whole value is that word, so
     // values terminated by `;`, `&`, `?`, a closing quote or other punctuation
     // are still placeholders, while a value continuing after such punctuation
     // (for example `pass!word` or `changeme:abc`) is reported. Brace-escaped
     // SQL Server values are reported unless they match a name-like template
-    // such as `{DB_PASSWORD}` or `{password123}`; `{S3cr3t}` and `{ABC123}`
-    // are real values. Values with `_`/`-` separators are always treated as
-    // templates, even when mixed case, so a brace-escaped real password such
-    // as `{S3cr3t_2024}` is deliberately not reported: template names and
-    // real values are indistinguishable there, and keeping `{DB_PASSWORD}` /
-    // `{DB-PASSWORD}` quiet matters more for documentation and env templates.
+    // such as `{DB_PASSWORD}` or `{password123}`; `{S3cr3t}`, `{ABC123}` and
+    // `{__S3cr3t__}` are real values. Values with `_`/`-` separators are always
+    // treated as templates, even when mixed case, so a brace-escaped real
+    // password such as `{S3cr3t_2024}` is deliberately not reported: template
+    // names and real values are indistinguishable there, and keeping
+    // `{DB_PASSWORD}` / `{DB-PASSWORD}` quiet matters more for documentation
+    // and env templates.
     // The trade-off is pinned by a test, so tightening the rule also requires
     // updating that test and this comment.
     // The host part is required, so a bare `user:password@` mention without a
@@ -152,7 +182,7 @@ const RULES = [
     // `jdbc:<scheme>://` prefix) keeps the original behaviour and is not
     // reported only because it contains a password property.
     pattern: new RegExp(
-      String.raw`\b(?:(?:postgres(?:ql)?|mysql|mariadb|mongodb|rediss?|amqps?|mssql|sqlserver|cockroachdb|clickhouse|oracle|neo4j)(?:\+[a-z0-9_]+)?:\/\/[^\s/:@?#]*:(?!${PLACEHOLDER_PASSWORD_SHAPES}|(?:${PLACEHOLDER_PASSWORD_WORDS})(?=[@/?#]|$))[^\s@/?#]+@[^\s/?#@]+|jdbc:[a-z0-9]+:\/\/\S*?[;?&]password=(?!${PLACEHOLDER_JDBC_SHAPES}|%[A-Za-z]|__[A-Za-z0-9_]*__|\*+|\.{3,}|(?:${PLACEHOLDER_PASSWORD_WORDS})(?![^\s;?&]*[A-Za-z0-9_-]))[^\s;?&]+)`,
+      String.raw`\b(?:(?:postgres(?:ql)?|mysql|mariadb|mongodb|rediss?|amqps?|mssql|sqlserver|cockroachdb|clickhouse|oracle|neo4j)(?:\+[a-z0-9_]+)?:\/\/[^\s/:@?#]*:(?!${PLACEHOLDER_PASSWORD_SHAPES}|(?:${PLACEHOLDER_PASSWORD_WHOLE_SHAPES})(?=@)|(?:${PLACEHOLDER_PASSWORD_WORDS})(?=[@/?#]|$))[^\s@/?#]+@[^\s/?#@]+|jdbc:[a-z0-9]+:\/\/\S*?[;?&]password=(?!${PLACEHOLDER_JDBC_SHAPES}|%[A-Za-z]|${PLACEHOLDER_PASSWORD_DUNDER_SHAPES}(?![^\s;?&]*[A-Za-z0-9_-])|\*+|\.{3,}|(?:${PLACEHOLDER_PASSWORD_WORDS})(?![^\s;?&]*[A-Za-z0-9_-]))[^\s;?&]+)`,
       'i',
     ),
   },
