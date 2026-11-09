@@ -31,7 +31,7 @@
 - 视口 / 主题：桌面 1440×1000 CSS px、DPR 1；手机 320×640 CSS px、DPR 2、`isMobile: true`、`hasTouch: true`；两者均为深色主题、`reducedMotion: reduce`，Before / After 使用同一 URL、同一固定初级雷盘、同一预置自定义记录与同一 WON 状态，均为整页截图（`fullPage: true`）。
 - 生成 After：`npm run screenshots:minesweeper:scores-clear`（生产构建 + `vite preview`）。
 - 预览端口：与 scores 相同，默认 `4192`；共享主机或并行 worktree 用 `PREVIEW_PORT=4193 npm run screenshots:minesweeper:scores-clear` 覆盖。
-- 复现 Before：在 `289d76d` 的干净 worktree 里 `npm ci && npm run build`，用 `node node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4193 --strictPort` 启动预览，再运行 `BASE_URL=http://127.0.0.1:4193 npm run screenshots:minesweeper:scores-clear-before`（Before 模式不启动 preview，端口以 `BASE_URL` 为准；脚本会确认基线有榜单卡片但没有清空按钮）。
+- 复现 Before：先在 `289d76d` 的干净 worktree 里 `npm ci && npm run build`，用 `node node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4193 --strictPort` 启动基线 preview；然后在含本 PR 脚本的 worktree（本分支）里运行 `BASE_URL=http://127.0.0.1:4193 npm run screenshots:minesweeper:scores-clear-before`。这个 npm script 与脚本的 `--clear` 支持都是本 PR 才新增的，直接在 `289d76d` worktree 里执行会报 `Missing script`；Before 模式不启动 preview，端口以 `BASE_URL` 指向的基线 preview 为准，脚本会确认基线有榜单卡片但没有清空按钮。
 
 | 文件 | 场景 | 视口 / 主题 | 说明 |
 | --- | --- | --- | --- |
