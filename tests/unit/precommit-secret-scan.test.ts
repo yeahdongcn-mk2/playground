@@ -169,6 +169,11 @@ const FAKE_JDBC_BRACE_REAL_DUNDER_PASSWORD = `{${FAKE_DUNDER_PASSWORD}}`;
 // Masked placeholder used by the Redis fixture, built from parts so no literal
 // masked URL appears in this file.
 const MASKED_PASSWORD_PLACEHOLDER = ['*', '****'].join('');
+// Documentation ellipsis placeholder. Like the masked, dunder and printf
+// shapes, only the whole password value is exempt; a real password that merely
+// starts with `...` is still reported. Built at runtime so this test file
+// itself stays clean for the scanner it exercises.
+const ELLIPSIS_PASSWORD_PLACEHOLDER = '.'.repeat(3);
 // Oracle thin puts the credentials in the path (`user/password@host`) instead
 // of a `user:password@` authority. The prefix, suffix and passwords are built
 // from parts so no complete inline-credential URL appears in this test file.
@@ -401,6 +406,53 @@ describe('secret scan pre-commit hook', () => {
     for (const [index] of urls.entries()) {
       expect(failing.stderr).toContain(
         `database-url-placeholder-prefixes.txt:${index + 1}: [database-url-password]`,
+      );
+    }
+  });
+
+  it('does not flag the ellipsis placeholder in URL userinfo and Oracle thin password slots', () => {
+    const dir = makeTempDir();
+    const fixture = join(dir, 'database-url-ellipsis-placeholders.txt');
+    // `...` fills the whole password value in the URL userinfo branch (bare and
+    // driver-suffixed schemes) and in the Oracle thin branch, which shares the
+    // whole-value placeholder shapes.
+    const urls = [
+      `postgres://dbuser:${ELLIPSIS_PASSWORD_PLACEHOLDER}@db.internal/app`,
+      `postgresql+asyncpg://dbuser:${ELLIPSIS_PASSWORD_PLACEHOLDER}@db.internal/app`,
+      `mysql+pymysql://dbuser:${ELLIPSIS_PASSWORD_PLACEHOLDER}@db.internal/app`,
+      oracleThinUrl(ELLIPSIS_PASSWORD_PLACEHOLDER),
+    ];
+    writeFileSync(fixture, `${urls.join('\n')}\n`);
+
+    expect(runScanner([fixture])).toEqual({ status: 0, stderr: '' });
+  });
+
+  it('still flags real database URL passwords that start with the ellipsis placeholder', () => {
+    const dir = makeTempDir();
+    const fixture = join(dir, 'database-url-ellipsis-prefixes.txt');
+    // Only the whole `...` value is a placeholder. A real password that merely
+    // starts with `...` must still be reported, as do the baseline real and
+    // percent-encoded passwords.
+    const passwords = [
+      [ELLIPSIS_PASSWORD_PLACEHOLDER, 'S3cr3t'].join(''),
+      FAKE_DB_PASSWORD,
+      FAKE_ORACLE_THIN_PASSWORD, // `S3cr3t!`
+      FAKE_DB_SPECIAL_PASSWORD, // `p%40ss%2Fword`
+    ];
+    const contents = [
+      ...passwords.map((password) => `postgres://dbuser:${password}@db.internal/app`),
+      // The Oracle thin branch shares the same whole-value rule.
+      oracleThinUrl([ELLIPSIS_PASSWORD_PLACEHOLDER, 'S3cr3t!'].join('')),
+    ];
+    writeFileSync(fixture, `${contents.join('\n')}\n`);
+
+    const failing = runScanner([fixture]);
+    expect(failing.status).toBe(1);
+    expect(failing.stderr).toContain('database-url-password');
+    // Every URL must be reported, not just the first line of the fixture.
+    for (const [index] of contents.entries()) {
+      expect(failing.stderr).toContain(
+        `database-url-ellipsis-prefixes.txt:${index + 1}: [database-url-password]`,
       );
     }
   });

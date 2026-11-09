@@ -20,10 +20,10 @@ import { readFileSync } from 'node:fs';
 const PLACEHOLDER_PASSWORD_WORDS = String.raw`password|passwd|pass|pwd|secret|changeme|change[_-]me|placeholder|example|your[_-]?(?:password|pass)|replace[_-]me|x{3,}`;
 
 // Interpolation/template placeholder shapes used for URL userinfo. Masked,
-// dunder and printf-style forms only count when they are the whole password,
-// so they are listed separately in PLACEHOLDER_PASSWORD_WHOLE_SHAPES below.
-// JDBC property values additionally treat `...` and brace-wrapped values as
-// placeholders.
+// ellipsis, dunder and printf-style forms only count when they are the whole
+// password, so they are listed separately in
+// PLACEHOLDER_PASSWORD_WHOLE_SHAPES below. JDBC property values additionally
+// treat brace-wrapped values as placeholders.
 const PLACEHOLDER_PASSWORD_SHAPES = String.raw`\$(?:\{|\(|[A-Za-z_])|\{[A-Za-z_{]|<[^>\s]*>|\[[^\]\s]*\]|%[A-Za-z_][A-Za-z0-9_]*%`;
 
 // `__UPPER_SNAKE__` names are templates only when a known placeholder word or
@@ -37,11 +37,12 @@ const PLACEHOLDER_PASSWORD_SHAPES = String.raw`\$(?:\{|\(|[A-Za-z_])|\{[A-Za-z_{
 // there.
 const PLACEHOLDER_PASSWORD_DUNDER_SHAPES = String.raw`__(?:[A-Za-z0-9]+_)*(?:${PLACEHOLDER_PASSWORD_WORDS})(?:_[A-Za-z0-9]+)*__`;
 
-// Masked, dunder and printf-style values that are placeholders only when they
-// fill the whole URL userinfo password (`*****`, `__PASSWORD__`, `%s`).
-// Requiring the `@` delimiter keeps a real password that merely starts with
-// one of those shapes, for example `%s3cr3t`, reported as a secret.
-const PLACEHOLDER_PASSWORD_WHOLE_SHAPES = String.raw`\*+|${PLACEHOLDER_PASSWORD_DUNDER_SHAPES}|%s`;
+// Masked, ellipsis, dunder and printf-style values that are placeholders only
+// when they fill the whole URL userinfo password (`*****`, `...`,
+// `__PASSWORD__`, `%s`). Requiring the `@` delimiter keeps a real password
+// that merely starts with one of those shapes, for example `%s3cr3t` or
+// `...S3cr3t`, reported as a secret.
+const PLACEHOLDER_PASSWORD_WHOLE_SHAPES = String.raw`\*+|\.{3,}|${PLACEHOLDER_PASSWORD_DUNDER_SHAPES}|%s`;
 
 // SQL Server JDBC escapes values containing `;`, `{`, `}` or `=` by wrapping
 // them in braces, for example `password={S3cr3t;!}`. A JDBC value that starts
@@ -162,15 +163,16 @@ const RULES = [
     //     `{{DB_PASSWORD}}`, `{DB_PASSWORD}`, `%DB_PASSWORD%`, `<password>`,
     //     `[password]`, `password`, `changeme`, `YOUR_PASSWORD`,
     //     `YOURPASSWORD`, `REPLACE_ME` and `xxxxx`;
-    //   - masked and printf-style placeholders that fill the whole URL
-    //     userinfo password: `*****`, `%s` and dunder templates whose
-    //     underscore-separated segments include a placeholder word, for
+    //   - masked, ellipsis and printf-style placeholders that fill the whole
+    //     URL userinfo password: `*****`, `...`, `%s` and dunder templates
+    //     whose underscore-separated segments include a placeholder word, for
     //     example `__PASSWORD__`, `__DB_PASSWORD__` and `__API_PASSWD__`.
     //     These only count as the exact value, so a real password that merely
-    //     starts with one of those shapes (for example `%s3cr3t` or
-    //     `__PASSWORD__x`) is still reported, as is a dunder value without a
-    //     placeholder word such as `__S3cr3t__`. The JDBC property branch
-    //     additionally treats `...` and brace-wrapped values as placeholders.
+    //     starts with one of those shapes (for example `...S3cr3t`, `%s3cr3t`
+    //     or `__PASSWORD__x`) is still reported, as is a dunder value without
+    //     a placeholder word such as `__S3cr3t__`. The Oracle thin password
+    //     slot shares these whole-value shapes. The JDBC property branch
+    //     additionally treats brace-wrapped values as placeholders.
     // A JDBC placeholder word counts when the whole value is that word, so
     // values terminated by `;`, `&`, `?`, a closing quote or other punctuation
     // are still placeholders, while a value continuing after such punctuation
