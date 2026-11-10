@@ -709,6 +709,6 @@ describe('browser coverage documentation', () => {
     // The WebKit project now runs framework, the minesweeper touch gestures,
     // the touch difficulty form, the snake / tetris phone cases and the 2048 /
     // breakout phone cases on top of the seven contract / smoke cases.
-    expect(webkit).toBeGreaterThanOrEqual(30);
+    expect(webkit).toBe(30);
   });
 });

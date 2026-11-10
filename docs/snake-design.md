@@ -91,7 +91,7 @@ src/games/snake/
 - 食物不生成在蛇身上、注入 RNG 的确定性、填满棋盘时胜利。
 - `state` 返回防御性副本，外部修改不影响引擎。
 
-运行：`npm run test:unit`（全仓 415 个用例）。
+运行：`npm run test:unit`（全仓 417 个用例）。
 
 ### 端到端（24）
 
@@ -117,7 +117,7 @@ src/games/snake/
 - 默认：贪食蛇大厅、READY、游玩中、GAME OVER、手机大厅与手机游戏（After，当前分支）。
 - 固定首果 `?food=11,10` 让「游玩中」截图可复现；桌面 1440×1000、手机 390×844（DPR 2），深色主题，`reducedMotion: reduce`。
 
-运行：`npm run screenshots:snake`。
+运行：`npm run screenshots:snake`；WebKit 手机 READY 图用 `npm run screenshots:snake:webkit`。
 
 ## 已知限制
 

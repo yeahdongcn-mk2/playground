@@ -244,7 +244,7 @@ pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和
 | `npm run screenshots:breakout:webkit` | 构建后用 WebKit 生成打砖块 ready / playing / levelclear / gameover 手机截图 |
 | `npm run screenshots:minesweeper` | 构建后生成扫雷大厅、桌面玩法与 Pixel 7 手机玩法截图 |
 | `npm run screenshots:minesweeper:webkit` | 构建后用 WebKit 生成扫雷 ready / playing / lost / won 手机截图 |
-| `npm run screenshots:minesweeper:webkit-before` | 用 `BASE_URL` 指定的触屏改动前基线生成 WebKit 手机 Before 截图 |
+| `npm run screenshots:minesweeper:webkit-before` | 用 `BASE_URL` 指定的触屏改动前基线生成 WebKit 手机 Before 截图（需外部基线，不提交 Before 文件） |
 | `npm run screenshots:minesweeper:touch-before` | 用 `BASE_URL` 指定的触屏改动前基线生成手机扫雷 Before 截图 |
 | `npm run screenshots:minesweeper:narrow` | 构建后生成 360×740 扫雷窄屏 ready 截图 |
 | `npm run screenshots:minesweeper:narrow-before` | 用 `BASE_URL` 指定的窄屏改动前基线生成 360×740 Before 截图 |
@@ -262,12 +262,11 @@ pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和
 | `npm run screenshots:minesweeper:scores:webkit` | 构建后用 WebKit 生成 320×640 最高用时榜 After 截图 |
 | `npm run screenshots:minesweeper:scores-before` | 用 `BASE_URL` 指定的改动前基线生成最高用时榜 Before 截图 |
 | `npm run screenshots:minesweeper:scores-clear` | 构建后生成带「清空记录」入口的最高用时榜 After 截图 |
-| `npm run screenshots:minesweeper:scores-clear:webkit` | 构建后用 WebKit 生成带「清空记录」入口的 320×640 After 截图 |
 | `npm run screenshots:minesweeper:scores-clear-before` | 用 `BASE_URL` 指定的「清空记录」改动前基线生成 Before 截图 |
 
 扫雷截图脚本不再提供通用 `--before` 模式：显式传入会报错并以非零状态退出；`touch-before` / `narrow-before` / `min-before` / `restart-before` / `large-before` 等模式保留，分别指向各自的历史基线。
 
-游戏与界面截图脚本新增了 `--webkit` 家族的命令（`capture-baseline.mjs` 仍只用于基线仓库状态）；Chromium 模式的命令、文件名与输出保持不变。WebKit 模式使用 `iPhone SE (3rd gen)` 设备模拟（375×667，DPR 2，深色，`reducedMotion: reduce`），窄屏矩阵按 320×640 / 360×640 / 375×667 / 412×839 显式覆盖视口。脚本日志会为每张图打印 `engine / viewport / theme` 记录，来源表见 [docs/screenshots/README.md](docs/screenshots/README.md)。
+游戏与界面截图脚本新增了 `--webkit` 家族的命令（`capture-baseline.mjs` 仍只用于基线仓库状态）；Chromium 模式的命令、文件名与输出保持不变。WebKit 模式使用 `iPhone SE (3rd gen)` 设备模拟（375×667，DPR 2，深色，`reducedMotion: reduce`；成绩榜为 320×640），窄屏矩阵按 320×640 / 360×640 / 375×667 / 412×839 显式覆盖视口。脚本日志会为每张图打印 `engine / viewport / theme` 记录，来源表见 [docs/screenshots/README.md](docs/screenshots/README.md)。
 
 首次运行端到端测试前需要安装 Chromium 与 WebKit 两个引擎：
 
@@ -393,7 +392,7 @@ games/<game>/scene → 对应引擎（动态 import）
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过
-npm run test:unit    # 415 passed（含贪食蛇 21、俄罗斯方块 38、2048 35、打砖块 39、扫雷 133 个规则 / 难度 / 成绩 / 视图 / 调试用例，以及截图脚本端口 10 例、截图模式 18 例、预览服务启动 6 例）
+npm run test:unit    # 417 passed（含贪食蛇 21、俄罗斯方块 38、2048 35、打砖块 39、扫雷 133 个规则 / 难度 / 成绩 / 视图 / 调试用例，以及截图脚本端口 10 例、截图模式 20 例、预览服务启动 6 例）
 npm run build        # 通过
 npm run check:budget # 通过（入口 10.91 KB gzip，全部 JS 404.24 KB gzip）
 npm run test:e2e     # 149 passed（桌面 85 + 手机 34 + WebKit 30）

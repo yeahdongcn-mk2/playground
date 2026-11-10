@@ -47,7 +47,6 @@
     "screenshots:minesweeper:scores:webkit": "npm run build && node scripts/capture-minesweeper-scores-screenshots.mjs --webkit",
     "screenshots:minesweeper:scores-before": "node scripts/capture-minesweeper-scores-screenshots.mjs --before",
     "screenshots:minesweeper:scores-clear": "npm run build && node scripts/capture-minesweeper-scores-screenshots.mjs --clear",
-    "screenshots:minesweeper:scores-clear:webkit": "npm run build && node scripts/capture-minesweeper-scores-screenshots.mjs --webkit --clear",
     "screenshots:minesweeper:scores-clear-before": "node scripts/capture-minesweeper-scores-screenshots.mjs --before --clear",
     "screenshots:baseline": "node scripts/capture-baseline.mjs",
     "lint": "oxlint src tests && node scripts/check-boundaries.mjs",

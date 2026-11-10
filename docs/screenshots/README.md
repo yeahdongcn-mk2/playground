@@ -2,7 +2,7 @@
 
 这些截图用于各期交付的 Before / After 视觉证据。全部由 Playwright 的 Chromium 或 WebKit 真实渲染（各节注明引擎），不是 mockup。
 
-引擎标注：文件名 `-desktop` 为 Chromium 1440×1000；`-mobile` 为 Chromium Pixel 7（390×844）；`-webkit` / `-webkit-narrow-*` 为 WebKit `iPhone SE (3rd gen)` 设备模拟。WebKit 手机截图的命令、设备参数与引擎 / 视口 / 主题记录见「webkit-phone」与「webkit-narrow」两节；Chromium 的既有命令与文件名保持不变。
+引擎标注：文件名 `-desktop` 为 Chromium 1440×1000；`-mobile` 为 Chromium 手机截图（扫雷 `-mobile` 为 Pixel 7 412×839，扫雷成绩为 320×640；其余手机图多为自定义 390×844，大厅为全页长图）；`-webkit` / `-webkit-narrow-*` 为 WebKit `iPhone SE (3rd gen)` 设备模拟。WebKit 手机截图的命令、设备参数与引擎 / 视口 / 主题记录见「webkit-phone」与「webkit-narrow」两节；Chromium 的既有命令与文件名保持不变。
 
 ## webkit-narrow：扫雷窄屏首屏契约的 WebKit 矩阵（Issue #83 / 子任务 1）
 
@@ -39,10 +39,10 @@
   - `npm run screenshots:2048:webkit` → 2048 ready / playing / gameover
   - `npm run screenshots:breakout:webkit` → 打砖块 ready / playing / levelclear / gameover
   - `npm run screenshots:minesweeper:webkit` → 扫雷 ready / playing / lost / won
-  - `npm run screenshots:minesweeper:webkit-before` → 同一组 WebKit 手机 Before 状态（需 `BASE_URL` 指向触屏改动前的基线预览）
-  - `npm run screenshots:minesweeper:scores:webkit` / `npm run screenshots:minesweeper:scores-clear:webkit` → 最高用时榜
+  - `npm run screenshots:minesweeper:webkit-before` → 同一组 WebKit 手机 Before 状态（需 `BASE_URL` 指向触屏改动前的基线预览；仓库不提交这些 Before 文件）
+  - `npm run screenshots:minesweeper:scores:webkit` → 最高用时榜（当前面板包含「清空记录」）
   - 窄屏 4 视口见上文 `webkit-narrow` 小节。
-- 引擎 / 视口 / 主题记录：每个脚本在写图后会输出一行 `engine=…, viewport=…, theme=dark, reducedMotion=reduce`；下表也逐项记录。Chromium 模式不写这些 `-webkit` 文件，也不会改动既有 Chromium 文件。
+- 引擎 / 视口 / 主题记录：每个脚本在写图后会输出一行 `engine=…, viewport=…, theme=dark, reducedMotion=reduce`；下表也逐项记录。WebKit 模式不写既有 Chromium 文件名，Chromium 模式也不会写这些 `-webkit` 文件。
 - 覆盖边界：俄罗斯方块只有 e2e 覆盖，没有 `capture-*` 截图脚本；因此本表不包含俄罗斯方块截图。WebKit 是 Linux 构建，不等同真实 iOS Safari，动态地址栏 / 安全区 / 真机字体仍由上文差异小节与 e2e 覆盖。
 
 | 文件 | 场景 | 引擎 / 视口 / 主题 | 生成命令 |
@@ -61,8 +61,7 @@
 | `after-minesweeper-playing-webkit.png` | 扫雷游玩中（触屏轻点 + 长按插旗） | WebKit / 375×667 / 深色 | `npm run screenshots:minesweeper:webkit` |
 | `after-minesweeper-lost-webkit.png` | 扫雷 BOOM（触屏） | WebKit / 375×667 / 深色 | `npm run screenshots:minesweeper:webkit` |
 | `after-minesweeper-won-webkit.png` | 扫雷 CLEARED（触屏） | WebKit / 375×667 / 深色 | `npm run screenshots:minesweeper:webkit` |
-| `after-minesweeper-scores-webkit.png` | 最高用时榜（手机） | WebKit / 320×640 / 深色 | `npm run screenshots:minesweeper:scores:webkit` |
-| `after-minesweeper-clear-scores-webkit.png` | 最高用时榜 + 清空记录（手机） | WebKit / 320×640 / 深色 | `npm run screenshots:minesweeper:scores-clear:webkit` |
+| `after-minesweeper-scores-webkit.png` | 最高用时榜（含「清空记录」，手机） | WebKit / 320×640 / 深色 | `npm run screenshots:minesweeper:scores:webkit` |
 
 ### 证据限制
 

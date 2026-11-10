@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -19,6 +19,7 @@ const FRAMEWORK = join(ROOT, 'docs', 'framework.md');
 const SCREENSHOTS_README = join(ROOT, 'docs', 'screenshots', 'README.md');
 const SCREENSHOT_DIR = join(ROOT, 'docs', 'screenshots');
 const SCRIPT_DIR = join(ROOT, 'scripts');
+const PLAYWRIGHT_CONFIG = join(ROOT, 'playwright.config.ts');
 
 const REMOVED_FLAG = '--before';
 const REMOVED_COMMAND = 'screenshots:minesweeper:before';
@@ -42,8 +43,23 @@ const WEBKIT_SCRIPT_MODES = [
   'screenshots:minesweeper:webkit-narrow',
   'screenshots:minesweeper:webkit-narrow-before',
   'screenshots:minesweeper:scores:webkit',
-  'screenshots:minesweeper:scores-clear:webkit',
 ] as const;
+
+const WEBKIT_SCRIPT_COMMANDS: Record<string, readonly string[]> = {
+  'capture-screenshots.mjs': ['screenshots:webkit'],
+  'capture-snake-screenshots.mjs': ['screenshots:snake:webkit'],
+  'capture-2048-screenshots.mjs': ['screenshots:2048:webkit'],
+  'capture-breakout-screenshots.mjs': ['screenshots:breakout:webkit'],
+  'capture-minesweeper-screenshots.mjs': [
+    'screenshots:minesweeper:webkit',
+    'screenshots:minesweeper:webkit-before',
+    'screenshots:minesweeper:webkit-narrow',
+    'screenshots:minesweeper:webkit-narrow-before',
+  ],
+  'capture-minesweeper-scores-screenshots.mjs': [
+    'screenshots:minesweeper:scores:webkit',
+  ],
+};
 
 const WEBKIT_SCREENSHOTS = [
   'after-hub-webkit.png',
@@ -61,7 +77,6 @@ const WEBKIT_SCREENSHOTS = [
   'after-minesweeper-lost-webkit.png',
   'after-minesweeper-won-webkit.png',
   'after-minesweeper-scores-webkit.png',
-  'after-minesweeper-clear-scores-webkit.png',
 ] as const;
 
 interface PackageJson {
@@ -280,6 +295,33 @@ describe('WebKit screenshot modes', () => {
     }
   });
 
+  it('maps every capture script to its WebKit command and flag', () => {
+    const scripts = packageJson.scripts ?? {};
+    const captureScripts = readdirSync(SCRIPT_DIR)
+      .filter((name) => name.startsWith('capture-') && name !== 'capture-baseline.mjs')
+      .sort();
+    expect(Object.keys(WEBKIT_SCRIPT_COMMANDS).sort()).toEqual(captureScripts);
+    for (const [file, commands] of Object.entries(WEBKIT_SCRIPT_COMMANDS)) {
+      expect(existsSync(join(SCRIPT_DIR, file)), file).toBe(true);
+      for (const name of commands) {
+        expect(scripts[name], name).toBeDefined();
+        expect(scripts[name], name).toContain(file);
+        expect(scripts[name], name).toContain('--webkit');
+      }
+    }
+  });
+
+  it('uses the same iPhone SE device as the mobile-webkit e2e project', () => {
+    const config = readFileSync(PLAYWRIGHT_CONFIG, 'utf8');
+    expect(config).toMatch(/name: 'mobile-webkit'[\s\S]*?devices\['iPhone SE \(3rd gen\)'\]/);
+    expect(phoneContextOptions('webkit')).toMatchObject({
+      viewport: { width: 375, height: 667 },
+      deviceScaleFactor: 2,
+      isMobile: true,
+      hasTouch: true,
+    });
+  });
+
   it('keeps Chromium commands and filenames working alongside WebKit', () => {
     const scripts = packageJson.scripts ?? {};
     for (const name of ['screenshots', 'screenshots:snake', 'screenshots:2048', 'screenshots:breakout', 'screenshots:minesweeper']) {
@@ -304,6 +346,7 @@ describe('WebKit screenshot modes', () => {
   it('documents every WebKit screenshot and its generation command', () => {
     const docs = readFileSync(SCREENSHOTS_README, 'utf8');
     for (const file of WEBKIT_SCREENSHOTS) {
+      expect(existsSync(join(SCREENSHOT_DIR, file)), file).toBe(true);
       expect(docs, file).toContain(file);
     }
     for (const name of WEBKIT_SCRIPT_MODES) {
