@@ -312,6 +312,7 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
 - After：PR #29 的截图捕获提交 [`abed3bc`](https://github.com/yeahdongcn-mk2/playground/commit/abed3bc0346fe738f24ef4e51666ca1ddb369f48)（分支 `agent/plan-27-t1`）。其后提交只修改 `tests/e2e/` 与 `docs/screenshots/README.md`，不改变界面；PR 描述中附有 Before / After 截图链接。
 - 视口 / 主题：桌面 1440×1000、手机 390×844（DPR 2），深色主题，`reducedMotion: reduce`。桌面与手机大厅均为整页截图（`fullPage: true`），手机 Before / After 用同一口径，保证单列布局中的打砖块卡片进入画面。
 - 生成：`npm run screenshots:breakout`（生产构建 + `vite preview`，固定砖块 / 球 / 生命走 `?debug=1` 调试接缝）。
+- 预览端口：默认 `4185`；共享主机或并行 worktree 用 `PREVIEW_PORT=4186 npm run screenshots:breakout` 覆盖（`PREVIEW_PORT` 为空串时回退 `4185`；`screenshots:breakout:webkit` 复用同一启动路径与端口）。端口已被占用时脚本在启动 preview 前以非零状态退出，错误包含实际端口、`the port is already in use` 与 `Set PREVIEW_PORT` 建议，不会写出或覆盖任何截图；端口探测通过后 preview 提前退出时报告子进程退出码与 stderr，不再静默连到端口上的其它服务。Before 模式（`screenshots:breakout:before`）以 `BASE_URL` 为准，不启动 preview、不探测端口。
 - 复现 Before：在 `63bf67e` 的干净 worktree 里 `npm ci && npm run build`，用 `node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4184 --strictPort` 启动预览，然后在当前分支运行 `BASE_URL=http://127.0.0.1:4184 npm run screenshots:breakout:before`。
 
 ### Before（main `63bf67e`，没有打砖块）
@@ -351,6 +352,7 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
 - After：本 PR head（见 PR 描述中的 commit SHA）。
 - 视口 / 主题：桌面 1440×1000、手机 390×844（DPR 2），深色主题，`reducedMotion: reduce`。桌面与手机大厅均为整页截图（`fullPage: true`）；手机 Before 用同一口径重截，保证单列布局中的 2048 卡片进入画面。
 - 生成：`npm run screenshots:2048`（生产构建 + `vite preview`，固定棋盘走 `?debug=1` 调试接缝）。
+- 预览端口：默认 `4183`；共享主机或并行 worktree 用 `PREVIEW_PORT=4184 npm run screenshots:2048` 覆盖（`PREVIEW_PORT` 为空串时回退 `4183`；`screenshots:2048:webkit` 复用同一启动路径与端口）。端口已被占用时脚本在启动 preview 前以非零状态退出，错误包含实际端口、`the port is already in use` 与 `Set PREVIEW_PORT` 建议，不会写出或覆盖任何截图；端口探测通过后 preview 提前退出时报告子进程退出码与 stderr，不再静默连到端口上的其它服务。Before 模式（`screenshots:2048:before`）以 `BASE_URL` 为准，不启动 preview、不探测端口。
 - 复现 Before：在 `d54ae9f` 的干净 worktree 里 `npm ci && npm run build`，用 `node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4184 --strictPort` 启动预览，然后在分支运行 `BASE_URL=http://127.0.0.1:4184 npm run screenshots:2048:before`。
 
 ### Before（main，没有 2048）
