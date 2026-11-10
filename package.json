@@ -16,6 +16,7 @@
     "test:unit": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "npm run build && playwright test",
+    "test:e2e:webkit": "npm run build && playwright test --project=mobile-webkit",
     "screenshots": "npm run build && node scripts/capture-screenshots.mjs",
     "screenshots:snake": "node scripts/capture-snake-screenshots.mjs",
     "screenshots:2048": "npm run build && node scripts/capture-2048-screenshots.mjs",

@@ -19,13 +19,19 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
-      testIgnore: /.*\.mobile\.spec\.ts/,
+      testIgnore: /.*\.(?:mobile|webkit)\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 1000 } },
     },
     {
       name: 'mobile',
       testMatch: /.*\.mobile\.spec\.ts/,
+      testIgnore: /.*\.webkit\.spec\.ts/,
       use: { ...devices['Pixel 7'] },
+    },
+    {
+      name: 'mobile-webkit',
+      testMatch: /.*\.webkit\.spec\.ts/,
+      use: { ...devices['iPhone SE (3rd gen)'] },
     },
   ],
   webServer: {
