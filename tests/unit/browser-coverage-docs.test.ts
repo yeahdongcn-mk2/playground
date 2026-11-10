@@ -10,9 +10,21 @@ const read = (path: string): string => readFileSync(join(ROOT, path), 'utf8');
 
 const README = read('README.md');
 const FRAMEWORK = read('docs/framework.md');
+const MOBILE_SPEC = read('tests/e2e/minesweeper.mobile.spec.ts');
 const NARROW_WEBKIT_SPEC = read('tests/e2e/minesweeper.narrow.webkit.spec.ts');
 const WEBKIT_DEVICE = 'iPhone SE (3rd gen)';
 const INSTALL_COMMAND = 'npx playwright install chromium webkit';
+const CHROMIUM_NARROW_VIEWPORTS = [
+  '320×640',
+  '340×700',
+  '349×700',
+  '360×640',
+  '360×740',
+  '375×667',
+  '400×700',
+  '412×839',
+];
+const WEBKIT_NARROW_VIEWPORTS = ['320×640', '360×640', '375×667', '412×839'];
 
 interface PackageJson {
   scripts?: Record<string, string>;
@@ -66,7 +78,7 @@ function matches(
   );
 }
 
-/** Viewport labels such as `320×640` declared in the WebKit narrow spec. */
+/** Viewport labels such as `320×640` declared in an e2e viewport matrix. */
 function viewportLabels(source: string): string[] {
   return Array.from(source.matchAll(/label:\s*'(\d{3,4})x(\d{3,4})'/g), (match) => {
     const width = match[1];
@@ -124,9 +136,11 @@ describe('browser coverage documentation', () => {
     ).toBe(true);
   });
 
-  it('documents the same viewport matrix the WebKit narrow spec asserts', () => {
-    const viewports = viewportLabels(NARROW_WEBKIT_SPEC);
-    expect(viewports).toEqual(['320×640', '360×640', '375×667', '412×839']);
+  it('documents the same viewport matrices the Chromium and WebKit specs assert', () => {
+    const chromiumViewports = viewportLabels(MOBILE_SPEC);
+    const webkitViewports = viewportLabels(NARROW_WEBKIT_SPEC);
+    expect(chromiumViewports).toEqual(CHROMIUM_NARROW_VIEWPORTS);
+    expect(webkitViewports).toEqual(WEBKIT_NARROW_VIEWPORTS);
 
     for (const [name, doc] of [
       ['README.md', README],
@@ -137,17 +151,101 @@ describe('browser coverage documentation', () => {
       }
       expect(doc, `${name} should mention the WebKit project`).toContain('mobile-webkit');
       expect(doc, `${name} should mention the WebKit device`).toContain(WEBKIT_DEVICE);
-      for (const viewport of viewports) {
+      for (const viewport of [...chromiumViewports, ...webkitViewports]) {
         expect(doc, `${name} is missing the ${viewport} viewport`).toContain(viewport);
       }
-      // The labels must match the spec in order, not just appear somewhere.
+      // The labels must match each spec in order, not just appear somewhere.
+      expect(doc, `${name} should list the Chromium matrix in spec order`).toContain(
+        chromiumViewports.join('、'),
+      );
       expect(doc, `${name} should list the WebKit matrix in spec order`).toContain(
-        viewports.join('、'),
+        webkitViewports.join('、'),
       );
       expect(
         doc,
-        `${name} should state that all four WebKit viewports assert the restart entry`,
+        `${name} should state the Chromium matrix has ${chromiumViewports.length} viewports`,
+      ).toContain(`Chromium ${chromiumViewports.length} 个视口`);
+      expect(
+        doc,
+        `${name} should state the WebKit matrix has ${webkitViewports.length} viewports`,
+      ).toContain(`WebKit ${webkitViewports.length} 个视口`);
+      expect(
+        doc,
+        `${name} should state that all WebKit viewports assert the restart entry`,
       ).toMatch(/四个视口都断言[^。\n]{0,80}重开入口/);
+    }
+  });
+
+  it('documents every executable narrow-screen layout contract clause', () => {
+    for (const [name, doc] of [
+      ['README.md', README],
+      ['docs/framework.md', FRAMEWORK],
+    ] as const) {
+      // Minimum viewport and its height boundary.
+      expect(doc, `${name} should document the 320×640 minimum viewport`).toMatch(
+        /最低支持视口\s*320×640/,
+      );
+      expect(doc, `${name} should state that heights under 640px are not guaranteed`).toMatch(
+        /高度\s*<640[^。\n]{0,20}不保证/,
+      );
+
+      // Cell-size promise and the 320–339px geometric fallback.
+      expect(doc, `${name} should document the ≥36×36px cell promise`).toContain(
+        '≥36×36px',
+      );
+      expect(doc, `${name} should document the ≥34×34px geometric fallback`).toContain(
+        '≥34×34px',
+      );
+      expect(doc, `${name} should scope the fallback to 320–339px`).toMatch(
+        /320[–-]339px/,
+      );
+
+      // First-screen entries the matrix must contain.
+      for (const entry of [
+        '返回大厅',
+        '剩余雷数',
+        '计时器',
+        'touch-hint',
+        'mobile-restart-button',
+      ]) {
+        expect(doc, `${name} should require ${entry} on the first screen`).toContain(
+          entry,
+        );
+      }
+
+      // Out-of-matrix boundary.
+      expect(doc, `${name} should document the matrix boundary examples`).toMatch(
+        /未列入矩阵[^。\n]{0,80}375×640[^。\n]{0,20}400×667/,
+      );
+      expect(doc, `${name} should not promise the restart entry outside the matrix`).toMatch(
+        /(?:不承诺|不保证)[^。\n]{0,30}重开入口/,
+      );
+
+      // Large-board degradation.
+      expect(doc, `${name} should only guarantee 36px for 9×9 boards`).toMatch(
+        /列数\s*>9[^。\n]{0,40}9×9[^。\n]{0,30}≥36px/,
+      );
+      expect(doc, `${name} should reference the large-board follow-up #86`).toContain(
+        '#86',
+      );
+      expect(doc, `${name} should say large boards scale down proportionally`).toContain(
+        '按比例缩小',
+      );
+      expect(doc, `${name} should keep the page free of horizontal scrolling`).toContain(
+        '不横向滚动',
+      );
+
+      // Rule for new viewport widths.
+      expect(doc, `${name} should document the new-width rule`).toMatch(
+        /新增视口宽度[^。\n]{0,60}按同一规则/,
+      );
+      expect(doc, `${name} should require an e2e for new widths`).toContain(
+        '补对应 e2e',
+      );
+      expect(doc, `${name} should avoid per-width tickets`).toContain('不再逐条开单');
+      expect(doc, `${name} should record out-of-rule widths as known limitations`).toMatch(
+        /超出规则范围[^。\n]{0,30}已知限制/,
+      );
     }
   });
 
@@ -214,6 +312,9 @@ describe('browser coverage documentation', () => {
     const staleWebkitMatrix =
       /WebKit[^。\n]{0,20}(?:只|仅)[^。\n]{0,20}(?:320×640|412×839)[^。\n]{0,20}(?:断言|覆盖)/;
     const staleWebkitTracking = /(?:360×640|375×667)[^。\n]{0,40}重开入口[^。\n]{0,20}#60/;
+    const stale60Tracking =
+      /#60[^。\n]{0,30}(?:继续|仍|还)[^。\n]{0,10}跟踪|(?:继续|仍|还)[^。\n]{0,20}跟踪[^。\n]{0,20}#60/;
+    const stalePr84 = /(?:PR\s*)?#84[^。\n]{0,30}(?:未合并|未合入|待合并|仍打开)/;
     for (const [name, doc] of [
       ['README.md', README],
       ['docs/framework.md', FRAMEWORK],
@@ -229,6 +330,12 @@ describe('browser coverage documentation', () => {
       );
       expect(doc, `${name} should not say the short-screen fix is still tracked by #60`).not.toMatch(
         staleWebkitTracking,
+      );
+      expect(doc, `${name} should not say #60 is still tracking the contract`).not.toMatch(
+        stale60Tracking,
+      );
+      expect(doc, `${name} should not say PR #84 is still unmerged`).not.toMatch(
+        stalePr84,
       );
     }
   });
