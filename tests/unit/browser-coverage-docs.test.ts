@@ -14,6 +14,40 @@ const SNAKE_DESIGN = read('docs/snake-design.md');
 const MOBILE_SPEC = read('tests/e2e/minesweeper.mobile.spec.ts');
 const NARROW_WEBKIT_SPEC = read('tests/e2e/minesweeper.narrow.webkit.spec.ts');
 const WEBKIT_DEVICE = 'iPhone SE (3rd gen)';
+
+/**
+ * Mobile cases that Chromium and WebKit must run from one shared module.
+ * Each pair of entries only wires the shared function into a Playwright file,
+ * so the two engine projects cannot drift into separately maintained copies.
+ */
+const SHARED_MOBILE_ENTRIES = [
+  {
+    name: 'framework',
+    chromium: 'tests/e2e/framework.mobile.spec.ts',
+    webkit: 'tests/e2e/framework.mobile.webkit.spec.ts',
+    shared: 'tests/e2e/framework-mobile-cases.ts',
+    define: 'defineFrameworkMobileCases',
+  },
+  {
+    name: 'minesweeper touch gestures',
+    chromium: 'tests/e2e/minesweeper.mobile.spec.ts',
+    webkit: 'tests/e2e/minesweeper.mobile.webkit.spec.ts',
+    shared: 'tests/e2e/minesweeper-mobile-touch-cases.ts',
+    define: 'defineMinesweeperMobileTouchCases',
+  },
+  {
+    name: 'minesweeper difficulty form',
+    chromium: 'tests/e2e/minesweeper.difficulty.mobile.spec.ts',
+    webkit: 'tests/e2e/minesweeper.difficulty.mobile.webkit.spec.ts',
+    shared: 'tests/e2e/minesweeper-difficulty-mobile-cases.ts',
+    define: 'defineMinesweeperDifficultyMobileCases',
+  },
+] as const;
+
+/** The basename of a repository-relative path. */
+function baseName(path: string): string {
+  return path.slice(path.lastIndexOf('/') + 1);
+}
 const INSTALL_COMMAND = 'npx playwright install chromium webkit';
 const CHROMIUM_NARROW_VIEWPORTS = [
   '320×640',
@@ -177,9 +211,33 @@ describe('browser coverage documentation', () => {
       .filter((file) => file.endsWith('.webkit.spec.ts'))
       .sort();
     expect(webkitSpecs).toEqual([
+      'framework.mobile.webkit.spec.ts',
+      'minesweeper.difficulty.mobile.webkit.spec.ts',
+      'minesweeper.mobile.webkit.spec.ts',
       'minesweeper.narrow.webkit.spec.ts',
       'minesweeper.webkit.spec.ts',
     ]);
+
+    // Every WebKit entry runs on mobile-webkit, while the Chromium mobile /
+    // desktop projects keep ignoring it so a case is never double-counted.
+    for (const entry of SHARED_MOBILE_ENTRIES) {
+      const spec = baseName(entry.webkit);
+      expect(matches(webkit.testMatch, spec), `${spec} should run on mobile-webkit`).toBe(
+        true,
+      );
+      expect(
+        matches(project('mobile').testMatch, spec),
+        `${spec} should not run on the Chromium mobile project`,
+      ).toBe(false);
+      expect(
+        matches(project('chromium').testIgnore, spec),
+        `${spec} should be ignored by the Chromium desktop project`,
+      ).toBe(true);
+      expect(
+        matches(project('mobile').testIgnore, spec),
+        `${spec} should be ignored by the Chromium mobile project`,
+      ).toBe(true);
+    }
 
     // The Chromium projects must keep ignoring the WebKit-only specs, so the
     // documented matrix is not silently double-counted or skipped.
@@ -189,6 +247,31 @@ describe('browser coverage documentation', () => {
     expect(
       matches(project('mobile').testIgnore, 'minesweeper.narrow.webkit.spec.ts'),
     ).toBe(true);
+  });
+
+  it('reuses one shared mobile case module for the Chromium and WebKit entries', () => {
+    for (const entry of SHARED_MOBILE_ENTRIES) {
+      const shared = read(entry.shared);
+      expect(shared, `${entry.shared} should export ${entry.define}`).toContain(
+        `export function ${entry.define}(`,
+      );
+      for (const specPath of [entry.chromium, entry.webkit]) {
+        const entrySource = read(specPath);
+        expect(entrySource, `${specPath} should import the shared module`).toContain(
+          `from './${baseName(entry.shared).replace(/\.ts$/, '')}'`,
+        );
+        expect(entrySource, `${specPath} should call ${entry.define}`).toContain(
+          `${entry.define}();`,
+        );
+      }
+      // The WebKit entry only wires the shared cases in; a copy of the
+      // assertions there would let the engines drift apart again. The Chromium
+      // entry stays the home of its engine-specific layout matrices.
+      expect(
+        read(entry.webkit),
+        `${entry.webkit} should not duplicate shared test cases`,
+      ).not.toContain('test(');
+    }
   });
 
   it('documents the same viewport matrices the Chromium and WebKit specs assert', () => {
@@ -398,6 +481,36 @@ describe('browser coverage documentation', () => {
     }
   });
 
+  it('documents every WebKit mobile entry and the specs still Chromium-only', () => {
+    for (const [name, doc] of [
+      ['README.md', README],
+      ['docs/framework.md', FRAMEWORK],
+    ] as const) {
+      for (const entry of SHARED_MOBILE_ENTRIES) {
+        expect(
+          doc,
+          `${name} should document ${entry.webkit}`,
+        ).toContain(entry.webkit);
+      }
+      expect(
+        doc,
+        `${name} should say framework and minesweeper touch share WebKit cases`,
+      ).toMatch(/WebKit[^。\n]{0,80}(?:framework|扫雷)[^。\n]{0,80}(?:触屏|手势)/);
+      expect(
+        doc,
+        `${name} should keep snake / tetris / 2048 / breakout Chromium-only`,
+      ).toMatch(/snake[^。\n]{0,60}(?:仍|只)(?:在|仅) Chromium/);
+      // Framework and the minesweeper touch / difficulty cases now run on
+      // both engines; calling them Chromium-only would misstate the matrix.
+      expect(
+        doc,
+        `${name} should not call the framework or minesweeper touch cases Chromium-only`,
+      ).not.toMatch(
+        /(?:framework|扫雷触屏|扫雷难度|minesweeper\.mobile|minesweeper\.difficulty\.mobile)[^。\n]{0,40}(?:仍|只)(?:在|仅) Chromium/,
+      );
+    }
+  });
+
   it('asserts the restart entry for every narrow viewport matrix', () => {
     for (const [name, spec, matrix, count] of [
       ['Chromium mobile', MOBILE_SPEC, 'FIRST_SCREEN_VIEWPORTS', 8],
@@ -522,6 +635,8 @@ describe('browser coverage documentation', () => {
     expect(frameworkBreakdown).toEqual(readmeBreakdown);
     const [desktop, mobile, webkit] = readmeBreakdown ?? [0, 0, 0];
     expect(desktop + mobile + webkit).toBe(counts.readmeE2e);
-    expect(webkit).toBeGreaterThanOrEqual(6);
+    // The WebKit project now runs framework, the minesweeper touch gestures
+    // and the touch difficulty form on top of the six contract / smoke cases.
+    expect(webkit).toBeGreaterThanOrEqual(22);
   });
 });
