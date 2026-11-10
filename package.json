@@ -51,7 +51,8 @@
     "screenshots:baseline": "node scripts/capture-baseline.mjs",
     "lint": "oxlint src tests && node scripts/check-boundaries.mjs",
     "check:budget": "node scripts/check-budget.mjs",
-    "verify:screenshots:webkit": "node scripts/verify-screenshot-artifacts.mjs"
+    "verify:screenshots:webkit": "node scripts/verify-screenshot-artifacts.mjs",
+    "verify:screenshots:doc-dims": "node scripts/check-screenshot-doc-dims.mjs"
   },
   "dependencies": {
     "phaser": "^4.2.1"
