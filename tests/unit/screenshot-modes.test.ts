@@ -5,9 +5,11 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import type { Page } from '@playwright/test';
+import { describe, expect, it, vi } from 'vitest';
 import {
   captureRecord,
+  captureScreenshot,
   parseCaptureEngine,
   phoneContextOptions,
 } from '../../scripts/lib/capture-runtime.mjs';
@@ -85,6 +87,233 @@ interface PackageJson {
 }
 
 const packageJson = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as PackageJson;
+
+/** Every screenshot script that must know about the shared capture runtime. */
+const CAPTURE_SCRIPTS = readdirSync(SCRIPT_DIR)
+  .filter(
+    (name) =>
+      name.startsWith('capture-') &&
+      name.endsWith('.mjs') &&
+      name !== 'capture-baseline.mjs',
+  )
+  .sort();
+
+interface WebkitScriptGuard {
+  /** WebKit-only capture helpers the script must define. */
+  functions: readonly string[];
+  /**
+   * The dispatch branch that calls the WebKit helper. The match deliberately
+   * stops at the first nested `{` so a helper that is defined but no longer
+   * called cannot keep the guard green.
+   */
+  dispatch: RegExp;
+}
+
+const WEBKIT_SCRIPT_GUARDS: Record<string, WebkitScriptGuard> = {
+  'capture-screenshots.mjs': {
+    functions: ['captureWebkitMobile'],
+    dispatch: /if \(IS_WEBKIT\)\s*\{[^{}]*\bcaptureWebkitMobile\(browser\)/,
+  },
+  'capture-snake-screenshots.mjs': {
+    functions: ['captureWebkitMobile'],
+    dispatch: /if \(IS_WEBKIT\)\s*\{[^{}]*\bcaptureWebkitMobile\(browser\)/,
+  },
+  'capture-2048-screenshots.mjs': {
+    functions: ['captureWebkitMobile'],
+    dispatch: /if \(IS_WEBKIT\)\s*\{[^{}]*\bcaptureWebkitMobile\(browser\)/,
+  },
+  'capture-breakout-screenshots.mjs': {
+    functions: ['captureWebkitMobile'],
+    dispatch: /if \(IS_WEBKIT\)\s*\{[^{}]*\bcaptureWebkitMobile\(browser\)/,
+  },
+  'capture-minesweeper-screenshots.mjs': {
+    functions: ['captureWebkitNarrow', 'captureTouchMobile'],
+    dispatch: /if \(IS_WEBKIT\)\s*\{[^{}]*\bcaptureTouchMobile\(browser,/,
+  },
+  'capture-minesweeper-scores-screenshots.mjs': {
+    functions: ['captureWebkitMobile'],
+    dispatch: /if \(IS_WEBKIT\)\s*\{[^{}]*\bcaptureWebkitMobile\(browser\)/,
+  },
+};
+
+interface WebkitArtifacts {
+  /** Names written in modes whose screenshots the repository commits. */
+  committed: string[];
+  /**
+   * `--webkit --touch-before` phone names: they need BASE_URL at the pre-touch
+   * baseline and docs/screenshots/README.md says those Before files are not
+   * committed. Everything else must exist on disk and be documented.
+   */
+  transient: string[];
+}
+
+function captureSource(file: string): string {
+  return readFileSync(join(SCRIPT_DIR, file), 'utf8');
+}
+
+/** Literal `*-webkit*.png` names referenced by a script. */
+function literalWebkitPngNames(source: string): string[] {
+  return [...source.matchAll(/['"]([^'"\n]*-webkit[^'"\n]*\.png)['"]/g)].map(
+    (match) => match[1]!,
+  );
+}
+
+/** Template literals that build a `*-webkit*.png` name at runtime. */
+function webkitPngTemplates(source: string): string[] {
+  return [...source.matchAll(/`([^`\n]*-webkit[^`\n]*)`/g)]
+    .map((match) => match[1]!)
+    .filter((template) => template.includes('${'));
+}
+
+/**
+ * The two prefixes one WebKit branch passes to its capture helper.
+ *
+ * The dispatch regex is anchored to the branch that actually runs the helper
+ * and captures the branch's mode literal plus both ternaries. Reading the call
+ * site, not every `'after'` / `'before'` literal in the file, makes a rename at
+ * the point that supplies the prefix change the expanded set.
+ */
+function dispatchPrefixes(
+  source: string,
+  dispatch: RegExp,
+  beforeMode: string,
+): string[] {
+  const match = source.match(dispatch);
+  expect(
+    match,
+    `${beforeMode} should dispatch its capture helper with before/after prefixes`,
+  ).not.toBeNull();
+
+  const [, mode, beforePrefix, afterPrefix] = match!;
+  expect(mode, 'the before mode literal should keep its name').toBe(beforeMode);
+  expect(beforePrefix, 'the before branch should pass a before* prefix').toMatch(/^before/);
+  expect(afterPrefix, 'the after branch should pass an after* prefix').toMatch(/^after/);
+
+  const prefixes = [...new Set([beforePrefix!, afterPrefix!])];
+  expect(prefixes, 'the two branches should pass distinct prefixes').toHaveLength(2);
+  return prefixes;
+}
+
+function isTransientBeforeTouch(name: string): boolean {
+  // The committed narrow Before matrix also starts with `before-`; only the
+  // touch-before phone states are absent from the repository.
+  return /^before-minesweeper-(?!webkit-narrow-).*-webkit\.png$/.test(name);
+}
+
+/**
+ * Expand every `*-webkit*.png` name a capture script can write from its own
+ * source: literal file names plus the two template families the scripts use.
+ *
+ * The expansion reads the scene list, viewport matrix and file prefix from the
+ * script instead of restating them, so renaming an artifact or dropping a
+ * template changes the extracted set and fails the cross-check against the
+ * committed files and docs.
+ */
+function extractWebkitArtifacts(file: string): WebkitArtifacts {
+  const source = captureSource(file);
+  const names = new Set(literalWebkitPngNames(source));
+  const templates = webkitPngTemplates(source);
+  const handledTemplates = new Set<string>();
+
+  const expandTemplate = (template: string, expand: () => readonly string[]) => {
+    if (!templates.includes(template)) {
+      return;
+    }
+    handledTemplates.add(template);
+    for (const name of expand()) {
+      names.add(name);
+    }
+  };
+
+  if (file === 'capture-minesweeper-screenshots.mjs') {
+    const states = [...source.matchAll(/touchMobileName\(prefix, '([a-z]+)'\)/g)].map(
+      (match) => match[1]!,
+    );
+    expect(states.length, 'touchMobileName should be called for each phone state').toBeGreaterThan(0);
+
+    const touchPrefixes = dispatchPrefixes(
+      source,
+      // Anchored to the IS_WEBKIT branch so the Chromium `'after'` / `'before'`
+      // call sites below it cannot satisfy (or shadow) the extraction.
+      /if \(IS_WEBKIT\)\s*\{[^{}]*await captureTouchMobile\(browser, MODE === '([a-z-]+)' \? '([a-z0-9-]+)' : '([a-z0-9-]+)'\);/,
+      'touch-before',
+    );
+    const narrowPrefixes = dispatchPrefixes(
+      source,
+      // Anchored to the narrow branch that actually calls captureWebkitNarrow.
+      /if \(MODE === 'webkit-narrow' \|\| MODE === 'webkit-narrow-before'\)\s*\{[^{}]*await captureWebkitNarrow\(browser, MODE === '([a-z-]+)' \? '([a-z0-9-]+)' : '([a-z0-9-]+)'\);/,
+      'webkit-narrow-before',
+    );
+
+    expandTemplate('${prefix}-minesweeper-${state}-webkit.png', () =>
+      touchPrefixes.flatMap((prefix) =>
+        states.map((state) => `${prefix}-minesweeper-${state}-webkit.png`),
+      ),
+    );
+
+    // The narrow matrix must come from the loop in captureWebkitNarrow itself:
+    // a different iterated list fails here, and the committed-file cross-check
+    // catches a viewport removed from the constant.
+    const narrowLoop = source.match(
+      /async function captureWebkitNarrow\([^)]*\)\s*\{[^{}]*for \(const viewport of ([A-Za-z_$][\w$]*)\)/,
+    );
+    expect(narrowLoop?.[1], 'captureWebkitNarrow should iterate a named viewport list').toBe(
+      'WEBKIT_NARROW_VIEWPORTS',
+    );
+
+    // A `continue` / `if` between the loop and its capture call would skip a
+    // viewport even though the iterated list is unchanged, leaving that
+    // committed artifact stale while every source-derived check stays green.
+    const loopIndex = source.indexOf('for (const viewport of WEBKIT_NARROW_VIEWPORTS)');
+    const captureIndex = source.indexOf(
+      '${prefix}-minesweeper-webkit-narrow-',
+      loopIndex,
+    );
+    expect(captureIndex, 'the narrow loop should reach its capture call').toBeGreaterThan(
+      loopIndex,
+    );
+    expect(
+      source.slice(loopIndex, captureIndex),
+      'the narrow loop should not skip a viewport before capturing',
+    ).not.toMatch(/\b(?:continue|break)\b|\bif \(/);
+
+    const viewportBlock = source.match(/const WEBKIT_NARROW_VIEWPORTS = \[([\s\S]*?)\];/);
+    expect(viewportBlock, 'WEBKIT_NARROW_VIEWPORTS should be declared').not.toBeNull();
+    const viewports = [
+      ...(viewportBlock?.[1] ?? '').matchAll(/\{ width: (\d+), height: (\d+) \}/g),
+    ].map((match) => `${match[1]}x${match[2]}`);
+    expect(viewports.length, 'the narrow matrix should list its viewports').toBeGreaterThan(0);
+
+    expandTemplate(
+      '${prefix}-minesweeper-webkit-narrow-${viewport.width}x${viewport.height}.png',
+      () =>
+        narrowPrefixes.flatMap((prefix) =>
+          viewports.map((viewport) => `${prefix}-minesweeper-webkit-narrow-${viewport}.png`),
+        ),
+    );
+  }
+
+  if (file === 'capture-minesweeper-scores-screenshots.mjs') {
+    // `--webkit --clear` is rejected, so only the non-clear branch can name a
+    // WebKit artifact.
+    const filePrefix = source.match(/const FILE_PREFIX = [^;]*?: '([^']+)';/)?.[1];
+    expect(filePrefix, 'FILE_PREFIX should keep a non-clear value').toBeTruthy();
+    expandTemplate('after-${FILE_PREFIX}-webkit.png', () => [
+      `after-${filePrefix!}-webkit.png`,
+    ]);
+  }
+
+  expect(
+    [...handledTemplates].sort(),
+    `${file}: every WebKit .png template needs an explicit expansion`,
+  ).toEqual(templates.sort());
+
+  const artifacts = [...names].sort();
+  return {
+    committed: artifacts.filter((name) => !isTransientBeforeTouch(name)),
+    transient: artifacts.filter(isTransientBeforeTouch),
+  };
+}
 
 /** Run a capture script with an explicit environment. */
 function spawnNode(
@@ -386,6 +615,152 @@ describe('WebKit screenshot modes', () => {
       expect(doc, file).not.toContain('截图脚本仍只在 Chromium 下运行');
       expect(doc, file).not.toContain('#100 继续跟踪截图脚本的 WebKit 覆盖');
       expect(doc, file).toContain('screenshots:minesweeper:webkit');
+    }
+  });
+});
+
+describe('WebKit screenshot static guards', () => {
+  it('guards exactly the capture scripts that write screenshots', () => {
+    expect(Object.keys(WEBKIT_SCRIPT_GUARDS).sort()).toEqual(CAPTURE_SCRIPTS);
+  });
+
+  it.each(CAPTURE_SCRIPTS)(
+    'selects the engine through the runtime and dispatches WebKit in %s',
+    (file) => {
+      const source = captureSource(file);
+      const guard = WEBKIT_SCRIPT_GUARDS[file];
+      expect(guard, file).toBeDefined();
+
+      expect(source, file).toMatch(/from '\.\/lib\/capture-runtime\.mjs'/);
+      expect(source, file).toMatch(/\bparseCaptureEngine\(ARGS\)/);
+      expect(source, file).toMatch(/\bIS_WEBKIT = ENGINE === WEBKIT_ENGINE\b/);
+      expect(source, file).toMatch(/\blaunchCaptureBrowser\(ENGINE\)/);
+      for (const fn of guard?.functions ?? []) {
+        expect(source, `${file}: ${fn}`).toMatch(new RegExp(`async function ${fn}\\(`));
+      }
+      expect(source, `${file}: IS_WEBKIT dispatch`).toMatch(guard!.dispatch);
+    },
+  );
+
+  it('keeps both WebKit narrow modes wired in the minesweeper script', () => {
+    const source = captureSource('capture-minesweeper-screenshots.mjs');
+
+    expect(source).toContain('WEBKIT_NARROW_FLAG');
+    expect(source).toContain('WEBKIT_NARROW_BEFORE_FLAG');
+    expect(source).toMatch(/MODE === 'webkit-narrow' \|\| MODE === 'webkit-narrow-before'/);
+    expect(source).toMatch(
+      /if \(MODE === 'webkit-narrow' \|\| MODE === 'webkit-narrow-before'\)\s*\{[^{}]*captureWebkitNarrow\(browser,/,
+    );
+  });
+
+  it.each(CAPTURE_SCRIPTS)(
+    'maps %s WebKit artifacts to committed files and the screenshot docs',
+    (file) => {
+      const { committed, transient } = extractWebkitArtifacts(file);
+      const docs = readFileSync(SCREENSHOTS_README, 'utf8');
+
+      expect(committed.length + transient.length, file).toBeGreaterThan(0);
+      for (const name of committed) {
+        expect(existsSync(join(SCREENSHOT_DIR, name)), name).toBe(true);
+        expect(docs, name).toContain(name);
+      }
+      for (const name of transient) {
+        // `--webkit --touch-before` files need a baseline preview and are
+        // explicitly not committed (docs/screenshots/README.md, webkit-phone).
+        expect(existsSync(join(SCREENSHOT_DIR, name)), name).toBe(false);
+      }
+    },
+  );
+
+  it('has a one-to-one mapping between scripts, committed files and docs', () => {
+    const committed = readdirSync(SCREENSHOT_DIR)
+      .filter((name) => name.includes('-webkit') && name.endsWith('.png'))
+      .sort();
+    const documented = [
+      ...new Set(
+        [
+          ...readFileSync(SCREENSHOTS_README, 'utf8').matchAll(
+            /[a-z0-9][a-z0-9.-]*-webkit[a-z0-9.-]*\.png/g,
+          ),
+        ].map((match) => match[0]!),
+      ),
+    ].sort();
+    const extracted = CAPTURE_SCRIPTS.flatMap(
+      (file) => extractWebkitArtifacts(file).committed,
+    ).sort();
+
+    expect(committed.length).toBeGreaterThan(0);
+    expect(documented, 'docs and committed WebKit screenshots should match').toEqual(committed);
+    expect(extracted, 'every committed screenshot should come from a script').toEqual(committed);
+  });
+});
+
+describe('captureScreenshot evidence logging', () => {
+  it('logs the engine, viewport and theme passed for every image a fake page writes', async () => {
+    const writes: Array<{ path: string; fullPage?: boolean }> = [];
+    let viewport = { width: 375, height: 667 };
+    const page = {
+      viewportSize: () => viewport,
+      screenshot: async (options: { path: string; fullPage?: boolean }) => {
+        writes.push(options);
+      },
+    } as unknown as Page;
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    // Different engines, themes and viewports per call: a constant returned by
+    // captureRecord instead of its arguments cannot match every case.
+    const calls = [
+      {
+        name: 'after-hub-webkit.png',
+        engine: 'webkit',
+        viewport: { width: 375, height: 667 },
+        theme: 'dark',
+        fullPage: false,
+      },
+      {
+        name: 'after-minesweeper-scores-webkit.png',
+        engine: 'webkit',
+        viewport: { width: 320, height: 640 },
+        theme: 'dark',
+        fullPage: true,
+      },
+      {
+        name: 'after-hub.png',
+        engine: 'chromium',
+        viewport: { width: 390, height: 844 },
+        theme: 'light',
+        fullPage: false,
+      },
+    ] as const;
+
+    try {
+      for (const call of calls) {
+        viewport = call.viewport;
+        await captureScreenshot(page, call.name, {
+          engine: call.engine,
+          colorScheme: call.theme,
+          fullPage: call.fullPage,
+        });
+      }
+
+      expect(writes.map((write) => write.path)).toEqual(
+        calls.map((call) => `docs/screenshots/${call.name}`),
+      );
+      expect(writes.map((write) => write.fullPage)).toEqual(calls.map((call) => call.fullPage));
+
+      // One record per write, matched by file name and position so a missing or
+      // reordered log line cannot be hidden by a log from another capture.
+      expect(log.mock.calls).toHaveLength(writes.length);
+      for (const [index, call] of calls.entries()) {
+        const record = String(log.mock.calls[index]?.[0]);
+        expect(record, call.name).toContain(`${call.name}: engine=${call.engine}`);
+        expect(record, call.name).toContain(`theme=${call.theme}`);
+        expect(record, call.name).toContain(
+          `viewport=${call.viewport.width}x${call.viewport.height}`,
+        );
+      }
+    } finally {
+      log.mockRestore();
     }
   });
 });
