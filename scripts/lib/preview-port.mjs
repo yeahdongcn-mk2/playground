@@ -7,12 +7,17 @@ export const DEFAULT_PREVIEW_PORT = 4192;
  * Resolve the preview port from an environment value.
  *
  * Shared CI hosts and parallel worktrees can already own the default port, so
- * callers may pass `PREVIEW_PORT` instead of editing the script. An invalid
+ * callers may pass `PREVIEW_PORT` instead of editing the script. `fallback`
+ * lets a caller keep its own default (the minesweeper script uses 4186 while
+ * the scores scripts use 4192) without changing the shared default. An invalid
  * value fails fast instead of being coerced to a surprising port.
  */
-export function parsePreviewPort(value = process.env.PREVIEW_PORT) {
+export function parsePreviewPort(
+  value = process.env.PREVIEW_PORT,
+  fallback = DEFAULT_PREVIEW_PORT,
+) {
   if (value === undefined || value === '') {
-    return DEFAULT_PREVIEW_PORT;
+    return fallback;
   }
   const text = String(value).trim();
   if (!/^\d+$/.test(text)) {

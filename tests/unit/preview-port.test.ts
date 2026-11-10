@@ -51,10 +51,20 @@ describe('parsePreviewPort', () => {
     expect(parsePreviewPort(' 5000 ')).toBe(5000);
   });
 
+  it('uses a caller-provided fallback for unset and empty values', () => {
+    // The minesweeper screenshot script keeps 4186 as its own default.
+    expect(parsePreviewPort(undefined, 4186)).toBe(4186);
+    expect(parsePreviewPort('', 4186)).toBe(4186);
+    // The scores scripts keep the shared 4192 default.
+    expect(parsePreviewPort(undefined)).toBe(DEFAULT_PREVIEW_PORT);
+    expect(parsePreviewPort('')).toBe(DEFAULT_PREVIEW_PORT);
+  });
+
   it.each(['abc', '0', '-1', '1.5', '65536'])(
     'rejects the invalid value %s',
     (value) => {
       expect(() => parsePreviewPort(value)).toThrow(/PREVIEW_PORT/);
+      expect(() => parsePreviewPort(value, 4186)).toThrow(/PREVIEW_PORT/);
     },
   );
 });

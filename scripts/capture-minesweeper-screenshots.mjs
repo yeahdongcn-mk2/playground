@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { chromium, devices } from '@playwright/test';
+import { assertPortAvailable, parsePreviewPort } from './lib/preview-port.mjs';
 
 /**
  * Capture the Before / After evidence for the minesweeper integration.
@@ -31,6 +32,11 @@ import { chromium, devices } from '@playwright/test';
  * board at 320×640 and 360×640 to show the narrow-screen degradation hint.
  * Every before mode likewise needs BASE_URL at its baseline preview.
  *
+ * The preview port is 4186 by default; on a shared host or in a parallel
+ * worktree set `PREVIEW_PORT` to a free port instead of editing this file.
+ * When that port is already taken, the script fails before writing any
+ * screenshot instead of quietly talking to the other server.
+ *
  * The generic --before mode has been removed: it captured a main baseline
  * that had no minesweeper route. Its screenshots remain as historical
  * evidence, but passing --before is rejected instead of being treated as the
@@ -46,7 +52,7 @@ if (process.argv.slice(2).includes('--before')) {
 }
 
 const HOST = '127.0.0.1';
-const PORT = 4186;
+const PORT = parsePreviewPort(process.env.PREVIEW_PORT, 4186);
 const ORIGIN = `http://${HOST}:${PORT}`;
 const OUTPUT = 'docs/screenshots';
 const TOUCH_BEFORE = process.argv.includes('--touch-before');
@@ -125,12 +131,28 @@ const WIN_MINES = [
 
 let server = null;
 
-async function waitForServer(url, timeoutMs = 30_000) {
+/** Error shown when the preview dies before the capture can connect to it. */
+function previewStartupError(detail) {
+  const suffix = detail.trim() === '' ? '' : `\n${detail.trim()}`;
+  return new Error(
+    `The preview server exited before ${ORIGIN} became ready. ` +
+      `Port ${PORT} may be taken by another process; set PREVIEW_PORT to a ` +
+      `free port (for example PREVIEW_PORT=${PORT + 1}).${suffix}`,
+  );
+}
+
+async function waitForServer(url, { timeoutMs = 30_000, failure } = {}) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    const failureDetail = failure?.();
+    if (failureDetail != null) {
+      throw previewStartupError(failureDetail);
+    }
     try {
       const response = await fetch(url);
-      if (response.ok) {
+      // A responding port is not proof that our preview is the server there:
+      // the child may already have exited because another process owns it.
+      if (response.ok && failure?.() == null) {
         return;
       }
     } catch {
@@ -138,7 +160,12 @@ async function waitForServer(url, timeoutMs = 30_000) {
     }
     await delay(250);
   }
-  throw new Error(`Timed out waiting for ${url}`);
+  const failureDetail = failure?.();
+  throw new Error(
+    `Timed out waiting for ${url}. If the preview is on another port, set ` +
+      `PREVIEW_PORT to match it.` +
+      (failureDetail == null ? '' : `\n${failureDetail}`),
+  );
 }
 
 async function settle(page) {
@@ -470,6 +497,13 @@ if (MODE === 'short-before' && !process.env.BASE_URL) {
 }
 
 if (!process.env.BASE_URL) {
+  // Fail before spawning (and before mkdir or the browser) when another server
+  // owns the port; otherwise the readiness poll would connect to that server
+  // and write its build as After evidence.
+  await assertPortAvailable(PORT, HOST);
+
+  let stderr = '';
+  let previewFailure = null;
   server = spawn(
     process.execPath,
     [
@@ -481,10 +515,28 @@ if (!process.env.BASE_URL) {
       String(PORT),
       '--strictPort',
     ],
-    { stdio: 'ignore' },
+    { stdio: ['ignore', 'pipe', 'pipe'] },
   );
+  server.stderr?.setEncoding('utf8');
+  server.stderr?.on('data', (chunk) => {
+    stderr = `${stderr}${chunk}`.slice(-4000);
+  });
+  server.once('error', (error) => {
+    previewFailure = `Failed to spawn the preview server: ${error.message}`;
+  });
+  server.once('exit', (code, signal) => {
+    previewFailure = `vite preview stopped (exit code ${code}, signal ${signal ?? 'none'}).`;
+  });
   process.on('exit', () => server?.kill());
-  await waitForServer(ORIGIN);
+  await waitForServer(ORIGIN, {
+    failure: () => {
+      if (previewFailure == null) {
+        return null;
+      }
+      const detail = stderr.trim();
+      return `${previewFailure}${detail === '' ? '' : `\n${detail}`}`;
+    },
+  });
 }
 
 await mkdir(OUTPUT, { recursive: true });

@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -8,6 +9,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SCRIPT = join(ROOT, 'scripts', 'capture-minesweeper-screenshots.mjs');
 const README = join(ROOT, 'README.md');
 const SCREENSHOTS_README = join(ROOT, 'docs', 'screenshots', 'README.md');
+const SCREENSHOT_DIR = join(ROOT, 'docs', 'screenshots');
 
 const REMOVED_FLAG = '--before';
 const REMOVED_COMMAND = 'screenshots:minesweeper:before';
@@ -26,18 +28,52 @@ interface PackageJson {
 
 const packageJson = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as PackageJson;
 
-/** Run the minesweeper capture script without a preview server. */
-function runScript(args: string[]): { status: number | null; output: string } {
+/** Run the minesweeper capture script with an explicit environment. */
+function spawnScript(
+  args: string[],
+  env: NodeJS.ProcessEnv,
+): { status: number | null; output: string } {
   const result = spawnSync(process.execPath, [SCRIPT, ...args], {
     cwd: ROOT,
     encoding: 'utf8',
     timeout: 30_000,
-    env: { ...process.env, BASE_URL: '' },
+    env,
   });
   return {
     status: result.status,
     output: `${result.stdout ?? ''}${result.stderr ?? ''}`,
   };
+}
+
+/** Run the minesweeper capture script without a preview server. */
+function runScript(args: string[]): { status: number | null; output: string } {
+  return spawnScript(args, { ...process.env, BASE_URL: '' });
+}
+
+/** Hold a random 127.0.0.1 port open for the duration of the test. */
+function listenOnRandomPort(): Promise<{
+  port: number;
+  close: () => Promise<void>;
+}> {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once('error', reject);
+    server.listen({ port: 0, host: '127.0.0.1' }, () => {
+      const address = server.address();
+      if (address === null || typeof address === 'string') {
+        server.close();
+        reject(new Error('Expected the probe server to have an IP socket address'));
+        return;
+      }
+      resolve({
+        port: address.port,
+        close: () =>
+          new Promise<void>((done, fail) => {
+            server.close((error) => (error ? fail(error) : done()));
+          }),
+      });
+    });
+  });
 }
 
 describe('minesweeper screenshot modes', () => {
@@ -109,4 +145,38 @@ describe('minesweeper screenshot modes', () => {
     expect(script).not.toContain("process.argv.includes('--before')");
     expect(script).not.toContain("MODE === 'before'");
   });
+});
+
+describe('minesweeper screenshot preview port', () => {
+  it.each([
+    { label: 'default After', args: [] as string[] },
+    { label: '--short', args: ['--short'] },
+  ])(
+    'fails fast without screenshots when PREVIEW_PORT is taken ($label)',
+    { timeout: 30_000 },
+    async ({ args }) => {
+      const owner = await listenOnRandomPort();
+      const screenshotsBefore = readdirSync(SCREENSHOT_DIR).sort();
+      try {
+        const env = { ...process.env };
+        delete env.BASE_URL;
+        env.PREVIEW_PORT = String(owner.port);
+
+        const { status, output } = spawnScript(args, env);
+
+        expect(status).not.toBe(0);
+        // The specific failure names the real port and the fix; a generic
+        // locator timeout from the old script would not match this.
+        expect(output).toContain(
+          `Cannot start the preview server on 127.0.0.1:${owner.port}`,
+        );
+        expect(output).toContain('the port is already in use');
+        expect(output).toContain('Set PREVIEW_PORT');
+        expect(output).not.toContain('Captured');
+        expect(readdirSync(SCREENSHOT_DIR).sort()).toEqual(screenshotsBefore);
+      } finally {
+        await owner.close();
+      }
+    },
+  );
 });
