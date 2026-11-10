@@ -166,21 +166,32 @@ function webkitPngTemplates(source: string): string[] {
 }
 
 /**
- * The two prefixes a WebKit capture call site can pass.
+ * The two prefixes one WebKit branch passes to its capture helper.
  *
- * Read from the `MODE === '<mode>' ? '<before>' : '<after>'` ternary on the
- * line that actually names the artifacts, not from every `'after'` / `'before'`
- * literal in the file: a rename at that call site has to change the expanded
- * set, or the guard would keep comparing the old names.
+ * The dispatch regex is anchored to the branch that actually runs the helper
+ * and captures the branch's mode literal plus both ternaries. Reading the call
+ * site, not every `'after'` / `'before'` literal in the file, makes a rename at
+ * the point that supplies the prefix change the expanded set.
  */
-function dispatchPrefixes(source: string, helper: string): string[] {
-  const match = source.match(
-    new RegExp(
-      `await ${helper}\\(browser, MODE === '[a-z-]+' \\? '([a-z0-9-]+)' : '([a-z0-9-]+)'\\);`,
-    ),
-  );
-  expect(match, `${helper} should be dispatched with before/after prefixes`).not.toBeNull();
-  return [...new Set([match![1]!, match![2]!])];
+function dispatchPrefixes(
+  source: string,
+  dispatch: RegExp,
+  beforeMode: string,
+): string[] {
+  const match = source.match(dispatch);
+  expect(
+    match,
+    `${beforeMode} should dispatch its capture helper with before/after prefixes`,
+  ).not.toBeNull();
+
+  const [, mode, beforePrefix, afterPrefix] = match!;
+  expect(mode, 'the before mode literal should keep its name').toBe(beforeMode);
+  expect(beforePrefix, 'the before branch should pass a before* prefix').toMatch(/^before/);
+  expect(afterPrefix, 'the after branch should pass an after* prefix').toMatch(/^after/);
+
+  const prefixes = [...new Set([beforePrefix!, afterPrefix!])];
+  expect(prefixes, 'the two branches should pass distinct prefixes').toHaveLength(2);
+  return prefixes;
 }
 
 function isTransientBeforeTouch(name: string): boolean {
@@ -220,8 +231,19 @@ function extractWebkitArtifacts(file: string): WebkitArtifacts {
     );
     expect(states.length, 'touchMobileName should be called for each phone state').toBeGreaterThan(0);
 
-    const touchPrefixes = dispatchPrefixes(source, 'captureTouchMobile');
-    const narrowPrefixes = dispatchPrefixes(source, 'captureWebkitNarrow');
+    const touchPrefixes = dispatchPrefixes(
+      source,
+      // Anchored to the IS_WEBKIT branch so the Chromium `'after'` / `'before'`
+      // call sites below it cannot satisfy (or shadow) the extraction.
+      /if \(IS_WEBKIT\)\s*\{[^{}]*await captureTouchMobile\(browser, MODE === '([a-z-]+)' \? '([a-z0-9-]+)' : '([a-z0-9-]+)'\);/,
+      'touch-before',
+    );
+    const narrowPrefixes = dispatchPrefixes(
+      source,
+      // Anchored to the narrow branch that actually calls captureWebkitNarrow.
+      /if \(MODE === 'webkit-narrow' \|\| MODE === 'webkit-narrow-before'\)\s*\{[^{}]*await captureWebkitNarrow\(browser, MODE === '([a-z-]+)' \? '([a-z0-9-]+)' : '([a-z0-9-]+)'\);/,
+      'webkit-narrow-before',
+    );
 
     expandTemplate('${prefix}-minesweeper-${state}-webkit.png', () =>
       touchPrefixes.flatMap((prefix) =>
@@ -229,14 +251,31 @@ function extractWebkitArtifacts(file: string): WebkitArtifacts {
       ),
     );
 
-    // The narrow matrix must come from the loop in captureWebkitNarrow itself,
-    // so trimming or renaming the viewport list changes the expanded set.
+    // The narrow matrix must come from the loop in captureWebkitNarrow itself:
+    // a different iterated list fails here, and the committed-file cross-check
+    // catches a viewport removed from the constant.
     const narrowLoop = source.match(
-      /async function captureWebkitNarrow\([^)]*\)\s*\{[\s\S]*?for \(const viewport of ([A-Za-z_$][\w$]*)\)/,
+      /async function captureWebkitNarrow\([^)]*\)\s*\{[^{}]*for \(const viewport of ([A-Za-z_$][\w$]*)\)/,
     );
     expect(narrowLoop?.[1], 'captureWebkitNarrow should iterate a named viewport list').toBe(
       'WEBKIT_NARROW_VIEWPORTS',
     );
+
+    // A `continue` / `if` between the loop and its capture call would skip a
+    // viewport even though the iterated list is unchanged, leaving that
+    // committed artifact stale while every source-derived check stays green.
+    const loopIndex = source.indexOf('for (const viewport of WEBKIT_NARROW_VIEWPORTS)');
+    const captureIndex = source.indexOf(
+      '${prefix}-minesweeper-webkit-narrow-',
+      loopIndex,
+    );
+    expect(captureIndex, 'the narrow loop should reach its capture call').toBeGreaterThan(
+      loopIndex,
+    );
+    expect(
+      source.slice(loopIndex, captureIndex),
+      'the narrow loop should not skip a viewport before capturing',
+    ).not.toMatch(/\b(?:continue|break)\b|\bif \(/);
 
     const viewportBlock = source.match(/const WEBKIT_NARROW_VIEWPORTS = \[([\s\S]*?)\];/);
     expect(viewportBlock, 'WEBKIT_NARROW_VIEWPORTS should be declared').not.toBeNull();
