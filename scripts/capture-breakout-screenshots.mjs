@@ -1,5 +1,4 @@
 import { mkdir } from 'node:fs/promises';
-import { setTimeout as delay } from 'node:timers/promises';
 import {
   WEBKIT_ENGINE,
   captureScreenshot,
@@ -11,6 +10,8 @@ import {
   startPreviewServer,
   stopPreviewServer,
 } from './lib/capture-runtime.mjs';
+import { assertPortAvailable, parsePreviewPort } from './lib/preview-port.mjs';
+import { waitForPreviewServer } from './lib/preview-server.mjs';
 
 /**
  * Capture the Before / After evidence for the breakout integration.
@@ -23,6 +24,13 @@ import {
  * preview. The before mode must point BASE_URL at a main baseline preview;
  * main has no breakout route, so no debug seam is needed there.
  *
+ * The preview port is 4185 by default; on a shared host set `PREVIEW_PORT` to a
+ * free port instead of editing this file. When that port is already taken, the
+ * script fails with an explicit bind error instead of quietly talking to the
+ * other server. A preview that exits right after the pre-spawn port probe
+ * reports its exit code and stderr instead of being mistaken for the ready
+ * server.
+ *
  * `--webkit` captures the four stable phone states (ready / playing /
  * levelclear / gameover) on the iPhone SE WebKit device as
  * `after-breakout-<state>-webkit.png`. It is an After-only mode; the desktop and
@@ -30,7 +38,7 @@ import {
  */
 
 const HOST = '127.0.0.1';
-const PORT = 4185;
+const PORT = parsePreviewPort(process.env.PREVIEW_PORT, 4185);
 const ORIGIN = `http://${HOST}:${PORT}`;
 const OUTPUT = 'docs/screenshots';
 const ARGS = process.argv.slice(2);
@@ -50,22 +58,6 @@ const BALL_UNDER_BRICK = `${BRICK_CENTER_X},${BRICK_BOTTOM + 8 - 1},0,-200`;
 const BALL_BELOW_COURT = '240,740,0,50';
 
 let server = null;
-
-async function waitForServer(url, timeoutMs = 30_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const response = await fetch(url);
-      if (response.ok) {
-        return;
-      }
-    } catch {
-      // server not ready yet
-    }
-    await delay(250);
-  }
-  throw new Error(`Timed out waiting for ${url}`);
-}
 
 async function settle(page) {
   await page.evaluate(() => document.fonts.ready);
@@ -257,24 +249,41 @@ if (MODE === 'before' && !process.env.BASE_URL) {
   );
 }
 
-if (!process.env.BASE_URL) {
-  server = startPreviewServer({ port: PORT, host: HOST, stdio: 'ignore' });
-  await waitForServer(ORIGIN);
-}
-
 await mkdir(OUTPUT, { recursive: true });
-const browser = await launchCaptureBrowser(ENGINE);
+
 try {
-  if (IS_WEBKIT) {
-    await captureWebkitMobile(browser);
-  } else {
-    await captureDesktop(browser);
-    await captureMobile(browser);
+  if (!process.env.BASE_URL) {
+    // Fail with the real cause when the port is taken; otherwise the readiness
+    // probe would connect to the other server and an unrelated locator timeout
+    // would be reported much later.
+    await assertPortAvailable(PORT, HOST);
+
+    // Test seam: point this at a stand-in that exits non-zero so the unit test
+    // can exercise the post-probe startup failure without a second server.
+    server = startPreviewServer({
+      host: HOST,
+      port: PORT,
+      entry: process.env.PREVIEW_ENTRY || undefined,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    await waitForPreviewServer(server, { origin: ORIGIN, port: PORT });
   }
-  console.log(
-    `Captured ${MODE} breakout screenshots on ${engineLabel(ENGINE)} in ${OUTPUT}`,
-  );
+
+  const browser = await launchCaptureBrowser(ENGINE);
+  try {
+    if (IS_WEBKIT) {
+      await captureWebkitMobile(browser);
+    } else {
+      await captureDesktop(browser);
+      await captureMobile(browser);
+    }
+    console.log(
+      `Captured ${MODE} breakout screenshots on ${engineLabel(ENGINE)} in ${OUTPUT}`,
+    );
+  } finally {
+    await closeCaptureBrowser(browser);
+  }
 } finally {
-  await closeCaptureBrowser(browser);
   stopPreviewServer(server);
+  server = null;
 }
