@@ -123,12 +123,17 @@ const CONTRACT_INTRO = '以下 7 条是';
  * the whole document: `docs/framework.md` and `README.md` repeat the same
  * tokens in their known-limitations prose, so a document-wide `toContain`
  * would stay green even after a contract clause was deleted or corrupted.
+ * The clause block must be a contiguous run of numbered lines at the top
+ * level of the section, terminated by a blank line.
  */
 function contractClauses(source: string, name: string): ContractClause[] {
-  const start = source.indexOf(CONTRACT_INTRO);
-  if (start < 0) {
-    throw new Error(`${name} is missing the narrow-screen contract intro`);
+  const introOccurrences = source.split(CONTRACT_INTRO).length - 1;
+  if (introOccurrences !== 1) {
+    throw new Error(
+      `${name} should have exactly one narrow-screen contract intro, found ${introOccurrences}`,
+    );
   }
+  const start = source.indexOf(CONTRACT_INTRO);
   const clauses: ContractClause[] = [];
   for (const line of source.slice(start).split('\n')) {
     const match = /^(\d+)\.\s+(.+)$/.exec(line.trim());
@@ -139,13 +144,23 @@ function contractClauses(source: string, name: string): ContractClause[] {
       continue;
     }
     const number = Number(match[1]);
-    const text = match[2];
-    if (!text) {
-      throw new Error(`${name} has an empty contract clause ${number}`);
-    }
+    const text = match[2] ?? '';
     clauses.push({ number, text });
   }
   return clauses;
+}
+
+/** The body of the `for (const viewport of <matrix>)` loop in an e2e spec. */
+function matrixLoopBody(source: string, matrix: string, name: string): string {
+  const start = source.indexOf(`for (const viewport of ${matrix})`);
+  if (start < 0) {
+    throw new Error(`${name} is missing its ${matrix} viewport loop`);
+  }
+  const end = source.indexOf('\n  }\n', start);
+  if (end < 0) {
+    throw new Error(`${name} has an unterminated ${matrix} viewport loop`);
+  }
+  return source.slice(start, end);
 }
 
 describe('browser coverage documentation', () => {
@@ -188,14 +203,10 @@ describe('browser coverage documentation', () => {
       for (const projectName of ['chromium', 'mobile', 'mobile-webkit']) {
         expect(doc, `${name} should mention the ${projectName} project`).toContain(projectName);
       }
-      expect(doc, `${name} should mention the WebKit project`).toContain('mobile-webkit');
       expect(doc, `${name} should mention the WebKit device`).toContain(WEBKIT_DEVICE);
-      for (const viewport of [...chromiumViewports, ...webkitViewports]) {
-        expect(doc, `${name} is missing the ${viewport} viewport`).toContain(viewport);
-      }
-      // Matrix order and counts are asserted inside contract clause 4 below;
-      // matching the whole document would let another copy of the same list
-      // hide an out-of-order or missing clause.
+      // Matrix order, counts and per-viewport coverage are asserted inside
+      // contract clause 4 below; matching the whole document would let
+      // another copy of the same list hide an out-of-order or missing clause.
     }
   });
 
@@ -230,6 +241,13 @@ describe('browser coverage documentation', () => {
       expect(clause(2), `${name} clause 2 should document the ≥36×36px cell promise`).toContain(
         '≥36×36px',
       );
+      expect(clause(2), `${name} clause 2 should scope the 36px promise to 9×9 boards`).toContain(
+        '9×9',
+      );
+      expect(
+        clause(2),
+        `${name} clause 2 should scope the 36px promise to widths of at least 340px`,
+      ).toContain('≥340px');
       expect(clause(2), `${name} clause 2 should document the ≥34×34px geometric fallback`).toContain(
         '≥34×34px',
       );
@@ -254,6 +272,10 @@ describe('browser coverage documentation', () => {
         clause(3),
         `${name} clause 3 should keep the first screen free of horizontal scrolling`,
       ).toContain('不横向滚动');
+      expect(
+        clause(3),
+        `${name} clause 3 should require the entries as part of the first-screen rule`,
+      ).toMatch(/必须包含[^。\n]*touch-hint[^。\n]*不横向滚动/);
 
       // Clause 4: the only authoritative matrix order for both engines.
       expect(
@@ -276,6 +298,10 @@ describe('browser coverage documentation', () => {
         clause(4),
         `${name} clause 4 should state that all WebKit viewports assert the restart entry`,
       ).toMatch(/四个视口都断言[^。\n]{0,80}重开入口/);
+      expect(
+        clause(4),
+        `${name} clause 4 should keep the existing 320×640 / 412×839 assertions`,
+      ).toContain('320×640 与 412×839 的既有断言未放宽');
 
       // Clause 5: out-of-matrix boundary.
       expect(clause(5), `${name} clause 5 should document the matrix boundary examples`).toMatch(
@@ -291,6 +317,10 @@ describe('browser coverage documentation', () => {
         clause(6),
         `${name} clause 6 should only guarantee 36px for 9×9 boards`,
       ).toMatch(/列数\s*>9[^。\n]{0,40}9×9[^。\n]{0,30}≥36px/);
+      expect(
+        clause(6),
+        `${name} clause 6 should guarantee 36px only for 9×9 boards`,
+      ).toContain('只有 9×9 享受');
       expect(clause(6), `${name} clause 6 should reference the large-board follow-up #86`).toContain(
         '#86',
       );
@@ -339,6 +369,12 @@ describe('browser coverage documentation', () => {
       ['README.md', README],
       ['docs/framework.md', FRAMEWORK],
     ] as const) {
+      // No document-wide sentence may claim both projects run the phone
+      // matrix; the attribution must stay on the mobile project alone.
+      expect(
+        doc,
+        `${name} should not say the chromium and mobile projects both run the phone matrix`,
+      ).not.toMatch(/`chromium`[^。\n]{0,40}(?:与|和) `mobile`[^。\n]{0,40}运行/);
       const attributionLines = doc
         .split('\n')
         .filter((line) => line.includes('tests/e2e/minesweeper.mobile.spec.ts'));
@@ -355,19 +391,32 @@ describe('browser coverage documentation', () => {
         );
         expect(
           line,
-          `${name} should not say the chromium project also runs the phone matrix`,
-        ).not.toMatch(/`chromium`[^。\n]{0,40}(?:与|和) `mobile`[^。\n]{0,40}运行/);
+          `${name} should name the 8-viewport phone matrix`,
+        ).toContain('8 视口矩阵');
       }
     }
   });
 
-  it('asserts the restart entry for every WebKit narrow viewport', () => {
-    expect(viewportLabels(NARROW_WEBKIT_SPEC)).toHaveLength(4);
-    // The four viewports share one contract call with the restart entry
-    // enabled. A regression to `restartEntry: false`, or a new viewport that
-    // opts out of the assertion, must fail this guard.
-    expect(NARROW_WEBKIT_SPEC).not.toMatch(/restartEntry:\s*false/);
-    expect(NARROW_WEBKIT_SPEC).toMatch(/restartEntry:\s*true/);
+  it('asserts the restart entry for every narrow viewport matrix', () => {
+    for (const [name, spec, matrix, count] of [
+      ['Chromium mobile', MOBILE_SPEC, 'FIRST_SCREEN_VIEWPORTS', 8],
+      ['WebKit narrow', NARROW_WEBKIT_SPEC, 'WEBKIT_NARROW_VIEWPORTS', 4],
+    ] as const) {
+      expect(viewportLabels(spec), `${name} matrix size`).toHaveLength(count);
+      // Each matrix loop must keep the restart entry assertion enabled. A
+      // regression to `restartEntry: false`, or a loop that opts out of the
+      // assertion, must fail this guard instead of only the docs promising it.
+      const loop = matrixLoopBody(spec, matrix, name);
+      expect(loop, `${name} should call the first-screen contract`).toContain(
+        'expectFirstScreenContract',
+      );
+      expect(loop, `${name} should assert the restart entry`).toMatch(
+        /restartEntry:\s*true/,
+      );
+      expect(loop, `${name} should not opt out of the restart entry`).not.toMatch(
+        /restartEntry:\s*false/,
+      );
+    }
   });
 
   it('documents the browser install and e2e commands that package.json and CI use', () => {
