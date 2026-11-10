@@ -1,0 +1,22 @@
+[
+  {
+    "file": "after-minesweeper-webkit-narrow-320x640.png",
+    "viewport": { "width": 320, "height": 640 },
+    "narrow": true
+  },
+  {
+    "file": "after-minesweeper-webkit-narrow-360x640.png",
+    "viewport": { "width": 360, "height": 640 },
+    "narrow": true
+  },
+  {
+    "file": "after-minesweeper-webkit-narrow-375x667.png",
+    "viewport": { "width": 375, "height": 667 },
+    "narrow": true
+  },
+  {
+    "file": "after-minesweeper-webkit-narrow-412x839.png",
+    "viewport": { "width": 412, "height": 839 },
+    "narrow": true
+  }
+]

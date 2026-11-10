@@ -3,9 +3,16 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { WEBKIT_SCREENSHOT_ARTIFACTS } from '../../scripts/lib/screenshot-artifacts.mjs';
+import type { ScreenshotArtifact } from '../../scripts/lib/screenshot-artifacts.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const WORKFLOW_PATH = join(ROOT, '.github', 'workflows', 'ci.yml');
+const NARROW_MANIFEST_PATH = join(ROOT, 'docs', 'screenshots', 'ci-webkit-narrow-manifest.json');
+const NARROW_MANIFEST = 'docs/screenshots/ci-webkit-narrow-manifest.json';
+const NARROW_CAPTURE_COMMAND = 'npm run screenshots:minesweeper:webkit-narrow';
+const NARROW_ARTIFACT_GLOB = 'docs/screenshots/after-minesweeper-webkit-narrow-*.png';
+const VERIFY_CLI = 'node scripts/verify-screenshot-artifacts.mjs';
 
 interface WorkflowStep {
   name?: string;
@@ -13,6 +20,7 @@ interface WorkflowStep {
   run?: string;
   with?: Record<string, string>;
   env?: Record<string, string>;
+  'continue-on-error'?: boolean;
 }
 
 interface WorkflowJob {
@@ -29,6 +37,9 @@ interface Workflow {
 const workflow = parse(readFileSync(WORKFLOW_PATH, 'utf8')) as Workflow;
 const verify = workflow.jobs?.verify;
 const steps = verify?.steps ?? [];
+const narrowManifest = JSON.parse(
+  readFileSync(NARROW_MANIFEST_PATH, 'utf8'),
+) as ScreenshotArtifact[];
 
 /** Commands of a `run` step, split by line and trimmed. */
 function commandsOf(step: WorkflowStep): string[] {
@@ -75,6 +86,8 @@ const PLAYWRIGHT_INSTALL_COMMAND = 'npx playwright install --with-deps chromium 
 const isPlaywrightInstall = (step: WorkflowStep): boolean =>
   (step.run ?? '').trim() === PLAYWRIGHT_INSTALL_COMMAND;
 const isE2e = (step: WorkflowStep): boolean => (step.run ?? '').trim() === 'npm run test:e2e';
+const isWebkitScreenshotSmoke = (step: WorkflowStep): boolean =>
+  commandsOf(step).some((command) => command.includes(NARROW_CAPTURE_COMMAND));
 
 describe('CI workflow', () => {
   it('keeps running on pull requests', () => {
@@ -115,6 +128,52 @@ describe('CI workflow', () => {
     const e2eIndex = stepIndex(isE2e);
     expect(e2eIndex, 'verify job should still run "npm run test:e2e"').toBeGreaterThanOrEqual(0);
     expect(installIndex).toBeLessThan(e2eIndex);
+  });
+
+  it('runs the WebKit narrow screenshot smoke test after the e2e tests', () => {
+    const smoke = requireStep(isWebkitScreenshotSmoke, 'a WebKit narrow screenshot smoke step');
+    const commands = commandsOf(smoke);
+
+    const rmIndex = commands.indexOf(`rm -f ${NARROW_ARTIFACT_GLOB}`);
+    const captureIndex = commands.findIndex((command) => command.includes(NARROW_CAPTURE_COMMAND));
+    const verifyIndex = commands.findIndex((command) => command.startsWith(VERIFY_CLI));
+
+    expect(commands).toContain('set -euo pipefail');
+    expect(
+      rmIndex,
+      `the step should delete the regenerated ${NARROW_ARTIFACT_GLOB} files first`,
+    ).toBeGreaterThanOrEqual(0);
+    expect(
+      captureIndex,
+      `the step should run "${NARROW_CAPTURE_COMMAND}"`,
+    ).toBeGreaterThanOrEqual(0);
+    expect(
+      verifyIndex,
+      'the step should verify the regenerated artifacts with the screenshot validator',
+    ).toBeGreaterThanOrEqual(0);
+
+    expect(rmIndex).toBeLessThan(captureIndex);
+    expect(captureIndex).toBeLessThan(verifyIndex);
+    // `tee` keeps the capture log for the validator, so its pipe must not hide
+    // a non-zero capture exit; `set -o pipefail` is asserted above.
+    expect(commands[captureIndex]).toContain('2>&1 | tee');
+    expect(commands[verifyIndex]).toContain(`--manifest ${NARROW_MANIFEST}`);
+    expect(commands[verifyIndex]).toContain('--log');
+
+    const e2eIndex = stepIndex(isE2e);
+    expect(e2eIndex, 'verify job should still run "npm run test:e2e"').toBeGreaterThanOrEqual(0);
+    expect(stepIndex(isWebkitScreenshotSmoke)).toBeGreaterThan(e2eIndex);
+    expect(verify?.['timeout-minutes']).toBe(20);
+    expect(smoke['continue-on-error']).toBeUndefined();
+  });
+
+  it('keeps the CI narrow screenshot manifest aligned with the WebKit artifact list', () => {
+    expect(narrowManifest).toHaveLength(4);
+    expect(narrowManifest).toEqual(
+      WEBKIT_SCREENSHOT_ARTIFACTS.filter(
+        (artifact) => artifact.narrow === true && artifact.file.startsWith('after-'),
+      ),
+    );
   });
 
   it('sets up Python and installs pre-commit after npm ci', () => {

@@ -4,6 +4,24 @@
 
 引擎标注：文件名 `-desktop` 为 Chromium 1440×1000；`-mobile` 为 Chromium 手机截图（扫雷 `-mobile` 为 Pixel 7 412×839，扫雷成绩为 320×640；其余手机图多为自定义 390×844，大厅为全页长图）；`-webkit` / `-webkit-narrow-*` 为 WebKit `iPhone SE (3rd gen)` 设备模拟。WebKit 手机截图的命令、设备参数与引擎 / 视口 / 主题记录见「webkit-phone」与「webkit-narrow」两节；Chromium 的既有命令与文件名保持不变。
 
+## CI：WebKit 窄屏截图冒烟（Issue #121）
+
+- 覆盖场景：扫雷 9×9 READY 首屏在 WebKit `iPhone SE (3rd gen)` 设备模拟下的 320×640、360×640、375×667、412×839 四个窄屏视口；使用与 e2e 同源的固定雷盘和 READY 状态，深色主题、`reducedMotion: reduce`、视口截图（`fullPage: false`）。对应产物是 `after-minesweeper-webkit-narrow-<W>x<H>.png`。
+- CI 位置：`.github/workflows/ci.yml` 的 `verify` job，在 `npm run test:e2e` 之后新增名为 `WebKit narrow screenshot smoke test` 的步骤；`verify` 的 `timeout-minutes` 保持 20。
+- 步骤内容：先用 `rm -f docs/screenshots/after-minesweeper-webkit-narrow-*.png` 删除本次要重新生成的四个文件，再执行 `npm run screenshots:minesweeper:webkit-narrow`（内部先 `npm run build` 并启动 `vite preview`，默认端口 4186，可用 `PREVIEW_PORT` 覆盖），把脚本的 `engine=webkit` 记录 tee 到 `$RUNNER_TEMP/minesweeper-webkit-narrow.log`，最后用 `scripts/verify-screenshot-artifacts.mjs` 按 `docs/screenshots/ci-webkit-narrow-manifest.json` 校验四个 PNG 的签名 / IHDR 宽高（DPR 2：640×1280、720×1280、750×1334、824×1678）、`-webkit-narrow-<W>x<H>.png` 命名，以及日志中逐文件的 `engine=webkit` / 视口记录。步骤开头的 `set -euo pipefail` 保证管道和任一命令失败都会让 `verify` job 变红。
+- 复现命令（本地等价于 CI 步骤）：
+
+```bash
+set -euo pipefail
+rm -f docs/screenshots/after-minesweeper-webkit-narrow-*.png
+npm run screenshots:minesweeper:webkit-narrow 2>&1 | tee /tmp/minesweeper-webkit-narrow.log
+node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webkit-narrow-manifest.json --log /tmp/minesweeper-webkit-narrow.log
+```
+
+  端口 4186 被占用时在捕获命令前加 `PREVIEW_PORT=4187`；脚本会在启动前报错并提示，不会静默连到别的服务。
+- 实测耗时：2026-11-11 在 `agent/plan-121-t2` 的本地 worktree 实测，`npm run screenshots:minesweeper:webkit-narrow`（含生产构建、WebKit 启动与四个视口）约 10.0 s，校验器约 0.02 s。作为参考，新增步骤前的 `main`（`20f1fe7`）CI run `42894213139` 的 `verify` job 实际耗时 316 s（其中 e2e 244 s）；新增检查约 10 s 量级，20 分钟 timeout 仍有充足余量。CI runner 的绝对耗时不同，以实际 run 为准。
+- 失败表现：捕获命令失败（构建 / WebKit 启动 / 页面定位器）时，`set -euo pipefail` 让步骤在捕获命令处失败；若脚本成功退出但没有写出产物（例如移除了 `--webkit-narrow` 分派），校验器会报告四个 `missing file` 与四条 `missing capture log record` 并返回 1；PNG 截断 / 非 PNG、宽高不符、文件名缺少窄屏视口、日志记录 engine 不是 `webkit` 或视口不符时，分别输出对应文件与期望 / 实际值，步骤同样变红。负向验证：临时移除 `scripts/capture-minesweeper-screenshots.mjs` 的 `captureWebkitNarrow` 分派后，该步骤在本地以 8 条问题失败（4 个缺失文件 + 4 条缺失日志），恢复后通过。
+
 ## webkit-narrow：扫雷窄屏首屏契约的 WebKit 矩阵（Issue #83 / 子任务 1）
 
 - Before 基线：`d6aeb3d`（t1 合入后的 `main`，也就是本子任务开始前的 `main`）。
