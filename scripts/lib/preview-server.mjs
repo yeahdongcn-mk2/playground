@@ -9,11 +9,40 @@ function portOf(url) {
   return parsed.protocol === 'https:' ? 443 : 80;
 }
 
+/**
+ * Wording for the shared startup messages.
+ *
+ * `serverName` defaults to `'preview'`, which keeps every historic message
+ * byte-for-byte. A caller that starts a different server (the snake capture
+ * script runs `vite` in dev mode) passes its own name so the failure names that
+ * server instead of claiming a preview failed.
+ */
+function serverWording(serverName) {
+  if (serverName === 'preview') {
+    return {
+      exited: 'The preview server',
+      stopped: 'vite preview',
+      onAnotherPort: 'the preview',
+    };
+  }
+  return {
+    exited: `The ${serverName} server`,
+    stopped: `vite ${serverName} server`,
+    onAnotherPort: `the ${serverName} server`,
+  };
+}
+
 /** Error shown when the preview dies before the capture can connect to it. */
-export function previewStartupError(origin, port, detail) {
+export function previewStartupError(
+  origin,
+  port,
+  detail,
+  serverName = 'preview',
+) {
   const suffix = detail.trim() === '' ? '' : `\n${detail.trim()}`;
+  const { exited } = serverWording(serverName);
   return new Error(
-    `The preview server exited before ${origin} became ready. ` +
+    `${exited} exited before ${origin} became ready. ` +
       `Port ${port} may be taken by another process; set PREVIEW_PORT to a ` +
       `free port (for example PREVIEW_PORT=${port + 1}).${suffix}`,
   );
@@ -28,6 +57,9 @@ export function previewStartupError(origin, port, detail) {
  * past a failed child exit. `failure` returns a non-null detail once the child
  * has died, and is checked before each probe and again after a response so a
  * server that answered between spawn and death is not mistaken for ours.
+ *
+ * `serverName` selects the wording of the startup error; its default keeps the
+ * existing preview messages and every current caller unchanged.
  */
 export async function waitForServer(
   url,
@@ -38,13 +70,14 @@ export async function waitForServer(
     probeTimeoutMs = 1_000,
     failure,
     fetchImpl = fetch,
+    serverName = 'preview',
   } = {},
 ) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const failureDetail = failure?.();
     if (failureDetail != null) {
-      throw previewStartupError(url, port, failureDetail);
+      throw previewStartupError(url, port, failureDetail, serverName);
     }
     try {
       const response = await fetchImpl(url, {
@@ -61,8 +94,9 @@ export async function waitForServer(
     await delay(probeIntervalMs);
   }
   const failureDetail = failure?.();
+  const { onAnotherPort } = serverWording(serverName);
   throw new Error(
-    `Timed out waiting for ${url}. If the preview is on another port, set ` +
+    `Timed out waiting for ${url}. If ${onAnotherPort} is on another port, set ` +
       `PREVIEW_PORT to match it.` +
       (failureDetail == null ? '' : `\n${failureDetail}`),
   );
@@ -75,6 +109,9 @@ export async function waitForServer(
  * Collects stderr, listens for `error` / `exit`, and feeds the resulting detail
  * to `waitForServer`, so a preview that dies after the pre-spawn port probe
  * still fails the run with the exit code and the child's own message.
+ *
+ * `serverName` defaults to `'preview'`; callers that start a dev server (the
+ * snake capture script) pass `'dev'` so the report names the right process.
  */
 export async function waitForPreviewServer(
   child,
@@ -84,19 +121,21 @@ export async function waitForPreviewServer(
     timeoutMs = 30_000,
     probeIntervalMs = 250,
     probeTimeoutMs = 1_000,
+    serverName = 'preview',
   } = {},
 ) {
   let stderr = '';
   let failure = null;
+  const { stopped } = serverWording(serverName);
   child.stderr?.setEncoding('utf8');
   child.stderr?.on('data', (chunk) => {
     stderr = `${stderr}${chunk}`.slice(-4000);
   });
   child.once('error', (error) => {
-    failure = `Failed to spawn the preview server: ${error.message}`;
+    failure = `Failed to spawn the ${serverName} server: ${error.message}`;
   });
   child.once('exit', (code, signal) => {
-    failure = `vite preview stopped (exit code ${code}, signal ${signal ?? 'none'}).`;
+    failure = `${stopped} stopped (exit code ${code}, signal ${signal ?? 'none'}).`;
   });
 
   await waitForServer(origin, {
@@ -104,6 +143,7 @@ export async function waitForPreviewServer(
     timeoutMs,
     probeIntervalMs,
     probeTimeoutMs,
+    serverName,
     failure: () => {
       if (failure == null) {
         return null;

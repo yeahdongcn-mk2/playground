@@ -84,5 +84,28 @@ describe('assertPortAvailable', () => {
 
     await expect(assertPortAvailable(port)).rejects.toThrow(/already in use/);
     await expect(assertPortAvailable(port)).rejects.toThrow(/PREVIEW_PORT/);
+    // The default label keeps the historic preview wording for every caller.
+    await expect(assertPortAvailable(port)).rejects.toThrow(
+      new RegExp(`Cannot start the preview server on 127\\.0\\.0\\.1:${port}`),
+    );
+  });
+
+  it('labels the caller server instead of preview when asked', async () => {
+    const owner = await listen();
+    const port = portOf(owner);
+
+    const message = await assertPortAvailable(port, '127.0.0.1', {
+      serverName: 'dev',
+    }).then(
+      () => '',
+      (reason: Error) => reason.message,
+    );
+
+    expect(message).toContain(
+      `Cannot start the dev server on 127.0.0.1:${port}`,
+    );
+    expect(message).toContain('the port is already in use');
+    expect(message).toContain('Set PREVIEW_PORT');
+    expect(message).not.toContain('preview server');
   });
 });

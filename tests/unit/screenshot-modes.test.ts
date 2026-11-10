@@ -20,6 +20,7 @@ const GENERIC_SCRIPT = join(ROOT, 'scripts', 'capture-screenshots.mjs');
 const SCORES_SCRIPT = join(ROOT, 'scripts', 'capture-minesweeper-scores-screenshots.mjs');
 const SCRIPT_2048 = join(ROOT, 'scripts', 'capture-2048-screenshots.mjs');
 const SCRIPT_BREAKOUT = join(ROOT, 'scripts', 'capture-breakout-screenshots.mjs');
+const SNAKE_SCRIPT = join(ROOT, 'scripts', 'capture-snake-screenshots.mjs');
 const README = join(ROOT, 'README.md');
 const FRAMEWORK = join(ROOT, 'docs', 'framework.md');
 const SCREENSHOTS_README = join(ROOT, 'docs', 'screenshots', 'README.md');
@@ -369,15 +370,15 @@ function screenshotHashes(): Record<string, string> {
   );
 }
 
-/** Hold a random 127.0.0.1 port open for the duration of the test. */
-function listenOnRandomPort(): Promise<{
+/** Hold a 127.0.0.1 port open for the duration of the test. */
+function listenOnPort(port: number): Promise<{
   port: number;
   close: () => Promise<void>;
 }> {
   return new Promise((resolve, reject) => {
     const server = createServer();
     server.once('error', reject);
-    server.listen({ port: 0, host: '127.0.0.1' }, () => {
+    server.listen({ port, host: '127.0.0.1' }, () => {
       const address = server.address();
       if (address === null || typeof address === 'string') {
         server.close();
@@ -393,6 +394,14 @@ function listenOnRandomPort(): Promise<{
       });
     });
   });
+}
+
+/** Hold a random 127.0.0.1 port open for the duration of the test. */
+function listenOnRandomPort(): Promise<{
+  port: number;
+  close: () => Promise<void>;
+}> {
+  return listenOnPort(0);
 }
 
 /**
@@ -1255,6 +1264,189 @@ describe('generic, 2048 and breakout screenshot preview startup', () => {
         expect(screenshotHashes()).toEqual(screenshotsBefore);
       } finally {
         await owner.close();
+      }
+    },
+  );
+});
+
+describe('snake screenshot dev server startup', () => {
+  it('guards the dev server port before spawning and uses the shared readiness helper', () => {
+    const source = readFileSync(SNAKE_SCRIPT, 'utf8');
+
+    expect(source).toMatch(/from '\.\/lib\/preview-port\.mjs'/);
+    expect(source).toMatch(/from '\.\/lib\/preview-server\.mjs'/);
+    // The dev server keeps its own 5188 default; an empty PREVIEW_PORT must
+    // fall back to it instead of the shared 4192 preview default.
+    expect(source).toContain(
+      'const PORT = parsePreviewPort(process.env.PREVIEW_PORT, 5188);',
+    );
+    expect(source).toContain("const SERVER_NAME = 'dev';");
+    expect(source).toContain(
+      'await assertPortAvailable(PORT, HOST, { serverName: SERVER_NAME });',
+    );
+    expect(source).toContain('await waitForPreviewServer(server, {');
+    expect(source).toContain('origin: ORIGIN,');
+    expect(source).toContain('port: PORT,');
+    expect(source).toContain('serverName: SERVER_NAME,');
+    // Test seam: a stand-in entry can replace the Vite dev server binary.
+    expect(source).toContain(
+      "process.env.PREVIEW_ENTRY || 'node_modules/vite/bin/vite.js'",
+    );
+    // The private poller must not come back; the shared helper bounds probes
+    // and rechecks the child after a response.
+    expect(source).not.toContain('function waitForServer');
+    expect(source).not.toContain('Timed out waiting for');
+    // Dev-server purpose and the fixed-first-fruit scenario stay unchanged.
+    expect(source).toContain("'--strictPort',");
+    expect(source).toContain('food=11,10');
+    expect(source).not.toContain("'preview',");
+  });
+
+  it(
+    'fails fast without screenshots when PREVIEW_PORT is taken',
+    { timeout: 30_000 },
+    async () => {
+      const owner = await listenOnRandomPort();
+      const screenshotsBefore = screenshotHashes();
+      try {
+        const env = { ...process.env };
+        delete env.PREVIEW_ENTRY;
+        env.PREVIEW_PORT = String(owner.port);
+
+        const { status, output } = spawnNode(SNAKE_SCRIPT, [], env);
+
+        expect(status).toBe(1);
+        // The dev server is named, not the preview the other scripts start.
+        expect(output).toContain(
+          `Cannot start the dev server on 127.0.0.1:${owner.port}`,
+        );
+        expect(output).toContain('the port is already in use');
+        expect(output).toContain('Set PREVIEW_PORT');
+        expect(output).not.toContain('Cannot start the preview server');
+        expect(output).not.toContain('Captured');
+        // Byte-for-byte proof that no screenshot was created or overwritten.
+        expect(screenshotHashes()).toEqual(screenshotsBefore);
+      } finally {
+        await owner.close();
+      }
+    },
+  );
+
+  it(
+    'fails fast without screenshots when the default 5188 port is taken',
+    { timeout: 30_000 },
+    async () => {
+      let owner: Awaited<ReturnType<typeof listenOnPort>> | null = null;
+      try {
+        owner = await listenOnPort(5188);
+      } catch (error) {
+        // Another process may already own 5188; the script must still report
+        // the taken default port, so keep going without owning it.
+        if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE') {
+          throw error;
+        }
+      }
+      const screenshotsBefore = screenshotHashes();
+      try {
+        const env = { ...process.env };
+        delete env.PREVIEW_ENTRY;
+        delete env.PREVIEW_PORT;
+
+        const { status, output } = spawnNode(SNAKE_SCRIPT, [], env);
+
+        expect(status).toBe(1);
+        expect(output).toContain(
+          'Cannot start the dev server on 127.0.0.1:5188',
+        );
+        expect(output).toContain('the port is already in use');
+        expect(output).toContain('Set PREVIEW_PORT');
+        expect(output).not.toContain('Cannot start the preview server');
+        expect(output).not.toContain('Captured');
+        expect(screenshotHashes()).toEqual(screenshotsBefore);
+      } finally {
+        await owner?.close();
+      }
+    },
+  );
+
+  it(
+    'reports the dev server exit code and stderr when it dies after the port probe',
+    { timeout: 45_000 },
+    async () => {
+      const probe = await listenOnRandomPort();
+      const port = probe.port;
+      // Releasing the port makes the pre-spawn probe pass; the fake entry then
+      // owns the post-probe failure the shared wait helper must surface.
+      await probe.close();
+      const dir = mkdtempSync(join(tmpdir(), 'snake-dev-server-'));
+      const fakeEntry = join(dir, 'fake-dev-server.mjs');
+      writeFileSync(
+        fakeEntry,
+        "process.stderr.write('fake snake dev server exploded\\n');\nprocess.exit(7);\n",
+      );
+      const screenshotsBefore = screenshotHashes();
+      try {
+        const env = { ...process.env };
+        env.PREVIEW_PORT = String(port);
+        env.PREVIEW_ENTRY = fakeEntry;
+
+        const { status, output } = spawnNode(SNAKE_SCRIPT, [], env);
+
+        expect(status).toBe(1);
+        expect(output).toContain(
+          `The dev server exited before http://127.0.0.1:${port} became ready`,
+        );
+        expect(output).toContain('vite dev server stopped');
+        expect(output).toContain('exit code 7');
+        expect(output).toContain('fake snake dev server exploded');
+        expect(output).toContain('PREVIEW_PORT');
+        expect(output).not.toContain('Captured');
+        expect(screenshotHashes()).toEqual(screenshotsBefore);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it(
+    'falls back to 5188 when PREVIEW_PORT is empty',
+    { timeout: 45_000 },
+    async () => {
+      // The fallback path needs 5188 to be free; if another process owns it,
+      // the occupied-port test above already covers that failure mode.
+      const probe = await listenOnPort(5188).catch(
+        (error: NodeJS.ErrnoException) => error,
+      );
+      if (probe instanceof Error) {
+        expect(probe.code).toBe('EADDRINUSE');
+        return;
+      }
+      await probe.close();
+
+      const dir = mkdtempSync(join(tmpdir(), 'snake-dev-fallback-'));
+      const fakeEntry = join(dir, 'fake-dev-server.mjs');
+      writeFileSync(
+        fakeEntry,
+        "process.stderr.write('fake snake dev server exploded\\n');\nprocess.exit(7);\n",
+      );
+      const screenshotsBefore = screenshotHashes();
+      try {
+        const env = { ...process.env };
+        env.PREVIEW_PORT = '';
+        env.PREVIEW_ENTRY = fakeEntry;
+
+        const { status, output } = spawnNode(SNAKE_SCRIPT, [], env);
+
+        expect(status).toBe(1);
+        // The resolved port proves the empty value fell back to 5188, not 4192.
+        expect(output).toContain('127.0.0.1:5188');
+        expect(output).not.toContain('127.0.0.1:4192');
+        expect(output).toContain('The dev server exited before');
+        expect(output).toContain('exit code 7');
+        expect(output).not.toContain('Captured');
+        expect(screenshotHashes()).toEqual(screenshotsBefore);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
       }
     },
   );
