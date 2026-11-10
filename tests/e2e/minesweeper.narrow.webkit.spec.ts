@@ -1,7 +1,12 @@
+import type { Page } from '@playwright/test';
 import { expect, test } from './fixtures';
 import {
+  cellLocator,
   expectFirstScreenContract,
+  longPressCell,
+  LOSS_MINE_CLICK,
   LOSS_MINES,
+  LOSS_SAFE_CLICK,
   openMinesweeper,
 } from './minesweeper-helpers';
 
@@ -17,6 +22,44 @@ const WEBKIT_NARROW_VIEWPORTS = [
   { width: 375, height: 667, minimumCellSize: 36, label: '375x667' },
   { width: 412, height: 839, minimumCellSize: 36, label: '412x839' },
 ] as const;
+
+/** The click fields that decide whether the product suppresses a release click. */
+interface ClickShape {
+  readonly constructorName: string;
+  readonly pointerId: number | null;
+  readonly detail: number;
+  readonly trusted: boolean;
+}
+
+const CLICK_SHAPES_KEY = '__webkitClickShapes';
+
+/** Read the click shapes recorded for the current mount. */
+async function readClickShapes(page: Page): Promise<ClickShape[]> {
+  return page.evaluate((key) => {
+    const shapes = (window as unknown as Record<string, ClickShape[] | undefined>)[key];
+    return shapes ?? [];
+  }, CLICK_SHAPES_KEY);
+}
+
+/** Record every click's constructor, pointer id, detail and trust state. */
+async function recordClickShapes(page: Page): Promise<void> {
+  await page.evaluate((key) => {
+    const shapes: ClickShape[] = [];
+    (window as unknown as Record<string, ClickShape[]>)[key] = shapes;
+    window.addEventListener(
+      'click',
+      (event) => {
+        shapes.push({
+          constructorName: event.constructor.name,
+          pointerId: event instanceof PointerEvent ? event.pointerId : null,
+          detail: event.detail,
+          trusted: event.isTrusted,
+        });
+      },
+      { capture: true },
+    );
+  }, CLICK_SHAPES_KEY);
+}
 
 /**
  * Cross-engine notes recorded on the same Playwright device emulation:
@@ -91,5 +134,46 @@ test.describe('minesweeper first-screen contract on WebKit', () => {
     expect(environment.anyPointerCoarse).toBe(true);
     // Playwright's emulation has no notch or home-indicator safe-area insets.
     expect(environment.safeArea).toEqual({ left: '0px', bottom: '0px' });
+  });
+
+  test('pins the injected long-press click to a real WebKit touch click', async ({
+    page,
+    browserName,
+  }) => {
+    expect(browserName).toBe('webkit');
+    await openMinesweeper(page, { mines: LOSS_MINES });
+    await recordClickShapes(page);
+
+    // A real touchscreen tap produces the release click the product has to
+    // recognise. Record its shape before the fallback fabricates one.
+    const safeCell = cellLocator(page, LOSS_SAFE_CLICK.row, LOSS_SAFE_CLICK.col);
+    const safeBox = await safeCell.boundingBox();
+    expect(safeBox).not.toBeNull();
+    await page.touchscreen.tap(
+      (safeBox?.x ?? 0) + (safeBox?.width ?? 0) / 2,
+      (safeBox?.y ?? 0) + (safeBox?.height ?? 0) / 2,
+    );
+    await expect
+      .poll(async () => (await readClickShapes(page)).filter((shape) => shape.trusted).length)
+      .toBe(1);
+
+    // The WebKit fallback then dispatches the release click of a long press.
+    await longPressCell(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
+    await expect
+      .poll(async () => (await readClickShapes(page)).filter((shape) => !shape.trusted).length)
+      .toBe(1);
+
+    const shapes = await readClickShapes(page);
+    const realClick = shapes.find((shape) => shape.trusted);
+    const injectedClick = shapes.find((shape) => !shape.trusted);
+    expect(realClick, 'the real touchscreen tap should emit a release click').toBeDefined();
+    expect(injectedClick, 'the long-press helper should emit its release click').toBeDefined();
+    // The helper must fabricate the click WebKit actually delivers; if WebKit
+    // changes to a MouseEvent or another pointer id, this fails instead of
+    // leaving the long-press cases green against a stale simulation.
+    expect(realClick?.constructorName).toBe('PointerEvent');
+    expect(realClick?.detail).toBe(1);
+    expect(injectedClick?.constructorName).toBe(realClick?.constructorName);
+    expect(injectedClick?.pointerId).toBe(realClick?.pointerId);
   });
 });
