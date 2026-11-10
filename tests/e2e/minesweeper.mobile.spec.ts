@@ -1,4 +1,5 @@
 import { expect, test } from './fixtures';
+import type { Page } from '@playwright/test';
 import {
   cancelCellPress,
   cellLocator,
@@ -26,14 +27,52 @@ import {
 } from './minesweeper-helpers';
 
 /**
- * Viewports around the 349px edge of the fallback range. The 320x640 minimum
- * has its own first-screen restart test below, where the board contract and
- * the compact restart entry are asserted together.
+ * Every supported phone size that the first-screen contract covers. The
+ * 320px minimum uses the documented 34px geometric fallback; widths from
+ * 340px up keep 36px touch targets. 360x640, 375x667 and 400x700 cover the
+ * short/narrow edge added for Issue #60, and all entries require the compact
+ * restart entry to stay inside the first screen. 412x839 is the Pixel 7
+ * default viewport from playwright.config.ts.
  */
-const NARROW_VIEWPORTS = [
+const FIRST_SCREEN_VIEWPORTS = [
+  { width: 320, height: 640, minimumCellSize: 34, label: '320x640' },
   { width: 340, height: 700, minimumCellSize: 36, label: '340x700' },
   { width: 349, height: 700, minimumCellSize: 36, label: '349x700' },
+  { width: 360, height: 640, minimumCellSize: 36, label: '360x640' },
+  { width: 360, height: 740, minimumCellSize: 36, label: '360x740' },
+  { width: 375, height: 667, minimumCellSize: 36, label: '375x667' },
+  { width: 400, height: 700, minimumCellSize: 36, label: '400x700' },
+  { width: 412, height: 839, minimumCellSize: 36, label: '412x839' },
 ] as const;
+
+/**
+ * The 340x667 min-width / max-height corner must actually match the short
+ * screen query. Its first-screen geometry also passes without that query, so
+ * assert the tightened computed styles; otherwise a regression to
+ * `min-width: 341px` or `max-height: 666px` would slip through.
+ */
+async function expectShortScreenTightening(page: Page): Promise<void> {
+  const heading = page.locator('.minesweeper-game .game-heading');
+  await expect(heading).toHaveCSS('row-gap', '6px');
+  await expect(heading).toHaveCSS('padding-bottom', '4px');
+  await expect(page.getByTestId('touch-hint')).toHaveCSS('margin-top', '2px');
+  await expect(page.locator('.minesweeper-touch-actions')).toHaveCSS(
+    'margin-top',
+    '2px',
+  );
+}
+
+/** The <=400x<=700 query must survive untouched above 667px and below 340px. */
+async function expectShortScreenSpacingUnchanged(page: Page): Promise<void> {
+  const heading = page.locator('.minesweeper-game .game-heading');
+  await expect(heading).toHaveCSS('row-gap', '8px');
+  await expect(heading).toHaveCSS('padding-bottom', '10px');
+  await expect(page.getByTestId('touch-hint')).toHaveCSS('margin-top', '4px');
+  await expect(page.locator('.minesweeper-touch-actions')).toHaveCSS(
+    'margin-top',
+    '6px',
+  );
+}
 
 test.describe('minesweeper on a phone viewport', () => {
   test('opens with the board, HUD and restart / back entries inside the viewport', async ({
@@ -89,8 +128,8 @@ test.describe('minesweeper on a phone viewport', () => {
     }
   });
 
-  for (const viewport of NARROW_VIEWPORTS) {
-    test(`keeps the board usable and overflow-free on a ${viewport.label} phone viewport`, async ({
+  for (const viewport of FIRST_SCREEN_VIEWPORTS) {
+    test(`keeps the first-screen mobile contract on a ${viewport.label} viewport`, async ({
       page,
     }) => {
       await page.setViewportSize({
@@ -99,31 +138,36 @@ test.describe('minesweeper on a phone viewport', () => {
       });
       await openMinesweeper(page, { mines: LOSS_MINES });
 
-      await expectFirstScreenContract(page, viewport.minimumCellSize);
+      // Every supported phone size must keep the compact restart entry fully
+      // inside the first screen, not just the board, HUD and back link.
+      await expectFirstScreenContract(page, viewport.minimumCellSize, {
+        restartEntry: true,
+      });
     });
   }
 
-  test('keeps the restart entry inside the first screen on a 320x640 phone viewport', async ({
+  test('matches the short-screen query only between 340 and 400px wide and at most 667px high', async ({
     page,
   }) => {
-    await page.setViewportSize({ width: 320, height: 640 });
+    // 340x667 is the min-width / max-height corner of the query. The geometry
+    // alone would pass without the query, so also pin the tightened styles.
+    await page.setViewportSize({ width: 340, height: 667 });
     await openMinesweeper(page, { mines: LOSS_MINES });
-
-    // The narrow contract still holds after the vertical compression: 81 cells
-    // stay >= 34px, the page has no horizontal overflow, and the back link plus
-    // both HUD readouts stay in the first screen. The contract also asserts the
-    // compact restart entry with exact bounds (x + width <= 320 and
-    // y + height <= 640).
-    await expectFirstScreenContract(page, 34, { restartEntry: true });
-  });
-
-  test('keeps 36px touch targets on a 360x740 phone viewport', async ({ page }) => {
-    await page.setViewportSize({ width: 360, height: 740 });
-    await openMinesweeper(page, { mines: LOSS_MINES });
-
-    // The narrow breakpoint must reclaim space without introducing a
-    // horizontally scrolling page at this common Android width.
     await expectFirstScreenContract(page, 36, { restartEntry: true });
+    await expectShortScreenTightening(page);
+
+    // 700px is one pixel above the max-height boundary: no extra tightening.
+    await page.setViewportSize({ width: 340, height: 700 });
+    await expectShortScreenSpacingUnchanged(page);
+
+    // 320px is below the min-width boundary (and its 34px fallback): the base
+    // short-narrow spacing must survive untouched.
+    await page.setViewportSize({ width: 320, height: 640 });
+    await expectShortScreenSpacingUnchanged(page);
+
+    // 400px is the max-width corner; the query still applies there.
+    await page.setViewportSize({ width: 400, height: 667 });
+    await expectShortScreenTightening(page);
   });
 
   test('a tap reveals and a long press toggles a flag exactly once', async ({ page }) => {

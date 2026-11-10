@@ -31,6 +31,8 @@
     "screenshots:minesweeper:min-before": "node scripts/capture-minesweeper-screenshots.mjs --min-before",
     "screenshots:minesweeper:restart": "npm run build && node scripts/capture-minesweeper-screenshots.mjs --restart",
     "screenshots:minesweeper:restart-before": "node scripts/capture-minesweeper-screenshots.mjs --restart-before",
+    "screenshots:minesweeper:short": "npm run build && node scripts/capture-minesweeper-screenshots.mjs --short",
+    "screenshots:minesweeper:short-before": "node scripts/capture-minesweeper-screenshots.mjs --short-before",
     "screenshots:minesweeper:large": "npm run build && node scripts/capture-minesweeper-screenshots.mjs --large",
     "screenshots:minesweeper:large-before": "node scripts/capture-minesweeper-screenshots.mjs --large-before",
     "screenshots:minesweeper:scores": "npm run build && node scripts/capture-minesweeper-scores-screenshots.mjs",
