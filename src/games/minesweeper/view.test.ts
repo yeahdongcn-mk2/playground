@@ -1204,12 +1204,57 @@ describe('minesweeper touch click suppression', () => {
     expect(statusOf(root)).toBe('playing');
   });
 
+  it('keeps a restarted board click suppressed while its finger is still down', async () => {
+    const { services } = createServices();
+    const root = await mount(services);
+
+    // Hold the mine, restart while the finger is still down, then let another
+    // finger tap before the first lifts. The restart token must survive that
+    // intervening press and still swallow the first finger's release click.
+    startTouchPress(root, MINE_ROW, MINE_COL, TOUCH_POINTER_ID);
+    clickRestart(root);
+    expect(statusOf(root)).toBe('ready');
+
+    startTouchPress(root, 0, 1, SECOND_TAP_POINTER_ID);
+    endTouchPress(root, 0, 1, SECOND_TAP_POINTER_ID);
+    clickRelease(root, 0, 1);
+    expect(cell(root, 0, 1).dataset.revealed).toBe('true');
+
+    endTouchPress(root, MINE_ROW, MINE_COL, TOUCH_POINTER_ID);
+    clickRelease(root, MINE_ROW, MINE_COL);
+    expect(cell(root, MINE_ROW, MINE_COL).dataset.revealed).toBeUndefined();
+    expect(statusOf(root)).toBe('playing');
+  });
+
+  it('drops a detached token when the terminal pointerup misses the board', async () => {
+    const { services } = createServices();
+    const root = await mount(services);
+
+    startTouchPress(root, 4, 4, TOUCH_POINTER_ID);
+    debugApi()?.setConfig({ rows: 6, cols: 6, mines: 10, firstClickSafe: true });
+    // The rebuild removed the pointerdown target, so its terminal pointerup is
+    // delivered outside the board. The window-level backstop must still end the
+    // finger's liveness so its release click is swallowed.
+    window.dispatchEvent(
+      pointerEvent('pointerup', {
+        pointerId: TOUCH_POINTER_ID,
+        pointerType: 'touch',
+        isPrimary: true,
+        button: 0,
+        buttons: 0,
+      }),
+    );
+    clickRelease(root, 0, 1);
+    expect(cell(root, 0, 1).dataset.revealed).toBeUndefined();
+    expect(statusOf(root)).toBe('ready');
+  });
+
   it('keeps the pending suppression across restart and rebuild', async () => {
     const { services } = createServices();
     const root = await mount(services);
 
-    // Restart while a finger is down; the release click still targets the held
-    // cell on the restarted board and must be swallowed.
+    // Restart while a finger is down; its pending release click must still be
+    // swallowed on the restarted board.
     startTouchPress(root, MINE_ROW, MINE_COL);
     clickRestart(root);
     expect(statusOf(root)).toBe('ready');

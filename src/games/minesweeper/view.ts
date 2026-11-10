@@ -545,12 +545,15 @@ export async function mountMinesweeper(
   // instead and swallow the first detail > 0 click on that cell. The pointer id
   // is bookkeeping only: it lets a cancelled pointer drop its own token and
   // lets a second finger start its own gesture without clearing the first
-  // finger's suppression. A rebuild replaces the board DOM and can change the
-  // rows / columns, so that path stores `null` ("detached"): the token no
-  // longer names a cell and swallows the next detail > 0 click wherever it
-  // lands once its finger has lifted. Tokens survive restart / rebuild, a
-  // pointerdown with no active gesture drops the ones whose gesture is over,
-  // and destroy clears them. Keyboard activation (detail 0) never consumes one.
+  // finger's suppression. Restart / rebuild cancel the gesture while its
+  // finger is still down, and another finger may press before it lifts (a new
+  // press drops attached tokens), so those paths store `null` ("detached"):
+  // the token no longer names a cell and swallows the next detail > 0 click
+  // wherever it lands once its finger has lifted. A rebuild can also change
+  // the rows / columns, so its release click may land on a different cell.
+  // Tokens survive restart / rebuild, a pointerdown with no active gesture
+  // drops the ones whose gesture is over, and destroy clears them. Keyboard
+  // activation (detail 0) never consumes one.
   const suppressedClicks = new Map<number, { row: number; col: number } | null>();
   // Touch pointers that are still physically down on the board. A detached
   // token outlives cancelTouchGesture(), so `touchGesture === null` no longer
@@ -577,9 +580,10 @@ export async function mountMinesweeper(
     clearGestureTimer(touchGesture);
     if (suppressClick) {
       // Keep this finger's release click from revealing the cell, even if a
-      // second finger starts its own gesture in the meantime. A rebuild can
-      // change the rows / columns (and therefore the cell under the finger),
-      // so that path detaches the token from any target.
+      // second finger starts its own gesture in the meantime. Restart /
+      // rebuild cancel the gesture while the finger is still down, so they
+      // detach the token: an intervening press must not drop it, and a rebuild
+      // can change the cell under the finger.
       suppressedClicks.set(
         touchGesture.pointerId,
         detachTarget ? null : { row: touchGesture.row, col: touchGesture.col },
@@ -925,9 +929,10 @@ export async function mountMinesweeper(
 
   function restart(): void {
     // A restart from another finger must not let a held cell's timer flag the
-    // fresh board a moment later. Restart keeps the board layout, so the
-    // pending token still matches the held cell's release click.
-    cancelTouchGesture();
+    // fresh board a moment later. Restart keeps the board layout, but it
+    // cancels the gesture while the finger is down, so detach the token: a
+    // press from another finger before this one lifts must not drop it.
+    cancelTouchGesture(true);
     services.audio.unlock();
     engine.restart();
     stopClock();
@@ -1059,6 +1064,21 @@ export async function mountMinesweeper(
     },
     { signal: listenerSignal },
   );
+  // A rebuild can remove the element that holds implicit touch capture, so the
+  // terminal pointer event may never reach the board. Clear liveness at the
+  // window level as a backstop; otherwise a detached token would stay pending
+  // and its release click would no longer be swallowed.
+  const clearTouchPointer = (event: PointerEvent): void => {
+    if (event.pointerType === 'touch') {
+      activeTouchPointers.delete(event.pointerId);
+    }
+  };
+  window.addEventListener('pointerup', clearTouchPointer, {
+    signal: listenerSignal,
+  });
+  window.addEventListener('pointercancel', clearTouchPointer, {
+    signal: listenerSignal,
+  });
   boardElement.addEventListener('pointerleave', () => cancelTouchGesture(), {
     signal: listenerSignal,
   });
@@ -1080,10 +1100,11 @@ export async function mountMinesweeper(
       // Match the pending gesture by its target cell instead and swallow that
       // first detail > 0 click. A click on another cell belongs to a different
       // finger or a later tap, so it must neither reveal the suppressed cell
-      // nor clear that finger's suppression. A detached token (rebuild) names
-      // no cell: it swallows the click wherever it lands once its own finger
-      // has lifted, while a still-held finger's click belongs to another finger
-      // and must reveal. Keyboard activation (detail 0) always passes.
+      // nor clear that finger's suppression. A detached token (restart /
+      // rebuild) names no cell: it swallows the click wherever it lands once
+      // its own finger has lifted, while a still-held finger's click belongs
+      // to another finger and must reveal. Keyboard activation (detail 0)
+      // always passes.
       if (event.detail > 0 && suppressedClicks.size > 0) {
         const target = currentCell(event.target);
         let matched: number | undefined;
