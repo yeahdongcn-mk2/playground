@@ -9,6 +9,7 @@ import {
   LOSS_SAFE_CLICK,
   openMinesweeper,
 } from './minesweeper-helpers';
+import { RELEASE_CLICK_POINTER_ID, TOUCH_POINTER_ID } from './touch-input';
 
 /**
  * The narrow first-screen matrix for the `mobile-webkit` project. 320px is the
@@ -23,42 +24,49 @@ const WEBKIT_NARROW_VIEWPORTS = [
   { width: 412, height: 839, minimumCellSize: 36, label: '412x839' },
 ] as const;
 
-/** The click fields that decide whether the product suppresses a release click. */
-interface ClickShape {
+/** The pointer fields that decide whether the product suppresses a release click. */
+interface PointerShape {
+  readonly type: 'pointerdown' | 'pointerup' | 'click';
   readonly constructorName: string;
   readonly pointerId: number | null;
+  readonly pointerType: string | null;
   readonly detail: number;
   readonly trusted: boolean;
 }
 
-const CLICK_SHAPES_KEY = '__webkitClickShapes';
+const POINTER_SHAPES_KEY = '__webkitPointerShapes';
 
-/** Read the click shapes recorded for the current mount. */
-async function readClickShapes(page: Page): Promise<ClickShape[]> {
+/** Read the pointer shapes recorded for the current mount. */
+async function readPointerShapes(page: Page): Promise<PointerShape[]> {
   return page.evaluate((key) => {
-    const shapes = (window as unknown as Record<string, ClickShape[] | undefined>)[key];
+    const shapes = (window as unknown as Record<string, PointerShape[] | undefined>)[key];
     return shapes ?? [];
-  }, CLICK_SHAPES_KEY);
+  }, POINTER_SHAPES_KEY);
 }
 
-/** Record every click's constructor, pointer id, detail and trust state. */
-async function recordClickShapes(page: Page): Promise<void> {
+/** Record pointerdown / pointerup / click shapes and their trust state. */
+async function recordPointerShapes(page: Page): Promise<void> {
   await page.evaluate((key) => {
-    const shapes: ClickShape[] = [];
-    (window as unknown as Record<string, ClickShape[]>)[key] = shapes;
-    window.addEventListener(
-      'click',
-      (event) => {
-        shapes.push({
-          constructorName: event.constructor.name,
-          pointerId: event instanceof PointerEvent ? event.pointerId : null,
-          detail: event.detail,
-          trusted: event.isTrusted,
-        });
-      },
-      { capture: true },
-    );
-  }, CLICK_SHAPES_KEY);
+    const shapes: PointerShape[] = [];
+    (window as unknown as Record<string, PointerShape[]>)[key] = shapes;
+    for (const type of ['pointerdown', 'pointerup', 'click'] as const) {
+      window.addEventListener(
+        type,
+        (event) => {
+          const pointer = event as PointerEvent;
+          shapes.push({
+            type,
+            constructorName: event.constructor.name,
+            pointerId: event instanceof PointerEvent ? pointer.pointerId : null,
+            pointerType: event instanceof PointerEvent ? pointer.pointerType : null,
+            detail: event.detail,
+            trusted: event.isTrusted,
+          });
+        },
+        { capture: true },
+      );
+    }
+  }, POINTER_SHAPES_KEY);
 }
 
 /**
@@ -93,7 +101,7 @@ test.describe('minesweeper first-screen contract on WebKit', () => {
     });
   }
 
-  test('exposes the WebKit environment assumptions behind the contract', async ({
+  test('exposes the WebKit environment and real touch-event assumptions behind the contract', async ({
     page,
     browserName,
   }) => {
@@ -134,18 +142,10 @@ test.describe('minesweeper first-screen contract on WebKit', () => {
     expect(environment.anyPointerCoarse).toBe(true);
     // Playwright's emulation has no notch or home-indicator safe-area insets.
     expect(environment.safeArea).toEqual({ left: '0px', bottom: '0px' });
-  });
 
-  test('pins the injected long-press click to a real WebKit touch click', async ({
-    page,
-    browserName,
-  }) => {
-    expect(browserName).toBe('webkit');
-    await openMinesweeper(page, { mines: LOSS_MINES });
-    await recordClickShapes(page);
-
-    // A real touchscreen tap produces the release click the product has to
-    // recognise. Record its shape before the fallback fabricates one.
+    // A real tap tells us the event shapes the helper has to fabricate. Record
+    // them before the fallback injects its own gesture.
+    await recordPointerShapes(page);
     const safeCell = cellLocator(page, LOSS_SAFE_CLICK.row, LOSS_SAFE_CLICK.col);
     const safeBox = await safeCell.boundingBox();
     expect(safeBox).not.toBeNull();
@@ -154,26 +154,71 @@ test.describe('minesweeper first-screen contract on WebKit', () => {
       (safeBox?.y ?? 0) + (safeBox?.height ?? 0) / 2,
     );
     await expect
-      .poll(async () => (await readClickShapes(page)).filter((shape) => shape.trusted).length)
+      .poll(
+        async () =>
+          (await readPointerShapes(page)).filter(
+            (shape) => shape.type === 'click' && shape.trusted,
+          ).length,
+      )
       .toBe(1);
 
-    // The WebKit fallback then dispatches the release click of a long press.
+    // The fallback then dispatches the release click of a long press.
     await longPressCell(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
     await expect
-      .poll(async () => (await readClickShapes(page)).filter((shape) => !shape.trusted).length)
+      .poll(
+        async () =>
+          (await readPointerShapes(page)).filter(
+            (shape) => shape.type === 'click' && !shape.trusted,
+          ).length,
+      )
       .toBe(1);
 
-    const shapes = await readClickShapes(page);
-    const realClick = shapes.find((shape) => shape.trusted);
-    const injectedClick = shapes.find((shape) => !shape.trusted);
-    expect(realClick, 'the real touchscreen tap should emit a release click').toBeDefined();
-    expect(injectedClick, 'the long-press helper should emit its release click').toBeDefined();
-    // The helper must fabricate the click WebKit actually delivers; if WebKit
+    const shapes = await readPointerShapes(page);
+    const find = (
+      type: PointerShape['type'],
+      trusted: boolean,
+    ): PointerShape | undefined =>
+      shapes.find((shape) => shape.type === type && shape.trusted === trusted);
+    const realDown = find('pointerdown', true);
+    const realUp = find('pointerup', true);
+    const realClick = find('click', true);
+    const injectedDown = find('pointerdown', false);
+    const injectedUp = find('pointerup', false);
+    const injectedClick = find('click', false);
+    expect(realDown, 'the real tap should emit a pointerdown').toBeDefined();
+    expect(realUp, 'the real tap should emit a pointerup').toBeDefined();
+    expect(realClick, 'the real tap should emit a release click').toBeDefined();
+    expect(injectedDown, 'the helper should emit a pointerdown').toBeDefined();
+    expect(injectedUp, 'the helper should emit a pointerup').toBeDefined();
+    expect(injectedClick, 'the helper should emit a release click').toBeDefined();
+
+    // WebKit reports the touch pointer and the mouse-mediated release click
+    // differently; the product must not assume they share a pointer id or type.
+    expect(realDown?.constructorName).toBe('PointerEvent');
+    expect(realDown?.pointerType).toBe('touch');
+    expect(realDown?.pointerId).toBe(TOUCH_POINTER_ID);
+    expect(realDown?.detail).toBe(0);
+    expect(realUp?.pointerType).toBe('touch');
+    expect(realUp?.pointerId).toBe(realDown?.pointerId);
+    expect(realClick?.constructorName).toBe('PointerEvent');
+    expect(realClick?.pointerType).toBe('mouse');
+    expect(realClick?.pointerId).toBe(RELEASE_CLICK_POINTER_ID);
+    expect(realClick?.detail).toBe(1);
+    expect(realDown?.pointerId).not.toBe(realClick?.pointerId);
+    expect(realDown?.pointerType).not.toBe(realClick?.pointerType);
+
+    // The helper must fabricate the shapes WebKit actually delivers; if WebKit
     // changes to a MouseEvent or another pointer id, this fails instead of
     // leaving the long-press cases green against a stale simulation.
-    expect(realClick?.constructorName).toBe('PointerEvent');
-    expect(realClick?.detail).toBe(1);
+    expect(injectedDown?.constructorName).toBe(realDown?.constructorName);
+    expect(injectedDown?.pointerType).toBe(realDown?.pointerType);
+    expect(injectedDown?.pointerId).toBe(realDown?.pointerId);
+    expect(injectedDown?.detail).toBe(realDown?.detail);
+    expect(injectedUp?.pointerType).toBe(realUp?.pointerType);
+    expect(injectedUp?.pointerId).toBe(realUp?.pointerId);
     expect(injectedClick?.constructorName).toBe(realClick?.constructorName);
+    expect(injectedClick?.pointerType).toBe(realClick?.pointerType);
     expect(injectedClick?.pointerId).toBe(realClick?.pointerId);
+    expect(injectedClick?.detail).toBe(realClick?.detail);
   });
 });

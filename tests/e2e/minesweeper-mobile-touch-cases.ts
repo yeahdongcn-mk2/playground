@@ -23,6 +23,7 @@ import {
   WIN_CLICK,
   WIN_MINES,
 } from './minesweeper-helpers';
+import { RELEASE_CLICK_POINTER_ID, TOUCH_POINTER_ID } from './touch-input';
 
 /**
  * Shared touch-gesture cases for the Chromium `mobile` project and the WebKit
@@ -79,6 +80,54 @@ export function defineMinesweeperMobileTouchCases(): void {
       await expectNoHorizontalOverflow(page);
     });
 
+    test('a long press on an unflagged cell only flags it', async ({ page }) => {
+      await openMinesweeper(page, { mines: LOSS_MINES });
+      const mine = cellLocator(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
+
+      // The helper now injects the real WebKit shape: pointerdown / pointerup
+      // use touch pointerId 2, while the release click is a mouse-mediated
+      // PointerEvent with pointerId 1. A build that suppresses the click by
+      // pointer id would reveal the mine here.
+      await longPressCell(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
+      // Let the release click land so a regression would reveal the mine.
+      await page.waitForTimeout(150);
+
+      await expect(mine).toHaveAttribute('data-state', 'flagged');
+      await expect(mine).toHaveText('⚑');
+      // A long press only toggles the flag: the cell must stay unrevealed and
+      // the game must not start (or end on the mine).
+      await expect(page.locator('[data-revealed="true"]')).toHaveCount(0);
+      await expect(page.getByTestId('flag-count')).toHaveText('1');
+      await expect(page.getByTestId('remaining-mines')).toHaveText('9');
+      await expect.poll(() => readStatus(page)).toBe('ready');
+      expect((await readState(page)).flaggedCount).toBe(1);
+    });
+
+    test('a long press on a flagged cell clears the flag only once without revealing it', async ({
+      page,
+    }) => {
+      await openMinesweeper(page, { mines: LOSS_MINES });
+      const mine = cellLocator(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
+
+      await longPressCell(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
+      await expect(mine).toHaveAttribute('data-state', 'flagged');
+
+      // The second hold clears the flag; its release click arrives with a
+      // different pointer id and must still be swallowed exactly once.
+      await longPressCell(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
+      // Let the second release click land; revealing the mine would end the
+      // game instead of leaving the cell hidden.
+      await page.waitForTimeout(150);
+
+      await expect(mine).toHaveAttribute('data-state', 'hidden');
+      await expect(mine).toHaveText('');
+      await expect(page.locator('[data-revealed="true"]')).toHaveCount(0);
+      await expect(page.getByTestId('flag-count')).toHaveText('0');
+      await expect(page.getByTestId('remaining-mines')).toHaveText('10');
+      await expect.poll(() => readStatus(page)).toBe('ready');
+      expect((await readState(page)).flaggedCount).toBe(0);
+    });
+
     test('a long hold that clears a flag still swallows the release click', async ({ page }) => {
       await openMinesweeper(page, { mines: LOSS_MINES });
       const mine = cellLocator(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
@@ -115,15 +164,16 @@ export function defineMinesweeperMobileTouchCases(): void {
       await longPressCell(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
       await expect(mine).toHaveAttribute('data-state', 'flagged');
 
-      // First finger starts a second long hold and clears the flag at 500 ms;
-      // its synthetic click is injected manually because CDP multi-touch does not
-      // generate one, and it must stay suppressed while the finger is down.
+      // First finger starts a second long hold and clears the flag at 500 ms.
+      // The events use real touch ids (2 for the first finger, 3 for the
+      // second) and the release click uses WebKit's mouse-mediated id 1, so the
+      // suppression must survive an id change between pointerdown and click.
       await dispatchTouchPointer(
         page,
         LOSS_MINE_CLICK.row,
         LOSS_MINE_CLICK.col,
         'pointerdown',
-        11,
+        TOUCH_POINTER_ID,
       );
       await page.waitForTimeout(650);
       await expect(mine).toHaveAttribute('data-state', 'hidden');
@@ -134,14 +184,14 @@ export function defineMinesweeperMobileTouchCases(): void {
         LOSS_SAFE_CLICK.row,
         LOSS_SAFE_CLICK.col,
         'pointerdown',
-        12,
+        TOUCH_POINTER_ID + 1,
       );
       await dispatchTouchPointer(
         page,
         LOSS_SAFE_CLICK.row,
         LOSS_SAFE_CLICK.col,
         'pointerup',
-        12,
+        TOUCH_POINTER_ID + 1,
       );
       // The first finger lifts (pointerup) before its click, and the suppression
       // must survive the other pointer until that click is consumed.
@@ -150,14 +200,14 @@ export function defineMinesweeperMobileTouchCases(): void {
         LOSS_MINE_CLICK.row,
         LOSS_MINE_CLICK.col,
         'pointerup',
-        11,
+        TOUCH_POINTER_ID,
       );
       await dispatchTouchPointer(
         page,
         LOSS_MINE_CLICK.row,
         LOSS_MINE_CLICK.col,
         'click',
-        11,
+        RELEASE_CLICK_POINTER_ID,
       );
 
       await expect(mine).toHaveAttribute('data-state', 'hidden');

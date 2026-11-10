@@ -11,6 +11,7 @@ import {
   endTouch,
   moveTouch,
   startTouch,
+  TOUCH_POINTER_ID,
   type TouchGesture,
 } from './touch-input';
 
@@ -153,7 +154,8 @@ export async function tapCell(page: Page, row: number, col: number): Promise<voi
  * Dispatch a synthetic touch PointerEvent on a cell. A single gesture needs
  * more control than `page.touchscreen` offers (two pointer ids at once, or a
  * click that arrives after a long hold), so the suppression tests inject the
- * exact events on the cell.
+ * exact events on the cell. Touch events keep the real `pointerType: 'touch'`;
+ * the mouse-mediated release click is 'mouse' with `detail: 1`.
  */
 export async function dispatchTouchPointer(
   page: Page,
@@ -161,12 +163,13 @@ export async function dispatchTouchPointer(
   col: number,
   type: 'pointerdown' | 'pointerup' | 'click',
   pointerId: number,
-  detail = 1,
 ): Promise<void> {
   const point = await cellCenter(page, row, col);
+  const click = type === 'click';
   await dispatchTouchPointerEvent(page, type, point, pointerId, {
     target: cellLocator(page, row, col),
-    detail,
+    detail: click ? 1 : 0,
+    pointerType: click ? 'mouse' : 'touch',
   });
 }
 
@@ -191,6 +194,7 @@ export async function startCellPress(
   const point = await cellCenter(page, row, col);
   const gesture = await startTouch(page, point, {
     target: cellLocator(page, row, col),
+    pointerId: TOUCH_POINTER_ID,
   });
   return {
     gesture,
