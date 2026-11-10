@@ -718,6 +718,10 @@ export async function mountMinesweeper(
     // Only 9×9 keeps the 36px touch-target guarantee; the narrow-screen warning
     // is keyed off this state instead of duplicating the column check in CSS.
     gameRoot.dataset.largeBoard = String(config.cols > TOUCH_TARGET_GUARANTEED_COLS);
+    // Square boards derive the stage height from the unpadded board in CSS;
+    // this keeps WebKit's aspect-ratio handling from stretching the padded
+    // stage (see minesweeper.css).
+    gameRoot.dataset.squareBoard = String(config.rows === config.cols);
     boardElement.setAttribute(
       'aria-label',
       `${config.rows} × ${config.cols} 扫雷棋盘`,

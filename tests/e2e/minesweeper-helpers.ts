@@ -270,6 +270,93 @@ export async function expectInsideViewport(
   );
 }
 
+export interface FirstScreenContractOptions {
+  /**
+   * Also assert the compact restart entry is fully inside the first screen.
+   * Enable it only for viewports where the layout already guarantees the entry;
+   * 360x640 and 375x667 wait for Issue #60 / PR #84.
+   */
+  readonly restartEntry?: boolean;
+}
+
+/**
+ * The shared narrow-screen first-screen contract for a phone viewport: the page
+ * does not scroll horizontally, all 81 cells are at least `minimumCellSize` px
+ * in both directions and roughly square, and both HUD readouts, the back link
+ * and the touch hint are fully inside the viewport.
+ *
+ * `restartEntry` adds the compact restart-entry assertion; pass it only for
+ * viewports where the Chromium baseline already guarantees the entry.
+ */
+export async function expectFirstScreenContract(
+  page: Page,
+  minimumCellSize: number,
+  options: FirstScreenContractOptions = {},
+): Promise<void> {
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - window.innerWidth,
+  );
+  expect(overflow, 'page should not scroll horizontally').toBe(0);
+
+  const cellBoxes = await page.locator('[data-cell]').evaluateAll((cells) =>
+    cells.map((cell) => {
+      const box = cell.getBoundingClientRect();
+      return { width: box.width, height: box.height };
+    }),
+  );
+  expect(cellBoxes, 'the 9x9 board should render 81 cells').toHaveLength(81);
+  for (const [index, box] of cellBoxes.entries()) {
+    expect(box.width, `cell ${index} width`).toBeGreaterThanOrEqual(minimumCellSize);
+    expect(box.height, `cell ${index} height`).toBeGreaterThanOrEqual(minimumCellSize);
+    expect(box.width, `cell ${index} aspect ratio`).toBeCloseTo(box.height, 1);
+  }
+
+  await expectInsideViewport(
+    page,
+    page.getByTestId('remaining-mines'),
+    'remaining mines',
+  );
+  await expectInsideViewport(page, page.getByTestId('timer'), 'timer');
+  await expectInsideViewport(
+    page,
+    page.getByRole('link', { name: /返回大厅/ }),
+    'back link',
+  );
+
+  const touchHint = page.getByTestId('touch-hint');
+  await expect(touchHint).toBeVisible();
+  await expectInsideViewport(page, touchHint, 'touch hint');
+
+  if (options.restartEntry) {
+    await expectRestartEntryInFirstScreen(page);
+  }
+}
+
+/**
+ * Assert the compact restart entry is fully inside the first screen. The
+ * shared viewport helper allows a 0.5px tolerance; the narrow contract requires
+ * the exact bounds, so this checks x + width <= viewport width and
+ * y + height <= viewport height directly.
+ */
+export async function expectRestartEntryInFirstScreen(page: Page): Promise<void> {
+  const viewport = page.viewportSize();
+  expect(viewport, 'viewport size should be available').not.toBeNull();
+  const restartBox = await page.getByTestId('mobile-restart-button').boundingBox();
+  expect(restartBox, 'restart button should have a bounding box').not.toBeNull();
+  if (!viewport || !restartBox) {
+    return;
+  }
+  expect(restartBox.x, 'restart button x').toBeGreaterThanOrEqual(0);
+  expect(restartBox.y, 'restart button y').toBeGreaterThanOrEqual(0);
+  expect(restartBox.x + restartBox.width, 'restart button right edge').toBeLessThanOrEqual(
+    viewport.width,
+  );
+  expect(
+    restartBox.y + restartBox.height,
+    'restart button bottom edge',
+  ).toBeLessThanOrEqual(viewport.height);
+}
+
 export async function openMinesweeper(
   page: Page,
   options: OpenMinesweeperOptions = {},

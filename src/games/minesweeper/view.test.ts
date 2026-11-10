@@ -437,6 +437,41 @@ describe('minesweeper large-board warning', () => {
   });
 });
 
+describe('minesweeper square-board state', () => {
+  function squareBoardState(root: HTMLElement): string | undefined {
+    return root.querySelector<HTMLElement>('[data-testid="minesweeper-game"]')
+      ?.dataset.squareBoard;
+  }
+
+  it('marks only boards whose rows and columns match', async () => {
+    const { services } = createServices();
+    const root = await mount(services);
+
+    // The default 5×5 debug board and the 9×9 preset are square; a wide custom
+    // board must not inherit the square-board stage ratio.
+    expect(squareBoardState(root)).toBe('true');
+    debugApi()?.setConfig(BEGINNER_CONFIG);
+    expect(squareBoardState(root)).toBe('true');
+    debugApi()?.setConfig({
+      rows: 16,
+      cols: 30,
+      mines: 99,
+      firstClickSafe: true,
+    });
+    expect(squareBoardState(root)).toBe('false');
+    debugApi()?.setConfig({
+      rows: 16,
+      cols: 16,
+      mines: 40,
+      firstClickSafe: true,
+    });
+    expect(squareBoardState(root)).toBe('true');
+
+    debugApi()?.setConfig(BEGINNER_CONFIG);
+    expect(squareBoardState(root)).toBe('true');
+  });
+});
+
 describe('minesweeper best-time leaderboard', () => {
   it('starts from an empty table with the empty-state copy', async () => {
     const { services, store } = createServices();

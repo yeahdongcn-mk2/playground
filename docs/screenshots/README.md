@@ -1,6 +1,27 @@
 # 截图来源
 
-这些截图用于各期交付的 Before / After 视觉证据。全部由 Playwright Chromium 真实渲染，不是 mockup。
+这些截图用于各期交付的 Before / After 视觉证据。全部由 Playwright 的 Chromium 或 WebKit 真实渲染（各节注明引擎），不是 mockup。
+
+## webkit-narrow：扫雷窄屏首屏契约的 WebKit 矩阵（Issue #83 / 子任务 1）
+
+- Before 基线：`d6aeb3d`（t1 合入后的 `main`，也就是本子任务开始前的 `main`）。
+- After：本子任务分支 `agent/plan-83-t1`。`tests/e2e/minesweeper-helpers.ts` 抽出 Chromium 与 WebKit 共用的首屏契约（无横向溢出、81 格 ≥ 最小格且近似正方形、HUD 两个读数 / 返回大厅 / 触屏提示在首屏，重开入口按视口可选），新增 `tests/e2e/minesweeper.narrow.webkit.spec.ts` 覆盖 320×640、360×640、375×667、412×839。
+- 视觉差异与修复：WebKit 把带 padding 的 `.minesweeper-stage` 的 `aspect-ratio` 解析到内容盒，导致 stage 比宽度高出一个 padding + border 的高度，9×9 格子变成纵向长方形（412×839 下 39.33×41.33）。`src/games/minesweeper/view.ts` 给 `rows === cols` 的棋盘加 `data-square-board="true"`，`minesweeper.css` 在 ≤560px 时让 stage 由去内边距的 board 提供行 / 列比例；Chromium 的 9×9 布局与既有大棋盘（16×16 / 16×30）几何断言不变。
+- 视口 / 主题：320×640、360×640、375×667、412×839 CSS px；Playwright WebKit `iPhone SE (3rd gen)` 设备模拟（DPR 2、`isMobile: true`、`hasTouch: true`），深色主题、`reducedMotion: reduce`。Before / After 使用同一 URL（`#/games/minesweeper?debug=1`）、同一 9×9 READY 棋盘，均为视口截图（`fullPage: false`）。
+- 复现：Before 在 `d6aeb3d` 的干净 worktree 中 `npm ci && npm run build` 后用 `vite preview --host 127.0.0.1 --port 4174 --strictPort` 启动；After 在当前分支构建后用同一命令换 4173 端口。截图脚本使用 Playwright WebKit 的 `devices['iPhone SE (3rd gen)']`、`colorScheme: 'dark'`、`reducedMotion: 'reduce'`，按上表设置视口，打开页面并等待 `document.fonts.ready` 后截取视口。Linux 本地运行 WebKit 需要 Playwright 的系统依赖；CI 用 `npx playwright install --with-deps chromium webkit`。
+
+| 文件 | 场景 | 视口 / 主题 | stage（Before → After） | 单格（Before → After） |
+| --- | --- | --- | --- | --- |
+| `before-minesweeper-webkit-narrow-320x640.png` / `after-minesweeper-webkit-narrow-320x640.png` | 9×9 READY（基线 `d6aeb3d` / 本子任务） | 320×640 / 深色 | 320×324 → 320×320 | 34.219×34.656 → 34.219×34.219 |
+| `before-minesweeper-webkit-narrow-360x640.png` / `after-minesweeper-webkit-narrow-360x640.png` | 9×9 READY（基线 `d6aeb3d` / 本子任务） | 360×640 / 深色 | 360×364 → 360×360 | 38.656×39.109 → 38.656×38.656 |
+| `before-minesweeper-webkit-narrow-375x667.png` / `after-minesweeper-webkit-narrow-375x667.png` | 9×9 READY（基线 `d6aeb3d` / 本子任务） | 375×667 / 深色 | 375×379 → 375×375 | 40.328×40.766 → 40.328×40.328 |
+| `before-minesweeper-webkit-narrow-412x839.png` / `after-minesweeper-webkit-narrow-412x839.png` | 9×9 READY（基线 `d6aeb3d` / 本子任务） | 412×839 / 深色 | 388×406 → 388×388 | 39.328×41.328 → 39.328×39.328 |
+
+### 证据限制
+
+- 手机端为 Playwright WebKit 的 Linux WPE 设备模拟，不是真实 iOS Safari 截图；Playwright 不模拟 iOS 动态地址栏与 `env(safe-area-inset-*)`，真机手感仍需人工验收（由 t3 文档记录处理方式）。
+- 360×640 / 375×667 的重开入口仍超出首屏（375×667 下底边 667.47px），由 #60 / PR #84 跟踪；这两档的 WebKit 契约断言棋盘、HUD、返回大厅与触屏提示，不放宽 320×640 / 412×839 的重开入口断言。
+- 截图只证明 9×9 READY 的静态视觉；契约的显隐、无横向溢出、格子尺寸与重开入口边界由 `tests/e2e/minesweeper.narrow.webkit.spec.ts` 在生产构建上验证，Chromium 无回归由 `npm run test:e2e` 验证。
 
 ## large-board：扫雷窄屏大棋盘降级提示（Issue #60）
 

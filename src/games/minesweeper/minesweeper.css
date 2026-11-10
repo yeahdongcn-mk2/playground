@@ -555,6 +555,22 @@
     gap: clamp(1px, calc(18px / var(--cols)), 2px);
   }
 
+  /* WebKit resolves the stage's aspect-ratio against its content box even
+     though the global reset sets border-box, so the padded stage became taller
+     than wide (320x324 at 320x640, 388x406 at 412x839) and the 9x9 cells
+     stopped being square. For square boards (the first-screen contract is
+     9x9) keep the stage width as the source of truth and let the board, which
+     has no padding or border, provide the ratio. Non-square boards keep the
+     stage ratio asserted by the configured-geometry e2e test. */
+  .minesweeper-game[data-square-board="true"] .minesweeper-stage {
+    aspect-ratio: auto;
+  }
+
+  .minesweeper-game[data-square-board="true"] .minesweeper-board {
+    height: auto;
+    aspect-ratio: var(--cols) / var(--rows);
+  }
+
   .minesweeper-overlay-card {
     padding: 20px 16px;
   }
