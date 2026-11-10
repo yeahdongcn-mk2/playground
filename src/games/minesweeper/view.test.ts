@@ -1095,6 +1095,31 @@ describe('minesweeper touch click suppression', () => {
     expect(cell(root, 2, 2).dataset.revealed).toBe('true');
   });
 
+  it('drops a cancelled gesture token before a later tap with another pointer id', async () => {
+    const { services } = createServices();
+    const root = await mount(services);
+
+    // pointerleave cancels the hold without a release click, so its suppression
+    // token stays pending. The next tap comes from a different pointer id and
+    // must reveal: a stale token may not swallow it.
+    startTouchPress(root, 0, 1, TOUCH_POINTER_ID);
+    board(root).dispatchEvent(
+      pointerEvent('pointerleave', {
+        pointerId: TOUCH_POINTER_ID,
+        pointerType: 'touch',
+      }),
+    );
+    expect(cell(root, 0, 1).dataset.revealed).toBeUndefined();
+
+    startTouchPress(root, 0, 1, 3);
+    endTouchPress(root, 0, 1, 3);
+    clickRelease(root, 0, 1);
+
+    // (0,1) touches the mine at (0,0), so the reveal does not win the game.
+    expect(cell(root, 0, 1).dataset.revealed).toBe('true');
+    expect(statusOf(root)).toBe('playing');
+  });
+
   it('keeps the pending suppression across restart and rebuild', async () => {
     const { services } = createServices();
     const root = await mount(services);
@@ -1110,13 +1135,16 @@ describe('minesweeper touch click suppression', () => {
     expect(statusOf(root)).toBe('ready');
 
     // Rebuilding into a larger board replaces the cell elements while the same
-    // finger is down; the click targets the new cell at the same coordinates.
-    startTouchPress(root, MINE_ROW, MINE_COL);
-    debugApi()?.setConfig({ rows: 6, cols: 6, mines: 1, firstClickSafe: false });
+    // finger is down. The cell under the finger moves from the 5x5 board's
+    // bottom-right (4,4) to the new board's (5,5), so the pending token cannot
+    // be matched by its old coordinates; the release click must still be
+    // swallowed instead of revealing (5,5).
+    startTouchPress(root, 4, 4);
+    debugApi()?.setConfig({ rows: 6, cols: 6, mines: 1, firstClickSafe: true });
     expect(root.querySelectorAll('[data-cell]')).toHaveLength(36);
-    endTouchPress(root, MINE_ROW, MINE_COL);
-    clickRelease(root, MINE_ROW, MINE_COL);
-    expect(cell(root, MINE_ROW, MINE_COL).dataset.revealed).toBeUndefined();
+    endTouchPress(root, 5, 5);
+    clickRelease(root, 5, 5);
+    expect(cell(root, 5, 5).dataset.revealed).toBeUndefined();
     expect(statusOf(root)).toBe('ready');
   });
 

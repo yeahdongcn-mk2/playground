@@ -545,10 +545,13 @@ export async function mountMinesweeper(
   // instead and swallow the first detail > 0 click on that cell. The pointer id
   // is bookkeeping only: it lets a cancelled pointer drop its own token and
   // lets a second finger start its own gesture without clearing the first
-  // finger's suppression. Tokens survive restart / rebuild because those
-  // replace the board DOM, and destroy drops them. Keyboard activation
-  // (detail 0) never consumes one.
-  const suppressedClicks = new Map<number, { row: number; col: number }>();
+  // finger's suppression. A restart / rebuild replaces the board DOM and can
+  // move the cell under the finger, so those paths store `null` ("detached"):
+  // the token no longer names a cell and swallows the next detail > 0 click
+  // wherever it lands. Tokens survive restart / rebuild, a pointerdown with no
+  // finger down drops them because their click cannot arrive any more, and
+  // destroy clears them. Keyboard activation (detail 0) never consumes one.
+  const suppressedClicks = new Map<number, { row: number; col: number } | null>();
 
   function clearGestureTimer(gesture: TouchGesture): void {
     if (gesture.timer !== null) {
@@ -561,21 +564,26 @@ export async function mountMinesweeper(
     suppressedClicks.set(pointerId, { row, col });
   }
 
-  function endTouchGesture(suppressClick: boolean): void {
+  function endTouchGesture(suppressClick: boolean, detachTarget = false): void {
     if (!touchGesture) {
       return;
     }
     clearGestureTimer(touchGesture);
     if (suppressClick) {
       // Keep this finger's release click from revealing the cell, even if a
-      // second finger starts its own gesture in the meantime.
-      suppressNextClick(touchGesture.pointerId, touchGesture.row, touchGesture.col);
+      // second finger starts its own gesture in the meantime. A restart /
+      // rebuild can change the rows / columns (and therefore the cell under
+      // the finger), so it detaches the token from any target.
+      suppressedClicks.set(
+        touchGesture.pointerId,
+        detachTarget ? null : { row: touchGesture.row, col: touchGesture.col },
+      );
     }
     touchGesture = null;
   }
 
-  function cancelTouchGesture(): void {
-    endTouchGesture(true);
+  function cancelTouchGesture(detachTarget = false): void {
+    endTouchGesture(true, detachTarget);
   }
 
   function stopClock(): void {
@@ -717,8 +725,9 @@ export async function mountMinesweeper(
     stopClock();
     // Like restart, a rebuild must keep the suppression that cancelTouchGesture
     // adds: the finger is still down and its release click will target the
-    // rebuilt board. Tokens are consumed by their click or dropped on destroy.
-    cancelTouchGesture();
+    // rebuilt board. Rows / columns may change, so the token is detached from
+    // the old cell and swallows that click wherever it lands.
+    cancelTouchGesture(true);
 
     stageElement.style.setProperty('--rows', String(config.rows));
     stageElement.style.setProperty('--cols', String(config.cols));
@@ -910,8 +919,10 @@ export async function mountMinesweeper(
 
   function restart(): void {
     // A restart from another finger must not let a held cell's timer flag the
-    // fresh board a moment later.
-    cancelTouchGesture();
+    // fresh board a moment later. The restart may replace the board under that
+    // finger, so its pending release click must be swallowed without relying
+    // on the old cell coordinates.
+    cancelTouchGesture(true);
     services.audio.unlock();
     engine.restart();
     stopClock();
@@ -1029,13 +1040,13 @@ export async function mountMinesweeper(
     },
     { signal: listenerSignal },
   );
-  boardElement.addEventListener('pointerleave', cancelTouchGesture, {
+  boardElement.addEventListener('pointerleave', () => cancelTouchGesture(), {
     signal: listenerSignal,
   });
 
   // Scrolling must cancel a pending flag even when the browser does not send
   // pointercancel (for example a programmatic scroll or a nested scroller).
-  window.addEventListener('scroll', cancelTouchGesture, {
+  window.addEventListener('scroll', () => cancelTouchGesture(), {
     capture: true,
     passive: true,
     signal: listenerSignal,
@@ -1050,24 +1061,39 @@ export async function mountMinesweeper(
       // Match the pending gesture by its target cell instead and swallow that
       // first detail > 0 click. A click on another cell belongs to a different
       // finger or a later tap, so it must neither reveal the suppressed cell
-      // nor clear that finger's suppression. Keyboard activation (detail 0)
-      // always passes.
+      // nor clear that finger's suppression. A detached token (restart /
+      // rebuild) names no cell and swallows the click wherever it lands.
+      // Keyboard activation (detail 0) always passes.
       if (event.detail > 0 && suppressedClicks.size > 0) {
         const target = currentCell(event.target);
         if (target) {
           for (const [pointerId, suppressed] of suppressedClicks) {
-            if (suppressed.row === target.row && suppressed.col === target.col) {
+            if (
+              suppressed !== null &&
+              suppressed.row === target.row &&
+              suppressed.col === target.col
+            ) {
+              suppressedClicks.delete(pointerId);
+              return;
+            }
+          }
+          // A detached token (restart / rebuild) names no cell, so it still
+          // owns this click wherever it landed. Without one, a click on another
+          // cell belongs to a different finger and must reach `reveal`.
+          for (const [pointerId, suppressed] of suppressedClicks) {
+            if (suppressed === null) {
               suppressedClicks.delete(pointerId);
               return;
             }
           }
         } else {
-          // The click did not land on a current cell (for example a rebuild
-          // replaced the board under the finger). Consume the oldest token so
-          // it cannot swallow a later real click.
-          const oldest = suppressedClicks.keys().next();
-          if (!oldest.done) {
-            suppressedClicks.delete(oldest.value);
+          // The click did not land on a current cell. Consume a token so it
+          // cannot swallow a later real click.
+          const detachedOrOldest =
+            [...suppressedClicks].find(([, suppressed]) => suppressed === null)?.[0] ??
+            suppressedClicks.keys().next().value;
+          if (detachedOrOldest !== undefined) {
+            suppressedClicks.delete(detachedOrOldest);
           }
           return;
         }
