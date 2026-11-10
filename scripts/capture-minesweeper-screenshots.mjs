@@ -471,7 +471,7 @@ if (!process.env.BASE_URL) {
   server = spawn(
     process.execPath,
     [
-      process.env.PREVIEW_ENTRY ?? 'node_modules/vite/bin/vite.js',
+      process.env.PREVIEW_ENTRY || 'node_modules/vite/bin/vite.js',
       'preview',
       '--host',
       HOST,

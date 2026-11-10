@@ -186,7 +186,7 @@ describe('minesweeper screenshot preview port', () => {
 
         const { status, output } = spawnScript(args, env);
 
-        expect(status).not.toBe(0);
+        expect(status).toBe(1);
         // The specific failure names the real port and the fix; a generic
         // locator timeout from the old script would not match this.
         expect(output).toContain(
@@ -227,7 +227,7 @@ describe('minesweeper screenshot preview port', () => {
 
         const { status, output } = spawnScript([], env);
 
-        expect(status).not.toBe(0);
+        expect(status).toBe(1);
         expect(output).toContain(
           `The preview server exited before http://127.0.0.1:${port} became ready`,
         );

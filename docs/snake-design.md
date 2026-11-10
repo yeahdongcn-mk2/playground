@@ -91,7 +91,7 @@ src/games/snake/
 - 食物不生成在蛇身上、注入 RNG 的确定性、填满棋盘时胜利。
 - `state` 返回防御性副本，外部修改不影响引擎。
 
-运行：`npm run test:unit`（全仓 401 个用例）。
+运行：`npm run test:unit`（全仓 403 个用例）。
 
 ### 端到端（21）
 

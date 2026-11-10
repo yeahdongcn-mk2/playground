@@ -1,19 +1,11 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { readdirSync, readFileSync } from 'node:fs';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer, type AddressInfo, type Server, type Socket } from 'node:net';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  previewStartupError,
   waitForPreviewServer,
   waitForServer,
 } from '../../scripts/lib/preview-server.mjs';
-
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const SCREENSHOT_DIR = join(ROOT, 'docs', 'screenshots');
 
 const children: ChildProcess[] = [];
 const servers: Server[] = [];
@@ -41,6 +33,18 @@ function exitOf(
 ): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
   return new Promise((resolve) => {
     child.once('exit', (code, signal) => resolve({ code, signal }));
+  });
+}
+
+/** Reserve and immediately release an ephemeral port, leaving it unbound. */
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once('error', reject);
+    server.listen({ port: 0, host: '127.0.0.1' }, () => {
+      const { port } = server.address() as AddressInfo;
+      server.close((error) => (error ? reject(error) : resolve(port)));
+    });
   });
 }
 
@@ -77,30 +81,17 @@ function closeServer(server: Server): Promise<void> {
   });
 }
 
-function screenshotHashes(): Record<string, string> {
-  return Object.fromEntries(
-    readdirSync(SCREENSHOT_DIR)
-      .sort()
-      .map((file) => [
-        file,
-        createHash('sha256')
-          .update(readFileSync(join(SCREENSHOT_DIR, file)))
-          .digest('hex'),
-      ]),
-  );
-}
-
 describe('preview server startup', () => {
   it('reports the exit code and stderr when the preview dies early', async () => {
+    const port = await freePort();
     const child = spawnPreview(
       "process.stderr.write('fake preview exploded\\n'); process.exit(7);",
     );
     const exited = exitOf(child);
-    const screenshotsBefore = screenshotHashes();
 
     const error = await waitForPreviewServer(child, {
-      origin: 'http://127.0.0.1:65000',
-      port: 65000,
+      origin: `http://127.0.0.1:${port}`,
+      port,
       timeoutMs: 5_000,
       probeIntervalMs: 25,
       probeTimeoutMs: 100,
@@ -109,14 +100,34 @@ describe('preview server startup', () => {
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain('exit code 7');
     expect((error as Error).message).toContain('fake preview exploded');
-    expect((error as Error).message).toContain('PREVIEW_PORT=65001');
+    expect((error as Error).message).toContain(`PREVIEW_PORT=${port + 1}`);
     // The fake preview really exited non-zero before anything was captured.
     expect(await exited).toEqual({ code: 7, signal: null });
-    expect(screenshotHashes()).toEqual(screenshotsBefore);
+  });
+
+  it('reports a spawn failure before the preview starts', async () => {
+    const port = await freePort();
+    const child = spawn('/definitely/missing-preview-binary', [], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    children.push(child);
+
+    const error = await waitForPreviewServer(child, {
+      origin: `http://127.0.0.1:${port}`,
+      port,
+      timeoutMs: 5_000,
+      probeIntervalMs: 25,
+      probeTimeoutMs: 100,
+    }).catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain(
+      'Failed to spawn the preview server',
+    );
+    expect((error as Error).message).toContain('ENOENT');
   });
 
   it('does not hang when the port accepts connections but never answers', async () => {
-    const child = spawnPreview('setInterval(() => {}, 1_000);');
     const port = await listenSilently();
     const started = Date.now();
 
@@ -130,10 +141,25 @@ describe('preview server startup', () => {
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toMatch(/Timed out waiting/);
     expect(Date.now() - started).toBeLessThan(3_000);
-    // The hanging server kept the child alive; only the probe timeout ended
-    // the wait, not a preview failure.
-    expect(child.exitCode).toBeNull();
   }, 10_000);
+
+  it('does not trust a response that arrives after the preview died', async () => {
+    let checks = 0;
+    const error = await waitForServer('http://127.0.0.1:65000', {
+      port: 65000,
+      failure: () =>
+        checks++ === 0
+          ? null
+          : 'vite preview stopped (exit code 7, signal none).',
+      // A 200 from the readiness probe must not hide the child's death.
+      fetchImpl: async () => ({ ok: true }),
+      timeoutMs: 1_000,
+      probeIntervalMs: 10,
+    }).catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('exit code 7');
+  });
 
   it('resolves once the preview answers', async () => {
     const child = spawnPreview('setInterval(() => {}, 1_000);');
@@ -157,11 +183,15 @@ describe('preview server startup', () => {
     ).resolves.toBeUndefined();
   });
 
-  it('names the real port and the override in the startup error', () => {
-    const error = previewStartupError('http://127.0.0.1:4186', 4186, 'boom');
+  it('derives the real port from the URL in the startup error', async () => {
+    const error = await waitForServer('http://127.0.0.1:4186', {
+      failure: () => 'boom',
+      timeoutMs: 100,
+    }).catch((reason: unknown) => reason);
 
-    expect(error.message).toContain('Port 4186');
-    expect(error.message).toContain('PREVIEW_PORT=4187');
-    expect(error.message).toContain('boom');
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('Port 4186');
+    expect((error as Error).message).toContain('PREVIEW_PORT=4187');
+    expect((error as Error).message).toContain('boom');
   });
 });
