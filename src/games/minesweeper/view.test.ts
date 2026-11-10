@@ -1121,6 +1121,26 @@ describe('minesweeper touch click suppression', () => {
     expect(statusOf(root)).toBe('playing');
   });
 
+  it('drops a released cancelled token before a later tap on the same cell', async () => {
+    const { services } = createServices();
+    const root = await mount(services);
+
+    // A scroll cancels the hold while its finger is down, then the finger
+    // lifts without a release click, so its token is still pending. The next
+    // press must drop it: otherwise it swallows that tap's click on the same
+    // cell and the tap no longer reveals.
+    startTouchPress(root, 0, 1, TOUCH_POINTER_ID);
+    window.dispatchEvent(new Event('scroll'));
+    endTouchPress(root, 0, 1, TOUCH_POINTER_ID);
+
+    startTouchPress(root, 0, 1, SECOND_TAP_POINTER_ID);
+    endTouchPress(root, 0, 1, SECOND_TAP_POINTER_ID);
+    clickRelease(root, 0, 1);
+
+    expect(cell(root, 0, 1).dataset.revealed).toBe('true');
+    expect(statusOf(root)).toBe('playing');
+  });
+
   it('keeps a cancelled hold suppressed when another pointer presses another cell', async () => {
     const { services } = createServices();
     const root = await mount(services);

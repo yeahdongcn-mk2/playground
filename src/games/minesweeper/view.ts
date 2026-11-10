@@ -546,14 +546,14 @@ export async function mountMinesweeper(
   // is bookkeeping only: it lets a cancelled pointer drop its own token and
   // lets a second finger start its own gesture without clearing the first
   // finger's suppression. Restart / rebuild cancel the gesture while its
-  // finger is still down, and another finger may press before it lifts (a new
-  // press drops attached tokens), so those paths store `null` ("detached"):
-  // the token no longer names a cell and swallows the next detail > 0 click
-  // wherever it lands once its finger has lifted. A rebuild can also change
-  // the rows / columns, so its release click may land on a different cell.
-  // Tokens survive restart / rebuild, a pointerdown with no active gesture
-  // drops the ones whose gesture is over, and destroy clears them. Keyboard
-  // activation (detail 0) never consumes one.
+  // finger is still down, and another finger may press before it lifts, so
+  // those paths store `null` ("detached"): the token no longer names a cell
+  // and swallows the next detail > 0 click wherever it lands once its finger
+  // has lifted. A rebuild can also change the rows / columns, so its release
+  // click may land on a different cell. Tokens survive restart / rebuild, any
+  // pointerdown drops the tokens whose finger has already lifted (a still-held
+  // token stays unless the press lands on its own cell), and destroy clears
+  // them. Keyboard activation (detail 0) never consumes one.
   const suppressedClicks = new Map<number, { row: number; col: number } | null>();
   // Touch pointers that are still physically down on the board. A detached
   // token outlives cancelTouchGesture(), so `touchGesture === null` no longer
