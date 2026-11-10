@@ -109,6 +109,45 @@ function documentedBreakdown(source: string): [number, number, number] | null {
   return [Number(match[1]), Number(match[2]), Number(match[3])];
 }
 
+interface ContractClause {
+  number: number;
+  text: string;
+}
+
+const CONTRACT_INTRO = '以下 7 条是';
+
+/**
+ * The numbered contract clauses, sliced out of the surrounding document.
+ *
+ * Clause assertions must read this slice (one numbered line each) instead of
+ * the whole document: `docs/framework.md` and `README.md` repeat the same
+ * tokens in their known-limitations prose, so a document-wide `toContain`
+ * would stay green even after a contract clause was deleted or corrupted.
+ */
+function contractClauses(source: string, name: string): ContractClause[] {
+  const start = source.indexOf(CONTRACT_INTRO);
+  if (start < 0) {
+    throw new Error(`${name} is missing the narrow-screen contract intro`);
+  }
+  const clauses: ContractClause[] = [];
+  for (const line of source.slice(start).split('\n')) {
+    const match = /^(\d+)\.\s+(.+)$/.exec(line.trim());
+    if (!match) {
+      if (clauses.length > 0 && line.trim() === '') {
+        break;
+      }
+      continue;
+    }
+    const number = Number(match[1]);
+    const text = match[2];
+    if (!text) {
+      throw new Error(`${name} has an empty contract clause ${number}`);
+    }
+    clauses.push({ number, text });
+  }
+  return clauses;
+}
+
 describe('browser coverage documentation', () => {
   it('runs the WebKit specs on the mobile-webkit project with the iPhone SE device', () => {
     const webkit = project('mobile-webkit');
@@ -154,25 +193,9 @@ describe('browser coverage documentation', () => {
       for (const viewport of [...chromiumViewports, ...webkitViewports]) {
         expect(doc, `${name} is missing the ${viewport} viewport`).toContain(viewport);
       }
-      // The labels must match each spec in order, not just appear somewhere.
-      expect(doc, `${name} should list the Chromium matrix in spec order`).toContain(
-        chromiumViewports.join('、'),
-      );
-      expect(doc, `${name} should list the WebKit matrix in spec order`).toContain(
-        webkitViewports.join('、'),
-      );
-      expect(
-        doc,
-        `${name} should state the Chromium matrix has ${chromiumViewports.length} viewports`,
-      ).toContain(`Chromium ${chromiumViewports.length} 个视口`);
-      expect(
-        doc,
-        `${name} should state the WebKit matrix has ${webkitViewports.length} viewports`,
-      ).toContain(`WebKit ${webkitViewports.length} 个视口`);
-      expect(
-        doc,
-        `${name} should state that all WebKit viewports assert the restart entry`,
-      ).toMatch(/四个视口都断言[^。\n]{0,80}重开入口/);
+      // Matrix order and counts are asserted inside contract clause 4 below;
+      // matching the whole document would let another copy of the same list
+      // hide an out-of-order or missing clause.
     }
   });
 
@@ -181,26 +204,40 @@ describe('browser coverage documentation', () => {
       ['README.md', README],
       ['docs/framework.md', FRAMEWORK],
     ] as const) {
-      // Minimum viewport and its height boundary.
-      expect(doc, `${name} should document the 320×640 minimum viewport`).toMatch(
+      const clauses = contractClauses(doc, name);
+      expect(
+        clauses.map((candidate) => candidate.number),
+        `${name} should number exactly clauses 1-7`,
+      ).toEqual([1, 2, 3, 4, 5, 6, 7]);
+      const clause = (number: number): string => {
+        const found = clauses.find((candidate) => candidate.number === number);
+        if (!found) {
+          throw new Error(`${name} is missing contract clause ${number}`);
+        }
+        return found.text;
+      };
+
+      // Clause 1: minimum viewport and its height boundary.
+      expect(clause(1), `${name} clause 1 should document the 320×640 minimum`).toMatch(
         /最低支持视口\s*320×640/,
       );
-      expect(doc, `${name} should state that heights under 640px are not guaranteed`).toMatch(
-        /高度\s*<640[^。\n]{0,20}不保证/,
-      );
+      expect(
+        clause(1),
+        `${name} clause 1 should state that heights under 640px are not guaranteed`,
+      ).toMatch(/高度\s*<640[^。\n]{0,20}不保证/);
 
-      // Cell-size promise and the 320–339px geometric fallback.
-      expect(doc, `${name} should document the ≥36×36px cell promise`).toContain(
+      // Clause 2: cell-size promise and the 320–339px geometric fallback.
+      expect(clause(2), `${name} clause 2 should document the ≥36×36px cell promise`).toContain(
         '≥36×36px',
       );
-      expect(doc, `${name} should document the ≥34×34px geometric fallback`).toContain(
+      expect(clause(2), `${name} clause 2 should document the ≥34×34px geometric fallback`).toContain(
         '≥34×34px',
       );
-      expect(doc, `${name} should scope the fallback to 320–339px`).toMatch(
+      expect(clause(2), `${name} clause 2 should scope the fallback to 320–339px`).toMatch(
         /320[–-]339px/,
       );
 
-      // First-screen entries the matrix must contain.
+      // Clause 3: first-screen entries and no horizontal scrolling.
       for (const entry of [
         '返回大厅',
         '剩余雷数',
@@ -208,44 +245,119 @@ describe('browser coverage documentation', () => {
         'touch-hint',
         'mobile-restart-button',
       ]) {
-        expect(doc, `${name} should require ${entry} on the first screen`).toContain(
-          entry,
-        );
+        expect(
+          clause(3),
+          `${name} clause 3 should require ${entry} on the first screen`,
+        ).toContain(entry);
       }
+      expect(
+        clause(3),
+        `${name} clause 3 should keep the first screen free of horizontal scrolling`,
+      ).toContain('不横向滚动');
 
-      // Out-of-matrix boundary.
-      expect(doc, `${name} should document the matrix boundary examples`).toMatch(
+      // Clause 4: the only authoritative matrix order for both engines.
+      expect(
+        clause(4),
+        `${name} clause 4 should list the Chromium matrix in spec order`,
+      ).toContain(CHROMIUM_NARROW_VIEWPORTS.join('、'));
+      expect(
+        clause(4),
+        `${name} clause 4 should list the WebKit matrix in spec order`,
+      ).toContain(WEBKIT_NARROW_VIEWPORTS.join('、'));
+      expect(
+        clause(4),
+        `${name} clause 4 should state the Chromium matrix has ${CHROMIUM_NARROW_VIEWPORTS.length} viewports`,
+      ).toContain(`Chromium ${CHROMIUM_NARROW_VIEWPORTS.length} 个视口`);
+      expect(
+        clause(4),
+        `${name} clause 4 should state the WebKit matrix has ${WEBKIT_NARROW_VIEWPORTS.length} viewports`,
+      ).toContain(`WebKit ${WEBKIT_NARROW_VIEWPORTS.length} 个视口`);
+      expect(
+        clause(4),
+        `${name} clause 4 should state that all WebKit viewports assert the restart entry`,
+      ).toMatch(/四个视口都断言[^。\n]{0,80}重开入口/);
+
+      // Clause 5: out-of-matrix boundary.
+      expect(clause(5), `${name} clause 5 should document the matrix boundary examples`).toMatch(
         /未列入矩阵[^。\n]{0,80}375×640[^。\n]{0,20}400×667/,
       );
-      expect(doc, `${name} should not promise the restart entry outside the matrix`).toMatch(
-        /(?:不承诺|不保证)[^。\n]{0,30}重开入口/,
-      );
+      expect(
+        clause(5),
+        `${name} clause 5 should not promise the restart entry outside the matrix`,
+      ).toMatch(/(?:不承诺|不保证)[^。\n]{0,30}重开入口/);
 
-      // Large-board degradation.
-      expect(doc, `${name} should only guarantee 36px for 9×9 boards`).toMatch(
-        /列数\s*>9[^。\n]{0,40}9×9[^。\n]{0,30}≥36px/,
-      );
-      expect(doc, `${name} should reference the large-board follow-up #86`).toContain(
+      // Clause 6: large-board degradation.
+      expect(
+        clause(6),
+        `${name} clause 6 should only guarantee 36px for 9×9 boards`,
+      ).toMatch(/列数\s*>9[^。\n]{0,40}9×9[^。\n]{0,30}≥36px/);
+      expect(clause(6), `${name} clause 6 should reference the large-board follow-up #86`).toContain(
         '#86',
       );
-      expect(doc, `${name} should say large boards scale down proportionally`).toContain(
+      expect(clause(6), `${name} clause 6 should say large boards scale down proportionally`).toContain(
         '按比例缩小',
       );
-      expect(doc, `${name} should keep the page free of horizontal scrolling`).toContain(
+      expect(clause(6), `${name} clause 6 should keep the page free of horizontal scrolling`).toContain(
         '不横向滚动',
       );
 
-      // Rule for new viewport widths.
-      expect(doc, `${name} should document the new-width rule`).toMatch(
+      // Clause 7: rule for new viewport widths.
+      expect(clause(7), `${name} clause 7 should document the new-width rule`).toMatch(
         /新增视口宽度[^。\n]{0,60}按同一规则/,
       );
-      expect(doc, `${name} should require an e2e for new widths`).toContain(
+      expect(clause(7), `${name} clause 7 should require an e2e for new widths`).toContain(
         '补对应 e2e',
       );
-      expect(doc, `${name} should avoid per-width tickets`).toContain('不再逐条开单');
-      expect(doc, `${name} should record out-of-rule widths as known limitations`).toMatch(
-        /超出规则范围[^。\n]{0,30}已知限制/,
+      expect(clause(7), `${name} clause 7 should avoid per-width tickets`).toContain(
+        '不再逐条开单',
       );
+      expect(
+        clause(7),
+        `${name} clause 7 should record out-of-rule widths as known limitations`,
+      ).toMatch(/超出规则范围[^。\n]{0,30}已知限制/);
+    }
+  });
+
+  it('attributes the phone viewport matrices to the projects that run them', () => {
+    // The chromium project ignores the mobile spec, so only the mobile
+    // (Pixel 7) project runs the 8-viewport matrix. The docs must state the
+    // same ownership as playwright.config.ts.
+    expect(
+      matches(project('chromium').testIgnore, 'minesweeper.mobile.spec.ts'),
+      'the chromium project should ignore minesweeper.mobile.spec.ts',
+    ).toBe(true);
+    expect(
+      matches(project('mobile').testMatch, 'minesweeper.mobile.spec.ts'),
+      'the mobile project should run minesweeper.mobile.spec.ts',
+    ).toBe(true);
+    expect(
+      matches(project('mobile-webkit').testMatch, 'minesweeper.mobile.spec.ts'),
+      'the mobile-webkit project should not run the Chromium mobile spec',
+    ).toBe(false);
+
+    for (const [name, doc] of [
+      ['README.md', README],
+      ['docs/framework.md', FRAMEWORK],
+    ] as const) {
+      const attributionLines = doc
+        .split('\n')
+        .filter((line) => line.includes('tests/e2e/minesweeper.mobile.spec.ts'));
+      expect(
+        attributionLines.length,
+        `${name} should attribute minesweeper.mobile.spec.ts to a project`,
+      ).toBeGreaterThan(0);
+      for (const line of attributionLines) {
+        expect(
+          line,
+          `${name} should attribute the 8-viewport matrix to the mobile project`,
+        ).toMatch(
+          /`mobile`（Pixel 7）项目运行 `tests\/e2e\/minesweeper\.mobile\.spec\.ts`/,
+        );
+        expect(
+          line,
+          `${name} should not say the chromium project also runs the phone matrix`,
+        ).not.toMatch(/`chromium`[^。\n]{0,40}(?:与|和) `mobile`[^。\n]{0,40}运行/);
+      }
     }
   });
 

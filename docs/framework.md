@@ -288,7 +288,7 @@ npm run test:e2e     # 先 build，再用 vite preview 跑 Chromium 桌面 / Pix
 npm run test:e2e:webkit # 先 build，只跑 mobile-webkit（iPhone SE (3rd gen)）
 ```
 
-当前提交本地通过：`typecheck`、`lint`、`build`、`check:budget` 通过；`npm run test:unit` 392 passed；`npm run test:e2e` 125 passed（桌面 85 + 手机 34 + WebKit 6）。
+当前提交本地通过：`typecheck`、`lint`、`build`、`check:budget` 通过；`npm run test:unit` 393 passed；`npm run test:e2e` 125 passed（桌面 85 + 手机 34 + WebKit 6）。
 
 - 单测只覆盖引擎无关逻辑；不要在 Node 里启动 Phaser。
 - 端到端使用 `data-testid`，覆盖进入 / 返回、最近游玩时间、键盘 / 鼠标 / 触屏、修饰键、重置、容器级缩放、未知路由、快速切换的晚到 mount、休眠时销毁和监听器清理；贪食蛇、俄罗斯方块、2048、打砖块与扫雷另有完整玩法用例（暂停 / 重开、计分 / 结束、窗口失焦暂停与恢复、手机端触屏按钮或拖动、像素绘制与监听器清理，扫雷另有左右键、固定雷盘、难度预设与自定义切换、非法自定义错误、格子可见文本、焦点迁移、畸形调试雷盘回退、胜利 / 踩雷与计时器 / 调试接缝清理）。
@@ -310,7 +310,7 @@ npm run test:e2e:webkit # 先 build，只跑 mobile-webkit（iPhone SE (3rd gen)
 
 现有 Playwright 覆盖：
 
-- `chromium`（桌面 1440×1000）与 `mobile`（Pixel 7）项目运行 `tests/e2e/minesweeper.mobile.spec.ts` 的 Chromium 8 视口矩阵；边界用例另用计算样式钉住短窄查询的 min-width / max-width / max-height 边界。
+- `mobile`（Pixel 7）项目运行 `tests/e2e/minesweeper.mobile.spec.ts` 的 Chromium 8 视口矩阵，并覆盖窄屏边界用例（用计算样式钉住短窄查询的 min-width / max-width / max-height 边界）；`chromium`（桌面 1440×1000）项目继续覆盖桌面交互，不运行该手机矩阵。
 - `mobile-webkit` 项目使用 `devices['iPhone SE (3rd gen)']`（WebKit 引擎），运行 `tests/e2e/minesweeper.webkit.spec.ts` 冒烟与 `tests/e2e/minesweeper.narrow.webkit.spec.ts` 的 WebKit 4 视口矩阵。
 - 其余手机端 spec 与截图脚本仍只在 Chromium 下运行，#100 跟踪后续按 spec 扩大 WebKit 覆盖。
 

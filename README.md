@@ -381,7 +381,7 @@ games/<game>/scene → 对应引擎（动态 import）
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过
-npm run test:unit    # 392 passed（含贪食蛇 21、俄罗斯方块 38、2048 35、打砖块 39、扫雷 133 个规则 / 难度 / 成绩 / 视图 / 调试用例，以及截图脚本端口 9 例、截图模式 6 例）
+npm run test:unit    # 393 passed（含贪食蛇 21、俄罗斯方块 38、2048 35、打砖块 39、扫雷 133 个规则 / 难度 / 成绩 / 视图 / 调试用例，以及截图脚本端口 9 例、截图模式 6 例）
 npm run build        # 通过
 npm run check:budget # 通过（入口 10.91 KB gzip，全部 JS 404.24 KB gzip）
 npm run test:e2e     # 125 passed（桌面 85 + 手机 34 + WebKit 6）
@@ -395,7 +395,7 @@ npm run test:e2e     # 125 passed（桌面 85 + 手机 34 + WebKit 6）
 
 扫雷窄屏首屏契约现在由 Chromium 与 WebKit 两套 Playwright 模拟共同验证：
 
-- Chromium：`chromium`（桌面 1440×1000）与 `mobile`（Pixel 7）项目，继续覆盖桌面、手机端交互与既有窄屏矩阵。`tests/e2e/minesweeper.mobile.spec.ts` 的 8 视口矩阵覆盖 320×640、340×700、349×700、360×640、360×740、375×667、400×700、412×839，全部断言重开入口完整位于首屏；边界用例另用计算样式钉住短窄查询的 min-width / max-width / max-height 三个边界，以及 401×667 回落到基础间距。
+- Chromium：`mobile`（Pixel 7）项目运行 `tests/e2e/minesweeper.mobile.spec.ts` 的 8 视口矩阵，覆盖 320×640、340×700、349×700、360×640、360×740、375×667、400×700、412×839，全部断言重开入口完整位于首屏；该 spec 的窄屏边界用例另用计算样式钉住短窄查询的 min-width / max-width / max-height 三个边界，以及 401×667 回落到基础间距。`chromium`（桌面 1440×1000）项目继续覆盖桌面交互，不运行该手机矩阵。
 - WebKit：`mobile-webkit` 项目（`iPhone SE (3rd gen)`，`webkit` 引擎）运行 `tests/e2e/minesweeper.webkit.spec.ts` 冒烟，以及 `tests/e2e/minesweeper.narrow.webkit.spec.ts` 的 320×640、360×640、375×667、412×839 视口矩阵。四个视口都断言 81 格最小尺寸、无横向溢出，剩余雷数 / 计时器 / 返回大厅 / touch-hint 与重开入口在首屏内；360×640 / 375×667 的短窄首屏入口由 Chromium 与 WebKit 两套矩阵共同断言，不再单独跟踪。
 - 其余手机端 spec（framework、snake、tetris、2048、breakout、minesweeper 等）与截图脚本仍只在 Chromium 下运行，#100 跟踪后续按 spec 扩大 WebKit 覆盖。
 
