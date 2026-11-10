@@ -27,9 +27,9 @@ const PLACEHOLDER_PASSWORD_WORDS = String.raw`password|passwd|pass|pwd|secret|ch
 // keeps `$DB_PASSWORD`, `$YOUR_PASSWORD` and `$CHANGE_ME` quiet. The
 // `${VAR:-fallback}` form is deliberately reported in these slots: the fallback
 // can contain a real secret, so only the plain `${VAR}`/`$(VAR)`/`$VAR` forms
-// are treated as templates. The URL userinfo and Oracle thin shapes below use
-// this name shape; the JDBC property branch still uses its existing broad `$`
-// prefix. The rule comment and a test pin that trade-off.
+// are treated as templates. All three password slots (URL userinfo, Oracle
+// thin and JDBC properties) use this name shape, and all three report
+// `${VAR:-fallback}`. The rule comment and a test pin that trade-off.
 const PLACEHOLDER_PASSWORD_INTERPOLATION_NAME = String.raw`(?!\d)_*(?:[A-Za-z0-9]+_)*(?:${PLACEHOLDER_PASSWORD_WORDS})(?:_[A-Za-z0-9]+)*_*`;
 
 // `__UPPER_SNAKE__` names are templates only when a known placeholder word or
@@ -93,10 +93,26 @@ const PLACEHOLDER_JDBC_BRACE_SHAPES = String.raw`\{\{?(?:(?:${PLACEHOLDER_PASSWO
 // PLACEHOLDER_JDBC_BRACE_SHAPES above and keep their stricter semantics.
 // Masked, ellipsis, dunder and printf-style forms are listed separately in
 // PLACEHOLDER_PASSWORD_WHOLE_SHAPES and already require the whole value; JDBC
-// property values apply the same whole-value rule to their bare values.
+// property values apply the same whole-value rule to their bare values. The
+// JDBC `$`, `<...>`, `[...]` and `%NAME%` shapes share this `$` name shape but
+// take the JDBC value boundary, so they live in PLACEHOLDER_JDBC_SHAPES below.
 const PLACEHOLDER_PASSWORD_BRACE_SHAPES = String.raw`\{\{[^}]*\}\}|\{(?!\{)[A-Za-z_][^}]*\}`;
 const PLACEHOLDER_PASSWORD_SHAPES = String.raw`\$(?:\{${PLACEHOLDER_PASSWORD_INTERPOLATION_NAME}\}|\(${PLACEHOLDER_PASSWORD_INTERPOLATION_NAME}\)|${PLACEHOLDER_PASSWORD_INTERPOLATION_NAME})|${PLACEHOLDER_PASSWORD_BRACE_SHAPES}|<[^>\s]*>|\[[^\]\s]*\]|%[A-Za-z_][A-Za-z0-9_]*%`;
-const PLACEHOLDER_JDBC_SHAPES = String.raw`\$(?:\{|\(|[A-Za-z_])|${PLACEHOLDER_JDBC_BRACE_SHAPES}(?![^\s;?&]*[A-Za-z0-9_-])|<[^>\s]*>|\[[^\]\s]*\]|%[A-Za-z_][A-Za-z0-9_]*%`;
+
+// JDBC property values are matched up to whitespace, `;`, `?` or `&`. The
+// whole-value check below requires that no value content (alphanumerics, `_`
+// or `-`) follows the shape before that boundary; trailing punctuation such as
+// a closing quote is tolerated, matching the other JDBC whole-value shapes.
+// The `$` forms reuse the same segmented variable-name shape as the URL
+// userinfo and Oracle thin slots, so `$DB_PASSWORD` is a template while
+// `$PASSWORDx` is a real password, and `${VAR:-fallback}` is deliberately
+// reported here too: the fallback can hide a real secret. The angle/bracket/
+// percent shapes likewise count only when nothing follows them before the
+// value ends, so `<password>x`, `[password]x` and `%DB_PASSWORD%x` are
+// reported. JDBC brace values keep their own whole-value rule in
+// PLACEHOLDER_JDBC_BRACE_SHAPES and are not repeated here.
+const PLACEHOLDER_JDBC_WHOLE_VALUE = String.raw`(?![^\s;?&]*[A-Za-z0-9_-])`;
+const PLACEHOLDER_JDBC_SHAPES = String.raw`\$(?:\{${PLACEHOLDER_PASSWORD_INTERPOLATION_NAME}\}|\(${PLACEHOLDER_PASSWORD_INTERPOLATION_NAME}\)|${PLACEHOLDER_PASSWORD_INTERPOLATION_NAME})${PLACEHOLDER_JDBC_WHOLE_VALUE}|${PLACEHOLDER_JDBC_BRACE_SHAPES}(?![^\s;?&]*[A-Za-z0-9_-])|<[^>\s]*>${PLACEHOLDER_JDBC_WHOLE_VALUE}|\[[^\]\s]*\]${PLACEHOLDER_JDBC_WHOLE_VALUE}|%[A-Za-z_][A-Za-z0-9_]*%${PLACEHOLDER_JDBC_WHOLE_VALUE}`;
 
 const RULES = [
   {
@@ -201,17 +217,18 @@ const RULES = [
     //     `{{DB_PASSWORD}}`, `{DB_PASSWORD}`, `%DB_PASSWORD%`, `<password>`,
     //     `[password]`, `password`, `changeme`, `YOUR_PASSWORD`,
     //     `YOURPASSWORD`, `REPLACE_ME` and `xxxxx`. These only count when they
-    //     fill the whole URL userinfo/Oracle thin password, so a real password
-    //     that merely starts with the shape (`$PASSWORDx`, `{S3cr3t`,
-    //     `<password>x`, `[password]x`, `%DB_PASSWORD%x`) is reported. In these
-    //     two slots the `$` forms additionally require a placeholder-word
-    //     variable name (`$DB_PASSWORD` is a template, `$PASSWORDx` is not),
-    //     matching the dunder rule; this `$` name constraint is specific to
-    //     the URL userinfo and Oracle thin slots.
-    //     `${VAR:-fallback}` is deliberately reported as well: the fallback can
-    //     contain a real secret, so only the plain `$VAR`/`${VAR}`/`$(VAR)`
-    //     forms are exempt. The URL userinfo/Oracle thin brace form is looser
-    //     than the JDBC brace shape: a balanced `{{...}}` or `{` followed by a
+    //     fill the whole password value, so a real password that merely starts
+    //     with the shape (`$PASSWORDx`, `{S3cr3t`, `<password>x`,
+    //     `[password]x`, `%DB_PASSWORD%x`) is reported. In the URL userinfo,
+    //     Oracle thin and JDBC property slots the `$` forms additionally
+    //     require a placeholder-word variable name (`$DB_PASSWORD` is a
+    //     template, `$PASSWORDx` is not), matching the dunder rule; the JDBC
+    //     property value ends at whitespace, `;`, `?` or `&`. This `$` name
+    //     constraint applies to all three slots, and `${VAR:-fallback}` is
+    //     deliberately reported as well: the fallback can contain a real
+    //     secret, so only the plain `$VAR`/`${VAR}`/`$(VAR)` forms are exempt.
+    //     The URL userinfo/Oracle thin brace form is looser than the JDBC
+    //     brace shape: a balanced `{{...}}` or `{` followed by a
     //     letter/underscore and a closing brace is a template, so
     //     `{DB_PASSWORD}`, `{{DB_PASSWORD}}`, `{password123}`, `{ABC123}`,
     //     `{S3cr3t}` and `{S3cr3t;!}` stay exempt while unbalanced forms
@@ -230,8 +247,9 @@ const RULES = [
     //     values the whole value ends at whitespace, `;`, `?` or `&`, so a
     //     placeholder followed by another property or a closing quote stays
     //     exempt while `*S3cr3t`, `...S3cr3t`, `%s3cr3t` and `%d3cr3t` are
-    //     reported. The JDBC property branch additionally treats whole-value
-    //     brace-wrapped values as placeholders.
+    //     reported. The same JDBC boundary applies to the `$`, `<...>`,
+    //     `[...]` and `%NAME%` shapes above. The JDBC property branch
+    //     additionally treats whole-value brace-wrapped values as placeholders.
     // A JDBC placeholder word counts when the whole value is that word, so
     // values terminated by `;`, `&`, `?`, a closing quote or other punctuation
     // are still placeholders, while a value continuing after such punctuation

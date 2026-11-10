@@ -282,11 +282,53 @@ const USERINFO_ORACLE_THIN_PLACEHOLDER_PREFIX_PASSWORDS = [
 // Default-value interpolation is deliberately reported: the fallback can
 // contain a real secret, so only the plain `$VAR`/`${VAR}`/`$(VAR)` forms are
 // whole-value placeholders. The scanner rule comment and these tests pin that
-// decision for the JDBC property branch to reuse. Built from parts so this test
-// file itself stays clean for the scanner it exercises.
+// decision for all three password slots, including JDBC properties. Built from
+// parts so this test file itself stays clean for the scanner it exercises.
 const DEFAULT_VALUE_INTERPOLATION_PASSWORDS = [
   ['${', 'DB_PASSWORD', ':-fallback}'],
   ['${', 'DB_PASSWORD', ':-S3cr3t!}'],
+].map((parts) => parts.join(''));
+
+// Whole-value interpolation/template placeholders in a JDBC password property.
+// JDBC property values end at whitespace, `;`, `?` or `&`, and the `$` forms
+// reuse the segmented variable-name shape from the URL userinfo/Oracle thin
+// slots, so `$DB_PASSWORD` is a template while `$PASSWORDx` is not. Angle,
+// bracket and percent shapes must fill the whole value too. These must not be
+// reported.
+const JDBC_WHOLE_VALUE_PLACEHOLDERS = [
+  '$DB_PASSWORD',
+  '$DB_PASSWORD_',
+  '$_DB_PASSWORD',
+  '$YOUR_PASSWORD',
+  '$CHANGE_ME',
+  '${DB_PASSWORD}',
+  '${YOUR_PASSWORD}',
+  '$(DB_PASSWORD)',
+  '$(YOUR_PASSWORD)',
+  '<password>',
+  '[password]',
+  '%DB_PASSWORD%',
+] as const;
+
+// Real JDBC property passwords that only start with a `$`, `<...>`, `[...]` or
+// `%NAME%` placeholder shape, or whose `$` variable name is not a
+// placeholder-word segment. Only a value that fills the whole property is a
+// placeholder, so these must still be reported. Built from parts so this test
+// file itself stays clean for the scanner it exercises.
+const JDBC_PLACEHOLDER_PREFIX_PASSWORDS = [
+  ['$', 'PASSWORD', 'x'],
+  ['$', 'PASSWORD', '123'],
+  ['$', 'DB_PASSWORD', 'x'], // valid name, but more content follows
+  ['$', '2_PASSWORD'], // variable names cannot start with a digit
+  ['$(', 'PASSWORD', 'x)'],
+  ['$(', 'DB_PASSWORD', ')x'],
+  ['$(', '2_PASSWORD', ')'],
+  ['${', 'PASSWORD', 'x}'],
+  ['${', 'DB_PASSWORD', '}x'],
+  ['${', '2_PASSWORD', '}'],
+  ['<password>', 'x'],
+  ['[password]', 'x'],
+  ['%DB_PASSWORD%', 'x'],
 ].map((parts) => parts.join(''));
 
 function oracleThinUrl(password: string): string {
@@ -699,6 +741,48 @@ describe('secret scan pre-commit hook', () => {
     expect(runScanner([fixture])).toEqual({ status: 0, stderr: '' });
   });
 
+  it('does not flag whole-value interpolation placeholders in JDBC properties', () => {
+    const dir = makeTempDir();
+    const fixture = join(dir, 'jdbc-interpolation-placeholders.txt');
+    // Placeholders must fill the whole property value. Cover values followed by
+    // another `;`/`&` property and values at the end of the URL, because the
+    // whole-value boundary must not depend on position.
+    const contents = JDBC_WHOLE_VALUE_PLACEHOLDERS.flatMap((password) => [
+      `jdbc:mysql://db.internal:3306/app;user=sa;password=${password};useSSL=false`,
+      `jdbc:postgresql://db.internal:5432/app?user=sa&password=${password}&ssl=false`,
+      `jdbc:sqlserver://host:1433;user=sa;password=${password}`,
+    ]);
+    writeFileSync(fixture, `${contents.map((url) => `DATABASE_URL=${url}`).join('\n')}\n`);
+
+    expect(runScanner([fixture])).toEqual({ status: 0, stderr: '' });
+  });
+
+  it('still flags real JDBC passwords that start with interpolation placeholder shapes', () => {
+    const dir = makeTempDir();
+    const fixture = join(dir, 'jdbc-interpolation-prefixes.txt');
+    // Only a value that fills the whole property is a placeholder: `$PASSWORDx`,
+    // `<password>x`, `[password]x` and `%DB_PASSWORD%x` are real passwords, and
+    // the `$` name must contain a placeholder-word segment. The baseline real
+    // password catches a regression that exempts everything.
+    const passwords = [...JDBC_PLACEHOLDER_PREFIX_PASSWORDS, FAKE_JDBC_PASSWORD];
+    const contents = passwords.flatMap((password) => [
+      `jdbc:mysql://db.internal:3306/app;user=sa;password=${password};useSSL=false`,
+      `jdbc:postgresql://db.internal:5432/app?user=sa&password=${password}&ssl=false`,
+      `jdbc:sqlserver://host:1433;user=sa;password=${password}`,
+    ]);
+    writeFileSync(fixture, `${contents.map((url) => `DATABASE_URL=${url}`).join('\n')}\n`);
+
+    const failing = runScanner([fixture]);
+    expect(failing.status).toBe(1);
+    expect(failing.stderr).toContain('database-url-password');
+    // Every URL must be reported, not just the first line of the fixture.
+    for (const [index] of contents.entries()) {
+      expect(failing.stderr).toContain(
+        `jdbc-interpolation-prefixes.txt:${index + 1}: [database-url-password]`,
+      );
+    }
+  });
+
   it('treats underscore/hyphen-separated brace values as templates (documented trade-off)', () => {
     const dir = makeTempDir();
     const fixture = join(dir, 'jdbc-brace-name-tradeoff.txt');
@@ -867,15 +951,16 @@ describe('secret scan pre-commit hook', () => {
     }
   });
 
-  it('reports default-value interpolation in URL userinfo and Oracle thin slots (deliberate tightening)', () => {
+  it('reports default-value interpolation in URL userinfo, Oracle thin and JDBC slots (deliberate tightening)', () => {
     const dir = makeTempDir();
     const fixture = join(dir, 'database-url-default-value-interpolation.txt');
     // `${VAR:-fallback}` is reported even when the variable name contains a
     // placeholder word, because the fallback can hide a real secret. The rule
-    // comment pins this decision, and the JDBC property branch reuses it.
+    // comment pins this decision, and all three password slots share it.
     const contents = DEFAULT_VALUE_INTERPOLATION_PASSWORDS.flatMap((password) => [
       `postgres://dbuser:${password}@db.internal/app`,
       oracleThinUrl(password),
+      `jdbc:mysql://db.internal:3306/app;user=sa;password=${password};useSSL=false`,
     ]);
     writeFileSync(fixture, `${contents.join('\n')}\n`);
 
