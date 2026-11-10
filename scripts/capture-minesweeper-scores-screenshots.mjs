@@ -1,5 +1,4 @@
 import { mkdir } from 'node:fs/promises';
-import { setTimeout as delay } from 'node:timers/promises';
 import {
   WEBKIT_ENGINE,
   captureScreenshot,
@@ -12,6 +11,7 @@ import {
   stopPreviewServer,
 } from './lib/capture-runtime.mjs';
 import { assertPortAvailable, parsePreviewPort } from './lib/preview-port.mjs';
+import { waitForPreviewServer } from './lib/preview-server.mjs';
 
 /**
  * Capture the Before / After evidence for the Minesweeper best-time leaderboard.
@@ -34,7 +34,9 @@ import { assertPortAvailable, parsePreviewPort } from './lib/preview-port.mjs';
  * The preview port is 4192 by default; on a shared host set `PREVIEW_PORT` to a
  * free port instead of editing this file. When that port is already taken, the
  * script fails with an explicit bind error instead of quietly talking to the
- * other server.
+ * other server. A preview that exits right after the pre-spawn port probe
+ * reports its exit code and stderr instead of being mistaken for the ready
+ * server.
  *
  * `--webkit` captures the 320×640 phone panel on the iPhone SE WebKit device
  * as `after-<prefix>-webkit.png`; it is an After-only mode and the desktop
@@ -79,41 +81,6 @@ const SEEDED_SCORES = {
 };
 
 let server = null;
-
-/** Error shown when the preview dies before the capture can connect to it. */
-function previewStartupError(detail) {
-  const suffix = detail.trim() === '' ? '' : `\n${detail.trim()}`;
-  return new Error(
-    `The preview server exited before ${ORIGIN} became ready. ` +
-      `Port ${PORT} may be taken by another process; set PREVIEW_PORT to a ` +
-      `free port (for example PREVIEW_PORT=${PORT + 1}).${suffix}`,
-  );
-}
-
-async function waitForServer(url, { timeoutMs = 30_000, failure } = {}) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const failureDetail = failure?.();
-    if (failureDetail != null) {
-      throw previewStartupError(failureDetail);
-    }
-    try {
-      const response = await fetch(url);
-      if (response.ok) {
-        return;
-      }
-    } catch {
-      // server not ready yet
-    }
-    await delay(250);
-  }
-  const failureDetail = failure?.();
-  throw new Error(
-    `Timed out waiting for ${url}. If the preview is on another port, set ` +
-      `PREVIEW_PORT to match it.` +
-      (failureDetail == null ? '' : `\n${failureDetail}`),
-  );
-}
 
 async function settle(page) {
   await page.evaluate(() => document.fonts.ready);
@@ -251,28 +218,16 @@ try {
     // probe would connect to the other server and an unrelated locator timeout
     // would be reported much later.
     await assertPortAvailable(PORT, HOST);
-    let stderr = '';
-    let startupFailure = null;
+
+    // Test seam: point this at a stand-in that exits non-zero so the unit test
+    // can exercise the post-probe startup failure without a second server.
     server = startPreviewServer({
       host: HOST,
       port: PORT,
+      entry: process.env.PREVIEW_ENTRY || undefined,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    server.stderr?.setEncoding('utf8');
-    server.stderr?.on('data', (chunk) => {
-      stderr = `${stderr}${chunk}`.slice(-4000);
-    });
-    server.once('error', (error) => {
-      startupFailure = `Failed to spawn the preview server: ${error.message}`;
-    });
-    server.once('close', (code, signal) => {
-      startupFailure ??=
-        `vite preview stopped (exit code ${code}, signal ${signal ?? 'none'}).` +
-        (stderr.trim() === '' ? '' : `\n${stderr.trim()}`);
-    });
-    await waitForServer(ORIGIN, {
-      failure: () => startupFailure,
-    });
+    await waitForPreviewServer(server, { origin: ORIGIN, port: PORT });
   }
 
   const browser = await launchCaptureBrowser(ENGINE);

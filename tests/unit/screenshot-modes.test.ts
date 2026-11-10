@@ -840,3 +840,107 @@ describe('minesweeper screenshot preview port', () => {
     },
   );
 });
+
+describe('minesweeper scores screenshot preview startup', () => {
+  it('uses the shared preview startup helper and keeps the default and Before guards', () => {
+    const source = readFileSync(SCORES_SCRIPT, 'utf8');
+
+    expect(source).toMatch(/from '\.\/lib\/preview-server\.mjs'/);
+    expect(source).toContain(
+      'await waitForPreviewServer(server, { origin: ORIGIN, port: PORT });',
+    );
+    // The private copy must not come back: only the shared helper bounds each
+    // probe with AbortSignal.timeout and rechecks the child after a response.
+    expect(source).not.toContain('function waitForServer');
+    expect(source).not.toContain('previewStartupError');
+    expect(source).not.toMatch(/from 'node:timers\/promises'/);
+
+    // No fallback argument keeps the shared 4192 default; preview-port.test.ts
+    // covers the empty-string PREVIEW_PORT fallback.
+    expect(source).toContain('const PORT = parsePreviewPort();');
+    expect(source).toContain('entry: process.env.PREVIEW_ENTRY || undefined');
+
+    // The probe and spawn stay inside the After branch, so a Before run with
+    // BASE_URL never touches the local preview port.
+    const beforeGuard = source.indexOf('if (!BEFORE) {');
+    const probe = source.indexOf('await assertPortAvailable(PORT, HOST);');
+    const spawn = source.indexOf('startPreviewServer({');
+    const wait = source.indexOf('waitForPreviewServer(server,');
+    expect(beforeGuard).toBeGreaterThan(-1);
+    expect(probe).toBeGreaterThan(beforeGuard);
+    expect(spawn).toBeGreaterThan(probe);
+    expect(wait).toBeGreaterThan(spawn);
+  });
+
+  it(
+    'fails fast without screenshots when PREVIEW_PORT is taken',
+    { timeout: 30_000 },
+    async () => {
+      const owner = await listenOnRandomPort();
+      const screenshotsBefore = screenshotHashes();
+      try {
+        const env = { ...process.env };
+        delete env.BASE_URL;
+        delete env.PREVIEW_ENTRY;
+        env.PREVIEW_PORT = String(owner.port);
+
+        const { status, output } = spawnNode(SCORES_SCRIPT, [], env);
+
+        expect(status).toBe(1);
+        // The specific failure names the real port and the fix; a generic
+        // locator timeout from a private poller would not match this.
+        expect(output).toContain(
+          `Cannot start the preview server on 127.0.0.1:${owner.port}`,
+        );
+        expect(output).toContain('the port is already in use');
+        expect(output).toContain('Set PREVIEW_PORT');
+        expect(output).not.toContain('Saved');
+        // Byte-for-byte proof that no screenshot was created or overwritten.
+        expect(screenshotHashes()).toEqual(screenshotsBefore);
+      } finally {
+        await owner.close();
+      }
+    },
+  );
+
+  it(
+    'fails with the preview exit code and stderr when the preview dies after the port probe',
+    { timeout: 45_000 },
+    async () => {
+      const probe = await listenOnRandomPort();
+      const port = probe.port;
+      await probe.close();
+      const dir = mkdtempSync(join(tmpdir(), 'minesweeper-scores-preview-'));
+      const fakePreview = join(dir, 'fake-preview.mjs');
+      writeFileSync(
+        fakePreview,
+        "process.stderr.write('scores preview exploded\\n');\nprocess.exit(9);\n",
+      );
+      const screenshotsBefore = screenshotHashes();
+      try {
+        const env = { ...process.env };
+        delete env.BASE_URL;
+        env.PREVIEW_PORT = String(port);
+        // Test seam consumed by the scores script: stand in for vite preview
+        // with a process that dies right after an otherwise successful probe.
+        env.PREVIEW_ENTRY = fakePreview;
+
+        const { status, output } = spawnNode(SCORES_SCRIPT, [], env);
+
+        expect(status).toBe(1);
+        expect(output).toContain(
+          `The preview server exited before http://127.0.0.1:${port} became ready`,
+        );
+        // The child's own exit code and stderr reach the operator, so the
+        // post-probe race is not mistaken for a locator or port failure.
+        expect(output).toContain('exit code 9');
+        expect(output).toContain('scores preview exploded');
+        expect(output).toContain('PREVIEW_PORT');
+        expect(output).not.toContain('Saved');
+        expect(screenshotHashes()).toEqual(screenshotsBefore);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+});
