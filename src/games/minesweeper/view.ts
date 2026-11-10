@@ -966,16 +966,27 @@ export async function mountMinesweeper(
       const hadActiveGesture = touchGesture !== null;
       cancelTouchGesture();
       if (!hadActiveGesture) {
-        // With no gesture tracked, a pending cell token has no release click we
-        // can attribute, so drop it rather than let it swallow this new press's
-        // click. A gesture cancelled by movement can still emit a click; this
-        // cleanup deliberately prefers not swallowing the new tap. A detached
-        // token is different: its finger may still be down after a rebuild, so
-        // keep it until that finger lifts.
+        // With no gesture tracked, a pending token whose finger has lifted has
+        // no release click we can attribute, so drop it rather than let it
+        // swallow this new press's click. A gesture cancelled by movement or
+        // scroll still has its finger down, though: another pointer's press
+        // must not clear that finger's suppression, because its own release
+        // click is still coming. Keep a still-held token unless this press
+        // lands on the token's own cell: a tap on the same cell is ambiguous,
+        // so the new press wins. A detached token is kept the same way.
+        const pressedCell = currentCell(event.target);
         for (const [pointerId, suppressed] of suppressedClicks) {
-          if (suppressed !== null || !activeTouchPointers.has(pointerId)) {
-            suppressedClicks.delete(pointerId);
+          if (activeTouchPointers.has(pointerId)) {
+            const sameCell =
+              suppressed !== null &&
+              pressedCell !== null &&
+              suppressed.row === pressedCell.row &&
+              suppressed.col === pressedCell.col;
+            if (!sameCell) {
+              continue;
+            }
           }
+          suppressedClicks.delete(pointerId);
         }
       }
       // Only this pointer's stale token is cleared; another finger's pending
@@ -1133,11 +1144,12 @@ export async function mountMinesweeper(
           return;
         }
         if (!target) {
-          // The click missed every cell. Consume a token that is already
-          // released so it cannot swallow a later real click, but keep a
-          // detached token whose finger is still down.
-          for (const [pointerId, suppressed] of suppressedClicks) {
-            if (suppressed !== null || !activeTouchPointers.has(pointerId)) {
+          // The click missed every cell. Consume a token whose finger has
+          // already lifted so it cannot swallow a later real click, but keep a
+          // still-held token: its release click is still coming, and another
+          // pointer's background click must not clear it.
+          for (const [pointerId] of suppressedClicks) {
+            if (!activeTouchPointers.has(pointerId)) {
               suppressedClicks.delete(pointerId);
               break;
             }

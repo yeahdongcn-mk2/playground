@@ -1121,6 +1121,57 @@ describe('minesweeper touch click suppression', () => {
     expect(statusOf(root)).toBe('playing');
   });
 
+  it('keeps a cancelled hold suppressed when another pointer presses another cell', async () => {
+    const { services } = createServices();
+    const root = await mount(services);
+
+    // A scroll cancels the hold while the finger is still down, so its token
+    // stays attached and its release click is still coming.
+    startTouchPress(root, MINE_ROW, MINE_COL, TOUCH_POINTER_ID);
+    window.dispatchEvent(new Event('scroll'));
+
+    // A second finger presses another cell. That press must neither drop the
+    // held token nor clear it with its own click.
+    startTouchPress(root, 0, 1, SECOND_TAP_POINTER_ID);
+    endTouchPress(root, 0, 1, SECOND_TAP_POINTER_ID);
+    clickRelease(root, 0, 1);
+    expect(cell(root, 0, 1).dataset.revealed).toBe('true');
+    expect(statusOf(root)).toBe('playing');
+
+    // The first finger's release click is still swallowed: the mine stays
+    // hidden and the game keeps running instead of hitting it.
+    endTouchPress(root, MINE_ROW, MINE_COL, TOUCH_POINTER_ID);
+    clickRelease(root, MINE_ROW, MINE_COL);
+    expect(cell(root, MINE_ROW, MINE_COL).dataset.revealed).toBeUndefined();
+    expect(statusOf(root)).toBe('playing');
+  });
+
+  it('keeps a cancelled hold suppressed when a background click misses every cell', async () => {
+    const { services } = createServices();
+    const root = await mount(services);
+
+    startTouchPress(root, MINE_ROW, MINE_COL, TOUCH_POINTER_ID);
+    window.dispatchEvent(new Event('scroll'));
+
+    // A click on the board background belongs to another gesture; it must not
+    // consume the token of a finger that is still down.
+    board(root).dispatchEvent(
+      pointerEvent('click', {
+        pointerId: WEBKIT_CLICK_POINTER_ID,
+        pointerType: 'mouse',
+        isPrimary: true,
+        detail: 1,
+        button: 0,
+        buttons: 0,
+      }),
+    );
+
+    endTouchPress(root, MINE_ROW, MINE_COL, TOUCH_POINTER_ID);
+    clickRelease(root, MINE_ROW, MINE_COL);
+    expect(cell(root, MINE_ROW, MINE_COL).dataset.revealed).toBeUndefined();
+    expect(statusOf(root)).toBe('ready');
+  });
+
   it('consumes released tokens when a click misses every cell', async () => {
     const { services } = createServices();
     const root = await mount(services);
