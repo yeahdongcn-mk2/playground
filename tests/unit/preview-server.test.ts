@@ -98,11 +98,38 @@ describe('preview server startup', () => {
     }).catch((reason: unknown) => reason);
 
     expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('The preview server exited before');
+    expect((error as Error).message).toContain('vite preview stopped');
     expect((error as Error).message).toContain('exit code 7');
     expect((error as Error).message).toContain('fake preview exploded');
     expect((error as Error).message).toContain(`PREVIEW_PORT=${port + 1}`);
     // The fake preview really exited non-zero before anything was captured.
     expect(await exited).toEqual({ code: 7, signal: null });
+  });
+
+  it('names the caller server instead of preview when asked', async () => {
+    const port = await freePort();
+    const child = spawnPreview(
+      "process.stderr.write('fake dev server exploded\\n'); process.exit(9);",
+    );
+    const exited = exitOf(child);
+
+    const error = await waitForPreviewServer(child, {
+      origin: `http://127.0.0.1:${port}`,
+      port,
+      serverName: 'dev',
+      timeoutMs: 5_000,
+      probeIntervalMs: 25,
+      probeTimeoutMs: 100,
+    }).catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('The dev server exited before');
+    expect((error as Error).message).toContain('vite dev server stopped');
+    expect((error as Error).message).toContain('exit code 9');
+    expect((error as Error).message).toContain('fake dev server exploded');
+    expect((error as Error).message).not.toContain('The preview server exited');
+    expect(await exited).toEqual({ code: 9, signal: null });
   });
 
   it('reports a spawn failure before the preview starts', async () => {
@@ -140,6 +167,10 @@ describe('preview server startup', () => {
 
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toMatch(/Timed out waiting/);
+    // The default timeout hint keeps the historic preview wording.
+    expect((error as Error).message).toContain(
+      'If the preview is on another port',
+    );
     expect(Date.now() - started).toBeLessThan(3_000);
   }, 10_000);
 

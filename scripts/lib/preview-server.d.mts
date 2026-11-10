@@ -4,6 +4,7 @@ export function previewStartupError(
   origin: string,
   port: number,
   detail: string,
+  serverName?: string,
 ): Error;
 
 export interface WaitForServerOptions {
@@ -16,6 +17,7 @@ export interface WaitForServerOptions {
     url: string,
     init: { signal?: AbortSignal },
   ) => Promise<{ ok: boolean }>;
+  serverName?: string;
 }
 
 export function waitForServer(
@@ -29,6 +31,7 @@ export interface WaitForPreviewServerOptions {
   timeoutMs?: number;
   probeIntervalMs?: number;
   probeTimeoutMs?: number;
+  serverName?: string;
 }
 
 export function waitForPreviewServer(

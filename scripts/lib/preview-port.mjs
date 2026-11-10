@@ -35,14 +35,22 @@ export function parsePreviewPort(
 }
 
 /**
- * Reject before spawning `vite preview` when the port is already taken.
+ * Reject before spawning the capture server when the port is already taken.
  *
  * Without this probe, `vite --strictPort` exits immediately but the capture
  * script's readiness poll happily connects to the other server and later times
  * out on an unrelated locator. The error names the port and the override so the
  * real cause is obvious.
+ *
+ * `serverName` names the process in the error. It defaults to `'preview'`,
+ * which keeps the existing preview wording; the snake capture script passes
+ * `'dev'` because it runs the Vite dev server.
  */
-export async function assertPortAvailable(port, host = '127.0.0.1') {
+export async function assertPortAvailable(
+  port,
+  host = '127.0.0.1',
+  { serverName = 'preview' } = {},
+) {
   const reason = await new Promise((resolve) => {
     const probe = createServer();
     probe.unref();
@@ -62,7 +70,7 @@ export async function assertPortAvailable(port, host = '127.0.0.1') {
         ? 'permission to bind the port was denied'
         : reason.message;
   throw new Error(
-    `Cannot start the preview server on ${host}:${port}: ${detail}. ` +
+    `Cannot start the ${serverName} server on ${host}:${port}: ${detail}. ` +
       `Set PREVIEW_PORT to a free port (for example PREVIEW_PORT=${port + 1}) ` +
       `or stop the server that owns ${port}.`,
     { cause: reason },

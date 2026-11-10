@@ -1,3 +1,12 @@
 export const DEFAULT_PREVIEW_PORT: number;
 export function parsePreviewPort(value?: string, fallback?: number): number;
-export function assertPortAvailable(port: number, host?: string): Promise<void>;
+
+export interface AssertPortAvailableOptions {
+  serverName?: string;
+}
+
+export function assertPortAvailable(
+  port: number,
+  host?: string,
+  options?: AssertPortAvailableOptions,
+): Promise<void>;

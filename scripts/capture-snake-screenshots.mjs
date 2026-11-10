@@ -8,7 +8,10 @@ import {
   engineLabel,
   launchCaptureBrowser,
   parseCaptureEngine,
+  stopPreviewServer,
 } from './lib/capture-runtime.mjs';
+import { assertPortAvailable, parsePreviewPort } from './lib/preview-port.mjs';
+import { waitForPreviewServer } from './lib/preview-server.mjs';
 
 /**
  * Capture the before/after evidence used in the PR description.
@@ -21,32 +24,24 @@ import {
  * is a DEV-only seam, and the screenshots should show the same rendering the
  * player gets in development. `--webkit` captures the stable phone frame on the
  * iPhone SE WebKit device as `after-snake-webkit.png`.
+ *
+ * The dev server port is 5188 by default; on a shared host set `PREVIEW_PORT`
+ * to a free port instead of editing this file. When that port is already
+ * taken, the script fails with an explicit bind error instead of quietly
+ * talking to the other server. A dev server that exits right after the
+ * pre-spawn port probe reports its exit code and stderr instead of being
+ * mistaken for the ready server.
  */
 
 const HOST = '127.0.0.1';
-const PORT = 5188;
+const PORT = parsePreviewPort(process.env.PREVIEW_PORT, 5188);
 const ORIGIN = `http://${HOST}:${PORT}`;
+const SERVER_NAME = 'dev';
 const OUTPUT = 'docs/screenshots';
 const ARGS = process.argv.slice(2);
 const MODE = ARGS.includes('--before') ? 'before' : 'after';
 const ENGINE = parseCaptureEngine(ARGS);
 const IS_WEBKIT = ENGINE === WEBKIT_ENGINE;
-
-async function waitForServer(url, timeoutMs = 30_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const response = await fetch(url);
-      if (response.ok) {
-        return;
-      }
-    } catch {
-      // server not ready yet
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  throw new Error(`Timed out waiting for ${url}`);
-}
 
 async function settle(page) {
   await page.evaluate(() => document.fonts.ready);
@@ -80,16 +75,36 @@ if (MODE === 'before' && IS_WEBKIT) {
   throw new Error('The --webkit mode captures After screenshots only.');
 }
 
-const server = spawn(
-  process.execPath,
-  ['node_modules/vite/bin/vite.js', '--host', HOST, '--port', String(PORT), '--strictPort'],
-  { stdio: 'ignore' },
-);
-process.on('exit', () => server.kill());
-
+let server = null;
 let browser;
 try {
-  await waitForServer(ORIGIN);
+  // The fixed first fruit is a DEV-only seam, so this script runs the Vite dev
+  // server rather than `vite preview`. Probe the port first: otherwise the dev
+  // server exits immediately (--strictPort) while the readiness poll connects
+  // to whatever else owns the port and captures screenshots from it.
+  await assertPortAvailable(PORT, HOST, { serverName: SERVER_NAME });
+
+  // Test seam: point PREVIEW_ENTRY at a stand-in that exits non-zero so the
+  // unit test can exercise the post-probe startup failure without a server.
+  server = spawn(
+    process.execPath,
+    [
+      process.env.PREVIEW_ENTRY || 'node_modules/vite/bin/vite.js',
+      '--host',
+      HOST,
+      '--port',
+      String(PORT),
+      '--strictPort',
+    ],
+    { stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  process.on('exit', () => server?.kill());
+  await waitForPreviewServer(server, {
+    origin: ORIGIN,
+    port: PORT,
+    serverName: SERVER_NAME,
+  });
+
   await mkdir(OUTPUT, { recursive: true });
   browser = await launchCaptureBrowser(ENGINE);
 
@@ -189,5 +204,6 @@ try {
   console.log(`Captured ${MODE} screenshots on ${engineLabel(ENGINE)} in ${OUTPUT}`);
 } finally {
   await closeCaptureBrowser(browser);
-  server.kill();
+  stopPreviewServer(server);
+  server = null;
 }
