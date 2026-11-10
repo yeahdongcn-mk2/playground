@@ -25,10 +25,12 @@ const PLACEHOLDER_PASSWORD_WORDS = String.raw`password|passwd|pass|pwd|secret|ch
 // whole-value `$VAR` shape would exempt any shell variable, including real
 // passwords such as `$PASSWORDx` and `$PASSWORD123`, while this segmented name
 // keeps `$DB_PASSWORD`, `$YOUR_PASSWORD` and `$CHANGE_ME` quiet. The
-// `${VAR:-fallback}` form is deliberately reported: the fallback can contain a
-// real secret, so only the plain `${VAR}`/`$(VAR)`/`$VAR` forms are treated as
-// templates. The rule comment and a test pin that trade-off.
-const PLACEHOLDER_PASSWORD_INTERPOLATION_NAME = String.raw`(?:[A-Za-z0-9]+_)*(?:${PLACEHOLDER_PASSWORD_WORDS})(?:_[A-Za-z0-9]+)*`;
+// `${VAR:-fallback}` form is deliberately reported in these slots: the fallback
+// can contain a real secret, so only the plain `${VAR}`/`$(VAR)`/`$VAR` forms
+// are treated as templates. The URL userinfo and Oracle thin shapes below use
+// this name shape; the JDBC property branch still uses its existing broad `$`
+// prefix. The rule comment and a test pin that trade-off.
+const PLACEHOLDER_PASSWORD_INTERPOLATION_NAME = String.raw`(?!\d)_*(?:[A-Za-z0-9]+_)*(?:${PLACEHOLDER_PASSWORD_WORDS})(?:_[A-Za-z0-9]+)*_*`;
 
 // `__UPPER_SNAKE__` names are templates only when a known placeholder word or
 // phrase makes up one or more underscore/hyphen-separated segments, so
@@ -70,8 +72,8 @@ const PLACEHOLDER_PASSWORD_WHOLE_SHAPES = String.raw`\*+|\.{3,}|${PLACEHOLDER_PA
 // the same placeholder-word shape as the URL branch, so `{__S3cr3t__}` is
 // reported. The brace shape only counts when no further value characters
 // follow it; the URL userinfo and Oracle thin branches keep their own looser
-// brace form (a name-like value wrapped in braces) and also require it to fill
-// the whole password.
+// brace form (a balanced `{{...}}`, or `{` followed by a letter/underscore and
+// a closing brace) and also require it to fill the whole password.
 const PLACEHOLDER_JDBC_BRACE_SHAPES = String.raw`\{\{?(?:(?:${PLACEHOLDER_PASSWORD_WORDS})[A-Za-z0-9]*|[A-Za-z][A-Za-z0-9]*(?:[_-][A-Za-z0-9]+)+|\.{3,}|\*+|${PLACEHOLDER_PASSWORD_DUNDER_SHAPES}|%[sdif])\}\}?`;
 
 // Interpolation/template placeholder shapes used for the URL userinfo and
@@ -80,17 +82,19 @@ const PLACEHOLDER_JDBC_BRACE_SHAPES = String.raw`\{\{?(?:(?:${PLACEHOLDER_PASSWO
 // real password that merely starts with one of these shapes, for example
 // `$PASSWORDx`, `{S3cr3t`, `<password>x`, `[password]x` or `%DB_PASSWORD%x`,
 // is still reported. The `$` forms use the segmented variable-name shape
-// above; angle/bracket/percent forms keep their existing content rules. The
-// brace form is deliberately looser than the JDBC brace escape shape: a whole
-// password that starts with `{` followed by a letter/underscore (or a second
-// `{`) and ends with a closing brace is a template, so `{DB_PASSWORD}`,
-// `{{DB_PASSWORD}}`, `{password123}` and `{S3cr3t}` stay exempt while
-// `{S3cr3t` and `{DB_PASSWORD}x` are reported. JDBC brace values are handled
-// by PLACEHOLDER_JDBC_BRACE_SHAPES above and keep their stricter semantics.
+// above; a variable name cannot start with a digit, and leading/trailing
+// underscores are allowed. Angle/bracket/percent forms keep their existing
+// content rules. The brace form is deliberately looser than the JDBC brace
+// escape shape: a whole password that is either `{{...}}` or `{` followed by
+// a letter/underscore and a closing brace is a template, so `{DB_PASSWORD}`,
+// `{{DB_PASSWORD}}`, `{password123}`, `{ABC123}`, `{S3cr3t}` and `{S3cr3t;!}`
+// stay exempt while unbalanced forms (`{S3cr3t`, `{S3cr3t}}`, `{{S3cr3t}`) and
+// `{DB_PASSWORD}x` are reported. JDBC brace values are handled by
+// PLACEHOLDER_JDBC_BRACE_SHAPES above and keep their stricter semantics.
 // Masked, ellipsis, dunder and printf-style forms are listed separately in
 // PLACEHOLDER_PASSWORD_WHOLE_SHAPES and already require the whole value; JDBC
 // property values apply the same whole-value rule to their bare values.
-const PLACEHOLDER_PASSWORD_BRACE_SHAPES = String.raw`\{[A-Za-z_{][^}]*\}\}?`;
+const PLACEHOLDER_PASSWORD_BRACE_SHAPES = String.raw`\{\{[^}]*\}\}|\{(?!\{)[A-Za-z_][^}]*\}`;
 const PLACEHOLDER_PASSWORD_SHAPES = String.raw`\$(?:\{${PLACEHOLDER_PASSWORD_INTERPOLATION_NAME}\}|\(${PLACEHOLDER_PASSWORD_INTERPOLATION_NAME}\)|${PLACEHOLDER_PASSWORD_INTERPOLATION_NAME})|${PLACEHOLDER_PASSWORD_BRACE_SHAPES}|<[^>\s]*>|\[[^\]\s]*\]|%[A-Za-z_][A-Za-z0-9_]*%`;
 const PLACEHOLDER_JDBC_SHAPES = String.raw`\$(?:\{|\(|[A-Za-z_])|${PLACEHOLDER_JDBC_BRACE_SHAPES}(?![^\s;?&]*[A-Za-z0-9_-])|<[^>\s]*>|\[[^\]\s]*\]|%[A-Za-z_][A-Za-z0-9_]*%`;
 
@@ -206,12 +210,13 @@ const RULES = [
     //     the URL userinfo and Oracle thin slots.
     //     `${VAR:-fallback}` is deliberately reported as well: the fallback can
     //     contain a real secret, so only the plain `$VAR`/`${VAR}`/`$(VAR)`
-    //     forms are exempt. The URL userinfo/Oracle thin brace form is a
-    //     name-like value wrapped in braces, required to fill the whole
-    //     password, so `{DB_PASSWORD}`, `{{DB_PASSWORD}}` and `{password123}`
-    //     stay exempt while `{S3cr3t` (unclosed) and `{DB_PASSWORD}x` are
-    //     reported; as before, a whole `{S3cr3t}` also stays exempt under this
-    //     looser URL/Oracle thin brace form, unlike the JDBC brace shape;
+    //     forms are exempt. The URL userinfo/Oracle thin brace form is looser
+    //     than the JDBC brace shape: a balanced `{{...}}` or `{` followed by a
+    //     letter/underscore and a closing brace is a template, so
+    //     `{DB_PASSWORD}`, `{{DB_PASSWORD}}`, `{password123}`, `{ABC123}`,
+    //     `{S3cr3t}` and `{S3cr3t;!}` stay exempt while unbalanced forms
+    //     (`{S3cr3t`, `{S3cr3t}}`, `{{S3cr3t}`) and `{DB_PASSWORD}x` are
+    //     reported;
     //   - masked, ellipsis and printf-style placeholders that fill the whole
     //     password value in the URL userinfo, Oracle thin and JDBC property
     //     branches: `*****`, `...`, `%s`, `%d`, `%i`, `%f` and dunder templates
