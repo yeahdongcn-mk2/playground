@@ -538,7 +538,7 @@ if (!process.env.BASE_URL) {
   server = startPreviewServer({
     host: HOST,
     port: PORT,
-    entry: process.env.PREVIEW_ENTRY,
+    entry: process.env.PREVIEW_ENTRY || undefined,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   await waitForPreviewServer(server, { origin: ORIGIN, port: PORT });

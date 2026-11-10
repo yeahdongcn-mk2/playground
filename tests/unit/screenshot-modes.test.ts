@@ -14,6 +14,7 @@ import {
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SCRIPT = join(ROOT, 'scripts', 'capture-minesweeper-screenshots.mjs');
+const SCORES_SCRIPT = join(ROOT, 'scripts', 'capture-minesweeper-scores-screenshots.mjs');
 const README = join(ROOT, 'README.md');
 const FRAMEWORK = join(ROOT, 'docs', 'framework.md');
 const SCREENSHOTS_README = join(ROOT, 'docs', 'screenshots', 'README.md');
@@ -85,12 +86,13 @@ interface PackageJson {
 
 const packageJson = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as PackageJson;
 
-/** Run the minesweeper capture script with an explicit environment. */
-function spawnScript(
+/** Run a capture script with an explicit environment. */
+function spawnNode(
+  script: string,
   args: string[],
   env: NodeJS.ProcessEnv,
 ): { status: number | null; output: string } {
-  const result = spawnSync(process.execPath, [SCRIPT, ...args], {
+  const result = spawnSync(process.execPath, [script, ...args], {
     cwd: ROOT,
     encoding: 'utf8',
     timeout: 30_000,
@@ -100,6 +102,14 @@ function spawnScript(
     status: result.status,
     output: `${result.stdout ?? ''}${result.stderr ?? ''}`,
   };
+}
+
+/** Run the minesweeper capture script with an explicit environment. */
+function spawnScript(
+  args: string[],
+  env: NodeJS.ProcessEnv,
+): { status: number | null; output: string } {
+  return spawnNode(SCRIPT, args, env);
 }
 
 /** Run the minesweeper capture script without a preview server. */
@@ -167,6 +177,17 @@ describe('minesweeper screenshot modes', () => {
 
     expect(status).toBe(1);
     expect(output).toContain('use --webkit-narrow');
+    expect(output).not.toContain('Captured');
+  });
+
+  it('rejects the Chromium-only clear-scores variant on WebKit', () => {
+    const { status, output } = spawnNode(SCORES_SCRIPT, ['--webkit', '--clear'], {
+      ...process.env,
+      BASE_URL: '',
+    });
+
+    expect(status).toBe(1);
+    expect(output).toContain('clear-records variant is Chromium-only');
     expect(output).not.toContain('Captured');
   });
 

@@ -19,7 +19,6 @@ import { assertPortAvailable, parsePreviewPort } from './lib/preview-port.mjs';
  *   npm run screenshots:minesweeper:scores
  *   BASE_URL=http://127.0.0.1:4192 node scripts/capture-minesweeper-scores-screenshots.mjs --before
  *   npm run screenshots:minesweeper:scores:webkit
- *   npm run screenshots:minesweeper:scores-clear:webkit
  *
  * Pass `--clear` for the clear-records follow-up: the After run requires the
  * enabled 「清空记录」 action in the populated panel, while `--before` must point
@@ -39,7 +38,8 @@ import { assertPortAvailable, parsePreviewPort } from './lib/preview-port.mjs';
  *
  * `--webkit` captures the 320×640 phone panel on the iPhone SE WebKit device
  * as `after-<prefix>-webkit.png`; it is an After-only mode and the desktop
- * evidence stays Chromium.
+ * evidence stays Chromium. The clear-records variant is Chromium-only because
+ * the current panel always renders the clear action.
  */
 
 const HOST = '127.0.0.1';
@@ -235,6 +235,12 @@ async function captureWebkitMobile(browser) {
 
 if (BEFORE && IS_WEBKIT) {
   throw new Error('The --webkit mode captures After screenshots only.');
+}
+
+if (CLEAR && IS_WEBKIT) {
+  throw new Error(
+    'The --webkit mode captures the shared scores panel only; the clear-records variant is Chromium-only.',
+  );
 }
 
 await mkdir(OUTPUT, { recursive: true });
