@@ -300,7 +300,7 @@ npm run test:e2e:webkit # 先 build，只跑 mobile-webkit（iPhone SE (3rd gen)
 
 扫雷窄屏首屏契约现在由 Chromium 与 WebKit 两套 Playwright 模拟共同验证：
 
-- `chromium`（桌面 1440×1000）与 `mobile`（Pixel 7）项目继续覆盖桌面与手机端交互；`tests/e2e/minesweeper.mobile.spec.ts` 的 8 视口矩阵（320×640、340×700、349×700、360×640、360×740、375×667、400×700、412×839）全部断言重开入口在首屏，340×667 另用计算样式断言钉住短窄查询边界。
+- `chromium`（桌面 1440×1000）与 `mobile`（Pixel 7）项目继续覆盖桌面与手机端交互；`tests/e2e/minesweeper.mobile.spec.ts` 的 8 视口矩阵（320×640、340×700、349×700、360×640、360×740、375×667、400×700、412×839）全部断言重开入口在首屏，边界用例另用计算样式钉住短窄查询的 min-width / max-width / max-height 边界。
 - `mobile-webkit` 项目使用 `devices['iPhone SE (3rd gen)']`（WebKit 引擎），运行 `tests/e2e/minesweeper.webkit.spec.ts` 冒烟与 `tests/e2e/minesweeper.narrow.webkit.spec.ts` 的 320×640、360×640、375×667、412×839 矩阵；四个视口都断言 81 格最小尺寸、无横向溢出，HUD / 返回大厅 / touch-hint 与重开入口在首屏内。
 - 360×640 / 375×667 的短窄首屏入口修复已随本分支落地，WebKit 与 Chromium 现在都断言重开入口；#60 的其它子任务仍由计划节点跟踪。
 - 其余手机端 spec 与截图脚本仍只在 Chromium 下运行，#100 跟踪后续按 spec 扩大 WebKit 覆盖。
@@ -336,7 +336,7 @@ Node.js `^22.12.0 || ^24.0.0 || >=26.0.0`（Vite 8 的要求）。CI（`.github/
 ## 14. 性能与已知限制
 
 - 大厅首屏不包含 Phaser；Phaser 只在进入使用 Phaser 的 2D 游戏时加载（本地构建 chunk 约 1.3 MB / 357 KB gzip），扫雷等 DOM 游戏不加载它。
-- 入口 JS 约 10.91 KB gzip；`check:budget` 断言入口不含引擎且小于 50 KB，全部 JS chunk 小于 450 KB gzip（当前约 402.67 KB gzip）。
+- 入口 JS 约 10.91 KB gzip；`check:budget` 断言入口不含引擎且小于 50 KB，全部 JS chunk 小于 450 KB gzip（当前约 404.24 KB gzip）。
 - 3D 尚未实现，Three.js 只在文档与目录层面预留。
 - 空白示例只演示框架能力；`src/games/snake/`、`src/games/tetris/`、`src/games/2048/`、`src/games/breakout/` 与 `src/games/minesweeper/` 是完整玩法参考（规则引擎、渲染器、响应式视图、测试）。扫雷是纯 DOM 参考，其余四款使用 Phaser 场景。
 - 打砖块固定 480×720 逻辑球场与 10 列砖块，没有道具、多球或在线排行榜；难度曲线由砖块行数与球速控制。

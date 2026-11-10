@@ -12,10 +12,10 @@ import {
  * including the 360x640 / 375x667 short-screen sizes fixed for Issue #60.
  */
 const WEBKIT_NARROW_VIEWPORTS = [
-  { width: 320, height: 640, minimumCellSize: 34, label: '320x640', restartEntry: true },
-  { width: 360, height: 640, minimumCellSize: 36, label: '360x640', restartEntry: true },
-  { width: 375, height: 667, minimumCellSize: 36, label: '375x667', restartEntry: true },
-  { width: 412, height: 839, minimumCellSize: 36, label: '412x839', restartEntry: true },
+  { width: 320, height: 640, minimumCellSize: 34, label: '320x640' },
+  { width: 360, height: 640, minimumCellSize: 36, label: '360x640' },
+  { width: 375, height: 667, minimumCellSize: 36, label: '375x667' },
+  { width: 412, height: 839, minimumCellSize: 36, label: '412x839' },
 ] as const;
 
 /**
@@ -45,7 +45,7 @@ test.describe('minesweeper first-screen contract on WebKit', () => {
       await openMinesweeper(page, { mines: LOSS_MINES });
 
       await expectFirstScreenContract(page, viewport.minimumCellSize, {
-        restartEntry: viewport.restartEntry,
+        restartEntry: true,
       });
     });
   }

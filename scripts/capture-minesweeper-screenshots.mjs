@@ -24,12 +24,12 @@ import { chromium, devices } from '@playwright/test';
  * before this task's touch and mobile changes, where the page exists but only
  * has desktop-style pointer input, and captures the same phone game states.
  * The narrow modes capture the 360×740 ready state, the min modes capture the
- * 320×640 ready state and the restart modes capture the same 320×640 ready
- * state after the short-screen vertical compression; the short modes capture
- * the 360×640 and 375×667 ready states that keep the restart entry in the
- * first screen after the Issue #60 fix; the large modes capture the 16×30
- * expert board at 320×640 and 360×640 to show the narrow-screen degradation
- * hint. Every before mode likewise needs BASE_URL at its baseline preview.
+ * 320×640 ready state and the restart modes capture the 320×640 ready state
+ * after the Issue #53 short-screen compression; the short modes capture the
+ * 360×640 and 375×667 ready states that keep the restart entry in the first
+ * screen after the Issue #60 fix; the large modes capture the 16×30 expert
+ * board at 320×640 and 360×640 to show the narrow-screen degradation hint.
+ * Every before mode likewise needs BASE_URL at its baseline preview.
  *
  * The generic --before mode has been removed: it captured a main baseline
  * that had no minesweeper route. Its screenshots remain as historical
@@ -364,10 +364,11 @@ async function captureTouchMobile(browser, prefix) {
 
 /**
  * Capture the ready state at a narrow phone viewport: 360×740 for the narrow
- * mode, 320×640 for the min mode and 320×640 for the restart mode. Each pair
- * isolates one layout change: same scene, viewport, dark theme and
- * reduced-motion setting before and after. The restart mode uses its own file
- * suffix so it does not overwrite the min mode's earlier evidence.
+ * mode, 320×640 for the min and restart modes, and 360×640 / 375×667 for the
+ * short mode. Each pair isolates one layout change: same scene, viewport, dark
+ * theme and reduced-motion setting before and after. The restart mode uses its
+ * own file suffix so it does not overwrite the min mode's earlier evidence;
+ * the short mode keeps the plain ready filenames.
  */
 async function captureNarrow(browser, prefix, viewport, fileNameSuffix = '') {
   const { width, height } = viewport;

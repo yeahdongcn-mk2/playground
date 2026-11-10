@@ -98,6 +98,9 @@ describe('minesweeper screenshot modes', () => {
     expect(shortViewports?.[1]).toContain('{ width: 360, height: 640 }');
     expect(shortViewports?.[1]).toContain('{ width: 375, height: 667 }');
     expect(script).toContain("MODE === 'short' || MODE === 'short-before'");
+    // The short modes keep the plain ready filenames, not the restart suffix.
+    expect(script).toContain('const MODE_LABEL = SHORT_BEFORE');
+    expect(script).toContain("? 'short-before'");
   });
 
   it('no longer maps --before to a capture mode in the script', () => {

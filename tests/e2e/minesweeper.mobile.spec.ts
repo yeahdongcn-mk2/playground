@@ -29,10 +29,10 @@ import {
 /**
  * Every supported phone size that the first-screen contract covers. The
  * 320px minimum uses the documented 34px geometric fallback; widths from
- * 340px up keep 36px touch targets. 360x640, 375x667 and 400x700 cover the
- * short/narrow edge added for Issue #60, and all entries require the compact
- * restart entry to stay inside the first screen. 412x839 is the Pixel 7
- * default viewport from playwright.config.ts.
+ * 340px up keep 36px touch targets. 360x640 and 375x667 cover the short/narrow
+ * edge added for Issue #60; 400x700 exercises the pre-existing <=700px query;
+ * all entries require the compact restart entry to stay inside the first
+ * screen. 412x839 is the Pixel 7 default viewport from playwright.config.ts.
  */
 const FIRST_SCREEN_VIEWPORTS = [
   { width: 320, height: 640, minimumCellSize: 34, label: '320x640' },
@@ -48,8 +48,10 @@ const FIRST_SCREEN_VIEWPORTS = [
 /**
  * The 340x667 min-width / max-height corner must actually match the short
  * screen query. Its first-screen geometry also passes without that query, so
- * assert the tightened computed styles; otherwise a regression to
- * `min-width: 341px` or `max-height: 666px` would slip through.
+ * assert the tightened computed styles; the boundary test below also checks
+ * the max-width edge, the one-pixel-outside corners and both unchanged
+ * neighborhoods, so a regression to `min-width: 341px`, `max-width: 399px`
+ * or `max-height: 666px` cannot slip through.
  */
 async function expectShortScreenTightening(page: Page): Promise<void> {
   const heading = page.locator('.minesweeper-game .game-heading');
@@ -71,6 +73,18 @@ async function expectShortScreenSpacingUnchanged(page: Page): Promise<void> {
   await expect(page.locator('.minesweeper-touch-actions')).toHaveCSS(
     'margin-top',
     '6px',
+  );
+}
+
+/** Above 400px neither narrow query applies, so the <=560px base spacing returns. */
+async function expectBaseSpacing(page: Page): Promise<void> {
+  const heading = page.locator('.minesweeper-game .game-heading');
+  await expect(heading).toHaveCSS('row-gap', '12px');
+  await expect(heading).toHaveCSS('padding-bottom', '22px');
+  await expect(page.getByTestId('touch-hint')).toHaveCSS('margin-top', '10px');
+  await expect(page.locator('.minesweeper-touch-actions')).toHaveCSS(
+    'margin-top',
+    '12px',
   );
 }
 
@@ -156,8 +170,14 @@ test.describe('minesweeper on a phone viewport', () => {
     await expectFirstScreenContract(page, 36, { restartEntry: true });
     await expectShortScreenTightening(page);
 
-    // 700px is one pixel above the max-height boundary: no extra tightening.
-    await page.setViewportSize({ width: 340, height: 700 });
+    // 339px is one pixel below the min-width edge: only the older <=700px
+    // query applies, so no extra tightening.
+    await page.setViewportSize({ width: 339, height: 667 });
+    await expectShortScreenSpacingUnchanged(page);
+
+    // 668px is one pixel above the new max-height edge (the older <=700px
+    // query still applies): only the base short-narrow compression remains.
+    await page.setViewportSize({ width: 340, height: 668 });
     await expectShortScreenSpacingUnchanged(page);
 
     // 320px is below the min-width boundary (and its 34px fallback): the base
@@ -165,9 +185,14 @@ test.describe('minesweeper on a phone viewport', () => {
     await page.setViewportSize({ width: 320, height: 640 });
     await expectShortScreenSpacingUnchanged(page);
 
-    // 400px is the max-width corner; the query still applies there.
+    // 400px is the max-width corner; the new query still applies there.
     await page.setViewportSize({ width: 400, height: 667 });
     await expectShortScreenTightening(page);
+
+    // 401px is one pixel above the max-width edge: both narrow queries stop
+    // applying, so the base (>400px) spacing returns.
+    await page.setViewportSize({ width: 401, height: 667 });
+    await expectBaseSpacing(page);
   });
 
   test('a tap reveals and a long press toggles a flag exactly once', async ({ page }) => {
