@@ -1,4 +1,3 @@
-import type { Page } from '@playwright/test';
 import { expect, test } from './fixtures';
 import {
   cancelCellPress,
@@ -7,6 +6,7 @@ import {
   dispatchTouchPointer,
   endCellPress,
   expectCleanBoard,
+  expectFirstScreenContract,
   expectInsideViewport,
   expectNoDebugSeam,
   expectNoHorizontalOverflow,
@@ -35,49 +35,12 @@ const NARROW_VIEWPORTS = [
   { width: 349, height: 700, minimumCellSize: 36, label: '349x700' },
 ] as const;
 
-/**
- * Assert the narrow-screen contract: no horizontal page scroll, every one of
- * the 81 cells at least `minimumCellSize` px in both directions and roughly
- * square, and the HUD plus back link inside the first screen.
- */
-async function expectNarrowBoard(page: Page, minimumCellSize: number): Promise<void> {
-  const overflow = await page.evaluate(
-    () => document.documentElement.scrollWidth - window.innerWidth,
-  );
-  expect(overflow).toBe(0);
-
-  const cellBoxes = await page.locator('[data-cell]').evaluateAll((cells) =>
-    cells.map((cell) => {
-      const box = cell.getBoundingClientRect();
-      return { width: box.width, height: box.height };
-    }),
-  );
-  expect(cellBoxes).toHaveLength(81);
-  for (const [index, box] of cellBoxes.entries()) {
-    expect(box.width, `cell ${index} width`).toBeGreaterThanOrEqual(minimumCellSize);
-    expect(box.height, `cell ${index} height`).toBeGreaterThanOrEqual(minimumCellSize);
-    expect(box.width, `cell ${index} aspect ratio`).toBeCloseTo(box.height, 1);
-  }
-
-  await expectInsideViewport(
-    page,
-    page.getByTestId('remaining-mines'),
-    'remaining mines',
-  );
-  await expectInsideViewport(page, page.getByTestId('timer'), 'timer');
-  await expectInsideViewport(
-    page,
-    page.getByRole('link', { name: /返回大厅/ }),
-    'back link',
-  );
-}
-
 test.describe('minesweeper on a phone viewport', () => {
   test('opens with the board, HUD and restart / back entries inside the viewport', async ({
     page,
   }) => {
     await openMinesweeper(page, { mines: LOSS_MINES });
-    await expectNoHorizontalOverflow(page);
+    await expectFirstScreenContract(page, 36, { restartEntry: true });
 
     await expect(page.getByTestId('minesweeper-board')).toBeVisible();
     await expect(page.locator('[data-cell]')).toHaveCount(81);
@@ -94,25 +57,6 @@ test.describe('minesweeper on a phone viewport', () => {
         .getByTestId('minesweeper-board')
         .evaluate((board) => getComputedStyle(board).userSelect),
     ).toBe('none');
-    await expectInsideViewport(
-      page,
-      page.getByRole('link', { name: /返回大厅/ }),
-      'back link',
-    );
-    await expectInsideViewport(page, page.getByTestId('remaining-mines'), 'remaining mines');
-    await expectInsideViewport(page, page.getByTestId('timer'), 'timer');
-    await expectInsideViewport(
-      page,
-      page.getByTestId('mobile-restart-button'),
-      'restart button',
-    );
-
-    // The 9x9 grid keeps every cell a usable touch target on a 412 px viewport.
-    const cellBox = await cellLocator(page, 0, 0).boundingBox();
-    expect(cellBox, 'cell should have a bounding box').not.toBeNull();
-    expect(cellBox?.width ?? 0).toBeGreaterThanOrEqual(36);
-    expect(cellBox?.height ?? 0).toBeGreaterThanOrEqual(36);
-    expect(cellBox?.width ?? 0).toBeCloseTo(cellBox?.height ?? 0, 1);
   });
 
   test('renders the longest custom best-time label without horizontal overflow', async ({
@@ -155,7 +99,7 @@ test.describe('minesweeper on a phone viewport', () => {
       });
       await openMinesweeper(page, { mines: LOSS_MINES });
 
-      await expectNarrowBoard(page, viewport.minimumCellSize);
+      await expectFirstScreenContract(page, viewport.minimumCellSize);
     });
   }
 
@@ -167,24 +111,10 @@ test.describe('minesweeper on a phone viewport', () => {
 
     // The narrow contract still holds after the vertical compression: 81 cells
     // stay >= 34px, the page has no horizontal overflow, and the back link plus
-    // both HUD readouts stay in the first screen.
-    await expectNarrowBoard(page, 34);
-    await expect(page.getByTestId('touch-hint')).toBeVisible();
-
-    const restart = page.getByTestId('mobile-restart-button');
-    const restartBox = await restart.boundingBox();
-    expect(restartBox, 'restart button should have a bounding box').not.toBeNull();
-    if (!restartBox) {
-      throw new Error('restart button should have a bounding box');
-    }
-    // The short-screen spacing must pull the whole restart entry into the
-    // 320x640 first screen. The shared viewport helper allows a 0.5px
-    // tolerance; the acceptance requires the exact bounds, so assert them
-    // directly: x + width <= 320 and y + height <= 640.
-    expect(restartBox.x).toBeGreaterThanOrEqual(0);
-    expect(restartBox.y).toBeGreaterThanOrEqual(0);
-    expect(restartBox.x + restartBox.width).toBeLessThanOrEqual(320);
-    expect(restartBox.y + restartBox.height).toBeLessThanOrEqual(640);
+    // both HUD readouts stay in the first screen. The contract also asserts the
+    // compact restart entry with exact bounds (x + width <= 320 and
+    // y + height <= 640).
+    await expectFirstScreenContract(page, 34, { restartEntry: true });
   });
 
   test('keeps 36px touch targets on a 360x740 phone viewport', async ({ page }) => {
@@ -193,12 +123,7 @@ test.describe('minesweeper on a phone viewport', () => {
 
     // The narrow breakpoint must reclaim space without introducing a
     // horizontally scrolling page at this common Android width.
-    await expectNarrowBoard(page, 36);
-    await expectInsideViewport(
-      page,
-      page.getByTestId('mobile-restart-button'),
-      'restart button',
-    );
+    await expectFirstScreenContract(page, 36, { restartEntry: true });
   });
 
   test('a tap reveals and a long press toggles a flag exactly once', async ({ page }) => {
