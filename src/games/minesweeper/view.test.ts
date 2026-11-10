@@ -848,6 +848,8 @@ afterAll(() => {
 /** Real WebKit touch shape: pointerdown is touch id 2, click is mouse id 1. */
 const TOUCH_POINTER_ID = 2;
 const WEBKIT_CLICK_POINTER_ID = 1;
+/** A second touch finger, used to check cross-pointer bookkeeping. */
+const SECOND_TAP_POINTER_ID = 3;
 const LONG_PRESS_DELAY_MS = 500;
 
 function pointerEvent(type: string, init: PointerEventInit): PointerEvent {
@@ -1109,14 +1111,96 @@ describe('minesweeper touch click suppression', () => {
         pointerType: 'touch',
       }),
     );
-    expect(cell(root, 0, 1).dataset.revealed).toBeUndefined();
 
-    startTouchPress(root, 0, 1, 3);
-    endTouchPress(root, 0, 1, 3);
+    startTouchPress(root, 0, 1, SECOND_TAP_POINTER_ID);
+    endTouchPress(root, 0, 1, SECOND_TAP_POINTER_ID);
     clickRelease(root, 0, 1);
 
-    // (0,1) touches the mine at (0,0), so the reveal does not win the game.
+    // (0,1) is adjacent to the mine at (0,0), so the reveal does not win.
     expect(cell(root, 0, 1).dataset.revealed).toBe('true');
+    expect(statusOf(root)).toBe('playing');
+  });
+
+  it('consumes released tokens when a click misses every cell', async () => {
+    const { services } = createServices();
+    const root = await mount(services);
+
+    // A cancelled hold leaves a token for (0, 1). A release click on the board
+    // background is not a cell, so it must consume the token instead of leaving
+    // it to swallow the next real tap.
+    startTouchPress(root, 0, 1, TOUCH_POINTER_ID);
+    board(root).dispatchEvent(
+      pointerEvent('pointerleave', {
+        pointerId: TOUCH_POINTER_ID,
+        pointerType: 'touch',
+      }),
+    );
+    endTouchPress(root, 0, 1, TOUCH_POINTER_ID);
+    board(root).dispatchEvent(
+      pointerEvent('click', {
+        pointerId: WEBKIT_CLICK_POINTER_ID,
+        pointerType: 'mouse',
+        isPrimary: true,
+        detail: 1,
+        button: 0,
+        buttons: 0,
+      }),
+    );
+    expect(statusOf(root)).toBe('ready');
+
+    // The background click consumed the token, so a following click without a
+    // fresh pointerdown is not swallowed.
+    clickRelease(root, 0, 1);
+    expect(cell(root, 0, 1).dataset.revealed).toBe('true');
+
+    // A detached token (rebuild) is consumed the same way when the release
+    // click misses every cell, so it cannot swallow a later tap.
+    startTouchPress(root, 4, 4, TOUCH_POINTER_ID);
+    debugApi()?.setConfig({ rows: 6, cols: 6, mines: 10, firstClickSafe: true });
+    endTouchPress(root, 5, 5, TOUCH_POINTER_ID);
+    board(root).dispatchEvent(
+      pointerEvent('click', {
+        pointerId: WEBKIT_CLICK_POINTER_ID,
+        pointerType: 'mouse',
+        isPrimary: true,
+        detail: 1,
+        button: 0,
+        buttons: 0,
+      }),
+    );
+    expect(statusOf(root)).toBe('ready');
+
+    clickRelease(root, 0, 1);
+    expect(cell(root, 0, 1).dataset.revealed).toBe('true');
+    expect(statusOf(root)).toBe('playing');
+  });
+
+  it('keeps a rebuilt board click suppressed while its finger is still down', async () => {
+    const { services } = createServices();
+    const root = await mount(services);
+
+    // Hold the 5x5 bottom-right cell, then rebuild to 6x6 while the finger is
+    // still down. The rebuild detaches the token from its old cell.
+    startTouchPress(root, 4, 4, TOUCH_POINTER_ID);
+    debugApi()?.setConfig({ rows: 6, cols: 6, mines: 10, firstClickSafe: true });
+
+    // A second finger taps a cell before the first lifts. That click belongs to
+    // the second finger and must reveal instead of consuming the pending
+    // detached token.
+    startTouchPress(root, 0, 1, SECOND_TAP_POINTER_ID);
+    endTouchPress(root, 0, 1, SECOND_TAP_POINTER_ID);
+    clickRelease(root, 0, 1);
+    expect(cell(root, 0, 1).dataset.revealed).toBe('true');
+
+    // The first finger's release click is still swallowed after the rebuild,
+    // wherever it lands; pick a cell the second finger's reveal did not open.
+    const release = gameState().board.flat().find((candidate) => !candidate.revealed);
+    if (!release) {
+      throw new Error('Expected a hidden cell after the second finger reveal');
+    }
+    endTouchPress(root, release.row, release.col, TOUCH_POINTER_ID);
+    clickRelease(root, release.row, release.col);
+    expect(cell(root, release.row, release.col).dataset.revealed).toBeUndefined();
     expect(statusOf(root)).toBe('playing');
   });
 
@@ -1124,8 +1208,8 @@ describe('minesweeper touch click suppression', () => {
     const { services } = createServices();
     const root = await mount(services);
 
-    // Restart while a finger is down; the release click follows the rebuilt
-    // board and must still be swallowed.
+    // Restart while a finger is down; the release click still targets the held
+    // cell on the restarted board and must be swallowed.
     startTouchPress(root, MINE_ROW, MINE_COL);
     clickRestart(root);
     expect(statusOf(root)).toBe('ready');
