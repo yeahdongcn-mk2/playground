@@ -22,6 +22,20 @@ const WEBKIT_DEVICE = 'iPhone SE (3rd gen)';
  */
 const SHARED_MOBILE_ENTRIES = [
   {
+    name: '2048 phone cases',
+    chromium: 'tests/e2e/2048.mobile.spec.ts',
+    webkit: 'tests/e2e/2048.mobile.webkit.spec.ts',
+    shared: 'tests/e2e/2048-mobile-cases.ts',
+    define: 'define2048MobileCases',
+  },
+  {
+    name: 'breakout phone cases',
+    chromium: 'tests/e2e/breakout.mobile.spec.ts',
+    webkit: 'tests/e2e/breakout.mobile.webkit.spec.ts',
+    shared: 'tests/e2e/breakout-mobile-cases.ts',
+    define: 'defineBreakoutMobileCases',
+  },
+  {
     name: 'framework',
     chromium: 'tests/e2e/framework.mobile.spec.ts',
     webkit: 'tests/e2e/framework.mobile.webkit.spec.ts',
@@ -225,6 +239,8 @@ describe('browser coverage documentation', () => {
       .filter((file) => file.endsWith('.webkit.spec.ts'))
       .sort();
     expect(webkitSpecs).toEqual([
+      '2048.mobile.webkit.spec.ts',
+      'breakout.mobile.webkit.spec.ts',
       'framework.mobile.webkit.spec.ts',
       'minesweeper.difficulty.mobile.webkit.spec.ts',
       'minesweeper.mobile.webkit.spec.ts',
@@ -497,7 +513,41 @@ describe('browser coverage documentation', () => {
     }
   });
 
-  it('documents every WebKit mobile entry and the specs still Chromium-only', () => {
+  it('does not inject touch input through a Chromium-only CDP session', () => {
+    const sources = readdirSync(join(ROOT, 'tests', 'e2e'))
+      .filter((file) => file.endsWith('.ts'))
+      .map((file) => ({
+        path: `tests/e2e/${file}`,
+        source: readFileSync(join(ROOT, 'tests', 'e2e', file), 'utf8'),
+      }));
+    for (const { path, source } of sources) {
+      expect(
+        source,
+        `${path} should not open a CDP session for touch injection`,
+      ).not.toContain('newCDPSession');
+      expect(
+        source,
+        `${path} should not dispatch Chromium-only touch events`,
+      ).not.toContain('Input.dispatchTouchEvent');
+    }
+
+    // The shared helper is the replacement for those injections; both phone
+    // entries for the once Chromium-only specs must use it.
+    const helper = read('tests/e2e/touch-input.ts');
+    expect(helper).toContain('export async function startTouch(');
+    expect(helper).toContain('export async function moveTouch(');
+    expect(helper).toContain('export async function endTouch(');
+    for (const entry of [
+      'tests/e2e/2048-mobile-cases.ts',
+      'tests/e2e/breakout-mobile-cases.ts',
+    ]) {
+      expect(read(entry), `${entry} should use the shared touch helper`).toContain(
+        "from './touch-input'",
+      );
+    }
+  });
+
+  it('documents every WebKit mobile entry and keeps only the screenshot scripts Chromium-only', () => {
     for (const [name, doc] of [
       ['README.md', README],
       ['docs/framework.md', FRAMEWORK],
@@ -514,16 +564,20 @@ describe('browser coverage documentation', () => {
       ).toMatch(/WebKit[^。\n]{0,80}(?:framework|扫雷)[^。\n]{0,80}(?:触屏|手势)/);
       expect(
         doc,
-        `${name} should keep 2048 / breakout Chromium-only`,
-      ).toMatch(/2048[^。\n]{0,60}(?:仍|只)(?:在|仅) Chromium/);
-      // Framework, the minesweeper touch / difficulty cases and the snake /
-      // tetris phone cases now run on both engines; calling any of them
-      // Chromium-only would misstate the matrix.
+        `${name} should say 2048 and breakout now run on both engines`,
+      ).toMatch(/2048 与 breakout 的手机端 spec 也已在两引擎运行/);
+      expect(
+        doc,
+        `${name} should keep the screenshot scripts Chromium-only`,
+      ).toContain('截图脚本仍只在 Chromium');
+      // All phone game specs now run on both engines; calling any of them
+      // Chromium-only would misstate the matrix, while the screenshot scripts
+      // remain Chromium-only until the follow-up lands.
       expect(
         doc,
         `${name} should not call the WebKit-covered cases Chromium-only`,
       ).not.toMatch(
-        /(?:framework|扫雷触屏|扫雷难度|minesweeper\.mobile|minesweeper\.difficulty\.mobile|snake\.mobile|tetris\.mobile)[^。\n]{0,40}(?:仍|只)(?:在|仅) Chromium/,
+        /(?:2048|breakout|framework|扫雷触屏|扫雷难度|minesweeper\.mobile|minesweeper\.difficulty\.mobile|snake\.mobile|tetris\.mobile)[^。\n]{0,40}(?:仍|只)(?:在|仅) Chromium/,
       );
     }
   });
@@ -653,8 +707,8 @@ describe('browser coverage documentation', () => {
     const [desktop, mobile, webkit] = readmeBreakdown ?? [0, 0, 0];
     expect(desktop + mobile + webkit).toBe(counts.readmeE2e);
     // The WebKit project now runs framework, the minesweeper touch gestures,
-    // the touch difficulty form and the snake / tetris phone cases on top of
-    // the seven contract / smoke cases.
-    expect(webkit).toBeGreaterThanOrEqual(27);
+    // the touch difficulty form, the snake / tetris phone cases and the 2048 /
+    // breakout phone cases on top of the seven contract / smoke cases.
+    expect(webkit).toBeGreaterThanOrEqual(30);
   });
 });

@@ -1,10 +1,18 @@
-import type { CDPSession, Locator, Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 import type {
   Cell,
   MinesweeperConfig,
   MinesweeperSnapshot,
 } from '../../src/games/minesweeper/engine';
 import { expect } from './fixtures';
+import {
+  cancelTouch,
+  dispatchTouchPointerEvent,
+  endTouch,
+  moveTouch,
+  startTouch,
+  type TouchGesture,
+} from './touch-input';
 
 export interface OpenMinesweeperOptions {
   /** Fixed mine layout, e.g. `[{ row: 0, col: 0 }, ...]`. */
@@ -135,15 +143,18 @@ async function cellCenter(
   return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
 }
 
-/** A real touch tap, so Chromium emits the same pointer/click pair a finger does. */
+/** A real touch tap, so both engines emit the pointer/click pair a finger does. */
 export async function tapCell(page: Page, row: number, col: number): Promise<void> {
   const point = await cellCenter(page, row, col);
   await page.touchscreen.tap(point.x, point.y);
 }
 
-/** Dispatch a synthetic touch PointerEvent on a cell. CDP cannot express every
- * multi-pointer sequence (for example two ids at once, or a click that arrives
- * after a long hold), so the suppression tests inject the exact events. */
+/**
+ * Dispatch a synthetic touch PointerEvent on a cell. A single gesture needs
+ * more control than `page.touchscreen` offers (two pointer ids at once, or a
+ * click that arrives after a long hold), so the suppression tests inject the
+ * exact events on the cell.
+ */
 export async function dispatchTouchPointer(
   page: Page,
   row: number,
@@ -152,82 +163,23 @@ export async function dispatchTouchPointer(
   pointerId: number,
   detail = 1,
 ): Promise<void> {
-  await cellLocator(page, row, col).evaluate(
-    (cell, init: { type: string; pointerId: number; detail: number }) => {
-      cell.dispatchEvent(
-        new PointerEvent(init.type, {
-          bubbles: true,
-          cancelable: true,
-          pointerId: init.pointerId,
-          pointerType: 'touch',
-          detail: init.detail,
-        }),
-      );
-    },
-    { type, pointerId, detail },
-  );
+  const point = await cellCenter(page, row, col);
+  await dispatchTouchPointerEvent(page, type, point, pointerId, {
+    target: cellLocator(page, row, col),
+    detail,
+  });
 }
 
 /**
- * One held touch. Chromium drives a real CDP touch sequence; WebKit has no CDP
- * session, so the same gesture is dispatched as the pointer events a touch
- * would produce (`pointerdown` / `pointermove` / `pointerup` plus the release
- * click). Both engines therefore exercise the same view code path.
+ * One held touch. The shared helper dispatches the pointer events a real touch
+ * produces (`pointerdown` / `pointermove` / `pointerup` plus the release click)
+ * on both engines, so Chromium and WebKit exercise the same view code path.
  */
 export interface CellPress {
-  readonly client: CDPSession | null;
-  readonly page: Page;
+  readonly gesture: TouchGesture;
   readonly row: number;
   readonly col: number;
   readonly point: { readonly x: number; readonly y: number };
-  readonly pointerId: number;
-}
-
-/**
- * Pointer id used by the WebKit fallback for the whole injected gesture.
- * WebKit's release click carries the mouse pointer id (1) rather than the
- * touch pointerdown id, so the fallback keeps one id to exercise the product's
- * pointer-id suppression path; the real click shape is pinned in
- * `minesweeper.narrow.webkit.spec.ts`.
- */
-const WEBKIT_TOUCH_POINTER_ID = 1;
-
-interface CellPointerInit {
-  readonly type: string;
-  readonly pointerId: number;
-  readonly clientX: number;
-  readonly clientY: number;
-  readonly detail?: number;
-  readonly buttons?: number;
-}
-
-/**
- * Dispatch a touch pointer event on a cell for engines without CDP. A real
- * touch is trusted input, but the event shape (bubbling PointerEvent with a
- * touch pointerType, coordinates and pointer id) is what the gesture handlers
- * consume, so the same suppression and long-press logic runs.
- */
-async function dispatchCellPointer(
-  page: Page,
-  row: number,
-  col: number,
-  init: CellPointerInit,
-): Promise<void> {
-  await cellLocator(page, row, col).evaluate((cell, eventInit: CellPointerInit) => {
-    cell.dispatchEvent(
-      new PointerEvent(eventInit.type, {
-        bubbles: true,
-        cancelable: true,
-        pointerId: eventInit.pointerId,
-        pointerType: 'touch',
-        isPrimary: true,
-        clientX: eventInit.clientX,
-        clientY: eventInit.clientY,
-        detail: eventInit.detail ?? 0,
-        buttons: eventInit.buttons ?? 0,
-      }),
-    );
-  }, init);
 }
 
 /** Begin a held touch press on a cell and keep it down until released. */
@@ -237,31 +189,14 @@ export async function startCellPress(
   col: number,
 ): Promise<CellPress> {
   const point = await cellCenter(page, row, col);
-  const client =
-    page.context().browser()?.browserType().name() === 'chromium'
-      ? await page.context().newCDPSession(page)
-      : null;
-  if (client) {
-    await client.send('Input.dispatchTouchEvent', {
-      type: 'touchStart',
-      touchPoints: [point],
-    });
-  } else {
-    await dispatchCellPointer(page, row, col, {
-      type: 'pointerdown',
-      pointerId: WEBKIT_TOUCH_POINTER_ID,
-      clientX: point.x,
-      clientY: point.y,
-      buttons: 1,
-    });
-  }
+  const gesture = await startTouch(page, point, {
+    target: cellLocator(page, row, col),
+  });
   return {
-    client,
-    page,
+    gesture,
     row,
     col,
     point,
-    pointerId: WEBKIT_TOUCH_POINTER_ID,
   };
 }
 
@@ -270,72 +205,21 @@ export async function moveCellPress(
   dx: number,
   dy: number,
 ): Promise<void> {
-  if (press.client) {
-    await press.client.send('Input.dispatchTouchEvent', {
-      type: 'touchMove',
-      touchPoints: [{ x: press.point.x + dx, y: press.point.y + dy }],
-    });
-  } else {
-    await dispatchCellPointer(press.page, press.row, press.col, {
-      type: 'pointermove',
-      pointerId: press.pointerId,
-      clientX: press.point.x + dx,
-      clientY: press.point.y + dy,
-      buttons: 1,
-    });
-  }
+  await moveTouch(press.gesture, {
+    x: press.point.x + dx,
+    y: press.point.y + dy,
+  });
 }
 
-/** Release a press and detach the CDP session. */
+/** Release a press with the release click a real touch would produce. */
 export async function endCellPress(press: CellPress): Promise<void> {
-  try {
-    if (press.client) {
-      await press.client.send('Input.dispatchTouchEvent', {
-        type: 'touchEnd',
-        touchPoints: [],
-      });
-      return;
-    }
-    await dispatchCellPointer(press.page, press.row, press.col, {
-      type: 'pointerup',
-      pointerId: press.pointerId,
-      clientX: press.point.x,
-      clientY: press.point.y,
-    });
-    // WebKit does not synthesize the release click for untrusted pointer
-    // events, so dispatch the click the browser would have produced. A long
-    // press or cancelled gesture must consume it.
-    await dispatchCellPointer(press.page, press.row, press.col, {
-      type: 'click',
-      pointerId: press.pointerId,
-      clientX: press.point.x,
-      clientY: press.point.y,
-      detail: 1,
-    });
-  } finally {
-    await press.client?.detach();
-  }
+  // A long press or cancelled gesture must consume this release click.
+  await endTouch(press.gesture, { click: true });
 }
 
-/** Cancel a press (browser scroll or gesture takeover) and detach the session. */
+/** Cancel a press (browser scroll or gesture takeover). */
 export async function cancelCellPress(press: CellPress): Promise<void> {
-  try {
-    if (press.client) {
-      await press.client.send('Input.dispatchTouchEvent', {
-        type: 'touchCancel',
-        touchPoints: [],
-      });
-    } else {
-      await dispatchCellPointer(press.page, press.row, press.col, {
-        type: 'pointercancel',
-        pointerId: press.pointerId,
-        clientX: press.point.x,
-        clientY: press.point.y,
-      });
-    }
-  } finally {
-    await press.client?.detach();
-  }
+  await cancelTouch(press.gesture);
 }
 
 export async function longPressCell(
@@ -345,13 +229,8 @@ export async function longPressCell(
   holdMs = 650,
 ): Promise<void> {
   const press = await startCellPress(page, row, col);
-  try {
-    await page.waitForTimeout(holdMs);
-    await endCellPress(press);
-  } catch (error) {
-    await press.client?.detach().catch(() => undefined);
-    throw error;
-  }
+  await page.waitForTimeout(holdMs);
+  await endCellPress(press);
 }
 
 /** Assert the document does not scroll horizontally. */
