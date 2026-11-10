@@ -217,6 +217,7 @@ pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和
 | `npm run typecheck` | 只做 TypeScript 类型检查 |
 | `npm run test:unit` | Vitest 单元测试 |
 | `npm run test:e2e` | 先构建，再用 `vite preview` 跑 Playwright 端到端测试 |
+| `npm run test:e2e:webkit` | 先构建，再只跑 `mobile-webkit` 项目（iPhone SE (3rd gen) 冒烟） |
 | `npm run lint` | oxlint + 模块依赖方向检查 |
 | `npm run check:budget` | 检查入口无引擎、gzip 体积预算 |
 | `npm run screenshots` | 构建后生成 `docs/screenshots/` 中的界面截图 |
@@ -245,7 +246,7 @@ pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和
 首次运行端到端测试前需要安装浏览器：
 
 ```bash
-npx playwright install chromium
+npx playwright install chromium webkit
 ```
 
 ## 目录结构
@@ -353,7 +354,7 @@ games/<game>/scene → 对应引擎（动态 import）
 | DOM 游戏 | 原生 DOM + CSS（扫雷，不加载引擎） |
 | 3D 引擎 | Three.js（首个 3D 游戏时接入） |
 | 单元测试 | Vitest |
-| 端到端测试 | Playwright（Chromium、桌面 + Pixel 7） |
+| 端到端测试 | Playwright（Chromium + WebKit；桌面、Pixel 7、iPhone SE (3rd gen)） |
 
 使用 Phaser 的 2D 游戏把规则与渲染分离：纯逻辑放 `engine.ts` / `logic/` 并先写单测，Phaser Scene 只负责绘制与输入；DOM 游戏则由 `view.ts` 直接渲染并复用同一份纯逻辑。3D 游戏在 `mount()` 内创建 `WebGLRenderer` 和相机，沿用相同的路由、存储、音效和销毁契约。
 
@@ -367,7 +368,7 @@ npm run lint         # 通过
 npm run test:unit    # 366 passed（含贪食蛇 21、俄罗斯方块 38、2048 35、打砖块 39、扫雷 132 个规则 / 难度 / 成绩 / 视图 / 调试用例，以及截图脚本端口 9 例、截图模式 5 例）
 npm run build        # 通过
 npm run check:budget # 通过（入口 10.90 KB gzip，全部 JS 404.23 KB gzip）
-npm run test:e2e     # 114 passed（桌面 85 + 手机 29）
+npm run test:e2e     # 115 passed（桌面 85 + 手机 29 + WebKit 1）
 ```
 
 端到端覆盖：大厅与游戏卡片、页面内锚点滚动、进入 / 返回 / 重进、最近游玩时间（进入 → 返回大厅 → 刷新后保留）、未知游戏与未知路径、音效偏好持久化、方向键与 WASD、修饰键快捷键不劫持、鼠标点击与拖动、重置后键盘仍可用、仅容器变化时的缩放、快速切换时丢弃晚到 mount、页面隐藏时离开仍能完整销毁、监听器清理、手机触屏与横向溢出检查；贪食蛇的开始 / 暂停 / 重开、吃果实与增长、撞墙死亡、更高 / 更低最高分、刷新后最高分仍在、P / Esc / R、滑动转向、页面隐藏自动暂停、手机 D-pad 与手机端重开；俄罗斯方块的从大厅进入 / 返回、键盘移动与旋转、硬降消行计分、暂停 / 继续、堆顶结束与重开、R 重开，以及手机端触屏按钮操作与手机端结束 / 重开；2048 的从大厅进入 / 返回、方向键与 WASD 合并计分、固定棋盘无路可走结束 / 重开 / R 重开、READY 时 R 直接开始、canvas 像素确认棋盘与方块确实被绘制，以及就绪定时器与 destroy 后键盘 / 可见性 / 指针监听的清理；手机端滑动合并与横向溢出检查；打砖块的从大厅进入 / 返回、键盘与 A/D 移动挡板、非终砖击中立即计分、固定砖块过关后加速、Space 开始 / 过关继续、R 与侧栏重开、窗口失焦暂停并在恢复焦点后继续、连续三次漏球扣命至 game over 后重开、canvas 像素确认分层砖块 / 挡板 / 球被绘制、destroy 后键盘 / 指针（含 cancel / lostpointercapture）/ 可见性监听与就绪定时器、调试接缝清理，以及手机端触屏拖动挡板与横向溢出检查；扫雷的从大厅进入 / 返回、固定雷盘首开、左键翻开、右键插旗与取消旗（剩余雷数同步变化）、格子可见文本（数字 / ⚑ / ✹ 与重开清空）、踩雷结束并展示全部雷、翻开全部安全格获胜、结束后焦点进入遮罩、重开后焦点回到重开按钮、Enter 翻开聚焦格、畸形调试雷盘回退到固定随机盘、重开后的 data-revealed 清理、遮罩与侧栏重开、用时显示、胜利后最高用时立即出现并在刷新后保留、失败局不写入、空榜时「清空记录」按钮禁用、点击清空后榜单立即回到空态且刷新仍为空（同一存储中的其它游戏 / 设置键保留），以及 destroy 与路由离开后的棋盘监听器、计时器、mountSignal 与调试接缝清理；手机端扫雷的轻点翻开、长按插旗 / 取消、移动 / 滚动 / 取消长按、取消后下一次轻点仍可翻开、按住超过 1.2 秒后松手不误翻、按住时重开 / destroy 取消待触发的长按、第二个指针不清除首个指针的 click 抑制、重开后焦点落在首屏可见的重开按钮、触屏踩雷 / 胜利与手机布局无横向溢出、最长自定义最高用时标签不产生横向溢出；手机端扫雷另在 320×640 / 340×700 / 349×700 / 360×740 视口逐一断言 81 格最小尺寸、无横向溢出与 HUD / 返回大厅在首屏内，并在 320×640 下断言重开入口完整位于首屏（x + width ≤ 320、y + height ≤ 640）且 touch-hint 可见。
