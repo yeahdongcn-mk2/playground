@@ -3,6 +3,7 @@ import { mkdir } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { chromium, devices } from '@playwright/test';
 import { assertPortAvailable, parsePreviewPort } from './lib/preview-port.mjs';
+import { waitForPreviewServer } from './lib/preview-server.mjs';
 
 /**
  * Capture the Before / After evidence for the minesweeper integration.
@@ -130,43 +131,6 @@ const WIN_MINES = [
 ].join(';');
 
 let server = null;
-
-/** Error shown when the preview dies before the capture can connect to it. */
-function previewStartupError(detail) {
-  const suffix = detail.trim() === '' ? '' : `\n${detail.trim()}`;
-  return new Error(
-    `The preview server exited before ${ORIGIN} became ready. ` +
-      `Port ${PORT} may be taken by another process; set PREVIEW_PORT to a ` +
-      `free port (for example PREVIEW_PORT=${PORT + 1}).${suffix}`,
-  );
-}
-
-async function waitForServer(url, { timeoutMs = 30_000, failure } = {}) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const failureDetail = failure?.();
-    if (failureDetail != null) {
-      throw previewStartupError(failureDetail);
-    }
-    try {
-      const response = await fetch(url);
-      // A responding port is not proof that our preview is the server there:
-      // the child may already have exited because another process owns it.
-      if (response.ok && failure?.() == null) {
-        return;
-      }
-    } catch {
-      // server not ready yet
-    }
-    await delay(250);
-  }
-  const failureDetail = failure?.();
-  throw new Error(
-    `Timed out waiting for ${url}. If the preview is on another port, set ` +
-      `PREVIEW_PORT to match it.` +
-      (failureDetail == null ? '' : `\n${failureDetail}`),
-  );
-}
 
 async function settle(page) {
   await page.evaluate(() => document.fonts.ready);
@@ -502,12 +466,12 @@ if (!process.env.BASE_URL) {
   // and write its build as After evidence.
   await assertPortAvailable(PORT, HOST);
 
-  let stderr = '';
-  let previewFailure = null;
+  // Test seam: point this at a stand-in that exits non-zero so the unit test
+  // can exercise the post-probe startup failure without a second server.
   server = spawn(
     process.execPath,
     [
-      'node_modules/vite/bin/vite.js',
+      process.env.PREVIEW_ENTRY ?? 'node_modules/vite/bin/vite.js',
       'preview',
       '--host',
       HOST,
@@ -517,26 +481,8 @@ if (!process.env.BASE_URL) {
     ],
     { stdio: ['ignore', 'pipe', 'pipe'] },
   );
-  server.stderr?.setEncoding('utf8');
-  server.stderr?.on('data', (chunk) => {
-    stderr = `${stderr}${chunk}`.slice(-4000);
-  });
-  server.once('error', (error) => {
-    previewFailure = `Failed to spawn the preview server: ${error.message}`;
-  });
-  server.once('exit', (code, signal) => {
-    previewFailure = `vite preview stopped (exit code ${code}, signal ${signal ?? 'none'}).`;
-  });
   process.on('exit', () => server?.kill());
-  await waitForServer(ORIGIN, {
-    failure: () => {
-      if (previewFailure == null) {
-        return null;
-      }
-      const detail = stderr.trim();
-      return `${previewFailure}${detail === '' ? '' : `\n${detail}`}`;
-    },
-  });
+  await waitForPreviewServer(server, { origin: ORIGIN, port: PORT });
 }
 
 await mkdir(OUTPUT, { recursive: true });

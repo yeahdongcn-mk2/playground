@@ -1,6 +1,8 @@
 import { spawnSync } from 'node:child_process';
-import { readdirSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -48,6 +50,26 @@ function spawnScript(
 /** Run the minesweeper capture script without a preview server. */
 function runScript(args: string[]): { status: number | null; output: string } {
   return spawnScript(args, { ...process.env, BASE_URL: '' });
+}
+
+/**
+ * sha256 of every file in the screenshot directory, keyed by file name.
+ *
+ * Comparing hashes instead of the file-name set proves the failing run did not
+ * overwrite an existing screenshot: the short-mode targets already exist in the
+ * repository, so a filename-only comparison would stay green after a write.
+ */
+function screenshotHashes(): Record<string, string> {
+  return Object.fromEntries(
+    readdirSync(SCREENSHOT_DIR)
+      .sort()
+      .map((file) => [
+        file,
+        createHash('sha256')
+          .update(readFileSync(join(SCREENSHOT_DIR, file)))
+          .digest('hex'),
+      ]),
+  );
 }
 
 /** Hold a random 127.0.0.1 port open for the duration of the test. */
@@ -156,7 +178,7 @@ describe('minesweeper screenshot preview port', () => {
     { timeout: 30_000 },
     async ({ args }) => {
       const owner = await listenOnRandomPort();
-      const screenshotsBefore = readdirSync(SCREENSHOT_DIR).sort();
+      const screenshotsBefore = screenshotHashes();
       try {
         const env = { ...process.env };
         delete env.BASE_URL;
@@ -173,9 +195,51 @@ describe('minesweeper screenshot preview port', () => {
         expect(output).toContain('the port is already in use');
         expect(output).toContain('Set PREVIEW_PORT');
         expect(output).not.toContain('Captured');
-        expect(readdirSync(SCREENSHOT_DIR).sort()).toEqual(screenshotsBefore);
+        // Byte-for-byte proof that no screenshot was created or overwritten.
+        expect(screenshotHashes()).toEqual(screenshotsBefore);
       } finally {
         await owner.close();
+      }
+    },
+  );
+
+  it(
+    'fails with the preview exit code and stderr when the preview dies after the port probe',
+    { timeout: 45_000 },
+    async () => {
+      const probe = await listenOnRandomPort();
+      const port = probe.port;
+      await probe.close();
+      const dir = mkdtempSync(join(tmpdir(), 'minesweeper-preview-'));
+      const fakePreview = join(dir, 'fake-preview.mjs');
+      writeFileSync(
+        fakePreview,
+        "process.stderr.write('fake preview exploded\\n');\nprocess.exit(7);\n",
+      );
+      const screenshotsBefore = screenshotHashes();
+      try {
+        const env = { ...process.env };
+        delete env.BASE_URL;
+        env.PREVIEW_PORT = String(port);
+        // Test seam consumed by the capture script: stand in for vite preview
+        // with a process that dies right after an otherwise successful probe.
+        env.PREVIEW_ENTRY = fakePreview;
+
+        const { status, output } = spawnScript([], env);
+
+        expect(status).not.toBe(0);
+        expect(output).toContain(
+          `The preview server exited before http://127.0.0.1:${port} became ready`,
+        );
+        // The child's own exit code and stderr reach the operator, so the
+        // post-probe race is not mistaken for a locator or port failure.
+        expect(output).toContain('exit code 7');
+        expect(output).toContain('fake preview exploded');
+        expect(output).toContain('PREVIEW_PORT');
+        expect(output).not.toContain('Captured');
+        expect(screenshotHashes()).toEqual(screenshotsBefore);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
       }
     },
   );
