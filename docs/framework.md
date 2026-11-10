@@ -288,7 +288,7 @@ npm run test:e2e     # 先 build，再用 vite preview 跑 Chromium 桌面 / Pix
 npm run test:e2e:webkit # 先 build，只跑 mobile-webkit（iPhone SE (3rd gen)）
 ```
 
-当前提交本地通过：`typecheck`、`lint`、`build`、`check:budget` 通过；`npm run test:unit` 391 passed；`npm run test:e2e` 125 passed（桌面 85 + 手机 34 + WebKit 6）。
+当前提交本地通过：`typecheck`、`lint`、`build`、`check:budget` 通过；`npm run test:unit` 393 passed；`npm run test:e2e` 125 passed（桌面 85 + 手机 34 + WebKit 6）。
 
 - 单测只覆盖引擎无关逻辑；不要在 Node 里启动 Phaser。
 - 端到端使用 `data-testid`，覆盖进入 / 返回、最近游玩时间、键盘 / 鼠标 / 触屏、修饰键、重置、容器级缩放、未知路由、快速切换的晚到 mount、休眠时销毁和监听器清理；贪食蛇、俄罗斯方块、2048、打砖块与扫雷另有完整玩法用例（暂停 / 重开、计分 / 结束、窗口失焦暂停与恢复、手机端触屏按钮或拖动、像素绘制与监听器清理，扫雷另有左右键、固定雷盘、难度预设与自定义切换、非法自定义错误、格子可见文本、焦点迁移、畸形调试雷盘回退、胜利 / 踩雷与计时器 / 调试接缝清理）。
@@ -298,11 +298,20 @@ npm run test:e2e:webkit # 先 build，只跑 mobile-webkit（iPhone SE (3rd gen)
 
 ### 12.1 浏览器覆盖与真实 iOS 限制
 
-扫雷窄屏首屏契约现在由 Chromium 与 WebKit 两套 Playwright 模拟共同验证：
+扫雷窄屏布局契约现在由 Chromium 与 WebKit 两套 Playwright 模拟共同验证。以下 7 条是唯一契约；文档、e2e 与验收共用同一组视口，新增宽度按第 7 条处理，不再逐条开单。
 
-- `chromium`（桌面 1440×1000）与 `mobile`（Pixel 7）项目继续覆盖桌面与手机端交互；`tests/e2e/minesweeper.mobile.spec.ts` 的 8 视口矩阵（320×640、340×700、349×700、360×640、360×740、375×667、400×700、412×839）全部断言重开入口在首屏，边界用例另用计算样式钉住短窄查询的 min-width / max-width / max-height 边界。
-- `mobile-webkit` 项目使用 `devices['iPhone SE (3rd gen)']`（WebKit 引擎），运行 `tests/e2e/minesweeper.webkit.spec.ts` 冒烟与 `tests/e2e/minesweeper.narrow.webkit.spec.ts` 的 320×640、360×640、375×667、412×839 矩阵；四个视口都断言 81 格最小尺寸、无横向溢出，HUD / 返回大厅 / touch-hint 与重开入口在首屏内。
-- 320×640、360×640、375×667、412×839 四个 WebKit 视口与 Chromium 的 8 视口矩阵都断言重开入口完整位于首屏；320×640 与 412×839 的既有断言未放宽。
+1. **最低支持视口 320×640**：320px 与 `src/styles/app.css` 的 `html { min-width: 320px }` 一致，640px 是最低保证高度；高度 <640 的视口不保证首屏完整。
+2. **格子尺寸**：9×9 棋盘在宽度 ≥340px 且高度 ≥640px 时每格 ≥36×36px；宽度 320–339px 是几何降级区间，保证每格 ≥34×34px（320px 下约 34.2px）。9×36px 已经占满 324px，再加上棋盘边框与 gap 无法放进 320px，因此这一区间不承诺 36px。
+3. **首屏入口**：矩阵内每个视口的首屏必须包含返回大厅、剩余雷数、计时器、touch-hint 与 `mobile-restart-button`（重开入口），且页面不横向滚动。
+4. **覆盖矩阵**：Chromium 8 个视口为 320×640、340×700、349×700、360×640、360×740、375×667、400×700、412×839；WebKit 4 个视口为 320×640、360×640、375×667、412×839。四个视口都断言重开入口在首屏内，320×640 与 412×839 的既有断言未放宽。
+5. **矩阵外边界**：未列入矩阵的组合（例如 375×640、400×667）即使命中短窄间距查询，也不承诺重开入口在首屏内；这是明确的契约边界，不是回归。
+6. **大棋盘降级**：列数 >9 的大棋盘只有 9×9 享受 ≥36px 触控目标保证；大棋盘在窄屏按比例缩小并显示中文降级提示（#86），建议横屏或改用更小的棋盘，页面不横向滚动。
+7. **新宽度规则**：后续新增视口宽度若落在既有媒体查询 / 尺寸公式内，按同一规则处理并补对应 e2e，不再逐条开单；超出规则范围的组合记录为已知限制。
+
+现有 Playwright 覆盖：
+
+- `mobile`（Pixel 7）项目运行 `tests/e2e/minesweeper.mobile.spec.ts` 的 Chromium 8 视口矩阵，并覆盖窄屏边界用例（用计算样式钉住短窄查询的 min-width / max-width / max-height 边界）；`chromium`（桌面 1440×1000）项目继续覆盖桌面交互，不运行该手机矩阵。
+- `mobile-webkit` 项目使用 `devices['iPhone SE (3rd gen)']`（WebKit 引擎），运行 `tests/e2e/minesweeper.webkit.spec.ts` 冒烟与 `tests/e2e/minesweeper.narrow.webkit.spec.ts` 的 WebKit 4 视口矩阵。
 - 其余手机端 spec 与截图脚本仍只在 Chromium 下运行，#100 跟踪后续按 spec 扩大 WebKit 覆盖。
 
 首次运行需要安装两个引擎：
@@ -342,4 +351,4 @@ Node.js `^22.12.0 || ^24.0.0 || >=26.0.0`（Vite 8 的要求）。CI（`.github/
 - 打砖块固定 480×720 逻辑球场与 10 列砖块，没有道具、多球或在线排行榜；难度曲线由砖块行数与球速控制。
 - 扫雷提供初级 / 中级 / 高级三档预设与 5–30 行、5–30 列的自定义棋盘；没有撤销、问号标记、道具或在线排行榜。
 - Lint 使用 oxlint 而不是 ESLint：TypeScript 7 暂无 JS Compiler API，`typescript-eslint` 的 peer 范围也尚未覆盖 TS 7；oxlint 负责 TS 语法与常见规则，目录边界由本地脚本补足。
-- 手机端使用 Playwright 的 Chromium / WebKit 设备模拟：扫雷窄屏首屏契约已在 Chromium 8 视口与 WebKit 4 视口验证，四个 WebKit 视口都断言重开入口在首屏内，但 WebKit 不等于 iOS Safari（不模拟动态地址栏与安全区），真实触屏手感与 iOS 渲染仍需人工验收；其余手机端 spec 与截图脚本仍只在 Chromium 下运行（#100）。扫雷的最低支持宽度是 320px；宽度 ≥340px 且高度 ≥640px 的手机视口保证 81 格 ≥36×36px，320–339px 为几何降级区间（每格 ≥34×34px），因为 9×36px 加边框与 gap 无法放进 320px。
+- 手机端使用 Playwright 的 Chromium / WebKit 设备模拟：扫雷窄屏首屏契约已在 Chromium 8 视口与 WebKit 4 视口验证，四个 WebKit 视口都断言重开入口在首屏内，但 WebKit 不等于 iOS Safari（不模拟动态地址栏与安全区），真实触屏手感与 iOS 渲染仍需人工验收；其余手机端 spec 与截图脚本仍只在 Chromium 下运行（#100）。扫雷窄屏契约的边界是最低支持视口 320×640（高度 <640 不保证）；宽度 ≥340px 且高度 ≥640px 时 81 格 ≥36×36px，320–339px 为几何降级区间（每格 ≥34×34px），因为 9×36px 加边框与 gap 无法放进 320px；矩阵外组合（例如 375×640、400×667）不承诺重开入口在首屏内，列数 >9 的大棋盘只按比例缩小并显示中文降级提示（#86）、不再保证 36px。
