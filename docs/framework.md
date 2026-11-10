@@ -25,7 +25,7 @@
 | 2D 引擎 | Phaser | 4.2.1 |
 | 3D 引擎 | Three.js（首个 3D 游戏接入） | 0.187.0 |
 | 单元测试 | Vitest | 5.1.0 |
-| 端到端测试 | Playwright（Chromium） | 1.64.1 |
+| 端到端测试 | Playwright（Chromium + WebKit） | 1.64.1 |
 | Lint | oxlint + 模块边界脚本 | 1.91.0 / 本地脚本 |
 
 Phaser 与 Three.js **只能**出现在某个游戏的懒加载 chunk 中。共享外壳和 `core/` 保持引擎无关；这样替换引擎或升级大版本时不会波及大厅。扫雷是纯 DOM 游戏（`engine: 'dom'`），视图直接操作 DOM，完全不加载 Phaser。
@@ -284,8 +284,11 @@ npm run lint         # oxlint + 模块边界检查
 npm run test:unit    # Vitest：storage / input / router / dom 与五个游戏的纯规则引擎
 npm run build        # 类型检查 + 生产构建
 npm run check:budget # 入口无引擎、体积预算
-npm run test:e2e     # 先 build，再用 vite preview 跑桌面 + Pixel 7
+npm run test:e2e     # 先 build，再用 vite preview 跑 Chromium 桌面 / Pixel 7 与 mobile-webkit
+npm run test:e2e:webkit # 先 build，只跑 mobile-webkit（iPhone SE (3rd gen)）
 ```
+
+当前提交本地通过：`typecheck`、`lint`、`build`、`check:budget` 通过；`npm run test:unit` 384 passed；`npm run test:e2e` 120 passed（桌面 85 + 手机 29 + WebKit 6）。
 
 - 单测只覆盖引擎无关逻辑；不要在 Node 里启动 Phaser。
 - 端到端使用 `data-testid`，覆盖进入 / 返回、最近游玩时间、键盘 / 鼠标 / 触屏、修饰键、重置、容器级缩放、未知路由、快速切换的晚到 mount、休眠时销毁和监听器清理；贪食蛇、俄罗斯方块、2048、打砖块与扫雷另有完整玩法用例（暂停 / 重开、计分 / 结束、窗口失焦暂停与恢复、手机端触屏按钮或拖动、像素绘制与监听器清理，扫雷另有左右键、固定雷盘、难度预设与自定义切换、非法自定义错误、格子可见文本、焦点迁移、畸形调试雷盘回退、胜利 / 踩雷与计时器 / 调试接缝清理）。
@@ -293,16 +296,42 @@ npm run test:e2e     # 先 build，再用 vite preview 跑桌面 + Pixel 7
 - 生产构建后可用 `npm run preview` 手工检查 `dist/`。
 - 截图由 `npm run screenshots`（通用页）与 `npm run screenshots:breakout` 等游戏专用脚本生成，来源说明见 [screenshots/README.md](./screenshots/README.md)。
 
+### 12.1 浏览器覆盖与真实 iOS 限制
+
+扫雷窄屏首屏契约现在由 Chromium 与 WebKit 两套 Playwright 模拟共同验证：
+
+- `chromium`（桌面 1440×1000）与 `mobile`（Pixel 7）项目继续覆盖桌面与手机端交互。
+- `mobile-webkit` 项目使用 `devices['iPhone SE (3rd gen)']`（WebKit 引擎），运行 `tests/e2e/minesweeper.webkit.spec.ts` 冒烟与 `tests/e2e/minesweeper.narrow.webkit.spec.ts` 的 320×640、360×640、375×667、412×839 矩阵；四个视口都断言 81 格最小尺寸、无横向溢出，HUD / 返回大厅 / touch-hint 在首屏内。
+- WebKit 只在 320×640 与 412×839 断言重开入口完整位于首屏；360×640 / 375×667 的重开入口截断仍由 #60 跟踪（Chromium 修复见 PR #84），没有写成已解决。
+- 其余手机端 spec 与截图脚本仍只在 Chromium 下运行，#100 跟踪后续按 spec 扩大 WebKit 覆盖。
+
+首次运行需要安装两个引擎：
+
+```bash
+npx playwright install chromium webkit
+npm run test:e2e        # 全部项目：Chromium 桌面 + Pixel 7 + mobile-webkit
+npm run test:e2e:webkit # 只跑 mobile-webkit
+```
+
+实测差异与处理方式（#60 / #100 均为未关闭的跟踪单）：
+
+- **动态地址栏与 `dvh`**：Playwright 不模拟 iOS 动态地址栏；`100dvh` 等于模拟视口内高（与 Chromium 一致），真实 Safari 地址栏伸缩仍需真机验收。
+- **安全区**：iPhone SE (3rd gen) 模拟下 `env(safe-area-inset-*)` 为 0px，刘海 / Home 指示条安全区未被模拟。
+- **字体度量**：Linux WebKit 回退字体使「返回大厅」文本比 Chromium 宽约 3%（68.33px vs 66.45px）；契约断言元素边界而非固定文本宽度。
+- **触屏媒体查询**：`any-pointer: coarse` 在两套模拟下都命中，touch-hint 与紧凑重开入口都会渲染。
+- **真实 iOS**：CI 没有 iOS Safari / 真机，触屏手感、安全区与渲染像素仍需人工验收；WebKit 模拟通过不代表 iOS Safari 已完全兼容。
+
 ## 13. 环境与命令
 
 ```bash
 npm install
+npx playwright install chromium webkit  # e2e 需要 Chromium 与 WebKit
 npm run dev        # http://localhost:5173
 npm run build
 npm run preview
 ```
 
-Node.js `^22.12.0 || ^24.0.0 || >=26.0.0`（Vite 8 的要求）。CI（`.github/workflows/ci.yml`）按 `npm ci` → `typecheck` → `lint` → `test:unit` → `build` → `check:budget` → `test:e2e` 的顺序执行。
+Node.js `^22.12.0 || ^24.0.0 || >=26.0.0`（Vite 8 的要求）。CI（`.github/workflows/ci.yml`）按 `npm ci` → `pre-commit` → `typecheck` → `lint` → `test:unit` → `build` → `check:budget` → `test:e2e` 的顺序执行，并在 e2e 前安装 Chromium 与 WebKit。
 
 ## 14. 性能与已知限制
 
@@ -313,4 +342,4 @@ Node.js `^22.12.0 || ^24.0.0 || >=26.0.0`（Vite 8 的要求）。CI（`.github/
 - 打砖块固定 480×720 逻辑球场与 10 列砖块，没有道具、多球或在线排行榜；难度曲线由砖块行数与球速控制。
 - 扫雷提供初级 / 中级 / 高级三档预设与 5–30 行、5–30 列的自定义棋盘；没有撤销、问号标记、道具或在线排行榜。
 - Lint 使用 oxlint 而不是 ESLint：TypeScript 7 暂无 JS Compiler API，`typescript-eslint` 的 peer 范围也尚未覆盖 TS 7；oxlint 负责 TS 语法与常见规则，目录边界由本地脚本补足。
-- 手机端目前用 Playwright 模拟，真实设备手感需要人工验收。扫雷的最低支持宽度是 320px；宽度 ≥340px 且高度 ≥640px 的手机视口保证 81 格 ≥36×36px，320–339px 为几何降级区间（每格 ≥34×34px），因为 9×36px 加边框与 gap 无法放进 320px。
+- 手机端使用 Playwright 的 Chromium / WebKit 设备模拟：扫雷窄屏契约已在两引擎验证，但 WebKit 不等于 iOS Safari（不模拟动态地址栏与安全区），真实触屏手感与 iOS 渲染仍需人工验收；其余手机端 spec 与截图脚本仍只在 Chromium 下运行（#100）。扫雷的最低支持宽度是 320px；宽度 ≥340px 且高度 ≥640px 的手机视口保证 81 格 ≥36×36px，320–339px 为几何降级区间（每格 ≥34×34px），因为 9×36px 加边框与 gap 无法放进 320px。
