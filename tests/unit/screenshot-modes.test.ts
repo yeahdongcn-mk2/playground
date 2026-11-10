@@ -392,6 +392,65 @@ function listenOnRandomPort(): Promise<{
   });
 }
 
+/**
+ * The body of the first `marker { ... }` block in `source`, matched by braces.
+ *
+ * Position-only assertions cannot prove the preview startup sits inside the
+ * guard: closing the guard immediately and moving the startup lines after it
+ * keeps every `indexOf` ordering intact. Skipping strings and comments makes
+ * the brace match insensitive to textual braces.
+ */
+function blockBody(source: string, marker: string): string {
+  const markerAt = source.indexOf(marker);
+  if (markerAt === -1) {
+    throw new Error(`Missing ${marker}`);
+  }
+  const open = source.indexOf('{', markerAt + marker.length);
+  if (open === -1) {
+    throw new Error(`Missing block after ${marker}`);
+  }
+
+  let depth = 0;
+  for (let i = open; i < source.length; i += 1) {
+    const char = source[i];
+    if (char === "'" || char === '"' || char === '`') {
+      for (i += 1; i < source.length; i += 1) {
+        if (source[i] === '\\') {
+          i += 1;
+        } else if (source[i] === char) {
+          break;
+        }
+      }
+      continue;
+    }
+    if (char === '/' && source[i + 1] === '/') {
+      i = source.indexOf('\n', i);
+      if (i === -1) {
+        break;
+      }
+      continue;
+    }
+    if (char === '/' && source[i + 1] === '*') {
+      const end = source.indexOf('*/', i + 2);
+      if (end === -1) {
+        throw new Error(`Unterminated comment after ${marker}`);
+      }
+      i = end + 1;
+      continue;
+    }
+    if (char === '{') {
+      depth += 1;
+    }
+    if (char === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return source.slice(open + 1, i);
+      }
+    }
+  }
+  throw new Error(`Unbalanced block after ${marker}`);
+}
+
 describe('minesweeper screenshot modes', () => {
   it('rejects the removed generic --before flag instead of capturing After shots', () => {
     const { status, output } = runScript([REMOVED_FLAG]);
@@ -861,15 +920,27 @@ describe('minesweeper scores screenshot preview startup', () => {
     expect(source).toContain('entry: process.env.PREVIEW_ENTRY || undefined');
 
     // The probe and spawn stay inside the After branch, so a Before run with
-    // BASE_URL never touches the local preview port.
-    const beforeGuard = source.indexOf('if (!BEFORE) {');
-    const probe = source.indexOf('await assertPortAvailable(PORT, HOST);');
-    const spawn = source.indexOf('startPreviewServer({');
-    const wait = source.indexOf('waitForPreviewServer(server,');
-    expect(beforeGuard).toBeGreaterThan(-1);
-    expect(probe).toBeGreaterThan(beforeGuard);
+    // BASE_URL never touches the local preview port. Extracting the guarded
+    // block by matching braces makes this falsifiable: closing the guard early
+    // and moving the startup lines after it empties the block, so these
+    // assertions fail instead of matching elsewhere in the file.
+    const beforeBlock = blockBody(source, 'if (!BEFORE)');
+    const probe = beforeBlock.indexOf('await assertPortAvailable(PORT, HOST);');
+    const spawn = beforeBlock.indexOf('startPreviewServer({');
+    const wait = beforeBlock.indexOf('waitForPreviewServer(server,');
+    expect(probe).toBeGreaterThan(-1);
     expect(spawn).toBeGreaterThan(probe);
     expect(wait).toBeGreaterThan(spawn);
+
+    // A duplicate after the guard must not satisfy the assertions above: the
+    // startup code has to live in the Before-excluding branch, not merely
+    // somewhere in the file.
+    const afterBlock = source.slice(
+      source.indexOf(beforeBlock) + beforeBlock.length,
+    );
+    expect(afterBlock).not.toContain('assertPortAvailable(PORT, HOST)');
+    expect(afterBlock).not.toContain('startPreviewServer({');
+    expect(afterBlock).not.toContain('waitForPreviewServer(server,');
   });
 
   it(
