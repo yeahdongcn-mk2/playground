@@ -60,6 +60,7 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
   - `npm run screenshots:minesweeper:webkit-before` → 同一组 WebKit 手机 Before 状态（需 `BASE_URL` 指向触屏改动前的基线预览；仓库不提交这些 Before 文件）
   - `npm run screenshots:minesweeper:scores:webkit` → 最高用时榜（当前面板包含「清空记录」）
   - 窄屏 4 视口见上文 `webkit-narrow` 小节。
+- 预览端口：通用大厅 / 空白画布脚本（`npm run screenshots` 与 `npm run screenshots:webkit`）默认 `4174`；共享主机或并行 worktree 用 `PREVIEW_PORT=4175 npm run screenshots` 覆盖（`PREVIEW_PORT` 为空串时回退 `4174`；WebKit 模式复用同一启动路径与端口）。端口已被占用时脚本在启动 preview 前以非零状态退出，错误包含实际端口、`the port is already in use` 与 `Set PREVIEW_PORT` 建议，不会写出或覆盖任何截图；端口探测通过后 preview 提前退出时报告子进程退出码与 stderr，不再静默连到端口上的其它服务。显式设置 `BASE_URL` 时（外部 preview 模式）不启动 preview、不探测端口，行为与文件名保持不变。
 - 引擎 / 视口 / 主题记录：每个脚本在写图后会输出一行 `engine=…, viewport=…, theme=dark, reducedMotion=reduce`；下表也逐项记录。WebKit 模式不写既有 Chromium 文件名，Chromium 模式也不会写这些 `-webkit` 文件。
 - 覆盖边界：俄罗斯方块只有 e2e 覆盖，没有 `capture-*` 截图脚本；因此本表不包含俄罗斯方块截图。WebKit 是 Linux 构建，不等同真实 iOS Safari，动态地址栏 / 安全区 / 真机字体仍由上文差异小节与 e2e 覆盖。
 

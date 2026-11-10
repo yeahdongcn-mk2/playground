@@ -1,5 +1,4 @@
 import { mkdir } from 'node:fs/promises';
-import { setTimeout as delay } from 'node:timers/promises';
 import {
   WEBKIT_ENGINE,
   captureScreenshot,
@@ -11,31 +10,33 @@ import {
   startPreviewServer,
   stopPreviewServer,
 } from './lib/capture-runtime.mjs';
+import { assertPortAvailable, parsePreviewPort } from './lib/preview-port.mjs';
+import { waitForPreviewServer } from './lib/preview-server.mjs';
 
-const PORT = 4174;
-const BASE_URL = process.env.BASE_URL ?? `http://127.0.0.1:${PORT}`;
+/**
+ * Shared hub / blank-canvas evidence capture.
+ *
+ * The preview port is 4174 by default; on a shared host set `PREVIEW_PORT` to a
+ * free port instead of editing this file. When that port is already taken, the
+ * script fails with an explicit bind error instead of quietly talking to the
+ * other server. A preview that exits right after the pre-spawn port probe
+ * reports its exit code and stderr instead of being mistaken for the ready
+ * server.
+ *
+ * Setting `BASE_URL` skips the local preview entirely: no port probe, no spawn.
+ * The WebKit mode (`--webkit`) reuses the same startup path and port.
+ */
+
+const HOST = '127.0.0.1';
+const PORT = parsePreviewPort(process.env.PREVIEW_PORT, 4174);
+const ORIGIN = `http://${HOST}:${PORT}`;
+const BASE_URL = process.env.BASE_URL ?? ORIGIN;
 const OUTPUT_DIR = 'docs/screenshots';
-const shouldStartServer = !process.env.BASE_URL;
 const ARGS = process.argv.slice(2);
 const ENGINE = parseCaptureEngine(ARGS);
 const IS_WEBKIT = ENGINE === WEBKIT_ENGINE;
 
 let server = null;
-
-async function waitForServer(url) {
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    try {
-      const response = await fetch(url);
-      if (response.ok) {
-        return;
-      }
-    } catch {
-      // The preview server is still booting.
-    }
-    await delay(250);
-  }
-  throw new Error(`Timed out waiting for ${url}`);
-}
 
 async function captureDesktop(browser) {
   const context = await browser.newContext({
@@ -153,12 +154,24 @@ async function captureWebkitMobile(browser) {
 }
 
 try {
-  await mkdir(OUTPUT_DIR, { recursive: true });
+  if (!process.env.BASE_URL) {
+    // Fail with the real cause when the port is taken; otherwise the readiness
+    // probe would connect to the other server and an unrelated locator timeout
+    // would be reported much later.
+    await assertPortAvailable(PORT, HOST);
 
-  if (shouldStartServer) {
-    server = startPreviewServer({ port: PORT, host: '127.0.0.1', stdio: 'inherit' });
-    await waitForServer(BASE_URL);
+    // Test seam: point this at a stand-in that exits non-zero so the unit test
+    // can exercise the post-probe startup failure without a second server.
+    server = startPreviewServer({
+      host: HOST,
+      port: PORT,
+      entry: process.env.PREVIEW_ENTRY || undefined,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    await waitForPreviewServer(server, { origin: ORIGIN, port: PORT });
   }
+
+  await mkdir(OUTPUT_DIR, { recursive: true });
 
   const browser = await launchCaptureBrowser(ENGINE);
   try {
@@ -175,4 +188,5 @@ try {
   console.log(`Screenshots written to ${OUTPUT_DIR}/ on ${engineLabel(ENGINE)}`);
 } finally {
   stopPreviewServer(server);
+  server = null;
 }

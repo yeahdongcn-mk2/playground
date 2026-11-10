@@ -16,6 +16,7 @@ import {
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SCRIPT = join(ROOT, 'scripts', 'capture-minesweeper-screenshots.mjs');
+const GENERIC_SCRIPT = join(ROOT, 'scripts', 'capture-screenshots.mjs');
 const SCORES_SCRIPT = join(ROOT, 'scripts', 'capture-minesweeper-scores-screenshots.mjs');
 const SCRIPT_2048 = join(ROOT, 'scripts', 'capture-2048-screenshots.mjs');
 const SCRIPT_BREAKOUT = join(ROOT, 'scripts', 'capture-breakout-screenshots.mjs');
@@ -1025,14 +1026,24 @@ interface PreviewPortScript {
   fakePreviewExitCode: number;
   fakePreviewStderr: string;
   tempPrefix: string;
+  /** Text the successful capture path prints; its absence proves no screenshot ran. */
+  successMarker: string;
 }
 
 /**
- * The two scripts this ticket migrated still had private readiness pollers and
- * a port fixed in source, so their failing branches need the same coverage as
- * the minesweeper scripts.
+ * These scripts still had private readiness pollers and a port fixed in source,
+ * so their failing branches need the same coverage as the minesweeper scripts.
  */
 const PREVIEW_PORT_SCRIPTS: readonly PreviewPortScript[] = [
+  {
+    label: 'generic hub / blank',
+    script: GENERIC_SCRIPT,
+    defaultPort: 4174,
+    fakePreviewExitCode: 5,
+    fakePreviewStderr: 'fake generic preview exploded',
+    tempPrefix: 'generic-preview-',
+    successMarker: 'Screenshots written to',
+  },
   {
     label: '2048',
     script: SCRIPT_2048,
@@ -1040,6 +1051,7 @@ const PREVIEW_PORT_SCRIPTS: readonly PreviewPortScript[] = [
     fakePreviewExitCode: 7,
     fakePreviewStderr: 'fake 2048 preview exploded',
     tempPrefix: '2048-preview-',
+    successMarker: 'Captured',
   },
   {
     label: 'breakout',
@@ -1048,10 +1060,11 @@ const PREVIEW_PORT_SCRIPTS: readonly PreviewPortScript[] = [
     fakePreviewExitCode: 9,
     fakePreviewStderr: 'fake breakout preview exploded',
     tempPrefix: 'breakout-preview-',
+    successMarker: 'Captured',
   },
 ];
 
-describe('2048 and breakout screenshot preview startup', () => {
+describe('generic, 2048 and breakout screenshot preview startup', () => {
   it.each(PREVIEW_PORT_SCRIPTS)(
     'uses the shared preview startup helper and keeps the Before guard ($label)',
     ({ script, defaultPort }) => {
@@ -1101,7 +1114,7 @@ describe('2048 and breakout screenshot preview startup', () => {
   it.each(PREVIEW_PORT_SCRIPTS)(
     'fails fast without screenshots when PREVIEW_PORT is taken ($label)',
     { timeout: 30_000 },
-    async ({ script }) => {
+    async ({ script, successMarker }) => {
       const owner = await listenOnRandomPort();
       const screenshotsBefore = screenshotHashes();
       try {
@@ -1120,7 +1133,7 @@ describe('2048 and breakout screenshot preview startup', () => {
         );
         expect(output).toContain('the port is already in use');
         expect(output).toContain('Set PREVIEW_PORT');
-        expect(output).not.toContain('Captured');
+        expect(output).not.toContain(successMarker);
         // Byte-for-byte proof that no screenshot was created or overwritten.
         expect(screenshotHashes()).toEqual(screenshotsBefore);
       } finally {
@@ -1132,7 +1145,14 @@ describe('2048 and breakout screenshot preview startup', () => {
   it.each(PREVIEW_PORT_SCRIPTS)(
     'falls back to its own default port when PREVIEW_PORT is empty ($label)',
     { timeout: 45_000 },
-    async ({ script, defaultPort, fakePreviewExitCode, fakePreviewStderr, tempPrefix }) => {
+    async ({
+      script,
+      defaultPort,
+      fakePreviewExitCode,
+      fakePreviewStderr,
+      tempPrefix,
+      successMarker,
+    }) => {
       const dir = mkdtempSync(join(tmpdir(), tempPrefix));
       const fakePreview = join(dir, 'fake-preview.mjs');
       writeFileSync(
@@ -1153,7 +1173,7 @@ describe('2048 and breakout screenshot preview startup', () => {
         // way the resolved port proves the empty value fell back correctly.
         expect(output).toContain(`127.0.0.1:${defaultPort}`);
         expect(output).not.toContain('127.0.0.1:4192');
-        expect(output).not.toContain('Captured');
+        expect(output).not.toContain(successMarker);
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
@@ -1163,7 +1183,13 @@ describe('2048 and breakout screenshot preview startup', () => {
   it.each(PREVIEW_PORT_SCRIPTS)(
     'fails with the preview exit code and stderr when the preview dies after the port probe ($label)',
     { timeout: 45_000 },
-    async ({ script, fakePreviewExitCode, fakePreviewStderr, tempPrefix }) => {
+    async ({
+      script,
+      fakePreviewExitCode,
+      fakePreviewStderr,
+      tempPrefix,
+      successMarker,
+    }) => {
       const probe = await listenOnRandomPort();
       const port = probe.port;
       // Releasing the port makes the pre-spawn probe pass; the fake preview
@@ -1195,10 +1221,40 @@ describe('2048 and breakout screenshot preview startup', () => {
         expect(output).toContain(`exit code ${fakePreviewExitCode}`);
         expect(output).toContain(fakePreviewStderr);
         expect(output).toContain('PREVIEW_PORT');
-        expect(output).not.toContain('Captured');
+        expect(output).not.toContain(successMarker);
         expect(screenshotHashes()).toEqual(screenshotsBefore);
       } finally {
         rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it(
+    'guards the port before launching the WebKit engine (--webkit)',
+    { timeout: 30_000 },
+    async () => {
+      const owner = await listenOnRandomPort();
+      const screenshotsBefore = screenshotHashes();
+      try {
+        const env = { ...process.env };
+        delete env.BASE_URL;
+        delete env.PREVIEW_ENTRY;
+        env.PREVIEW_PORT = String(owner.port);
+
+        // The WebKit mode shares the startup path: a taken port must fail
+        // before the browser launches, not after an unrelated locator timeout.
+        const { status, output } = spawnNode(GENERIC_SCRIPT, ['--webkit'], env);
+
+        expect(status).toBe(1);
+        expect(output).toContain(
+          `Cannot start the preview server on 127.0.0.1:${owner.port}`,
+        );
+        expect(output).toContain('the port is already in use');
+        expect(output).toContain('Set PREVIEW_PORT');
+        expect(output).not.toContain('Screenshots written to');
+        expect(screenshotHashes()).toEqual(screenshotsBefore);
+      } finally {
+        await owner.close();
       }
     },
   );
