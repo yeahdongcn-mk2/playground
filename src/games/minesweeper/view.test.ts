@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AudioService } from '../../core/audio';
 import type { GameHandle, GameServices } from '../../core/game';
 import { StorageService, type KeyValueStore } from '../../core/storage';
@@ -196,6 +196,15 @@ function gameState(): MinesweeperSnapshot {
     throw new Error('Expected the debug API');
   }
   return api.getState();
+}
+
+/** One cell of the current engine snapshot, with a clear failure when missing. */
+function snapshotCell(row: number, col: number) {
+  const target = gameState().board[row]?.[col];
+  if (!target) {
+    throw new Error(`Expected cell ${row},${col} in the snapshot`);
+  }
+  return target;
 }
 
 /** Mirror of the view's own formatting so assertions stay display-level. */
@@ -791,5 +800,364 @@ describe('minesweeper best-time leaderboard', () => {
     expect(isHidden(root, 'scores-empty')).toBe(false);
     expect(isHidden(root, 'scores-presets')).toBe(true);
     expect(store.getItem(SCORES_STORE_KEY)).toBeNull();
+  });
+});
+
+/**
+ * jsdom ships PointerEvent today, but this minimal stand-in keeps the
+ * WebKit-shaped cases meaningful in an environment that only has MouseEvent.
+ */
+class MinimalPointerEvent extends MouseEvent {
+  readonly pointerId: number;
+  readonly pointerType: string;
+  readonly isPrimary: boolean;
+
+  constructor(type: string, init: PointerEventInit = {}) {
+    super(type, init);
+    this.pointerId = init.pointerId ?? 0;
+    this.pointerType = init.pointerType ?? '';
+    this.isPrimary = init.isPrimary ?? false;
+  }
+}
+
+let originalPointerEvent: typeof PointerEvent | undefined;
+
+beforeAll(() => {
+  originalPointerEvent = window.PointerEvent;
+  if (typeof window.PointerEvent !== 'function') {
+    Object.defineProperty(window, 'PointerEvent', {
+      configurable: true,
+      writable: true,
+      value: MinimalPointerEvent,
+    });
+  }
+});
+
+afterAll(() => {
+  if (originalPointerEvent) {
+    Object.defineProperty(window, 'PointerEvent', {
+      configurable: true,
+      writable: true,
+      value: originalPointerEvent,
+    });
+  } else {
+    Reflect.deleteProperty(window, 'PointerEvent');
+  }
+});
+
+/** Real WebKit touch shape: pointerdown is touch id 2, click is mouse id 1. */
+const TOUCH_POINTER_ID = 2;
+const WEBKIT_CLICK_POINTER_ID = 1;
+const LONG_PRESS_DELAY_MS = 500;
+
+function pointerEvent(type: string, init: PointerEventInit): PointerEvent {
+  return new window.PointerEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    ...init,
+  });
+}
+
+function startTouchPress(
+  root: HTMLElement,
+  row: number,
+  col: number,
+  pointerId = TOUCH_POINTER_ID,
+): void {
+  cell(root, row, col).dispatchEvent(
+    pointerEvent('pointerdown', {
+      pointerId,
+      pointerType: 'touch',
+      isPrimary: true,
+      button: 0,
+      buttons: 1,
+      clientX: 10,
+      clientY: 20,
+    }),
+  );
+}
+
+function moveTouchPress(
+  root: HTMLElement,
+  row: number,
+  col: number,
+  pointerId = TOUCH_POINTER_ID,
+): void {
+  cell(root, row, col).dispatchEvent(
+    pointerEvent('pointermove', {
+      pointerId,
+      pointerType: 'touch',
+      isPrimary: true,
+      button: 0,
+      buttons: 1,
+      clientX: 60,
+      clientY: 20,
+    }),
+  );
+}
+
+function endTouchPress(
+  root: HTMLElement,
+  row: number,
+  col: number,
+  pointerId = TOUCH_POINTER_ID,
+): void {
+  cell(root, row, col).dispatchEvent(
+    pointerEvent('pointerup', {
+      pointerId,
+      pointerType: 'touch',
+      isPrimary: true,
+      button: 0,
+      buttons: 0,
+      clientX: 10,
+      clientY: 20,
+    }),
+  );
+}
+
+function cancelTouchPress(
+  root: HTMLElement,
+  row: number,
+  col: number,
+  pointerId = TOUCH_POINTER_ID,
+): void {
+  cell(root, row, col).dispatchEvent(
+    pointerEvent('pointercancel', {
+      pointerId,
+      pointerType: 'touch',
+      isPrimary: true,
+      button: 0,
+      buttons: 0,
+      clientX: 10,
+      clientY: 20,
+    }),
+  );
+}
+
+/** The real release click WebKit emits for a touch: mouse pointer id 1. */
+function clickRelease(
+  root: HTMLElement,
+  row: number,
+  col: number,
+  detail = 1,
+): void {
+  cell(root, row, col).dispatchEvent(
+    pointerEvent('click', {
+      pointerId: WEBKIT_CLICK_POINTER_ID,
+      pointerType: 'mouse',
+      isPrimary: true,
+      button: 0,
+      buttons: 0,
+      detail,
+    }),
+  );
+}
+
+function board(root: HTMLElement): HTMLElement {
+  const element = root.querySelector<HTMLElement>('[data-testid="minesweeper-board"]');
+  if (!element) {
+    throw new Error('Expected the minesweeper board');
+  }
+  return element;
+}
+
+describe('minesweeper touch click suppression', () => {
+  // The fake clock makes the 500 ms long press deterministic without waiting.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function pressAndHold(
+    root: HTMLElement,
+    row: number,
+    col: number,
+    pointerId = TOUCH_POINTER_ID,
+  ): void {
+    startTouchPress(root, row, col, pointerId);
+    vi.advanceTimersByTime(LONG_PRESS_DELAY_MS);
+  }
+
+  it('swallows the WebKit release click after a long press flags and unflags a cell', async () => {
+    const { services, play } = createServices();
+    const root = await mount(services);
+
+    // A hold on an unflagged mine only places a flag; the release click must
+    // not reveal the mine afterwards.
+    pressAndHold(root, MINE_ROW, MINE_COL);
+    expect(snapshotCell(MINE_ROW, MINE_COL).flagged).toBe(true);
+    endTouchPress(root, MINE_ROW, MINE_COL);
+    clickRelease(root, MINE_ROW, MINE_COL);
+
+    expect(cell(root, MINE_ROW, MINE_COL).dataset.state).toBe('flagged');
+    expect(cell(root, MINE_ROW, MINE_COL).dataset.revealed).toBeUndefined();
+    expect(statusOf(root)).toBe('ready');
+    expect(play.mock.calls).toEqual([['flag']]);
+
+    // A second hold on the flagged cell clears the flag; its release click must
+    // also be swallowed instead of revealing the now unflagged mine.
+    play.mockClear();
+    pressAndHold(root, MINE_ROW, MINE_COL);
+    expect(snapshotCell(MINE_ROW, MINE_COL).flagged).toBe(false);
+    endTouchPress(root, MINE_ROW, MINE_COL);
+    clickRelease(root, MINE_ROW, MINE_COL);
+
+    expect(cell(root, MINE_ROW, MINE_COL).dataset.state).toBe('hidden');
+    expect(cell(root, MINE_ROW, MINE_COL).dataset.revealed).toBeUndefined();
+    expect(statusOf(root)).toBe('ready');
+    expect(play.mock.calls).toEqual([['flag']]);
+  });
+
+  it('reveals exactly once for a quick tap with the WebKit release click shape', async () => {
+    const { services, play } = createServices();
+    const root = await mount(services);
+
+    // (0,1) touches the mine at (0,0), so the reveal stops at a numbered cell
+    // and the game stays in progress instead of flood-filling a win.
+    startTouchPress(root, 0, 1);
+    endTouchPress(root, 0, 1);
+    clickRelease(root, 0, 1);
+
+    expect(cell(root, 0, 1).dataset.revealed).toBe('true');
+    expect(statusOf(root)).toBe('playing');
+    expect(play.mock.calls.filter(([event]) => event === 'reveal')).toHaveLength(1);
+  });
+
+  it('does not let a second pointer clear the first pointer suppression', async () => {
+    const { services } = createServices();
+    const root = await mount(services);
+
+    // Flag the mine first so a leaked release click would reveal it.
+    pressAndHold(root, MINE_ROW, MINE_COL);
+    endTouchPress(root, MINE_ROW, MINE_COL);
+    clickRelease(root, MINE_ROW, MINE_COL);
+
+    // A first finger holds long enough to clear the flag; its release click is
+    // already pending when a second finger taps another cell.
+    const firstPointerId = 11;
+    pressAndHold(root, MINE_ROW, MINE_COL, firstPointerId);
+    expect(snapshotCell(MINE_ROW, MINE_COL).flagged).toBe(false);
+
+    startTouchPress(root, 0, 1, 12);
+    endTouchPress(root, 0, 1, 12);
+    // The second finger's click is not the suppressed one and must reveal.
+    clickRelease(root, 0, 1);
+    expect(cell(root, 0, 1).dataset.revealed).toBe('true');
+
+    // The first finger's release click still belongs to the suppressed hold.
+    endTouchPress(root, MINE_ROW, MINE_COL, firstPointerId);
+    clickRelease(root, MINE_ROW, MINE_COL);
+    expect(cell(root, MINE_ROW, MINE_COL).dataset.revealed).toBeUndefined();
+    expect(statusOf(root)).toBe('playing');
+  });
+
+  it('swallows cancelled gesture clicks without leaving a stale suppression', async () => {
+    const { services } = createServices();
+    const root = await mount(services);
+
+    // Movement beyond the tolerance cancels the hold.
+    startTouchPress(root, MINE_ROW, MINE_COL);
+    moveTouchPress(root, MINE_ROW, MINE_COL);
+    endTouchPress(root, MINE_ROW, MINE_COL);
+    clickRelease(root, MINE_ROW, MINE_COL);
+    expect(cell(root, MINE_ROW, MINE_COL).dataset.state).toBe('hidden');
+    expect(statusOf(root)).toBe('ready');
+
+    // pointerleave on the board cancels as well.
+    startTouchPress(root, MINE_ROW, MINE_COL);
+    board(root).dispatchEvent(
+      pointerEvent('pointerleave', { pointerId: TOUCH_POINTER_ID, pointerType: 'touch' }),
+    );
+    endTouchPress(root, MINE_ROW, MINE_COL);
+    clickRelease(root, MINE_ROW, MINE_COL);
+    expect(cell(root, MINE_ROW, MINE_COL).dataset.state).toBe('hidden');
+    expect(statusOf(root)).toBe('ready');
+
+    // A scroll cancels a hold even without pointercancel.
+    startTouchPress(root, MINE_ROW, MINE_COL);
+    window.dispatchEvent(new Event('scroll'));
+    endTouchPress(root, MINE_ROW, MINE_COL);
+    clickRelease(root, MINE_ROW, MINE_COL);
+    expect(cell(root, MINE_ROW, MINE_COL).dataset.state).toBe('hidden');
+    expect(statusOf(root)).toBe('ready');
+
+    // pointercancel never produces a click, so it must not leave suppression
+    // behind: the next real tap still reveals.
+    startTouchPress(root, MINE_ROW, MINE_COL);
+    cancelTouchPress(root, MINE_ROW, MINE_COL);
+    startTouchPress(root, 2, 2);
+    endTouchPress(root, 2, 2);
+    clickRelease(root, 2, 2);
+    expect(cell(root, 2, 2).dataset.revealed).toBe('true');
+  });
+
+  it('keeps the pending suppression across restart and rebuild', async () => {
+    const { services } = createServices();
+    const root = await mount(services);
+
+    // Restart while a finger is down; the release click follows the rebuilt
+    // board and must still be swallowed.
+    startTouchPress(root, MINE_ROW, MINE_COL);
+    clickRestart(root);
+    expect(statusOf(root)).toBe('ready');
+    endTouchPress(root, MINE_ROW, MINE_COL);
+    clickRelease(root, MINE_ROW, MINE_COL);
+    expect(cell(root, MINE_ROW, MINE_COL).dataset.revealed).toBeUndefined();
+    expect(statusOf(root)).toBe('ready');
+
+    // Rebuilding into a larger board replaces the cell elements while the same
+    // finger is down; the click targets the new cell at the same coordinates.
+    startTouchPress(root, MINE_ROW, MINE_COL);
+    debugApi()?.setConfig({ rows: 6, cols: 6, mines: 1, firstClickSafe: false });
+    expect(root.querySelectorAll('[data-cell]')).toHaveLength(36);
+    endTouchPress(root, MINE_ROW, MINE_COL);
+    clickRelease(root, MINE_ROW, MINE_COL);
+    expect(cell(root, MINE_ROW, MINE_COL).dataset.revealed).toBeUndefined();
+    expect(statusOf(root)).toBe('ready');
+  });
+
+  it('drops a pending press when the mount is destroyed', async () => {
+    const { services } = createServices();
+    const root = await mount(services);
+
+    startTouchPress(root, MINE_ROW, MINE_COL);
+    vi.advanceTimersByTime(100);
+    mounted?.handle.destroy();
+
+    // The aborted listeners ignore the rest of the gesture, and destroy clears
+    // the long-press timer so it cannot flag after teardown.
+    endTouchPress(root, MINE_ROW, MINE_COL);
+    clickRelease(root, MINE_ROW, MINE_COL);
+    vi.advanceTimersByTime(LONG_PRESS_DELAY_MS);
+    expect(cell(root, MINE_ROW, MINE_COL).dataset.state).toBe('hidden');
+    expect(statusOf(root)).toBe('ready');
+    expect(debugApi()).toBeUndefined();
+  });
+
+  it('keeps keyboard detail 0 and desktop clicks working while a touch is pending', async () => {
+    const { services } = createServices();
+    const root = await mount(services);
+
+    // A hold leaves a suppression token; keyboard activation has detail 0 and
+    // must not consume it or be swallowed by it.
+    pressAndHold(root, MINE_ROW, MINE_COL);
+    // (0,1) touches the mine, so the reveal does not flood-fill a win.
+    cell(root, 0, 1).click();
+    expect(cell(root, 0, 1).dataset.revealed).toBe('true');
+    expect(statusOf(root)).toBe('playing');
+
+    endTouchPress(root, MINE_ROW, MINE_COL);
+    clickRelease(root, MINE_ROW, MINE_COL);
+    expect(cell(root, MINE_ROW, MINE_COL).dataset.revealed).toBeUndefined();
+
+    // Right click keeps toggling a flag, and a desktop left click reveals.
+    flagCell(root, 1, 3);
+    expect(snapshotCell(1, 3).flagged).toBe(true);
+    clickRelease(root, 3, 3);
+    expect(cell(root, 3, 3).dataset.revealed).toBe('true');
   });
 });
