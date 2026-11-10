@@ -384,7 +384,7 @@ npm run lint         # 通过
 npm run test:unit    # 405 passed（含贪食蛇 21、俄罗斯方块 38、2048 35、打砖块 39、扫雷 133 个规则 / 难度 / 成绩 / 视图 / 调试用例，以及截图脚本端口 10 例、截图模式 9 例、预览服务启动 6 例）
 npm run build        # 通过
 npm run check:budget # 通过（入口 10.91 KB gzip，全部 JS 404.24 KB gzip）
-npm run test:e2e     # 142 passed（桌面 85 + 手机 34 + WebKit 23）
+npm run test:e2e     # 147 passed（桌面 85 + 手机 34 + WebKit 28）
 ```
 
 端到端覆盖：大厅与游戏卡片、页面内锚点滚动、进入 / 返回 / 重进、最近游玩时间（进入 → 返回大厅 → 刷新后保留）、未知游戏与未知路径、音效偏好持久化、方向键与 WASD、修饰键快捷键不劫持、鼠标点击与拖动、重置后键盘仍可用、仅容器变化时的缩放、快速切换时丢弃晚到 mount、页面隐藏时离开仍能完整销毁、监听器清理、手机触屏与横向溢出检查；贪食蛇的开始 / 暂停 / 重开、吃果实与增长、撞墙死亡、更高 / 更低最高分、刷新后最高分仍在、P / Esc / R、滑动转向、页面隐藏自动暂停、手机 D-pad 与手机端重开；俄罗斯方块的从大厅进入 / 返回、键盘移动与旋转、硬降消行计分、暂停 / 继续、堆顶结束与重开、R 重开，以及手机端触屏按钮操作与手机端结束 / 重开；2048 的从大厅进入 / 返回、方向键与 WASD 合并计分、固定棋盘无路可走结束 / 重开 / R 重开、READY 时 R 直接开始、canvas 像素确认棋盘与方块确实被绘制，以及就绪定时器与 destroy 后键盘 / 可见性 / 指针监听的清理；手机端滑动合并与横向溢出检查；打砖块的从大厅进入 / 返回、键盘与 A/D 移动挡板、非终砖击中立即计分、固定砖块过关后加速、Space 开始 / 过关继续、R 与侧栏重开、窗口失焦暂停并在恢复焦点后继续、连续三次漏球扣命至 game over 后重开、canvas 像素确认分层砖块 / 挡板 / 球被绘制、destroy 后键盘 / 指针（含 cancel / lostpointercapture）/ 可见性监听与就绪定时器、调试接缝清理，以及手机端触屏拖动挡板与横向溢出检查；扫雷的从大厅进入 / 返回、固定雷盘首开、左键翻开、右键插旗与取消旗（剩余雷数同步变化）、格子可见文本（数字 / ⚑ / ✹ 与重开清空）、踩雷结束并展示全部雷、翻开全部安全格获胜、结束后焦点进入遮罩、重开后焦点回到重开按钮、Enter 翻开聚焦格、畸形调试雷盘回退到固定随机盘、重开后的 data-revealed 清理、遮罩与侧栏重开、用时显示、胜利后最高用时立即出现并在刷新后保留、失败局不写入、空榜时「清空记录」按钮禁用、点击清空后榜单立即回到空态且刷新仍为空（同一存储中的其它游戏 / 设置键保留），以及 destroy 与路由离开后的棋盘监听器、计时器、mountSignal 与调试接缝清理；手机端扫雷的轻点翻开、长按插旗 / 取消、移动 / 滚动 / 取消长按、取消后下一次轻点仍可翻开、按住超过 1.2 秒后松手不误翻、按住时重开 / destroy 取消待触发的长按、第二个指针不清除首个指针的 click 抑制、重开后焦点落在首屏可见的重开按钮、触屏踩雷 / 胜利与手机布局无横向溢出、最长自定义最高用时标签不产生横向溢出；手机端扫雷另在 320×640 / 340×700 / 349×700 / 360×640 / 360×740 / 375×667 / 400×700 / 412×839 视口逐一断言 81 格最小尺寸、无横向溢出、HUD / 返回大厅 / touch-hint 在首屏内，并对重开入口断言完整位于首屏（x + width ≤ 视口宽、y + height ≤ 视口高）；边界用例另断言 340×667 / 400×667 收紧，340×668 / 320×640 保持基础短窄间距，401×667 回落到桌面间距。
@@ -393,7 +393,7 @@ npm run test:e2e     # 142 passed（桌面 85 + 手机 34 + WebKit 23）
 
 ### 浏览器覆盖范围
 
-扫雷窄屏首屏契约与 framework、扫雷触屏手势 / 触屏难度表单现在由 Chromium 与 WebKit 两套 Playwright 模拟共同验证。WebKit 还运行 framework 与扫雷的触屏用例，复用同一份共享用例模块：
+扫雷窄屏首屏契约与 framework、扫雷触屏手势 / 触屏难度表单、贪食蛇与俄罗斯方块的手机端用例现在由 Chromium 与 WebKit 两套 Playwright 模拟共同验证；这些手机端用例复用同一份共享用例模块：
 
 - Chromium：`mobile`（Pixel 7）项目运行 `tests/e2e/minesweeper.mobile.spec.ts` 的 8 视口矩阵，覆盖 320×640、340×700、349×700、360×640、360×740、375×667、400×700、412×839，全部断言重开入口完整位于首屏；该 spec 的窄屏边界用例另用计算样式钉住短窄查询的 min-width / max-width / max-height 三个边界，以及 401×667 回落到基础间距。`chromium`（桌面 1440×1000）项目继续覆盖桌面交互，不运行该手机矩阵。
 - WebKit：`mobile-webkit` 项目（`iPhone SE (3rd gen)`，`webkit` 引擎）运行以下 spec：
@@ -402,7 +402,9 @@ npm run test:e2e     # 142 passed（桌面 85 + 手机 34 + WebKit 23）
   - `tests/e2e/minesweeper.mobile.webkit.spec.ts`：轻点翻开、长按插旗 / 取消、双指针抑制、取消长按、按住时重开 / destroy、重开后的焦点等触屏手势，复用 `tests/e2e/minesweeper-mobile-touch-cases.ts`；Chromium 的 8 视口矩阵与短窄查询边界仍只在该 spec 的 Chromium 入口。
   - `tests/e2e/minesweeper.difficulty.mobile.webkit.spec.ts`：触屏难度预设、自定义表单校验与大棋盘提示，复用 `tests/e2e/minesweeper-difficulty-mobile-cases.ts`。
   - `tests/e2e/minesweeper.narrow.webkit.spec.ts`：320×640、360×640、375×667、412×839 视口矩阵。四个视口都断言 81 格最小尺寸、无横向溢出，剩余雷数 / 计时器 / 返回大厅 / touch-hint 与重开入口在首屏内；360×640 / 375×667 的短窄首屏入口由 Chromium 与 WebKit 两套矩阵共同断言，不再单独跟踪。
-- Chromium 8 视口与 WebKit 4 视口矩阵的归属保持不变；其余手机端 spec（snake、tetris、2048、breakout）与截图脚本仍只在 Chromium 下运行，#100 跟踪后续按 spec 扩大 WebKit 覆盖。
+  - `tests/e2e/snake.mobile.webkit.spec.ts`：贪食蛇手机端的 D-pad 触屏、方向键与触屏混用、暂停、死亡与重开，复用 `tests/e2e/snake-mobile-cases.ts`。
+  - `tests/e2e/tetris.mobile.webkit.spec.ts`：俄罗斯方块手机端的触屏按钮移动 / 旋转 / 暂停 / 硬降、堆顶结束与重开，复用 `tests/e2e/tetris-mobile-cases.ts`。
+- Chromium 8 视口与 WebKit 4 视口矩阵的归属保持不变；其余手机端 spec（2048、breakout）与截图脚本仍只在 Chromium 下运行，#100 跟踪后续按 spec 扩大 WebKit 覆盖。
 
 ```bash
 npx playwright install chromium webkit  # 首次安装 Chromium 与 WebKit
@@ -419,7 +421,7 @@ Playwright 的 WebKit 是 Linux 上的 WebKit 构建，不等于 iOS Safari。�
 - **字体度量**：Linux WebKit 的回退字体让「返回大厅」文本比 Chromium 宽约 3%（68.33px vs 66.45px）。契约断言元素边界而不是固定文本宽度，因此两引擎都通过；真实 iOS 系统字体仍可能不同。
 - **触屏媒体查询**：`any-pointer: coarse` 在两套模拟下都命中，touch-hint 与紧凑重开入口都会渲染；真实设备的指针能力与手感仍需人工确认。
 - **长按 / 双指针注入**：Playwright WebKit 没有 CDP，不能用 `Input.dispatchTouchEvent` 保持按住；共享辅助函数在 WebKit 下派发同语义的 `PointerEvent`（pointerdown / pointermove / pointercancel / pointerup 与 release click），Chromium 仍用真实 CDP 触摸。产品代码不分叉，差异只在测试注入层；WebKit 环境假设用例还会用真实 `page.touchscreen.tap` 断言 release click 的构造器与 pointerId，防止注入形状与引擎实际行为漂移。
-- **真实 iOS**：CI 没有 iOS Safari 或真机，触屏手感、安全区与渲染像素仍需人工验收；WebKit 模拟通过不代表 iOS Safari 已完全兼容。#100 仍跟踪其余 Phaser 游戏与截图脚本的 WebKit 覆盖；framework 与扫雷触屏用例已纳入两引擎。
+- **真实 iOS**：CI 没有 iOS Safari 或真机，触屏手感、安全区与渲染像素仍需人工验收；WebKit 模拟通过不代表 iOS Safari 已完全兼容。#100 仍跟踪 2048、breakout 的手机端用例与截图脚本的 WebKit 覆盖；framework、扫雷触屏、贪食蛇与俄罗斯方块的手机端用例已纳入两引擎。
 
 ## 已知限制
 
@@ -430,6 +432,6 @@ Playwright 的 WebKit 是 Linux 上的 WebKit 构建，不等于 iOS Safari。�
 - 打砖块固定 480×720 逻辑球场与 10 列砖块，没有道具、多球或在线排行榜；难度只来自砖块行数与球速。
 - 扫雷提供初级 / 中级 / 高级三档预设与 5–30 行、5–30 列的自定义棋盘，但没有撤销、问号标记、道具或在线排行榜；最高用时只在本地浏览器保存（不跨设备），手机端轻点翻开、长按插旗 / 取消旗，桌面右键行为保留。
 - 3D（Three.js）只预留契约与目录路径，参考实现要等首个 3D 游戏接入。
-- 手机端使用 Playwright 的 Chromium / WebKit 设备模拟：扫雷窄屏契约、framework 手机端与扫雷触屏手势 / 触屏难度表单已覆盖两引擎，但 WebKit 不等于 iOS Safari（不模拟动态地址栏与安全区），真实触屏手感与 iOS 渲染仍需人工验收；snake、tetris、2048、breakout 的手机端 spec 与截图脚本仍只在 Chromium 下运行（#100）。窄屏契约的边界是最低视口 320×640（高度 <640 不保证）、矩阵外组合（如 375×640、400×667）不承诺首屏重开，以及列数 >9 的大棋盘只按比例缩小并显示中文降级提示（#86）、不再保证 36px。
+- 手机端使用 Playwright 的 Chromium / WebKit 设备模拟：扫雷窄屏契约、framework 手机端、扫雷触屏手势 / 触屏难度表单以及贪食蛇与俄罗斯方块的手机端 spec 已覆盖两引擎，但 WebKit 不等于 iOS Safari（不模拟动态地址栏与安全区），真实触屏手感与 iOS 渲染仍需人工验收；2048、breakout 的手机端 spec 与截图脚本仍只在 Chromium 下运行（#100）。窄屏契约的边界是最低视口 320×640（高度 <640 不保证）、矩阵外组合（如 375×640、400×667）不承诺首屏重开，以及列数 >9 的大棋盘只按比例缩小并显示中文降级提示（#86）、不再保证 36px。
 - 扫雷使用原生 DOM 网格，不进入 Phaser chunk；其余 2D 游戏仍共用 Phaser 适配层。
 - Phaser 引擎 chunk 约数百 KB（gzip），只在进入使用 Phaser 的游戏时加载；大厅首屏和纯 DOM 的扫雷都不包含引擎。
