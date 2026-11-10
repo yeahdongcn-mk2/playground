@@ -369,7 +369,7 @@ games/<game>/scene → 对应引擎（动态 import）
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过
-npm run test:unit    # 390 passed（含贪食蛇 21、俄罗斯方块 38、2048 35、打砖块 39、扫雷 133 个规则 / 难度 / 成绩 / 视图 / 调试用例，以及截图脚本端口 9 例、截图模式 6 例）
+npm run test:unit    # 391 passed（含贪食蛇 21、俄罗斯方块 38、2048 35、打砖块 39、扫雷 133 个规则 / 难度 / 成绩 / 视图 / 调试用例，以及截图脚本端口 9 例、截图模式 6 例）
 npm run build        # 通过
 npm run check:budget # 通过（入口 10.91 KB gzip，全部 JS 404.24 KB gzip）
 npm run test:e2e     # 125 passed（桌面 85 + 手机 34 + WebKit 6）
@@ -384,7 +384,7 @@ npm run test:e2e     # 125 passed（桌面 85 + 手机 34 + WebKit 6）
 扫雷窄屏首屏契约现在由 Chromium 与 WebKit 两套 Playwright 模拟共同验证：
 
 - Chromium：`chromium`（桌面 1440×1000）与 `mobile`（Pixel 7）项目，继续覆盖桌面、手机端交互与既有窄屏矩阵。`tests/e2e/minesweeper.mobile.spec.ts` 的 8 视口矩阵覆盖 320×640、340×700、349×700、360×640、360×740、375×667、400×700、412×839，全部断言重开入口完整位于首屏；边界用例另用计算样式钉住短窄查询的 min-width / max-width / max-height 三个边界，以及 401×667 回落到基础间距。
-- WebKit：`mobile-webkit` 项目（`iPhone SE (3rd gen)`，`webkit` 引擎）运行 `tests/e2e/minesweeper.webkit.spec.ts` 冒烟，以及 `tests/e2e/minesweeper.narrow.webkit.spec.ts` 的 320×640、360×640、375×667、412×839 视口矩阵。四个视口都断言 81 格最小尺寸、无横向溢出，剩余雷数 / 计时器 / 返回大厅 / touch-hint 与重开入口在首屏内；360×640 / 375×667 的短窄首屏入口随本分支的 CSS 修复一起两引擎验证。
+- WebKit：`mobile-webkit` 项目（`iPhone SE (3rd gen)`，`webkit` 引擎）运行 `tests/e2e/minesweeper.webkit.spec.ts` 冒烟，以及 `tests/e2e/minesweeper.narrow.webkit.spec.ts` 的 320×640、360×640、375×667、412×839 视口矩阵。四个视口都断言 81 格最小尺寸、无横向溢出，剩余雷数 / 计时器 / 返回大厅 / touch-hint 与重开入口在首屏内；360×640 / 375×667 的短窄首屏入口由 Chromium 与 WebKit 两套矩阵共同断言，不再单独跟踪。
 - 其余手机端 spec（framework、snake、tetris、2048、breakout、minesweeper 等）与截图脚本仍只在 Chromium 下运行，#100 跟踪后续按 spec 扩大 WebKit 覆盖。
 
 ```bash
@@ -401,7 +401,7 @@ Playwright 的 WebKit 是 Linux 上的 WebKit 构建，不等于 iOS Safari。�
 - **安全区**：iPhone SE (3rd gen) 模拟下 `env(safe-area-inset-*)` 恒为 0px，刘海 / Home 指示条安全区没有被模拟；依赖安全区的布局只能靠真机验收。
 - **字体度量**：Linux WebKit 的回退字体让「返回大厅」文本比 Chromium 宽约 3%（68.33px vs 66.45px）。契约断言元素边界而不是固定文本宽度，因此两引擎都通过；真实 iOS 系统字体仍可能不同。
 - **触屏媒体查询**：`any-pointer: coarse` 在两套模拟下都命中，touch-hint 与紧凑重开入口都会渲染；真实设备的指针能力与手感仍需人工确认。
-- **真实 iOS**：CI 没有 iOS Safari 或真机，触屏手感、安全区与渲染像素仍需人工验收；WebKit 模拟通过不代表 iOS Safari 已完全兼容。#100 跟踪扩大 WebKit 覆盖；360×640 / 375×667 的首屏重开入口修复已随本分支落地。
+- **真实 iOS**：CI 没有 iOS Safari 或真机，触屏手感、安全区与渲染像素仍需人工验收；WebKit 模拟通过不代表 iOS Safari 已完全兼容。#100 跟踪扩大 WebKit 覆盖；扫雷窄屏矩阵的四个 WebKit 视口已全部断言重开入口在首屏内。
 
 ## 已知限制
 
