@@ -56,10 +56,10 @@ await browser.close();
 ### 证据限制
 
 - 手机端为 Playwright WebKit 的 Linux WPE 设备模拟，不是真实 iOS Safari 截图；Playwright 不模拟 iOS 动态地址栏与 `env(safe-area-inset-*)`，真机手感仍需人工验收（由 t3 文档记录处理方式）。
-- 本节 8 张 WebKit 截图捕获于 short 修复之前：当时 360×640 / 375×667 的重开入口仍超出首屏（375×667 下底边约 667.5px）。short 修复落地后 `tests/e2e/minesweeper.narrow.webkit.spec.ts` 已对这两档打开 `restartEntry`，四个视口现在都断言重开入口完整位于首屏（见下文 short 小节）。
+- 本节 8 张 WebKit 截图是 Issue #83 的历史证据：After 捕获于 Issue #60 短窄 CSS 修复（本计划 t1）之前，当时 360×640 / 375×667 的 `mobile-restart-button` 底部约 652.5px / 667.5px，仍超出首屏。它们不再代表当前重开入口行为；当前行为由 `tests/e2e/minesweeper.narrow.webkit.spec.ts` 在 320×640、360×640、375×667、412×839 四个 WebKit 视口上的 e2e 断言证明，并由下文 short 小节（本计划 t1）的 Chromium Before / After 提供视觉证据。
 - 截图只证明 9×9 READY 的静态视觉；契约的显隐、无横向溢出、格子尺寸与重开入口边界由 `tests/e2e/minesweeper.narrow.webkit.spec.ts` 在生产构建上验证，Chromium 无回归由 `npm run test:e2e` 验证。
 
-## short：扫雷 360×640 / 375×667 短窄视口首屏重开入口（Issue #60 / 子任务 0）
+## short：扫雷 360×640 / 375×667 短窄视口首屏重开入口（Issue #60 / t1）
 
 - Before 基线：`249bda2`（本子任务开始前的 `main`；与旧 PR #84 的基线 `a60062e` 相比扫雷布局未变，本轮按任务要求重新生成，不复用旧图）。360×640 READY 下 9×9 格子约 38.66×38.66 px、页面无横向溢出，HUD、返回大厅和 touch-hint 在首屏内；但 `mobile-restart-button` 底部约 652.52 px，超出 640 px 视口约 12.52 px。375×667 下格子约 40.33×40.33 px，重开按钮底部约 667.52 px，超出 667 px 视口约 0.52 px。
 - After：本子任务分支 `agent/plan-60-t0`，实现提交 `6f84598`。`minesweeper.css` 在既有 `(max-width: 400px) and (max-height: 700px)` 查询之后新增 `(min-width: 340px) and (max-width: 400px) and (max-height: 667px)`，再压缩 `.game-heading` 的 `row-gap` / `padding` 与 touch hint / touch actions 的纵向 `margin`（共 16 px）。舞台宽度、棋盘格子尺寸、横向规则与游戏规则均未改：360×640 下重开按钮底部约 636.52 px，375×667 下约 651.52 px，均完整落在首屏内。320×640 的布局与 34 px 格子下限不变；高度 700 px 及以上的 340×700 / 349×700 / 400×700 / 360×740 / 412×839 不受新增收紧影响。

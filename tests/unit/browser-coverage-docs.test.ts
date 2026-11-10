@@ -140,7 +140,24 @@ describe('browser coverage documentation', () => {
       for (const viewport of viewports) {
         expect(doc, `${name} is missing the ${viewport} viewport`).toContain(viewport);
       }
+      // The labels must match the spec in order, not just appear somewhere.
+      expect(doc, `${name} should list the WebKit matrix in spec order`).toContain(
+        viewports.join('、'),
+      );
+      expect(
+        doc,
+        `${name} should state that all four WebKit viewports assert the restart entry`,
+      ).toMatch(/四个视口都断言[^。\n]{0,80}重开入口/);
     }
+  });
+
+  it('asserts the restart entry for every WebKit narrow viewport', () => {
+    expect(viewportLabels(NARROW_WEBKIT_SPEC)).toHaveLength(4);
+    // The four viewports share one contract call with the restart entry
+    // enabled. A regression to `restartEntry: false`, or a new viewport that
+    // opts out of the assertion, must fail this guard.
+    expect(NARROW_WEBKIT_SPEC).not.toMatch(/restartEntry:\s*false/);
+    expect(NARROW_WEBKIT_SPEC).toMatch(/restartEntry:\s*true/);
   });
 
   it('documents the browser install and e2e commands that package.json and CI use', () => {
@@ -166,14 +183,13 @@ describe('browser coverage documentation', () => {
 
   it('records the real iOS limitations and the requirement for manual acceptance', () => {
     // These are the measured WebKit / iOS differences the docs promise to
-    // disclose, plus the still-open follow-ups that track the remaining work.
+    // disclose, plus the still-open follow-up that tracks the remaining work.
     const requiredTerms = [
       'safe-area',
       'dvh',
       '字体度量',
       'any-pointer',
       '人工验收',
-      '#60',
       '#100',
     ];
     for (const [name, doc] of [
@@ -195,6 +211,9 @@ describe('browser coverage documentation', () => {
   it('does not restore the stale Chromium-only narrow-contract wording', () => {
     const staleNarrowContract = /窄屏(?:首屏)?契约[^。\n]{0,40}(?:只|仅)(?:在|用) Chromium/;
     const staleResolved = /#(?:60|100)[^。\n]{0,20}已(?:解决|完成|关闭)/;
+    const staleWebkitMatrix =
+      /WebKit[^。\n]{0,20}(?:只|仅)[^。\n]{0,20}(?:320×640|412×839)[^。\n]{0,20}(?:断言|覆盖)/;
+    const staleWebkitTracking = /(?:360×640|375×667)[^。\n]{0,40}重开入口[^。\n]{0,20}#60/;
     for (const [name, doc] of [
       ['README.md', README],
       ['docs/framework.md', FRAMEWORK],
@@ -204,6 +223,12 @@ describe('browser coverage documentation', () => {
       );
       expect(doc, `${name} should not claim the follow-ups are resolved`).not.toMatch(
         staleResolved,
+      );
+      expect(doc, `${name} should not limit the WebKit assertion to two viewports`).not.toMatch(
+        staleWebkitMatrix,
+      );
+      expect(doc, `${name} should not say the short-screen fix is still tracked by #60`).not.toMatch(
+        staleWebkitTracking,
       );
     }
   });
