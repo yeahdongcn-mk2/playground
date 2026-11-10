@@ -35,13 +35,13 @@ export function defineMinesweeperMobileTouchCases(): void {
   test.describe('minesweeper touch gestures on a phone viewport', () => {
     test('a tap reveals and a long press toggles a flag exactly once', async ({ page }) => {
       await openMinesweeper(page, { mines: LOSS_MINES });
-  
+
       await tapCell(page, LOSS_SAFE_CLICK.row, LOSS_SAFE_CLICK.col);
       await expect(page.getByTestId('status')).toHaveText('进行中');
       await expect(
         cellLocator(page, LOSS_SAFE_CLICK.row, LOSS_SAFE_CLICK.col),
       ).toHaveAttribute('data-revealed', 'true');
-  
+
       const mine = cellLocator(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
       await longPressCell(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
       await expect(mine).toHaveAttribute('data-state', 'flagged');
@@ -50,7 +50,7 @@ export function defineMinesweeperMobileTouchCases(): void {
       await expect(page.getByTestId('flag-count')).toHaveText('1');
       // A long press must not toggle twice through the synthetic contextmenu.
       expect((await readState(page)).flaggedCount).toBe(1);
-  
+
       // The restart entry next to the board works from a dirty board.
       const mobileRestart = page.getByTestId('mobile-restart-button');
       const restartBox = await mobileRestart.boundingBox();
@@ -66,7 +66,7 @@ export function defineMinesweeperMobileTouchCases(): void {
       // compact button next to the board is the preferred target.
       await expect(mobileRestart).toBeFocused();
       await expectInsideViewport(page, mobileRestart, 'restart button');
-  
+
       // Holding a flagged cell clears the flag; the first hold sets it again.
       await longPressCell(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
       await expect(mine).toHaveAttribute('data-state', 'flagged');
@@ -78,11 +78,11 @@ export function defineMinesweeperMobileTouchCases(): void {
       expect((await readState(page)).flaggedCount).toBe(0);
       await expectNoHorizontalOverflow(page);
     });
-  
+
     test('a long hold that clears a flag still swallows the release click', async ({ page }) => {
       await openMinesweeper(page, { mines: LOSS_MINES });
       const mine = cellLocator(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
-  
+
       // The finger stays down 1100 ms after the 500 ms long-press timer. A fixed
       // suppression window would expire before this release click, revealing the
       // cell; the gesture-level flag must keep swallowing it.
@@ -92,7 +92,7 @@ export function defineMinesweeperMobileTouchCases(): void {
       await expect(mine).toHaveAttribute('data-state', 'flagged');
       await expect.poll(async () => (await readState(page)).flaggedCount).toBe(1);
       await expect.poll(() => readStatus(page)).toBe('ready');
-  
+
       // A second long hold clears the flag; its release click arrives even later
       // and must still be swallowed instead of revealing the cell.
       await longPressCell(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col, 1_600);
@@ -103,18 +103,18 @@ export function defineMinesweeperMobileTouchCases(): void {
       await expect.poll(async () => (await readState(page)).flaggedCount).toBe(0);
       await expect.poll(() => readStatus(page)).toBe('ready');
     });
-  
+
     test('a second pointer cannot clear the first pointer click suppression', async ({
       page,
     }) => {
       await openMinesweeper(page, { mines: LOSS_MINES });
       const mine = cellLocator(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
-  
+
       // Start from a flag so the first pointer's stale release click would reveal
       // the mine instead of being a no-op on an already flagged cell.
       await longPressCell(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
       await expect(mine).toHaveAttribute('data-state', 'flagged');
-  
+
       // First finger starts a second long hold and clears the flag at 500 ms;
       // its synthetic click is injected manually because CDP multi-touch does not
       // generate one, and it must stay suppressed while the finger is down.
@@ -127,7 +127,7 @@ export function defineMinesweeperMobileTouchCases(): void {
       );
       await page.waitForTimeout(650);
       await expect(mine).toHaveAttribute('data-state', 'hidden');
-  
+
       // A second finger starts and ends its own gesture elsewhere on the board.
       await dispatchTouchPointer(
         page,
@@ -159,18 +159,18 @@ export function defineMinesweeperMobileTouchCases(): void {
         'click',
         11,
       );
-  
+
       await expect(mine).toHaveAttribute('data-state', 'hidden');
       await expect.poll(() => readStatus(page)).toBe('ready');
       expect((await readState(page)).flaggedCount).toBe(0);
     });
-  
+
     test('restarting while a finger holds a cell cancels the pending long press', async ({
       page,
     }) => {
       await openMinesweeper(page, { mines: LOSS_MINES });
       const mine = cellLocator(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
-  
+
       // Activate restart inside the same pointerdown turn. Waiting for a separate
       // Playwright call could let the 500 ms timer fire first under CI load, and
       // the restarted board would hide that failure.
@@ -181,10 +181,10 @@ export function defineMinesweeperMobileTouchCases(): void {
         );
         board?.addEventListener('pointerdown', () => restart?.click(), { once: true });
       });
-  
+
       const held = await startCellPress(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
       await expect(page.getByTestId('status')).toHaveText('待开始');
-  
+
       // Wait past the original hold deadline. Without cancelling the gesture the
       // stale timer would flag the fresh board when it fires.
       await page.waitForTimeout(600);
@@ -195,14 +195,14 @@ export function defineMinesweeperMobileTouchCases(): void {
       await expectCleanBoard(page);
       expect(await readStatus(page)).toBe('ready');
     });
-  
+
     test('rebuilding while a finger holds a cell keeps the long press cancelled and swallows its release click', async ({
       page,
     }) => {
       await openMinesweeper(page, { mines: LOSS_MINES });
       const held = await startCellPress(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
       await page.waitForTimeout(120);
-  
+
       // Rebuild the board to 16x16 while the first gesture is still pending.
       await setDebugConfig(page, {
         rows: 16,
@@ -213,7 +213,7 @@ export function defineMinesweeperMobileTouchCases(): void {
       await expect(page.locator('[data-cell]')).toHaveCount(256);
       await expect(page.getByTestId('board-summary')).toHaveText('16 × 16 · 40 雷');
       await expect(page.getByTestId('status')).toHaveText('待开始');
-  
+
       // The old 500 ms timer is gone, so holding past the threshold must not
       // flag the rebuilt board.
       await page.waitForTimeout(600);
@@ -227,22 +227,22 @@ export function defineMinesweeperMobileTouchCases(): void {
       await expectCleanBoard(page);
       expect(await readStatus(page)).toBe('ready');
       expect((await readState(page)).flaggedCount).toBe(0);
-  
+
       // The debug seam is still a debug-only test seam and is removed on destroy.
       await destroyDebugGame(page);
       await expectNoDebugSeam(page);
     });
-  
+
     test('destroying the mount while a finger holds a cell cancels the pending long press', async ({
       page,
     }) => {
       await openMinesweeper(page, { mines: LOSS_MINES });
       const mine = cellLocator(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
-  
+
       const held = await startCellPress(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
       try {
         await destroyDebugGame(page);
-  
+
         // Without cancelling the gesture the 500 ms timer would still run after
         // destroy and toggle a flag through sync() on the detached view.
         await page.waitForTimeout(600);
@@ -257,14 +257,14 @@ export function defineMinesweeperMobileTouchCases(): void {
       );
       await expectNoDebugSeam(page);
     });
-  
+
     test('restarting from the sidebar focuses the visible compact restart on a phone', async ({
       page,
     }) => {
       await openMinesweeper(page, { mines: LOSS_MINES });
       await tapCell(page, LOSS_SAFE_CLICK.row, LOSS_SAFE_CLICK.col);
       await expect(page.getByTestId('status')).toHaveText('进行中');
-  
+
       const sidebarRestart = page.getByTestId('restart-button');
       // The sidebar restart stays visible in the stacked phone layout but can be
       // below the fold. Restarting from it must not leave focus off-screen.
@@ -276,11 +276,11 @@ export function defineMinesweeperMobileTouchCases(): void {
       await expectInsideViewport(page, compactRestart, 'compact restart after restart');
       await expect(sidebarRestart).not.toBeFocused();
     });
-  
+
     test('cancelled presses never toggle a flag and do not swallow the next tap', async ({ page }) => {
       await openMinesweeper(page, { mines: LOSS_MINES });
       const mine = cellLocator(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
-  
+
       // Movement beyond the tolerance cancels the pending long press and click.
       const moved = await startCellPress(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
       await page.waitForTimeout(120);
@@ -289,7 +289,7 @@ export function defineMinesweeperMobileTouchCases(): void {
       await endCellPress(moved);
       await expect(mine).toHaveAttribute('data-state', 'hidden');
       expect(await readStatus(page)).toBe('ready');
-  
+
       // pointercancel cancels as well.
       const cancelled = await startCellPress(
         page,
@@ -301,7 +301,7 @@ export function defineMinesweeperMobileTouchCases(): void {
       await page.waitForTimeout(600);
       await expect(mine).toHaveAttribute('data-state', 'hidden');
       expect(await readStatus(page)).toBe('ready');
-  
+
       // pointerleave (the finger leaves the board) also cancels. A real finger
       // would already trip the move tolerance above, so this synthetic event
       // covers the dedicated handler without claiming a physical path.
@@ -316,7 +316,7 @@ export function defineMinesweeperMobileTouchCases(): void {
       await endCellPress(leftBoard);
       await expect(mine).toHaveAttribute('data-state', 'hidden');
       expect(await readStatus(page)).toBe('ready');
-  
+
       // Scrolling the page cancels the pending press.
       const scrolled = await startCellPress(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
       await page.waitForTimeout(120);
@@ -325,14 +325,14 @@ export function defineMinesweeperMobileTouchCases(): void {
       await endCellPress(scrolled);
       await expect(mine).toHaveAttribute('data-state', 'hidden');
       expect(await readStatus(page)).toBe('ready');
-  
+
       // Positive control: cancellation did not break the timer itself.
       await page.evaluate(() => window.scrollTo(0, 0));
       await longPressCell(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
       await expect(mine).toHaveAttribute('data-state', 'flagged');
       expect((await readState(page)).flaggedCount).toBe(1);
       await expectNoHorizontalOverflow(page);
-  
+
       // Cancelled gestures must not leave state that swallows the next tap.
       await tapCell(page, LOSS_SAFE_CLICK.row, LOSS_SAFE_CLICK.col);
       await expect(
@@ -340,13 +340,13 @@ export function defineMinesweeperMobileTouchCases(): void {
       ).toHaveAttribute('data-revealed', 'true');
       await expect.poll(() => readStatus(page)).toBe('playing');
     });
-  
+
     test('a touch contextmenu is always prevented and never toggles twice', async ({
       page,
     }) => {
       await openMinesweeper(page, { mines: LOSS_MINES });
       const mine = cellLocator(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
-  
+
       // Without an active hold, a touch contextmenu is prevented and ignored.
       const preventedWithoutHold = await mine.evaluate((cell) => {
         const event = new PointerEvent('contextmenu', {
@@ -359,7 +359,7 @@ export function defineMinesweeperMobileTouchCases(): void {
       });
       expect(preventedWithoutHold).toBe(true);
       expect((await readState(page)).flaggedCount).toBe(0);
-  
+
       // If the native menu wins the race against the 500 ms timer, it owns the
       // flag and disarms the timer so the hold still toggles exactly once.
       const press = await startCellPress(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
@@ -376,18 +376,18 @@ export function defineMinesweeperMobileTouchCases(): void {
       expect(preventedDuringHold).toBe(true);
       await page.waitForTimeout(600);
       await endCellPress(press);
-  
+
       await expect(mine).toHaveAttribute('data-state', 'flagged');
       expect((await readState(page)).flaggedCount).toBe(1);
     });
-  
+
     test('tapping a mine ends the game, explains the loss and restarts from the overlay', async ({
       page,
     }) => {
       await openMinesweeper(page, { mines: LOSS_MINES });
       await tapCell(page, LOSS_SAFE_CLICK.row, LOSS_SAFE_CLICK.col);
       await expect(page.getByTestId('status')).toHaveText('进行中');
-  
+
       await tapCell(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
       await expect(page.getByTestId('status')).toHaveText('踩雷结束');
       await expect(page.getByTestId('overlay')).toBeVisible();
@@ -398,7 +398,7 @@ export function defineMinesweeperMobileTouchCases(): void {
         'overlay restart button',
       );
       await expectNoHorizontalOverflow(page);
-  
+
       const restart = page.getByTestId('overlay-primary');
       const box = await restart.boundingBox();
       expect(box).not.toBeNull();
@@ -412,11 +412,11 @@ export function defineMinesweeperMobileTouchCases(): void {
       await expectCleanBoard(page);
       await expectNoHorizontalOverflow(page);
     });
-  
+
     test('tapping the last safe cell wins the game', async ({ page }) => {
       await openMinesweeper(page, { mines: WIN_MINES });
       await tapCell(page, WIN_CLICK.row, WIN_CLICK.col);
-  
+
       await expect(page.getByTestId('status')).toHaveText('胜利');
       await expect(page.getByTestId('overlay')).toBeVisible();
       await expect(page.getByTestId('overlay-title')).toHaveText('扫雷成功');

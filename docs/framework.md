@@ -288,7 +288,7 @@ npm run test:e2e     # 先 build，再用 vite preview 跑 Chromium 桌面 / Pix
 npm run test:e2e:webkit # 先 build，只跑 mobile-webkit（iPhone SE (3rd gen)）
 ```
 
-当前提交本地通过：`typecheck`、`lint`、`build`、`check:budget` 通过；`npm run test:unit` 405 passed；`npm run test:e2e` 141 passed（桌面 85 + 手机 34 + WebKit 22）。
+当前提交本地通过：`typecheck`、`lint`、`build`、`check:budget` 通过；`npm run test:unit` 405 passed；`npm run test:e2e` 142 passed（桌面 85 + 手机 34 + WebKit 23）。
 
 - 单测只覆盖引擎无关逻辑；不要在 Node 里启动 Phaser。
 - 端到端使用 `data-testid`，覆盖进入 / 返回、最近游玩时间、键盘 / 鼠标 / 触屏、修饰键、重置、容器级缩放、未知路由、快速切换的晚到 mount、休眠时销毁和监听器清理；贪食蛇、俄罗斯方块、2048、打砖块与扫雷另有完整玩法用例（暂停 / 重开、计分 / 结束、窗口失焦暂停与恢复、手机端触屏按钮或拖动、像素绘制与监听器清理，扫雷另有左右键、固定雷盘、难度预设与自定义切换、非法自定义错误、格子可见文本、焦点迁移、畸形调试雷盘回退、胜利 / 踩雷与计时器 / 调试接缝清理）。
@@ -328,7 +328,7 @@ npm run test:e2e:webkit # 只跑 mobile-webkit
 - **安全区**：iPhone SE (3rd gen) 模拟下 `env(safe-area-inset-*)` 为 0px，刘海 / Home 指示条安全区未被模拟。
 - **字体度量**：Linux WebKit 回退字体使「返回大厅」文本比 Chromium 宽约 3%（68.33px vs 66.45px）；契约断言元素边界而非固定文本宽度。
 - **触屏媒体查询**：`any-pointer: coarse` 在两套模拟下都命中，touch-hint 与紧凑重开入口都会渲染。
-- **长按 / 双指针注入**：Playwright WebKit 没有 CDP，不能用 `Input.dispatchTouchEvent` 保持按住；共享辅助函数在 WebKit 下派发同语义的 `PointerEvent`（pointerdown / pointermove / pointercancel / pointerup 与 release click），Chromium 仍用真实 CDP 触摸。产品代码不分叉，差异只在测试注入层。
+- **长按 / 双指针注入**：Playwright WebKit 没有 CDP，不能用 `Input.dispatchTouchEvent` 保持按住；共享辅助函数在 WebKit 下派发同语义的 `PointerEvent`（pointerdown / pointermove / pointercancel / pointerup 与 release click），Chromium 仍用真实 CDP 触摸。产品代码不分叉，差异只在测试注入层；WebKit 环境假设用例还会用真实 `page.touchscreen.tap` 断言 release click 的构造器与 pointerId，防止注入形状与引擎实际行为漂移。
 - **真实 iOS**：CI 没有 iOS Safari / 真机，触屏手感、安全区与渲染像素仍需人工验收；WebKit 模拟通过不代表 iOS Safari 已完全兼容。
 
 ## 13. 环境与命令

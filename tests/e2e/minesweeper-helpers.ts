@@ -183,7 +183,13 @@ export interface CellPress {
   readonly pointerId: number;
 }
 
-/** Pointer id reused by the WebKit fallback, matching a real touch. */
+/**
+ * Pointer id used by the WebKit fallback for the whole injected gesture.
+ * WebKit's release click carries the mouse pointer id (1) rather than the
+ * touch pointerdown id, so the fallback keeps one id to exercise the product's
+ * pointer-id suppression path; the real click shape is pinned in
+ * `minesweeper.narrow.webkit.spec.ts`.
+ */
 const WEBKIT_TOUCH_POINTER_ID = 1;
 
 interface CellPointerInit {

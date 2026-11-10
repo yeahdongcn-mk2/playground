@@ -636,7 +636,7 @@ describe('browser coverage documentation', () => {
     const [desktop, mobile, webkit] = readmeBreakdown ?? [0, 0, 0];
     expect(desktop + mobile + webkit).toBe(counts.readmeE2e);
     // The WebKit project now runs framework, the minesweeper touch gestures
-    // and the touch difficulty form on top of the six contract / smoke cases.
+    // and the touch difficulty form on top of the seven contract / smoke cases.
     expect(webkit).toBeGreaterThanOrEqual(22);
   });
 });
