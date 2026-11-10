@@ -233,15 +233,23 @@ pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和
 | `npm run lint` | oxlint + 模块依赖方向检查 |
 | `npm run check:budget` | 检查入口无引擎、gzip 体积预算 |
 | `npm run screenshots` | 构建后生成 `docs/screenshots/` 中的界面截图 |
+| `npm run screenshots:webkit` | 构建后用 WebKit 生成大厅与空白画布的 375×667 手机截图 |
 | `npm run screenshots:snake` | 生成贪食蛇 Before / After 截图（开发服务器 + 固定首果） |
+| `npm run screenshots:snake:webkit` | 用开发服务器 + WebKit 生成贪食蛇手机 ready 截图 |
 | `npm run screenshots:2048` | 构建后生成 2048 大厅与 ready / playing / gameover 截图 |
 | `npm run screenshots:2048:before` | 用 `BASE_URL` 指定的 main 预览生成 2048 Before 截图 |
+| `npm run screenshots:2048:webkit` | 构建后用 WebKit 生成 2048 ready / playing / gameover 手机截图 |
 | `npm run screenshots:breakout` | 构建后生成打砖块大厅与 ready / playing / levelclear / gameover 截图 |
 | `npm run screenshots:breakout:before` | 用 `BASE_URL` 指定的 main 预览生成打砖块 Before 截图 |
+| `npm run screenshots:breakout:webkit` | 构建后用 WebKit 生成打砖块 ready / playing / levelclear / gameover 手机截图 |
 | `npm run screenshots:minesweeper` | 构建后生成扫雷大厅、桌面玩法与 Pixel 7 手机玩法截图 |
+| `npm run screenshots:minesweeper:webkit` | 构建后用 WebKit 生成扫雷 ready / playing / lost / won 手机截图 |
+| `npm run screenshots:minesweeper:webkit-before` | 用 `BASE_URL` 指定的触屏改动前基线生成 WebKit 手机 Before 截图（需外部基线，不提交 Before 文件） |
 | `npm run screenshots:minesweeper:touch-before` | 用 `BASE_URL` 指定的触屏改动前基线生成手机扫雷 Before 截图 |
 | `npm run screenshots:minesweeper:narrow` | 构建后生成 360×740 扫雷窄屏 ready 截图 |
 | `npm run screenshots:minesweeper:narrow-before` | 用 `BASE_URL` 指定的窄屏改动前基线生成 360×740 Before 截图 |
+| `npm run screenshots:minesweeper:webkit-narrow` | 构建后用 WebKit 生成 320×640 / 360×640 / 375×667 / 412×839 窄屏矩阵截图 |
+| `npm run screenshots:minesweeper:webkit-narrow-before` | 用 `BASE_URL` 指定的 `d6aeb3d` 基线生成同一 WebKit 窄屏矩阵 Before 截图 |
 | `npm run screenshots:minesweeper:min` | 构建后生成 320×640 最低支持宽度 ready 截图 |
 | `npm run screenshots:minesweeper:min-before` | 用 `BASE_URL` 指定的窄屏改动前基线生成 320×640 Before 截图 |
 | `npm run screenshots:minesweeper:restart` | 构建后生成 320×640 扫雷 ready 截图，并保留重开入口在首屏内的状态 |
@@ -251,11 +259,14 @@ pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和
 | `npm run screenshots:minesweeper:large` | 构建后生成 320×640 / 360×640 的 16×30 大棋盘提示截图 |
 | `npm run screenshots:minesweeper:large-before` | 用 `BASE_URL` 指定的大棋盘提示改动前基线生成 320×640 / 360×640 Before 截图 |
 | `npm run screenshots:minesweeper:scores` | 构建后生成扫雷最高用时榜的桌面与 320×640 手机 After 截图 |
+| `npm run screenshots:minesweeper:scores:webkit` | 构建后用 WebKit 生成 320×640 最高用时榜 After 截图 |
 | `npm run screenshots:minesweeper:scores-before` | 用 `BASE_URL` 指定的改动前基线生成最高用时榜 Before 截图 |
 | `npm run screenshots:minesweeper:scores-clear` | 构建后生成带「清空记录」入口的最高用时榜 After 截图 |
 | `npm run screenshots:minesweeper:scores-clear-before` | 用 `BASE_URL` 指定的「清空记录」改动前基线生成 Before 截图 |
 
 扫雷截图脚本不再提供通用 `--before` 模式：显式传入会报错并以非零状态退出；`touch-before` / `narrow-before` / `min-before` / `restart-before` / `large-before` 等模式保留，分别指向各自的历史基线。
+
+游戏与界面截图脚本新增了 `--webkit` 家族的命令（`capture-baseline.mjs` 仍只用于基线仓库状态）；Chromium 模式的命令、文件名与输出保持不变。WebKit 模式使用 `iPhone SE (3rd gen)` 设备模拟（375×667，DPR 2，深色，`reducedMotion: reduce`；成绩榜为 320×640），窄屏矩阵按 320×640 / 360×640 / 375×667 / 412×839 显式覆盖视口。脚本日志会为每张图打印 `engine / viewport / theme` 记录，来源表见 [docs/screenshots/README.md](docs/screenshots/README.md)。
 
 首次运行端到端测试前需要安装 Chromium 与 WebKit 两个引擎：
 
@@ -381,7 +392,7 @@ games/<game>/scene → 对应引擎（动态 import）
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过
-npm run test:unit    # 406 passed（含贪食蛇 21、俄罗斯方块 38、2048 35、打砖块 39、扫雷 133 个规则 / 难度 / 成绩 / 视图 / 调试用例，以及截图脚本端口 10 例、截图模式 9 例、预览服务启动 6 例）
+npm run test:unit    # 418 passed（含贪食蛇 21、俄罗斯方块 38、2048 35、打砖块 39、扫雷 133 个规则 / 难度 / 成绩 / 视图 / 调试用例，以及截图脚本端口 10 例、截图模式 21 例、预览服务启动 6 例）
 npm run build        # 通过
 npm run check:budget # 通过（入口 10.91 KB gzip，全部 JS 404.24 KB gzip）
 npm run test:e2e     # 149 passed（桌面 85 + 手机 34 + WebKit 30）
@@ -406,7 +417,7 @@ npm run test:e2e     # 149 passed（桌面 85 + 手机 34 + WebKit 30）
   - `tests/e2e/tetris.mobile.webkit.spec.ts`：俄罗斯方块手机端的触屏按钮移动 / 旋转 / 暂停 / 硬降、堆顶结束与重开，复用 `tests/e2e/tetris-mobile-cases.ts`。
   - `tests/e2e/2048.mobile.webkit.spec.ts`：2048 手机端从 READY 遮罩滑动开始、合并计分与无横向溢出，复用 `tests/e2e/2048-mobile-cases.ts`；触摸滑动由跨引擎指针事件 helper 注入。
   - `tests/e2e/breakout.mobile.webkit.spec.ts`：打砖块手机端拖动挡板到右半场与无横向溢出，复用 `tests/e2e/breakout-mobile-cases.ts`；触摸拖动由同一个跨引擎指针事件 helper 注入。
-- Chromium 8 视口与 WebKit 4 视口矩阵的归属保持不变；截图脚本仍只在 Chromium 下运行，#100 继续跟踪截图脚本的 WebKit 覆盖。
+- Chromium 8 视口与 WebKit 4 视口矩阵的归属保持不变；截图脚本也提供 WebKit 模式，命令与引擎 / 视口 / 主题记录见 [docs/screenshots/README.md](docs/screenshots/README.md)，Chromium 模式无回归。
 
 ```bash
 npx playwright install chromium webkit  # 首次安装 Chromium 与 WebKit
@@ -422,8 +433,8 @@ Playwright 的 WebKit 是 Linux 上的 WebKit 构建，不等于 iOS Safari。�
 - **安全区**：iPhone SE (3rd gen) 模拟下 `env(safe-area-inset-*)` 恒为 0px，刘海 / Home 指示条安全区没有被模拟；依赖安全区的布局只能靠真机验收。
 - **字体度量**：Linux WebKit 的回退字体让「返回大厅」文本比 Chromium 宽约 3%（68.33px vs 66.45px）。契约断言元素边界而不是固定文本宽度，因此两引擎都通过；真实 iOS 系统字体仍可能不同。
 - **触屏媒体查询**：`any-pointer: coarse` 在两套模拟下都命中，touch-hint 与紧凑重开入口都会渲染；真实设备的指针能力与手感仍需人工确认。
-- **长按 / 双指针 / 滑动 / 拖动注入**：Playwright 没有跨引擎的「保持按住」触摸 API，WebKit 也没有 CDP；共享辅助函数在 Chromium 与 WebKit 两端统一派发同语义的 `PointerEvent`（pointerdown / pointermove / pointercancel / pointerup 与 release click），所以测试不再依赖 `newCDPSession` 或 `Input.dispatchTouchEvent`。产品代码不分叉，差异只在测试注入层；真实轻点仍用 `page.touchscreen.tap`，WebKit 环境假设用例会断言 release click 的构造器与 pointerId，防止注入形状与引擎实际行为漂移。
-- **真实 iOS**：CI 没有 iOS Safari 或真机，触屏手感、安全区与渲染像素仍需人工验收；WebKit 模拟通过不代表 iOS Safari 已完全兼容。2048 与 breakout 的手机端 spec 也已在两引擎运行。截图脚本仍只在 Chromium 下运行，#100 继续跟踪截图脚本的 WebKit 覆盖；framework、扫雷触屏、贪食蛇、俄罗斯方块、2048 与打砖块的手机端用例已纳入两引擎。
+- **长按 / 双指针 / 滑动 / 拖动注入**：Playwright 没有跨引擎的「保持按住」触摸 API，WebKit 也没有 CDP；e2e 共享辅助函数与截图脚本的 `scripts/lib/touch-input.mjs` 在 Chromium 与 WebKit 两端统一派发同语义的 `PointerEvent`（pointerdown / pointermove / pointercancel / pointerup 与 release click），所以测试与截图都不再依赖 `newCDPSession` 或 `Input.dispatchTouchEvent`。产品代码不分叉，差异只在测试 / 截图注入层；真实轻点仍用 `page.touchscreen.tap`，WebKit 环境假设用例会断言 release click 的构造器与 pointerId，防止注入形状与引擎实际行为漂移。
+- **真实 iOS**：CI 没有 iOS Safari 或真机，触屏手感、安全区与渲染像素仍需人工验收；WebKit 模拟通过不代表 iOS Safari 已完全兼容。2048 与 breakout 的手机端 spec 也已在两引擎运行；截图脚本的 WebKit 模式覆盖大厅、空白画布、扫雷（含窄屏矩阵与成绩榜）、贪食蛇、2048 与打砖块的稳定场景，均使用同一 iPhone SE (3rd gen) 设备模拟。
 
 ## 已知限制
 
@@ -434,6 +445,6 @@ Playwright 的 WebKit 是 Linux 上的 WebKit 构建，不等于 iOS Safari。�
 - 打砖块固定 480×720 逻辑球场与 10 列砖块，没有道具、多球或在线排行榜；难度只来自砖块行数与球速。
 - 扫雷提供初级 / 中级 / 高级三档预设与 5–30 行、5–30 列的自定义棋盘，但没有撤销、问号标记、道具或在线排行榜；最高用时只在本地浏览器保存（不跨设备），手机端轻点翻开、长按插旗 / 取消旗，桌面右键行为保留。
 - 3D（Three.js）只预留契约与目录路径，参考实现要等首个 3D 游戏接入。
-- 手机端使用 Playwright 的 Chromium / WebKit 设备模拟：扫雷窄屏契约、framework 手机端、扫雷触屏手势 / 触屏难度表单以及贪食蛇、俄罗斯方块、2048 与打砖块的手机端 spec 已覆盖两引擎，但 WebKit 不等于 iOS Safari（不模拟动态地址栏与安全区），真实触屏手感与 iOS 渲染仍需人工验收。截图脚本仍只在 Chromium 下运行，#100 继续跟踪截图脚本的 WebKit 覆盖。窄屏契约的边界是最低视口 320×640（高度 <640 不保证）、矩阵外组合（如 375×640、400×667）不承诺首屏重开，以及列数 >9 的大棋盘只按比例缩小并显示中文降级提示（#86）、不再保证 36px。
+- 手机端使用 Playwright 的 Chromium / WebKit 设备模拟：扫雷窄屏契约、framework 手机端、扫雷触屏手势 / 触屏难度表单以及贪食蛇、俄罗斯方块、2048 与打砖块的手机端 spec 已覆盖两引擎，但 WebKit 不等于 iOS Safari（不模拟动态地址栏与安全区），真实触屏手感与 iOS 渲染仍需人工验收。截图脚本的 WebKit 模式覆盖大厅、空白画布、扫雷（含窄屏矩阵与成绩榜）、贪食蛇、2048 与打砖块的稳定场景；俄罗斯方块只有 e2e 覆盖、没有截图脚本。窄屏契约的边界是最低视口 320×640（高度 <640 不保证）、矩阵外组合（如 375×640、400×667）不承诺首屏重开，以及列数 >9 的大棋盘只按比例缩小并显示中文降级提示（#86）、不再保证 36px。
 - 扫雷使用原生 DOM 网格，不进入 Phaser chunk；其余 2D 游戏仍共用 Phaser 适配层。
 - Phaser 引擎 chunk 约数百 KB（gzip），只在进入使用 Phaser 的游戏时加载；大厅首屏和纯 DOM 的扫雷都不包含引擎。

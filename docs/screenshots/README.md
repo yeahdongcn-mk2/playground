@@ -2,62 +2,71 @@
 
 这些截图用于各期交付的 Before / After 视觉证据。全部由 Playwright 的 Chromium 或 WebKit 真实渲染（各节注明引擎），不是 mockup。
 
+引擎标注：文件名 `-desktop` 为 Chromium 1440×1000；`-mobile` 为 Chromium 手机截图（扫雷 `-mobile` 为 Pixel 7 412×839，扫雷成绩为 320×640；其余手机图多为自定义 390×844，大厅为全页长图）；`-webkit` / `-webkit-narrow-*` 为 WebKit `iPhone SE (3rd gen)` 设备模拟。WebKit 手机截图的命令、设备参数与引擎 / 视口 / 主题记录见「webkit-phone」与「webkit-narrow」两节；Chromium 的既有命令与文件名保持不变。
+
 ## webkit-narrow：扫雷窄屏首屏契约的 WebKit 矩阵（Issue #83 / 子任务 1）
 
 - Before 基线：`d6aeb3d`（t1 合入后的 `main`，也就是本子任务开始前的 `main`）。
-- After：`50391e2`（本子任务分支 `agent/plan-83-t1` 的实现提交；评审后只改本节文字与 PR 描述，不改变页面渲染）。`tests/e2e/minesweeper-helpers.ts` 抽出 Chromium 与 WebKit 共用的首屏契约（无横向溢出、81 格 ≥ 最小格且近似正方形、HUD 两个读数 / 返回大厅 / 触屏提示在首屏，重开入口按视口可选），新增 `tests/e2e/minesweeper.narrow.webkit.spec.ts` 覆盖 320×640、360×640、375×667、412×839。
+- After：`agent/plan-100-t3` 的本次 head（由仓库内脚本重新生成，已包含 Issue #60 的短窄视口修复）。`tests/e2e/minesweeper-helpers.ts` 抽出 Chromium 与 WebKit 共用的首屏契约（无横向溢出、81 格 ≥ 最小格且近似正方形、HUD 两个读数 / 返回大厅 / 触屏提示在首屏，重开入口按视口可选），新增 `tests/e2e/minesweeper.narrow.webkit.spec.ts` 覆盖 320×640、360×640、375×667、412×839。
 - 视觉差异与修复：WebKit 把带 padding 的 `.minesweeper-stage` 的 `aspect-ratio` 解析到内容盒，导致 stage 比宽度高出一个 padding + border 的高度，9×9 格子变成纵向长方形（412×839 下 39.33×41.33）。`src/games/minesweeper/view.ts` 给 `rows === cols` 的棋盘加 `data-square-board="true"`，`minesweeper.css` 在 ≤560px 时让 stage 由去内边距的 board 提供行 / 列比例；Chromium 的 9×9 布局与既有大棋盘（16×16 / 16×30）几何断言不变。
-- 视口 / 主题：320×640、360×640、375×667、412×839 CSS px；Playwright WebKit `iPhone SE (3rd gen)` 设备模拟（DPR 2、`isMobile: true`、`hasTouch: true`），深色主题、`reducedMotion: reduce`。Before / After 使用同一 URL（`#/games/minesweeper?debug=1`）、同一 9×9 READY 棋盘，均为视口截图（`fullPage: false`）。
-- 复现：这 8 张 WebKit 截图由**未入库的临时脚本**生成。脚本只存在于执行本次任务的 worktree 的 `.plan/capture-evidence-all.mjs`（`.plan/` 被 `.gitignore` 忽略），**没有提交到本仓库，也没有对应的 npm script**；仓库里的 `scripts/capture-minesweeper-screenshots.mjs` 只启动 Chromium，`npm run screenshots:minesweeper:narrow` 产出的是 360×740 等 Chromium 文件，不能产出本节这些 `*-minesweeper-webkit-narrow-*.png`。临时脚本全文见下方「未入库截图脚本」。复现步骤：Before 在 `d6aeb3d` 的干净 worktree 中 `npm ci && npm run build`，用 `vite preview --host 127.0.0.1 --port 4174 --strictPort` 启动；After 在 `50391e2` 构建后用同一命令换 `--port 4173`；然后在仓库根目录运行 `node .plan/capture-evidence-all.mjs`。Linux 本地运行 WebKit 需要 Playwright 的系统依赖；CI 用 `npx playwright install --with-deps chromium webkit`。
+- 视口 / 主题：320×640、360×640、375×667、412×839 CSS px；Playwright WebKit `iPhone SE (3rd gen)` 设备模拟（DPR 2、`isMobile: true`、`hasTouch: true`），深色主题、`reducedMotion: reduce`。Before / After 使用同一 9×9 READY 场景（READY 下雷盘不可见），均为视口截图（`fullPage: false`）。
+- 复现（已入库，不再依赖临时脚本）：
+  - After：`npm run screenshots:minesweeper:webkit-narrow`（生产构建 + `vite preview`，端口 `4186`，可用 `PREVIEW_PORT` 覆盖）。
+  - Before：在 `d6aeb3d` 的干净 worktree 中 `npm ci && npm run build`，启动 `vite preview --host 127.0.0.1 --port 4174 --strictPort`，然后在当前分支运行 `BASE_URL=http://127.0.0.1:4174 npm run screenshots:minesweeper:webkit-narrow-before`。
+  - 两个命令都使用 `iPhone SE (3rd gen)` WebKit 设备模拟，循环 320×640、360×640、375×667、412×839 四个视口，输出到 `docs/screenshots/`；脚本会为每张图打印 `engine=webkit, viewport=<W>x<H>, theme=dark, reducedMotion=reduce` 记录。
+  - 长按 / 触控注入复用脚本侧的跨引擎 helper `scripts/lib/touch-input.mjs`，不再依赖 Chromium CDP；Chromium 的既有 `screenshots:minesweeper:*` 命令与文件名保持不变。
 
-| 文件 | 场景 | 视口 / 主题 | stage（Before → After） | 单格（Before → After） |
-| --- | --- | --- | --- | --- |
-| `before-minesweeper-webkit-narrow-320x640.png` / `after-minesweeper-webkit-narrow-320x640.png` | 9×9 READY（基线 `d6aeb3d` / 本子任务） | 320×640 / 深色 | 320×324 → 320×320 | 34.219×34.656 → 34.219×34.219 |
-| `before-minesweeper-webkit-narrow-360x640.png` / `after-minesweeper-webkit-narrow-360x640.png` | 9×9 READY（基线 `d6aeb3d` / 本子任务） | 360×640 / 深色 | 360×364 → 360×360 | 38.656×39.109 → 38.656×38.656 |
-| `before-minesweeper-webkit-narrow-375x667.png` / `after-minesweeper-webkit-narrow-375x667.png` | 9×9 READY（基线 `d6aeb3d` / 本子任务） | 375×667 / 深色 | 375×379 → 375×375 | 40.328×40.766 → 40.328×40.328 |
-| `before-minesweeper-webkit-narrow-412x839.png` / `after-minesweeper-webkit-narrow-412x839.png` | 9×9 READY（基线 `d6aeb3d` / 本子任务） | 412×839 / 深色 | 388×406 → 388×388 | 39.328×41.328 → 39.328×39.328 |
-
-### 未入库截图脚本
-
-以下是生成上表 8 张 PNG 的临时脚本全文，供复现参考。它**没有入库**，也没有对应的 npm script；运行前需按上文在 4174（Before）与 4173（After）启动两个 preview，并从仓库根目录执行。
-
-```js
-import { webkit, devices } from '@playwright/test';
-const browser = await webkit.launch();
-const context = await browser.newContext({
-  ...devices['iPhone SE (3rd gen)'],
-  colorScheme: 'dark',
-  reducedMotion: 'reduce',
-});
-for (const [label, base] of [['before', 'http://127.0.0.1:4174'], ['after', 'http://127.0.0.1:4173']]) {
-  for (const vp of [{ width: 320, height: 640 }, { width: 360, height: 640 }, { width: 375, height: 667 }, { width: 412, height: 839 }]) {
-    const page = await context.newPage();
-    await page.setViewportSize(vp);
-    await page.goto(`${base}/#/games/minesweeper?debug=1`);
-    await page.getByTestId('minesweeper-board').waitFor();
-    await page.getByTestId('status').waitFor();
-    await page.evaluate(() => document.fonts.ready);
-    await page.waitForTimeout(300);
-    const name = `docs/screenshots/${label}-minesweeper-webkit-narrow-${vp.width}x${vp.height}.png`;
-    await page.screenshot({ path: name, fullPage: false });
-    const metrics = await page.evaluate(() => {
-      const s = document.querySelector('.minesweeper-stage').getBoundingClientRect();
-      const c = document.querySelector('.minesweeper-cell').getBoundingClientRect();
-      const r = document.querySelector('[data-testid="mobile-restart-button"]').getBoundingClientRect();
-      return { stage: [s.width, s.height], cell: [c.width, c.height], restartBottom: r.y + r.height };
-    });
-    console.log(label, `${vp.width}x${vp.height}`, name, JSON.stringify(metrics));
-    await page.close();
-  }
-}
-await browser.close();
-```
+| 文件 | 场景 | 视口 / 主题 | stage（Before → After） | 单格（Before → After） | 重开入口底部（After） |
+| --- | --- | --- | --- | --- | --- |
+| `before-minesweeper-webkit-narrow-320x640.png` / `after-minesweeper-webkit-narrow-320x640.png` | 9×9 READY（基线 `d6aeb3d` / 本子任务） | 320×640 / 深色 | 320×324 → 320×320 | 34.219×34.656 → 34.219×34.219 | 612.47 px |
+| `before-minesweeper-webkit-narrow-360x640.png` / `after-minesweeper-webkit-narrow-360x640.png` | 9×9 READY（基线 `d6aeb3d` / 本子任务） | 360×640 / 深色 | 360×364 → 360×360 | 38.656×39.109 → 38.656×38.656 | 636.47 px |
+| `before-minesweeper-webkit-narrow-375x667.png` / `after-minesweeper-webkit-narrow-375x667.png` | 9×9 READY（基线 `d6aeb3d` / 本子任务） | 375×667 / 深色 | 375×379 → 375×375 | 40.328×40.766 → 40.328×40.328 | 651.47 px |
+| `before-minesweeper-webkit-narrow-412x839.png` / `after-minesweeper-webkit-narrow-412x839.png` | 9×9 READY（基线 `d6aeb3d` / 本子任务） | 412×839 / 深色 | 388×406 → 388×388 | 39.328×41.328 → 39.328×39.328 | 732.06 px |
 
 ### 证据限制
 
-- 手机端为 Playwright WebKit 的 Linux WPE 设备模拟，不是真实 iOS Safari 截图；Playwright 不模拟 iOS 动态地址栏与 `env(safe-area-inset-*)`，真机手感仍需人工验收（由 t3 文档记录处理方式）。
-- 本节 8 张 WebKit 截图是 Issue #83 的历史证据：After 捕获于 Issue #60 短窄 CSS 修复（本计划 t1）之前，当时 360×640 / 375×667 的 `mobile-restart-button` 底部约 652.5px / 667.5px，仍超出首屏。它们不再代表当前重开入口行为；当前行为由 `tests/e2e/minesweeper.narrow.webkit.spec.ts` 在 320×640、360×640、375×667、412×839 四个 WebKit 视口上的 e2e 断言证明，并由下文 short 小节（本计划 t1）的 Chromium Before / After 提供视觉证据。
+- 手机端为 Playwright WebKit 的 Linux WPE 设备模拟（iPhone SE (3rd gen) 视口 / DPR / 触摸参数），不是真实 iOS Safari 截图；Playwright 不模拟 iOS 动态地址栏与 `env(safe-area-inset-*)`，真机手感仍需人工验收。
+- After 已用本次 head 重新生成，因此包含 Issue #60 的短窄视口修复：360×640 / 375×667 的 `mobile-restart-button` 现在完整落在首屏内。Before 仍是 `d6aeb3d` 的历史基线；当前行为另由 `tests/e2e/minesweeper.narrow.webkit.spec.ts` 在 320×640、360×640、375×667、412×839 四个 WebKit 视口上的 e2e 断言证明。
 - 截图只证明 9×9 READY 的静态视觉；契约的显隐、无横向溢出、格子尺寸与重开入口边界由 `tests/e2e/minesweeper.narrow.webkit.spec.ts` 在生产构建上验证，Chromium 无回归由 `npm run test:e2e` 验证。
+
+## webkit-phone：t1–t3 稳定场景的 WebKit 手机端截图（Issue #100 / t4）
+
+- 来源：本子任务分支 `agent/plan-100-t3` 的当前 head。Chromium 的既有同名状态文件保持不变；下表全部是新增的 `*-webkit*.png`，由仓库内脚本生成。
+- 引擎 / 设备：Playwright WebKit（Linux WPE）`iPhone SE (3rd gen)` 设备模拟（DPR 2、`isMobile: true`、`hasTouch: true`）；除成绩榜使用 320×640 外，其余为 375×667 CSS px。深色主题、`reducedMotion: reduce`；除成绩榜为全页截图（`fullPage: true`，宽度 320 CSS px）外，其余为视口截图（`fullPage: false`）。
+- 复现命令：
+  - `npm run screenshots:webkit` → 大厅 / 空白画布
+  - `npm run screenshots:snake:webkit` → 贪食蛇手机 ready（开发服务器 + 固定首果）
+  - `npm run screenshots:2048:webkit` → 2048 ready / playing / gameover
+  - `npm run screenshots:breakout:webkit` → 打砖块 ready / playing / levelclear / gameover
+  - `npm run screenshots:minesweeper:webkit` → 扫雷 ready / playing / lost / won
+  - `npm run screenshots:minesweeper:webkit-before` → 同一组 WebKit 手机 Before 状态（需 `BASE_URL` 指向触屏改动前的基线预览；仓库不提交这些 Before 文件）
+  - `npm run screenshots:minesweeper:scores:webkit` → 最高用时榜（当前面板包含「清空记录」）
+  - 窄屏 4 视口见上文 `webkit-narrow` 小节。
+- 引擎 / 视口 / 主题记录：每个脚本在写图后会输出一行 `engine=…, viewport=…, theme=dark, reducedMotion=reduce`；下表也逐项记录。WebKit 模式不写既有 Chromium 文件名，Chromium 模式也不会写这些 `-webkit` 文件。
+- 覆盖边界：俄罗斯方块只有 e2e 覆盖，没有 `capture-*` 截图脚本；因此本表不包含俄罗斯方块截图。WebKit 是 Linux 构建，不等同真实 iOS Safari，动态地址栏 / 安全区 / 真机字体仍由上文差异小节与 e2e 覆盖。
+
+| 文件 | 场景 | 引擎 / 视口 / 主题 | 生成命令 |
+| --- | --- | --- | --- |
+| `after-hub-webkit.png` | 大厅 | WebKit / 375×667 / 深色 | `npm run screenshots:webkit` |
+| `after-blank-webkit.png` | 空白画布（触屏移动后） | WebKit / 375×667 / 深色 | `npm run screenshots:webkit` |
+| `after-snake-webkit.png` | 贪食蛇 READY（手机） | WebKit / 375×667 / 深色 | `npm run screenshots:snake:webkit` |
+| `after-2048-ready-webkit.png` | 2048 READY（手机） | WebKit / 375×667 / 深色 | `npm run screenshots:2048:webkit` |
+| `after-2048-playing-webkit.png` | 2048 合并计分中（手机） | WebKit / 375×667 / 深色 | `npm run screenshots:2048:webkit` |
+| `after-2048-gameover-webkit.png` | 2048 无路可走（手机） | WebKit / 375×667 / 深色 | `npm run screenshots:2048:webkit` |
+| `after-breakout-ready-webkit.png` | 打砖块 READY（手机） | WebKit / 375×667 / 深色 | `npm run screenshots:breakout:webkit` |
+| `after-breakout-playing-webkit.png` | 打砖块游玩中（手机） | WebKit / 375×667 / 深色 | `npm run screenshots:breakout:webkit` |
+| `after-breakout-levelclear-webkit.png` | 打砖块过关（手机） | WebKit / 375×667 / 深色 | `npm run screenshots:breakout:webkit` |
+| `after-breakout-gameover-webkit.png` | 打砖块生命用完（手机） | WebKit / 375×667 / 深色 | `npm run screenshots:breakout:webkit` |
+| `after-minesweeper-ready-webkit.png` | 扫雷 READY（手机） | WebKit / 375×667 / 深色 | `npm run screenshots:minesweeper:webkit` |
+| `after-minesweeper-playing-webkit.png` | 扫雷游玩中（触屏轻点 + 长按插旗） | WebKit / 375×667 / 深色 | `npm run screenshots:minesweeper:webkit` |
+| `after-minesweeper-lost-webkit.png` | 扫雷 BOOM（触屏） | WebKit / 375×667 / 深色 | `npm run screenshots:minesweeper:webkit` |
+| `after-minesweeper-won-webkit.png` | 扫雷 CLEARED（触屏） | WebKit / 375×667 / 深色 | `npm run screenshots:minesweeper:webkit` |
+| `after-minesweeper-scores-webkit.png` | 最高用时榜（含「清空记录」，手机） | WebKit / 320×640 / 深色 | `npm run screenshots:minesweeper:scores:webkit` |
+
+### 证据限制
+
+- 这是当前 head 的静态视觉证据，不是 UI 改动的 Before / After 对比；本轮没有改变页面渲染，目的是让 t1–t3 已稳定的手机端场景在 WebKit 引擎下可复现地留下截图。
+- 截图脚本的 WebKit 模式与 e2e 的 `mobile-webkit` project 使用同一设备参数；长按 / 触摸注入使用脚本侧 `scripts/lib/touch-input.mjs`，行为语义与 `tests/e2e/touch-input.ts` 一致。
 
 ## short：扫雷 360×640 / 375×667 短窄视口首屏重开入口（Issue #60 / t1）
 

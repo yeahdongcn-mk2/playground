@@ -1,23 +1,36 @@
 import { spawn } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
-import { chromium } from '@playwright/test';
+import {
+  WEBKIT_ENGINE,
+  captureScreenshot,
+  closeCaptureBrowser,
+  createPhoneContext,
+  engineLabel,
+  launchCaptureBrowser,
+  parseCaptureEngine,
+} from './lib/capture-runtime.mjs';
 
 /**
  * Capture the before/after evidence used in the PR description.
  *
  *   node scripts/capture-snake-screenshots.mjs --before   # framework baseline (t2 head)
  *   node scripts/capture-snake-screenshots.mjs            # snake integrated
+ *   npm run screenshots:snake:webkit                      # WebKit phone evidence
  *
  * The dev server is used on purpose: the deterministic first fruit (?food=...)
  * is a DEV-only seam, and the screenshots should show the same rendering the
- * player gets in development.
+ * player gets in development. `--webkit` captures the stable phone frame on the
+ * iPhone SE WebKit device as `after-snake-webkit.png`.
  */
 
 const HOST = '127.0.0.1';
 const PORT = 5188;
 const ORIGIN = `http://${HOST}:${PORT}`;
 const OUTPUT = 'docs/screenshots';
-const MODE = process.argv.includes('--before') ? 'before' : 'after';
+const ARGS = process.argv.slice(2);
+const MODE = ARGS.includes('--before') ? 'before' : 'after';
+const ENGINE = parseCaptureEngine(ARGS);
+const IS_WEBKIT = ENGINE === WEBKIT_ENGINE;
 
 async function waitForServer(url, timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs;
@@ -47,11 +60,24 @@ async function waitForSnakeReady(page) {
 }
 
 async function capture(page, name, fullPage = true) {
-  await page.screenshot({
-    path: `${OUTPUT}/${name}`,
-    fullPage,
-    animations: 'disabled',
-  });
+  await captureScreenshot(page, name, { engine: ENGINE, fullPage });
+}
+
+/** Capture the stable snake phone frame on the WebKit engine. */
+async function captureWebkitMobile(browser) {
+  const mobile = await createPhoneContext(browser, ENGINE);
+  const mobileGame = await mobile.newPage();
+  await mobileGame.goto(`${ORIGIN}/#/games/snake?debug=1&food=11,10`, { waitUntil: 'networkidle' });
+  await waitForSnakeReady(mobileGame);
+  await mobileGame.getByTestId('dpad').scrollIntoViewIfNeeded();
+  await mobileGame.evaluate(() => window.scrollBy(0, -16));
+  await mobileGame.waitForTimeout(300);
+  await capture(mobileGame, 'after-snake-webkit.png', false);
+  await mobile.close();
+}
+
+if (MODE === 'before' && IS_WEBKIT) {
+  throw new Error('The --webkit mode captures After screenshots only.');
 }
 
 const server = spawn(
@@ -65,98 +91,103 @@ let browser;
 try {
   await waitForServer(ORIGIN);
   await mkdir(OUTPUT, { recursive: true });
-  browser = await chromium.launch();
+  browser = await launchCaptureBrowser(ENGINE);
 
-  const desktop = await browser.newContext({
-    viewport: { width: 1440, height: 1000 },
-    colorScheme: 'dark',
-    reducedMotion: 'reduce',
-  });
-
-  if (MODE === 'before') {
-    const hub = await desktop.newPage();
-    await hub.goto(ORIGIN, { waitUntil: 'networkidle' });
-    await settle(hub);
-    await capture(hub, 'before-framework-hub.png', true);
-
-    const blank = await desktop.newPage();
-    await blank.goto(`${ORIGIN}/#/games/blank`, { waitUntil: 'networkidle' });
-    await blank.waitForSelector('[data-testid="blank-stage"][data-state="ready"]');
-    await settle(blank);
-    await capture(blank, 'before-framework-blank.png', true);
-
-    const snakeRoute = await desktop.newPage();
-    await snakeRoute.goto(`${ORIGIN}/#/games/snake`, { waitUntil: 'networkidle' });
-    await settle(snakeRoute);
-    await capture(snakeRoute, 'before-framework-snake-route.png', true);
-
-    const mobile = await browser.newContext({
-      viewport: { width: 390, height: 844 },
-      deviceScaleFactor: 2,
-      isMobile: true,
-      hasTouch: true,
-      colorScheme: 'dark',
-      reducedMotion: 'reduce',
-    });
-    const mobileHub = await mobile.newPage();
-    await mobileHub.goto(ORIGIN, { waitUntil: 'networkidle' });
-    await settle(mobileHub);
-    await capture(mobileHub, 'before-framework-hub-mobile.png', false);
-    await mobile.close();
+  if (IS_WEBKIT) {
+    await captureWebkitMobile(browser);
   } else {
-    const hub = await desktop.newPage();
-    await hub.goto(ORIGIN, { waitUntil: 'networkidle' });
-    await settle(hub);
-    await capture(hub, 'after-hub-desktop.png', true);
-
-    const ready = await desktop.newPage();
-    await ready.goto(`${ORIGIN}/#/games/snake?debug=1&food=11,10`, { waitUntil: 'networkidle' });
-    await waitForSnakeReady(ready);
-    await capture(ready, 'after-snake-ready.png', true);
-
-    const playing = await desktop.newPage();
-    await playing.goto(`${ORIGIN}/#/games/snake?debug=1&food=11,10`, { waitUntil: 'networkidle' });
-    await waitForSnakeReady(playing);
-    await playing.keyboard.press('Space');
-    await playing.waitForFunction(() => window.__playground?.getState().score >= 10);
-    await playing.waitForTimeout(120);
-    await capture(playing, 'after-snake-playing.png', true);
-
-    const over = await desktop.newPage();
-    await over.goto(`${ORIGIN}/#/games/snake?debug=1&food=0,0`, { waitUntil: 'networkidle' });
-    await waitForSnakeReady(over);
-    await over.keyboard.press('Space');
-    await over.keyboard.press('ArrowUp');
-    await over.waitForFunction(() => window.__playground?.getState().status === 'gameover');
-    await over.waitForTimeout(300);
-    await capture(over, 'after-snake-gameover.png', true);
-
-    const mobile = await browser.newContext({
-      viewport: { width: 390, height: 844 },
-      deviceScaleFactor: 2,
-      isMobile: true,
-      hasTouch: true,
+    const desktop = await browser.newContext({
+      viewport: { width: 1440, height: 1000 },
       colorScheme: 'dark',
       reducedMotion: 'reduce',
     });
-    const mobileHub = await mobile.newPage();
-    await mobileHub.goto(ORIGIN, { waitUntil: 'networkidle' });
-    await settle(mobileHub);
-    await capture(mobileHub, 'after-hub-mobile.png', false);
 
-    const mobileGame = await mobile.newPage();
-    await mobileGame.goto(`${ORIGIN}/#/games/snake?debug=1&food=11,10`, { waitUntil: 'networkidle' });
-    await waitForSnakeReady(mobileGame);
-    await mobileGame.getByTestId('dpad').scrollIntoViewIfNeeded();
-    await mobileGame.evaluate(() => window.scrollBy(0, -16));
-    await mobileGame.waitForTimeout(300);
-    await capture(mobileGame, 'after-snake-mobile.png', false);
-    await mobile.close();
+    if (MODE === 'before') {
+      const hub = await desktop.newPage();
+      await hub.goto(ORIGIN, { waitUntil: 'networkidle' });
+      await settle(hub);
+      await capture(hub, 'before-framework-hub.png', true);
+
+      const blank = await desktop.newPage();
+      await blank.goto(`${ORIGIN}/#/games/blank`, { waitUntil: 'networkidle' });
+      await blank.waitForSelector('[data-testid="blank-stage"][data-state="ready"]');
+      await settle(blank);
+      await capture(blank, 'before-framework-blank.png', true);
+
+      const snakeRoute = await desktop.newPage();
+      await snakeRoute.goto(`${ORIGIN}/#/games/snake`, { waitUntil: 'networkidle' });
+      await settle(snakeRoute);
+      await capture(snakeRoute, 'before-framework-snake-route.png', true);
+
+      const mobile = await browser.newContext({
+        viewport: { width: 390, height: 844 },
+        deviceScaleFactor: 2,
+        isMobile: true,
+        hasTouch: true,
+        colorScheme: 'dark',
+        reducedMotion: 'reduce',
+      });
+      const mobileHub = await mobile.newPage();
+      await mobileHub.goto(ORIGIN, { waitUntil: 'networkidle' });
+      await settle(mobileHub);
+      await capture(mobileHub, 'before-framework-hub-mobile.png', false);
+      await mobile.close();
+    } else {
+      const hub = await desktop.newPage();
+      await hub.goto(ORIGIN, { waitUntil: 'networkidle' });
+      await settle(hub);
+      await capture(hub, 'after-hub-desktop.png', true);
+
+      const ready = await desktop.newPage();
+      await ready.goto(`${ORIGIN}/#/games/snake?debug=1&food=11,10`, { waitUntil: 'networkidle' });
+      await waitForSnakeReady(ready);
+      await capture(ready, 'after-snake-ready.png', true);
+
+      const playing = await desktop.newPage();
+      await playing.goto(`${ORIGIN}/#/games/snake?debug=1&food=11,10`, { waitUntil: 'networkidle' });
+      await waitForSnakeReady(playing);
+      await playing.keyboard.press('Space');
+      await playing.waitForFunction(() => window.__playground?.getState().score >= 10);
+      await playing.waitForTimeout(120);
+      await capture(playing, 'after-snake-playing.png', true);
+
+      const over = await desktop.newPage();
+      await over.goto(`${ORIGIN}/#/games/snake?debug=1&food=0,0`, { waitUntil: 'networkidle' });
+      await waitForSnakeReady(over);
+      await over.keyboard.press('Space');
+      await over.keyboard.press('ArrowUp');
+      await over.waitForFunction(() => window.__playground?.getState().status === 'gameover');
+      await over.waitForTimeout(300);
+      await capture(over, 'after-snake-gameover.png', true);
+
+      const mobile = await browser.newContext({
+        viewport: { width: 390, height: 844 },
+        deviceScaleFactor: 2,
+        isMobile: true,
+        hasTouch: true,
+        colorScheme: 'dark',
+        reducedMotion: 'reduce',
+      });
+      const mobileHub = await mobile.newPage();
+      await mobileHub.goto(ORIGIN, { waitUntil: 'networkidle' });
+      await settle(mobileHub);
+      await capture(mobileHub, 'after-hub-mobile.png', false);
+
+      const mobileGame = await mobile.newPage();
+      await mobileGame.goto(`${ORIGIN}/#/games/snake?debug=1&food=11,10`, { waitUntil: 'networkidle' });
+      await waitForSnakeReady(mobileGame);
+      await mobileGame.getByTestId('dpad').scrollIntoViewIfNeeded();
+      await mobileGame.evaluate(() => window.scrollBy(0, -16));
+      await mobileGame.waitForTimeout(300);
+      await capture(mobileGame, 'after-snake-mobile.png', false);
+      await mobile.close();
+    }
+
+    await desktop.close();
   }
 
-  await desktop.close();
-  console.log(`Captured ${MODE} screenshots in ${OUTPUT}`);
+  console.log(`Captured ${MODE} screenshots on ${engineLabel(ENGINE)} in ${OUTPUT}`);
 } finally {
-  await browser?.close();
+  await closeCaptureBrowser(browser);
   server.kill();
 }

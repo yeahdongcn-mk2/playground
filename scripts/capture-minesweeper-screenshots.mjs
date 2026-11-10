@@ -1,9 +1,21 @@
-import { spawn } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
-import { setTimeout as delay } from 'node:timers/promises';
-import { chromium, devices } from '@playwright/test';
+import { devices } from '@playwright/test';
+import {
+  WEBKIT_ENGINE,
+  WEBKIT_NARROW_BEFORE_FLAG,
+  WEBKIT_NARROW_FLAG,
+  captureScreenshot,
+  closeCaptureBrowser,
+  createPhoneContext,
+  engineLabel,
+  launchCaptureBrowser,
+  parseCaptureEngine,
+  startPreviewServer,
+  stopPreviewServer,
+} from './lib/capture-runtime.mjs';
 import { assertPortAvailable, parsePreviewPort } from './lib/preview-port.mjs';
 import { waitForPreviewServer } from './lib/preview-server.mjs';
+import { touchLongPress } from './lib/touch-input.mjs';
 
 /**
  * Capture the Before / After evidence for the minesweeper integration.
@@ -20,6 +32,14 @@ import { waitForPreviewServer } from './lib/preview-server.mjs';
  *   BASE_URL=http://127.0.0.1:4192 npm run screenshots:minesweeper:short-before
  *   npm run screenshots:minesweeper:large
  *   BASE_URL=http://127.0.0.1:4193 npm run screenshots:minesweeper:large-before
+ *
+ * Add `--webkit` to the after mode to capture the four stable phone states
+ * (ready / playing / lost / won) on the WebKit engine as
+ * `after-minesweeper-<state>-webkit.png`. The dedicated
+ * `--webkit-narrow` / `--webkit-narrow-before` modes capture the Issue #83
+ * narrow-screen matrix at 320×640, 360×640, 375×667 and 412×839 into the
+ * committed `*-minesweeper-webkit-narrow-<W>x<H>.png` evidence files; the
+ * before variant needs BASE_URL at the `d6aeb3d` baseline preview.
  *
  * The after mode builds first (the npm script does) and serves the production
  * preview. The touch-before mode points BASE_URL at a preview of the commit
@@ -56,20 +76,42 @@ const HOST = '127.0.0.1';
 const PORT = parsePreviewPort(process.env.PREVIEW_PORT, 4186);
 const ORIGIN = `http://${HOST}:${PORT}`;
 const OUTPUT = 'docs/screenshots';
-const TOUCH_BEFORE = process.argv.includes('--touch-before');
-const NARROW = process.argv.includes('--narrow');
-const NARROW_BEFORE = process.argv.includes('--narrow-before');
-const MIN = process.argv.includes('--min');
-const MIN_BEFORE = process.argv.includes('--min-before');
-const RESTART = process.argv.includes('--restart');
-const RESTART_BEFORE = process.argv.includes('--restart-before');
-const SHORT = process.argv.includes('--short');
-const SHORT_BEFORE = process.argv.includes('--short-before');
-const LARGE = process.argv.includes('--large');
-const LARGE_BEFORE = process.argv.includes('--large-before');
+const ARGS = process.argv.slice(2);
+const ENGINE = parseCaptureEngine(ARGS);
+const IS_WEBKIT = ENGINE === WEBKIT_ENGINE;
+const WEBKIT_NARROW = ARGS.includes(WEBKIT_NARROW_FLAG);
+const WEBKIT_NARROW_BEFORE = ARGS.includes(WEBKIT_NARROW_BEFORE_FLAG);
+const TOUCH_BEFORE = ARGS.includes('--touch-before');
+const NARROW = ARGS.includes('--narrow');
+const NARROW_BEFORE = ARGS.includes('--narrow-before');
+const MIN = ARGS.includes('--min');
+const MIN_BEFORE = ARGS.includes('--min-before');
+const RESTART = ARGS.includes('--restart');
+const RESTART_BEFORE = ARGS.includes('--restart-before');
+const SHORT = ARGS.includes('--short');
+const SHORT_BEFORE = ARGS.includes('--short-before');
+const LARGE = ARGS.includes('--large');
+const LARGE_BEFORE = ARGS.includes('--large-before');
 const IS_COMPACT = RESTART || RESTART_BEFORE;
 const IS_NARROW =
   NARROW || NARROW_BEFORE || MIN || MIN_BEFORE || RESTART || RESTART_BEFORE;
+const CHROMIUM_NARROW_MODE =
+  NARROW ||
+  NARROW_BEFORE ||
+  MIN ||
+  MIN_BEFORE ||
+  RESTART ||
+  RESTART_BEFORE ||
+  SHORT ||
+  SHORT_BEFORE ||
+  LARGE ||
+  LARGE_BEFORE;
+
+if (IS_WEBKIT && CHROMIUM_NARROW_MODE && !WEBKIT_NARROW && !WEBKIT_NARROW_BEFORE) {
+  throw new Error(
+    'The --webkit flag captures the stable phone states only; use --webkit-narrow or --webkit-narrow-before for the WebKit narrow matrix. Do not combine --webkit with the Chromium narrow modes.',
+  );
+}
 const IS_NARROW_BEFORE = NARROW_BEFORE || MIN_BEFORE || RESTART_BEFORE;
 const NARROW_VIEWPORT =
   MIN || MIN_BEFORE || IS_COMPACT
@@ -85,32 +127,41 @@ const SHORT_VIEWPORTS = [
   { width: 360, height: 640 },
   { width: 375, height: 667 },
 ];
+/** The Issue #83 WebKit narrow-screen evidence matrix. */
+const WEBKIT_NARROW_VIEWPORTS = [
+  { width: 320, height: 640 },
+  { width: 360, height: 640 },
+  { width: 375, height: 667 },
+  { width: 412, height: 839 },
+];
 const NARROW_FILE_SUFFIX = IS_COMPACT ? '-restart' : '';
-const MODE = SHORT_BEFORE
-  ? 'short-before'
-  : SHORT
-    ? 'short'
-    : LARGE_BEFORE
-      ? 'large-before'
-      : LARGE
-        ? 'large'
-        : IS_NARROW_BEFORE
-          ? 'narrow-before'
-          : IS_NARROW
-            ? 'narrow'
-            : TOUCH_BEFORE
-              ? 'touch-before'
-              : 'after';
+const MODE = WEBKIT_NARROW_BEFORE
+  ? 'webkit-narrow-before'
+  : WEBKIT_NARROW
+    ? 'webkit-narrow'
+    : SHORT_BEFORE
+      ? 'short-before'
+      : SHORT
+        ? 'short'
+        : LARGE_BEFORE
+          ? 'large-before'
+          : LARGE
+            ? 'large'
+            : IS_NARROW_BEFORE
+              ? 'narrow-before'
+              : IS_NARROW
+                ? 'narrow'
+                : TOUCH_BEFORE
+                  ? 'touch-before'
+                  : 'after';
 /** Human-readable mode for the log; restart reuses the narrow capture path. */
-const MODE_LABEL = SHORT_BEFORE
-  ? 'short-before'
-  : SHORT
-    ? 'short'
-    : RESTART_BEFORE
-      ? 'restart-before'
-      : RESTART
-        ? 'restart'
-        : MODE;
+const MODE_LABEL = (() => {
+  if (WEBKIT_NARROW_BEFORE || WEBKIT_NARROW) return MODE;
+  if (IS_WEBKIT && MODE === 'touch-before') return 'webkit-touch-before';
+  if (RESTART_BEFORE) return 'restart-before';
+  if (RESTART) return 'restart';
+  return MODE;
+})();
 const BASE_URL = process.env.BASE_URL ?? ORIGIN;
 
 // The same deterministic layouts as tests/e2e/minesweeper-helpers.ts: a mine
@@ -138,11 +189,7 @@ async function settle(page) {
 }
 
 async function capture(page, name, fullPage) {
-  await page.screenshot({
-    path: `${OUTPUT}/${name}`,
-    fullPage,
-    animations: 'disabled',
-  });
+  await captureScreenshot(page, name, { engine: ENGINE, fullPage });
 }
 
 function debugUrl(mines) {
@@ -266,26 +313,11 @@ async function touchTap(page, locator) {
   await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
 }
 
-async function touchLongPress(page, locator, holdMs = 650) {
-  const box = await locator.boundingBox();
-  if (!box) {
-    throw new Error('touch target has no bounding box');
-  }
-  const client = await page.context().newCDPSession(page);
-  const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-  try {
-    await client.send('Input.dispatchTouchEvent', {
-      type: 'touchStart',
-      touchPoints: [point],
-    });
-    await delay(holdMs);
-    await client.send('Input.dispatchTouchEvent', {
-      type: 'touchEnd',
-      touchPoints: [],
-    });
-  } finally {
-    await client.detach();
-  }
+/** File name for one phone state on the selected engine. */
+function touchMobileName(prefix, state) {
+  return IS_WEBKIT
+    ? `${prefix}-minesweeper-${state}-webkit.png`
+    : `${prefix}-minesweeper-${state}-mobile.png`;
 }
 
 /**
@@ -293,17 +325,23 @@ async function touchLongPress(page, locator, holdMs = 650) {
  * before mode must still use the mouse (a right click) to flag: that input is
  * exactly what the touch task adds, so the baseline cannot express the state
  * through touch yet.
+ *
+ * Chromium keeps the historical Pixel 7 framing and `-mobile` file names. The
+ * WebKit run uses the same iPhone SE (3rd gen) device as the e2e project and
+ * writes `-webkit` file names, so both evidence sets can coexist.
  */
 async function captureTouchMobile(browser, prefix) {
-  const context = await browser.newContext({
-    ...devices['Pixel 7'],
-    colorScheme: 'dark',
-    reducedMotion: 'reduce',
-  });
+  const context = IS_WEBKIT
+    ? await createPhoneContext(browser, ENGINE)
+    : await browser.newContext({
+        ...devices['Pixel 7'],
+        colorScheme: 'dark',
+        reducedMotion: 'reduce',
+      });
 
   const ready = await context.newPage();
   await openTouchGame(ready, WIN_MINES);
-  await capture(ready, `${prefix}-minesweeper-ready-mobile.png`, false);
+  await capture(ready, touchMobileName(prefix, 'ready'), false);
   await ready.close();
 
   const playing = await context.newPage();
@@ -321,7 +359,7 @@ async function captureTouchMobile(browser, prefix) {
   // show the same live HUD state despite the slower touch long press.
   await playing.getByTestId('timer').filter({ hasNotText: '0:00' }).waitFor();
   await settle(playing);
-  await capture(playing, `${prefix}-minesweeper-playing-mobile.png`, false);
+  await capture(playing, touchMobileName(prefix, 'playing'), false);
   await playing.close();
 
   const lost = await context.newPage();
@@ -335,7 +373,7 @@ async function captureTouchMobile(browser, prefix) {
   }
   await lost.getByTestId('overlay-title').filter({ hasText: '踩到地雷' }).waitFor();
   await settle(lost);
-  await capture(lost, `${prefix}-minesweeper-lost-mobile.png`, false);
+  await capture(lost, touchMobileName(prefix, 'lost'), false);
   await lost.close();
 
   const won = await context.newPage();
@@ -347,10 +385,33 @@ async function captureTouchMobile(browser, prefix) {
   }
   await won.getByTestId('overlay-title').filter({ hasText: '扫雷成功' }).waitFor();
   await settle(won);
-  await capture(won, `${prefix}-minesweeper-won-mobile.png`, false);
+  await capture(won, touchMobileName(prefix, 'won'), false);
   await won.close();
 
   await context.close();
+}
+
+/**
+ * Capture the Issue #83 WebKit narrow-screen matrix: the ready state at the
+ * four contract viewports, with the engine, viewport and theme logged for each
+ * file. The committed After images are reproducible from this branch; the
+ * Before images need BASE_URL at the `d6aeb3d` baseline preview.
+ */
+async function captureWebkitNarrow(browser, prefix) {
+  for (const viewport of WEBKIT_NARROW_VIEWPORTS) {
+    const context = await createPhoneContext(browser, ENGINE, { viewport });
+    const page = await context.newPage();
+    await openTouchGame(page, WIN_MINES);
+    await page.getByTestId('status').filter({ hasText: '待开始' }).waitFor();
+    await settle(page);
+    await capture(
+      page,
+      `${prefix}-minesweeper-webkit-narrow-${viewport.width}x${viewport.height}.png`,
+      false,
+    );
+    await page.close();
+    await context.close();
+  }
 }
 
 /**
@@ -460,6 +521,12 @@ if (MODE === 'short-before' && !process.env.BASE_URL) {
   );
 }
 
+if (MODE === 'webkit-narrow-before' && !process.env.BASE_URL) {
+  throw new Error(
+    'The webkit-narrow-before mode needs BASE_URL pointing at a preview of the d6aeb3d baseline commit (see docs/screenshots/README.md).',
+  );
+}
+
 if (!process.env.BASE_URL) {
   // Fail before spawning (and before mkdir or the browser) when another server
   // owns the port; otherwise the readiness poll would connect to that server
@@ -468,27 +535,21 @@ if (!process.env.BASE_URL) {
 
   // Test seam: point this at a stand-in that exits non-zero so the unit test
   // can exercise the post-probe startup failure without a second server.
-  server = spawn(
-    process.execPath,
-    [
-      process.env.PREVIEW_ENTRY || 'node_modules/vite/bin/vite.js',
-      'preview',
-      '--host',
-      HOST,
-      '--port',
-      String(PORT),
-      '--strictPort',
-    ],
-    { stdio: ['ignore', 'pipe', 'pipe'] },
-  );
-  process.on('exit', () => server?.kill());
+  server = startPreviewServer({
+    host: HOST,
+    port: PORT,
+    entry: process.env.PREVIEW_ENTRY || undefined,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
   await waitForPreviewServer(server, { origin: ORIGIN, port: PORT });
 }
 
 await mkdir(OUTPUT, { recursive: true });
-const browser = await chromium.launch();
+const browser = await launchCaptureBrowser(ENGINE);
 try {
-  if (MODE === 'large' || MODE === 'large-before') {
+  if (MODE === 'webkit-narrow' || MODE === 'webkit-narrow-before') {
+    await captureWebkitNarrow(browser, MODE === 'webkit-narrow-before' ? 'before' : 'after');
+  } else if (MODE === 'large' || MODE === 'large-before') {
     await captureLarge(browser, MODE === 'large-before' ? 'before' : 'after');
   } else if (MODE === 'short' || MODE === 'short-before') {
     for (const viewport of SHORT_VIEWPORTS) {
@@ -505,6 +566,10 @@ try {
       NARROW_VIEWPORT,
       NARROW_FILE_SUFFIX,
     );
+  } else if (IS_WEBKIT) {
+    // WebKit only needs the stable phone states; desktop and hub evidence stay
+    // on the existing Chromium scripts.
+    await captureTouchMobile(browser, MODE === 'touch-before' ? 'before' : 'after');
   } else {
     if (MODE !== 'touch-before') {
       await captureDesktop(browser);
@@ -516,8 +581,10 @@ try {
       await captureTouchMobile(browser, 'before');
     }
   }
-  console.log(`Captured ${MODE_LABEL} minesweeper screenshots in ${OUTPUT}`);
+  console.log(
+    `Captured ${MODE_LABEL} minesweeper screenshots on ${engineLabel(ENGINE)} in ${OUTPUT}`,
+  );
 } finally {
-  await browser.close();
-  server?.kill();
+  await closeCaptureBrowser(browser);
+  stopPreviewServer(server);
 }

@@ -1,17 +1,26 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import {
+  captureRecord,
+  parseCaptureEngine,
+  phoneContextOptions,
+} from '../../scripts/lib/capture-runtime.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SCRIPT = join(ROOT, 'scripts', 'capture-minesweeper-screenshots.mjs');
+const SCORES_SCRIPT = join(ROOT, 'scripts', 'capture-minesweeper-scores-screenshots.mjs');
 const README = join(ROOT, 'README.md');
+const FRAMEWORK = join(ROOT, 'docs', 'framework.md');
 const SCREENSHOTS_README = join(ROOT, 'docs', 'screenshots', 'README.md');
 const SCREENSHOT_DIR = join(ROOT, 'docs', 'screenshots');
+const SCRIPT_DIR = join(ROOT, 'scripts');
+const PLAYWRIGHT_CONFIG = join(ROOT, 'playwright.config.ts');
 
 const REMOVED_FLAG = '--before';
 const REMOVED_COMMAND = 'screenshots:minesweeper:before';
@@ -22,6 +31,53 @@ const RETAINED_BEFORE_FLAGS = [
   '--restart-before',
   '--short-before',
   '--large-before',
+  '--webkit-narrow-before',
+] as const;
+
+const WEBKIT_SCRIPT_MODES = [
+  'screenshots:webkit',
+  'screenshots:snake:webkit',
+  'screenshots:2048:webkit',
+  'screenshots:breakout:webkit',
+  'screenshots:minesweeper:webkit',
+  'screenshots:minesweeper:webkit-before',
+  'screenshots:minesweeper:webkit-narrow',
+  'screenshots:minesweeper:webkit-narrow-before',
+  'screenshots:minesweeper:scores:webkit',
+] as const;
+
+const WEBKIT_SCRIPT_COMMANDS: Record<string, readonly string[]> = {
+  'capture-screenshots.mjs': ['screenshots:webkit'],
+  'capture-snake-screenshots.mjs': ['screenshots:snake:webkit'],
+  'capture-2048-screenshots.mjs': ['screenshots:2048:webkit'],
+  'capture-breakout-screenshots.mjs': ['screenshots:breakout:webkit'],
+  'capture-minesweeper-screenshots.mjs': [
+    'screenshots:minesweeper:webkit',
+    'screenshots:minesweeper:webkit-before',
+    'screenshots:minesweeper:webkit-narrow',
+    'screenshots:minesweeper:webkit-narrow-before',
+  ],
+  'capture-minesweeper-scores-screenshots.mjs': [
+    'screenshots:minesweeper:scores:webkit',
+  ],
+};
+
+const WEBKIT_SCREENSHOTS = [
+  'after-hub-webkit.png',
+  'after-blank-webkit.png',
+  'after-snake-webkit.png',
+  'after-2048-ready-webkit.png',
+  'after-2048-playing-webkit.png',
+  'after-2048-gameover-webkit.png',
+  'after-breakout-ready-webkit.png',
+  'after-breakout-playing-webkit.png',
+  'after-breakout-levelclear-webkit.png',
+  'after-breakout-gameover-webkit.png',
+  'after-minesweeper-ready-webkit.png',
+  'after-minesweeper-playing-webkit.png',
+  'after-minesweeper-lost-webkit.png',
+  'after-minesweeper-won-webkit.png',
+  'after-minesweeper-scores-webkit.png',
 ] as const;
 
 interface PackageJson {
@@ -30,12 +86,13 @@ interface PackageJson {
 
 const packageJson = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as PackageJson;
 
-/** Run the minesweeper capture script with an explicit environment. */
-function spawnScript(
+/** Run a capture script with an explicit environment. */
+function spawnNode(
+  script: string,
   args: string[],
   env: NodeJS.ProcessEnv,
 ): { status: number | null; output: string } {
-  const result = spawnSync(process.execPath, [SCRIPT, ...args], {
+  const result = spawnSync(process.execPath, [script, ...args], {
     cwd: ROOT,
     encoding: 'utf8',
     timeout: 30_000,
@@ -45,6 +102,14 @@ function spawnScript(
     status: result.status,
     output: `${result.stdout ?? ''}${result.stderr ?? ''}`,
   };
+}
+
+/** Run the minesweeper capture script with an explicit environment. */
+function spawnScript(
+  args: string[],
+  env: NodeJS.ProcessEnv,
+): { status: number | null; output: string } {
+  return spawnNode(SCRIPT, args, env);
 }
 
 /** Run the minesweeper capture script without a preview server. */
@@ -107,6 +172,25 @@ describe('minesweeper screenshot modes', () => {
     expect(output).not.toContain('Captured');
   });
 
+  it('rejects combining --webkit with the Chromium-only narrow modes', () => {
+    const { status, output } = runScript(['--webkit', '--narrow']);
+
+    expect(status).toBe(1);
+    expect(output).toContain('use --webkit-narrow');
+    expect(output).not.toContain('Captured');
+  });
+
+  it('rejects the Chromium-only clear-scores variant on WebKit', () => {
+    const { status, output } = spawnNode(SCORES_SCRIPT, ['--webkit', '--clear'], {
+      ...process.env,
+      BASE_URL: '',
+    });
+
+    expect(status).toBe(1);
+    expect(output).toContain('clear-records variant is Chromium-only');
+    expect(output).not.toContain('Captured');
+  });
+
   it('still recognises every retained before mode', () => {
     for (const flag of RETAINED_BEFORE_FLAGS) {
       const { status, output } = runScript([flag]);
@@ -157,8 +241,8 @@ describe('minesweeper screenshot modes', () => {
     expect(shortViewports?.[1]).toContain('{ width: 375, height: 667 }');
     expect(script).toContain("MODE === 'short' || MODE === 'short-before'");
     // The short modes keep the plain ready filenames, not the restart suffix.
-    expect(script).toContain('const MODE_LABEL = SHORT_BEFORE');
-    expect(script).toContain("? 'short-before'");
+    expect(script).toContain('const MODE_LABEL =');
+    expect(script).toMatch(/SHORT_BEFORE\s*\n\s*\? 'short-before'/);
   });
 
   it('no longer maps --before to a capture mode in the script', () => {
@@ -166,6 +250,143 @@ describe('minesweeper screenshot modes', () => {
 
     expect(script).not.toContain("process.argv.includes('--before')");
     expect(script).not.toContain("MODE === 'before'");
+  });
+});
+
+
+describe('WebKit screenshot modes', () => {
+  it('selects WebKit only when a WebKit flag is present', () => {
+    expect(parseCaptureEngine([])).toBe('chromium');
+    expect(parseCaptureEngine(['--short'])).toBe('chromium');
+    expect(parseCaptureEngine(['--webkit'])).toBe('webkit');
+    expect(parseCaptureEngine(['--webkit-narrow'])).toBe('webkit');
+    expect(parseCaptureEngine(['--webkit-narrow-before'])).toBe('webkit');
+  });
+
+  it('uses the same iPhone SE device as the mobile-webkit project', () => {
+    const webkit = phoneContextOptions('webkit');
+    expect(webkit.viewport).toEqual({ width: 375, height: 667 });
+    expect(webkit.deviceScaleFactor).toBe(2);
+    expect(webkit.isMobile).toBe(true);
+    expect(webkit.hasTouch).toBe(true);
+    expect(webkit.colorScheme).toBe('dark');
+    expect(webkit.reducedMotion).toBe('reduce');
+    expect(webkit.userAgent).toContain('iPhone');
+
+    const narrow = phoneContextOptions('webkit', {
+      viewport: { width: 320, height: 640 },
+    });
+    expect(narrow.viewport).toEqual({ width: 320, height: 640 });
+    expect(narrow.screen).toEqual({ width: 320, height: 640 });
+
+    const chromium = phoneContextOptions('chromium', {
+      viewport: { width: 390, height: 844 },
+    });
+    expect(chromium.viewport).toEqual({ width: 390, height: 844 });
+    expect(chromium.deviceScaleFactor).toBe(2);
+  });
+
+  it('records engine, viewport and theme for every capture', () => {
+    const record = captureRecord(
+      'after-minesweeper-ready-webkit.png',
+      'webkit',
+      { width: 375, height: 667 },
+    );
+    expect(record).toContain('after-minesweeper-ready-webkit.png');
+    expect(record).toContain('engine=webkit');
+    expect(record).toContain('viewport=375x667');
+    expect(record).toContain('theme=dark');
+    expect(record).toContain('reducedMotion=reduce');
+  });
+
+  it('exposes a WebKit npm command for every capture script', () => {
+    const scripts = packageJson.scripts ?? {};
+    for (const name of WEBKIT_SCRIPT_MODES) {
+      const command = scripts[name];
+      expect(command, name).toBeDefined();
+      if (name.endsWith(':webkit-narrow')) {
+        expect(command, name).toContain('--webkit-narrow');
+      } else if (name.endsWith(':webkit-narrow-before')) {
+        expect(command, name).toContain('--webkit-narrow-before');
+      } else if (name === 'screenshots:minesweeper:webkit-before') {
+        expect(command, name).toContain('--webkit --touch-before');
+      } else {
+        expect(command, name).toContain('--webkit');
+      }
+    }
+  });
+
+  it('maps every capture script to its WebKit command and flag', () => {
+    const scripts = packageJson.scripts ?? {};
+    const captureScripts = readdirSync(SCRIPT_DIR)
+      .filter((name) => name.startsWith('capture-') && name !== 'capture-baseline.mjs')
+      .sort();
+    expect(Object.keys(WEBKIT_SCRIPT_COMMANDS).sort()).toEqual(captureScripts);
+    for (const [file, commands] of Object.entries(WEBKIT_SCRIPT_COMMANDS)) {
+      expect(existsSync(join(SCRIPT_DIR, file)), file).toBe(true);
+      for (const name of commands) {
+        expect(scripts[name], name).toBeDefined();
+        expect(scripts[name], name).toContain(file);
+        expect(scripts[name], name).toContain('--webkit');
+      }
+    }
+  });
+
+  it('uses the same iPhone SE device as the mobile-webkit e2e project', () => {
+    const config = readFileSync(PLAYWRIGHT_CONFIG, 'utf8');
+    expect(config).toMatch(/name: 'mobile-webkit'[\s\S]*?devices\['iPhone SE \(3rd gen\)'\]/);
+    expect(phoneContextOptions('webkit')).toMatchObject({
+      viewport: { width: 375, height: 667 },
+      deviceScaleFactor: 2,
+      isMobile: true,
+      hasTouch: true,
+    });
+  });
+
+  it('keeps Chromium commands and filenames working alongside WebKit', () => {
+    const scripts = packageJson.scripts ?? {};
+    for (const name of ['screenshots', 'screenshots:snake', 'screenshots:2048', 'screenshots:breakout', 'screenshots:minesweeper']) {
+      expect(scripts[name], name).toBeDefined();
+      expect(scripts[name], name).not.toContain('--webkit');
+    }
+  });
+
+  it('no longer uses a Chromium-only CDP touch session in any capture script', () => {
+    for (const file of readdirSync(SCRIPT_DIR).filter((name) => name.startsWith('capture-'))) {
+      const source = readFileSync(join(SCRIPT_DIR, file), 'utf8');
+      expect(source, file).not.toContain('newCDPSession');
+      expect(source, file).not.toContain('Input.dispatchTouchEvent');
+    }
+    const touchHelper = readFileSync(join(SCRIPT_DIR, 'lib', 'touch-input.mjs'), 'utf8');
+    expect(touchHelper).toContain("pointerType: 'touch'");
+    expect(touchHelper).toContain("'pointerdown'");
+    expect(touchHelper).toContain("'pointerup'");
+    expect(touchHelper).toContain("'click'");
+  });
+
+  it('documents every WebKit screenshot and its generation command', () => {
+    const docs = readFileSync(SCREENSHOTS_README, 'utf8');
+    for (const file of WEBKIT_SCREENSHOTS) {
+      expect(existsSync(join(SCREENSHOT_DIR, file)), file).toBe(true);
+      expect(docs, file).toContain(file);
+    }
+    for (const name of WEBKIT_SCRIPT_MODES) {
+      expect(docs, name).toContain(`npm run ${name}`);
+    }
+    expect(docs).toContain('engine=webkit');
+    expect(docs).toContain('viewport=');
+    expect(docs).toContain('theme=dark');
+    expect(docs).not.toContain('未入库的临时脚本');
+    expect(docs).not.toContain('.plan/capture-evidence-all.mjs');
+  });
+
+  it('keeps README and framework coverage free of the Chromium-only screenshot note', () => {
+    for (const file of [README, FRAMEWORK]) {
+      const doc = readFileSync(file, 'utf8');
+      expect(doc, file).not.toContain('截图脚本仍只在 Chromium 下运行');
+      expect(doc, file).not.toContain('#100 继续跟踪截图脚本的 WebKit 覆盖');
+      expect(doc, file).toContain('screenshots:minesweeper:webkit');
+    }
   });
 });
 
