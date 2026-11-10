@@ -10,6 +10,7 @@ const read = (path: string): string => readFileSync(join(ROOT, path), 'utf8');
 
 const README = read('README.md');
 const FRAMEWORK = read('docs/framework.md');
+const SNAKE_DESIGN = read('docs/snake-design.md');
 const MOBILE_SPEC = read('tests/e2e/minesweeper.mobile.spec.ts');
 const NARROW_WEBKIT_SPEC = read('tests/e2e/minesweeper.narrow.webkit.spec.ts');
 const WEBKIT_DEVICE = 'iPhone SE (3rd gen)';
@@ -90,9 +91,9 @@ function viewportLabels(source: string): string[] {
   });
 }
 
-/** The `N passed` count documented next to an npm script, if any. */
+/** The `N passed` / `全仓 N 个用例` count documented next to an npm script, if any. */
 function documentedCount(source: string, command: string): number {
-  const pattern = new RegExp(`${command}[^\\n]*?(?:# )?(\\d+) passed`);
+  const pattern = new RegExp(`${command}[^\\n]*?(?:# )?(\\d+) (?:passed|个用例)`);
   const match = pattern.exec(source);
   if (!match?.[1]) {
     throw new Error(`missing a documented "N passed" count for ${command}`);
@@ -501,15 +502,19 @@ describe('browser coverage documentation', () => {
     }
   });
 
-  it('keeps the verification counts and e2e breakdown in sync across both docs', () => {
+  it('keeps the verification counts and e2e breakdown in sync across the docs', () => {
     const counts = {
       readmeUnit: documentedCount(README, 'npm run test:unit'),
       readmeE2e: documentedCount(README, 'npm run test:e2e'),
       frameworkUnit: documentedCount(FRAMEWORK, 'npm run test:unit'),
       frameworkE2e: documentedCount(FRAMEWORK, 'npm run test:e2e'),
+      snakeDesignUnit: documentedCount(SNAKE_DESIGN, 'npm run test:unit'),
     };
     expect(counts.frameworkUnit).toBe(counts.readmeUnit);
     expect(counts.frameworkE2e).toBe(counts.readmeE2e);
+    // The game design doc repeats the whole-repo unit count; keep it from
+    // drifting back to the stale 44 it carried when the snake game landed.
+    expect(counts.snakeDesignUnit).toBe(counts.readmeUnit);
 
     const readmeBreakdown = documentedBreakdown(README);
     const frameworkBreakdown = documentedBreakdown(FRAMEWORK);
