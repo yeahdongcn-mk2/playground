@@ -165,6 +165,24 @@ function webkitPngTemplates(source: string): string[] {
     .filter((template) => template.includes('${'));
 }
 
+/**
+ * The two prefixes a WebKit capture call site can pass.
+ *
+ * Read from the `MODE === '<mode>' ? '<before>' : '<after>'` ternary on the
+ * line that actually names the artifacts, not from every `'after'` / `'before'`
+ * literal in the file: a rename at that call site has to change the expanded
+ * set, or the guard would keep comparing the old names.
+ */
+function dispatchPrefixes(source: string, helper: string): string[] {
+  const match = source.match(
+    new RegExp(
+      `await ${helper}\\(browser, MODE === '[a-z-]+' \\? '([a-z0-9-]+)' : '([a-z0-9-]+)'\\);`,
+    ),
+  );
+  expect(match, `${helper} should be dispatched with before/after prefixes`).not.toBeNull();
+  return [...new Set([match![1]!, match![2]!])];
+}
+
 function isTransientBeforeTouch(name: string): boolean {
   // The committed narrow Before matrix also starts with `before-`; only the
   // touch-before phone states are absent from the repository.
@@ -202,16 +220,22 @@ function extractWebkitArtifacts(file: string): WebkitArtifacts {
     );
     expect(states.length, 'touchMobileName should be called for each phone state').toBeGreaterThan(0);
 
-    // The script only ever passes `'after'` / `'before'` as the prefix.
-    const prefixes = [
-      ...new Set([...source.matchAll(/'(after|before)'/g)].map((match) => match[1]!)),
-    ];
-    expect(prefixes.sort()).toEqual(['after', 'before']);
+    const touchPrefixes = dispatchPrefixes(source, 'captureTouchMobile');
+    const narrowPrefixes = dispatchPrefixes(source, 'captureWebkitNarrow');
 
     expandTemplate('${prefix}-minesweeper-${state}-webkit.png', () =>
-      prefixes.flatMap((prefix) =>
+      touchPrefixes.flatMap((prefix) =>
         states.map((state) => `${prefix}-minesweeper-${state}-webkit.png`),
       ),
+    );
+
+    // The narrow matrix must come from the loop in captureWebkitNarrow itself,
+    // so trimming or renaming the viewport list changes the expanded set.
+    const narrowLoop = source.match(
+      /async function captureWebkitNarrow\([^)]*\)\s*\{[\s\S]*?for \(const viewport of ([A-Za-z_$][\w$]*)\)/,
+    );
+    expect(narrowLoop?.[1], 'captureWebkitNarrow should iterate a named viewport list').toBe(
+      'WEBKIT_NARROW_VIEWPORTS',
     );
 
     const viewportBlock = source.match(/const WEBKIT_NARROW_VIEWPORTS = \[([\s\S]*?)\];/);
@@ -224,7 +248,7 @@ function extractWebkitArtifacts(file: string): WebkitArtifacts {
     expandTemplate(
       '${prefix}-minesweeper-webkit-narrow-${viewport.width}x${viewport.height}.png',
       () =>
-        prefixes.flatMap((prefix) =>
+        narrowPrefixes.flatMap((prefix) =>
           viewports.map((viewport) => `${prefix}-minesweeper-webkit-narrow-${viewport}.png`),
         ),
     );
@@ -633,7 +657,7 @@ describe('WebKit screenshot static guards', () => {
 });
 
 describe('captureScreenshot evidence logging', () => {
-  it('logs engine, viewport and theme for every image a fake page writes', async () => {
+  it('logs the engine, viewport and theme passed for every image a fake page writes', async () => {
     const writes: Array<{ path: string; fullPage?: boolean }> = [];
     let viewport = { width: 375, height: 667 };
     const page = {
@@ -644,30 +668,58 @@ describe('captureScreenshot evidence logging', () => {
     } as unknown as Page;
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
 
-    try {
-      await captureScreenshot(page, 'after-hub-webkit.png', { engine: 'webkit' });
-      viewport = { width: 320, height: 640 };
-      await captureScreenshot(page, 'after-minesweeper-scores-webkit.png', {
+    // Different engines, themes and viewports per call: a constant returned by
+    // captureRecord instead of its arguments cannot match every case.
+    const calls = [
+      {
+        name: 'after-hub-webkit.png',
         engine: 'webkit',
+        viewport: { width: 375, height: 667 },
+        theme: 'dark',
+        fullPage: false,
+      },
+      {
+        name: 'after-minesweeper-scores-webkit.png',
+        engine: 'webkit',
+        viewport: { width: 320, height: 640 },
+        theme: 'dark',
         fullPage: true,
-      });
+      },
+      {
+        name: 'after-hub.png',
+        engine: 'chromium',
+        viewport: { width: 390, height: 844 },
+        theme: 'light',
+        fullPage: false,
+      },
+    ] as const;
 
-      expect(writes).toHaveLength(2);
-      expect(writes[0]?.path).toBe('docs/screenshots/after-hub-webkit.png');
-      expect(writes[1]?.path).toBe('docs/screenshots/after-minesweeper-scores-webkit.png');
-      expect(writes[1]?.fullPage).toBe(true);
-
-      // One record per write, matched by file name so a missing log line cannot
-      // be hidden by a log from another capture.
-      expect(log.mock.calls).toHaveLength(writes.length);
-      for (const [index, write] of writes.entries()) {
-        const name = write.path.replace(/^.*\//, '');
-        const record = String(log.mock.calls[index]?.[0]);
-        expect(record, name).toContain(`${name}: engine=webkit`);
-        expect(record, name).toContain('theme=dark');
+    try {
+      for (const call of calls) {
+        viewport = call.viewport;
+        await captureScreenshot(page, call.name, {
+          engine: call.engine,
+          colorScheme: call.theme,
+          fullPage: call.fullPage,
+        });
       }
-      expect(String(log.mock.calls[0]?.[0])).toContain('viewport=375x667');
-      expect(String(log.mock.calls[1]?.[0])).toContain('viewport=320x640');
+
+      expect(writes.map((write) => write.path)).toEqual(
+        calls.map((call) => `docs/screenshots/${call.name}`),
+      );
+      expect(writes.map((write) => write.fullPage)).toEqual(calls.map((call) => call.fullPage));
+
+      // One record per write, matched by file name and position so a missing or
+      // reordered log line cannot be hidden by a log from another capture.
+      expect(log.mock.calls).toHaveLength(writes.length);
+      for (const [index, call] of calls.entries()) {
+        const record = String(log.mock.calls[index]?.[0]);
+        expect(record, call.name).toContain(`${call.name}: engine=${call.engine}`);
+        expect(record, call.name).toContain(`theme=${call.theme}`);
+        expect(record, call.name).toContain(
+          `viewport=${call.viewport.width}x${call.viewport.height}`,
+        );
+      }
     } finally {
       log.mockRestore();
     }
