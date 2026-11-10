@@ -93,9 +93,9 @@ src/games/snake/
 
 运行：`npm run test:unit`（全仓 405 个用例）。
 
-### 端到端（21）
+### 端到端（24）
 
-`tests/e2e/snake.spec.ts`（桌面 18 个）与 `tests/e2e/snake.mobile.spec.ts`（手机 3 个）覆盖：
+`tests/e2e/snake.spec.ts`（桌面 18 个）与共享的 `tests/e2e/snake-mobile-cases.ts`（手机 3 个）覆盖；手机用例由 `tests/e2e/snake.mobile.spec.ts` 与 `tests/e2e/snake.mobile.webkit.spec.ts` 分别接入 Chromium `mobile` 与 WebKit `mobile-webkit` 项目，两个引擎运行同一份断言：
 
 - 从大厅卡片进入、返回大厅；聚焦「返回大厅」时按 Enter 正常导航，不会被游戏快捷键截获。
 - 开始、吃固定位置果实、增长、得分、最高分持久化与刷新。
@@ -103,7 +103,7 @@ src/games/snake/
 - 撞墙死亡、结算覆盖层、重开新一局；更高 / 更低的历史最高分；首次刷新最高分时的「新纪录！」。
 - 滑动转向、WASD 转向、页面隐藏 / 窗口失焦自动暂停、无控制台 / 页面错误。
 - 空格 / Enter 在结算后开新局；聚焦返回链接时 Enter 正常导航；大厅主 CTA 进入游戏。
-- 手机：D-pad 位于棋盘下方、开始 / 转向 / 中间键暂停、方向键聚焦后空格仍能暂停、死亡后重开、无横向溢出。
+- 手机：D-pad 位于棋盘下方、开始 / 转向 / 中间键暂停、触屏点按后方向键仍能转向 / 暂停（触屏与键盘混用）、死亡后重开、无横向溢出；Chromium 与 WebKit 各运行一遍。
 
 测试通过 `?debug=1`（生产构建）或开发服务器启用只读的 `window.__playground` 与固定首果 `?food=x,y`；生产构建默认不安装调试 API，只有带 `?debug=1` 时才启用，正常入口不会出现可见的调试 UI。
 

@@ -42,6 +42,20 @@ const SHARED_MOBILE_ENTRIES = [
     shared: 'tests/e2e/minesweeper-difficulty-mobile-cases.ts',
     define: 'defineMinesweeperDifficultyMobileCases',
   },
+  {
+    name: 'snake phone cases',
+    chromium: 'tests/e2e/snake.mobile.spec.ts',
+    webkit: 'tests/e2e/snake.mobile.webkit.spec.ts',
+    shared: 'tests/e2e/snake-mobile-cases.ts',
+    define: 'defineSnakeMobileCases',
+  },
+  {
+    name: 'tetris phone cases',
+    chromium: 'tests/e2e/tetris.mobile.spec.ts',
+    webkit: 'tests/e2e/tetris.mobile.webkit.spec.ts',
+    shared: 'tests/e2e/tetris-mobile-cases.ts',
+    define: 'defineTetrisMobileCases',
+  },
 ] as const;
 
 /** The basename of a repository-relative path. */
@@ -216,6 +230,8 @@ describe('browser coverage documentation', () => {
       'minesweeper.mobile.webkit.spec.ts',
       'minesweeper.narrow.webkit.spec.ts',
       'minesweeper.webkit.spec.ts',
+      'snake.mobile.webkit.spec.ts',
+      'tetris.mobile.webkit.spec.ts',
     ]);
 
     // Every WebKit entry runs on mobile-webkit, while the Chromium mobile /
@@ -498,15 +514,16 @@ describe('browser coverage documentation', () => {
       ).toMatch(/WebKit[^。\n]{0,80}(?:framework|扫雷)[^。\n]{0,80}(?:触屏|手势)/);
       expect(
         doc,
-        `${name} should keep snake / tetris / 2048 / breakout Chromium-only`,
-      ).toMatch(/snake[^。\n]{0,60}(?:仍|只)(?:在|仅) Chromium/);
-      // Framework and the minesweeper touch / difficulty cases now run on
-      // both engines; calling them Chromium-only would misstate the matrix.
+        `${name} should keep 2048 / breakout Chromium-only`,
+      ).toMatch(/2048[^。\n]{0,60}(?:仍|只)(?:在|仅) Chromium/);
+      // Framework, the minesweeper touch / difficulty cases and the snake /
+      // tetris phone cases now run on both engines; calling any of them
+      // Chromium-only would misstate the matrix.
       expect(
         doc,
-        `${name} should not call the framework or minesweeper touch cases Chromium-only`,
+        `${name} should not call the WebKit-covered cases Chromium-only`,
       ).not.toMatch(
-        /(?:framework|扫雷触屏|扫雷难度|minesweeper\.mobile|minesweeper\.difficulty\.mobile)[^。\n]{0,40}(?:仍|只)(?:在|仅) Chromium/,
+        /(?:framework|扫雷触屏|扫雷难度|minesweeper\.mobile|minesweeper\.difficulty\.mobile|snake\.mobile|tetris\.mobile)[^。\n]{0,40}(?:仍|只)(?:在|仅) Chromium/,
       );
     }
   });
@@ -635,8 +652,9 @@ describe('browser coverage documentation', () => {
     expect(frameworkBreakdown).toEqual(readmeBreakdown);
     const [desktop, mobile, webkit] = readmeBreakdown ?? [0, 0, 0];
     expect(desktop + mobile + webkit).toBe(counts.readmeE2e);
-    // The WebKit project now runs framework, the minesweeper touch gestures
-    // and the touch difficulty form on top of the seven contract / smoke cases.
-    expect(webkit).toBeGreaterThanOrEqual(22);
+    // The WebKit project now runs framework, the minesweeper touch gestures,
+    // the touch difficulty form and the snake / tetris phone cases on top of
+    // the seven contract / smoke cases.
+    expect(webkit).toBeGreaterThanOrEqual(27);
   });
 });
