@@ -642,6 +642,29 @@
   }
 }
 
+/* Shortest phones between 340 and 400px wide (Issue #60): the 700px query
+   above reclaims about 52px, but the board is still square and grows with the
+   viewport width, so 360x640 and 375x667 left the restart entry 12.5px / 0.5px
+   below the first screen. When the height is at most 667px, tighten the
+   heading and touch spacing once more. The 320px layout is deliberately
+   excluded so its released spacing and 34px cells stay unchanged; heights
+   above 667px (340x700 / 349x700 / 400x700 and 360x740) keep the 700px query's
+   layout. Stage width, board size and game rules stay untouched. */
+@media (min-width: 340px) and (max-width: 400px) and (max-height: 667px) {
+  .minesweeper-game .game-heading {
+    row-gap: 6px;
+    padding: 0 0 4px;
+  }
+
+  .minesweeper-touch-hint {
+    margin-top: 2px;
+  }
+
+  .minesweeper-touch-actions {
+    margin-top: 2px;
+  }
+}
+
 @media (hover: none) and (pointer: coarse) {
   /* Touch browsers can keep :hover after a tap; do not leave a lifted cell. */
   .minesweeper-cell:hover {

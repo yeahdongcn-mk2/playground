@@ -14,6 +14,8 @@ import { chromium, devices } from '@playwright/test';
  *   BASE_URL=http://127.0.0.1:4189 npm run screenshots:minesweeper:min-before
  *   npm run screenshots:minesweeper:restart
  *   BASE_URL=http://127.0.0.1:4191 npm run screenshots:minesweeper:restart-before
+ *   npm run screenshots:minesweeper:short
+ *   BASE_URL=http://127.0.0.1:4192 npm run screenshots:minesweeper:short-before
  *   npm run screenshots:minesweeper:large
  *   BASE_URL=http://127.0.0.1:4193 npm run screenshots:minesweeper:large-before
  *
@@ -22,11 +24,12 @@ import { chromium, devices } from '@playwright/test';
  * before this task's touch and mobile changes, where the page exists but only
  * has desktop-style pointer input, and captures the same phone game states.
  * The narrow modes capture the 360×740 ready state, the min modes capture the
- * 320×640 ready state and the restart modes capture the same 320×640 ready
- * state after the short-screen vertical compression; the large modes capture
- * the 16×30 expert board at 320×640 and 360×640 to show the narrow-screen
- * degradation hint. The before variants likewise need BASE_URL at their
- * baseline preview.
+ * 320×640 ready state and the restart modes capture the 320×640 ready state
+ * after the Issue #53 short-screen compression; the short modes capture the
+ * 360×640 and 375×667 ready states that keep the restart entry in the first
+ * screen after the Issue #60 fix; the large modes capture the 16×30 expert
+ * board at 320×640 and 360×640 to show the narrow-screen degradation hint.
+ * Every before mode likewise needs BASE_URL at its baseline preview.
  *
  * The generic --before mode has been removed: it captured a main baseline
  * that had no minesweeper route. Its screenshots remain as historical
@@ -37,7 +40,7 @@ import { chromium, devices } from '@playwright/test';
 if (process.argv.slice(2).includes('--before')) {
   console.error(
     'The generic --before mode has been removed: its baseline (main without a minesweeper route) is historical evidence only. ' +
-      'Use --touch-before, --narrow-before, --min-before, --restart-before or --large-before for their own baselines, or omit the flag to capture After screenshots.',
+      'Use --touch-before, --narrow-before, --min-before, --restart-before, --short-before or --large-before for their own baselines, or omit the flag to capture After screenshots.',
   );
   process.exit(1);
 }
@@ -53,6 +56,8 @@ const MIN = process.argv.includes('--min');
 const MIN_BEFORE = process.argv.includes('--min-before');
 const RESTART = process.argv.includes('--restart');
 const RESTART_BEFORE = process.argv.includes('--restart-before');
+const SHORT = process.argv.includes('--short');
+const SHORT_BEFORE = process.argv.includes('--short-before');
 const LARGE = process.argv.includes('--large');
 const LARGE_BEFORE = process.argv.includes('--large-before');
 const IS_COMPACT = RESTART || RESTART_BEFORE;
@@ -68,20 +73,37 @@ const LARGE_VIEWPORTS = [
   { width: 320, height: 640 },
   { width: 360, height: 640 },
 ];
+/** The two short phones fixed by Issue #60. */
+const SHORT_VIEWPORTS = [
+  { width: 360, height: 640 },
+  { width: 375, height: 667 },
+];
 const NARROW_FILE_SUFFIX = IS_COMPACT ? '-restart' : '';
-const MODE = LARGE_BEFORE
-  ? 'large-before'
-  : LARGE
-    ? 'large'
-    : IS_NARROW_BEFORE
-      ? 'narrow-before'
-      : IS_NARROW
-        ? 'narrow'
-        : TOUCH_BEFORE
-          ? 'touch-before'
-          : 'after';
+const MODE = SHORT_BEFORE
+  ? 'short-before'
+  : SHORT
+    ? 'short'
+    : LARGE_BEFORE
+      ? 'large-before'
+      : LARGE
+        ? 'large'
+        : IS_NARROW_BEFORE
+          ? 'narrow-before'
+          : IS_NARROW
+            ? 'narrow'
+            : TOUCH_BEFORE
+              ? 'touch-before'
+              : 'after';
 /** Human-readable mode for the log; restart reuses the narrow capture path. */
-const MODE_LABEL = RESTART_BEFORE ? 'restart-before' : RESTART ? 'restart' : MODE;
+const MODE_LABEL = SHORT_BEFORE
+  ? 'short-before'
+  : SHORT
+    ? 'short'
+    : RESTART_BEFORE
+      ? 'restart-before'
+      : RESTART
+        ? 'restart'
+        : MODE;
 const BASE_URL = process.env.BASE_URL ?? ORIGIN;
 
 // The same deterministic layouts as tests/e2e/minesweeper-helpers.ts: a mine
@@ -342,10 +364,11 @@ async function captureTouchMobile(browser, prefix) {
 
 /**
  * Capture the ready state at a narrow phone viewport: 360×740 for the narrow
- * mode, 320×640 for the min mode and 320×640 for the restart mode. Each pair
- * isolates one layout change: same scene, viewport, dark theme and
- * reduced-motion setting before and after. The restart mode uses its own file
- * suffix so it does not overwrite the min mode's earlier evidence.
+ * mode, 320×640 for the min and restart modes, and 360×640 / 375×667 for the
+ * short mode. Each pair isolates one layout change: same scene, viewport, dark
+ * theme and reduced-motion setting before and after. The restart mode uses its
+ * own file suffix so it does not overwrite the min mode's earlier evidence;
+ * the short mode keeps the plain ready filenames.
  */
 async function captureNarrow(browser, prefix, viewport, fileNameSuffix = '') {
   const { width, height } = viewport;
@@ -440,6 +463,12 @@ if (MODE === 'large-before' && !process.env.BASE_URL) {
   );
 }
 
+if (MODE === 'short-before' && !process.env.BASE_URL) {
+  throw new Error(
+    'The short-before mode needs BASE_URL pointing at a preview of the baseline commit before the Issue #60 short-screen fix (see docs/screenshots/README.md).',
+  );
+}
+
 if (!process.env.BASE_URL) {
   server = spawn(
     process.execPath,
@@ -463,6 +492,14 @@ const browser = await chromium.launch();
 try {
   if (MODE === 'large' || MODE === 'large-before') {
     await captureLarge(browser, MODE === 'large-before' ? 'before' : 'after');
+  } else if (MODE === 'short' || MODE === 'short-before') {
+    for (const viewport of SHORT_VIEWPORTS) {
+      await captureNarrow(
+        browser,
+        MODE === 'short-before' ? 'before' : 'after',
+        viewport,
+      );
+    }
   } else if (MODE === 'narrow' || MODE === 'narrow-before') {
     await captureNarrow(
       browser,

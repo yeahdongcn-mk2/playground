@@ -16,6 +16,7 @@ const RETAINED_BEFORE_FLAGS = [
   '--narrow-before',
   '--min-before',
   '--restart-before',
+  '--short-before',
   '--large-before',
 ] as const;
 
@@ -72,6 +73,8 @@ describe('minesweeper screenshot modes', () => {
       'screenshots:minesweeper:min-before',
       'screenshots:minesweeper:restart',
       'screenshots:minesweeper:restart-before',
+      'screenshots:minesweeper:short',
+      'screenshots:minesweeper:short-before',
       'screenshots:minesweeper:large',
       'screenshots:minesweeper:large-before',
       'screenshots:minesweeper:scores',
@@ -85,6 +88,19 @@ describe('minesweeper screenshot modes', () => {
     for (const file of [README, SCREENSHOTS_README]) {
       expect(readFileSync(file, 'utf8'), file).not.toContain(REMOVED_COMMAND);
     }
+  });
+
+  it('captures the 360x640 and 375x667 short viewports for Issue #60', () => {
+    const script = readFileSync(SCRIPT, 'utf8');
+    const shortViewports = script.match(/const SHORT_VIEWPORTS = \[(.*?)\];/s);
+
+    expect(shortViewports, 'SHORT_VIEWPORTS should be declared').not.toBeNull();
+    expect(shortViewports?.[1]).toContain('{ width: 360, height: 640 }');
+    expect(shortViewports?.[1]).toContain('{ width: 375, height: 667 }');
+    expect(script).toContain("MODE === 'short' || MODE === 'short-before'");
+    // The short modes keep the plain ready filenames, not the restart suffix.
+    expect(script).toContain('const MODE_LABEL = SHORT_BEFORE');
+    expect(script).toContain("? 'short-before'");
   });
 
   it('no longer maps --before to a capture mode in the script', () => {

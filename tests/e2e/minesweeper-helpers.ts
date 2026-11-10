@@ -273,8 +273,9 @@ export async function expectInsideViewport(
 export interface FirstScreenContractOptions {
   /**
    * Also assert the compact restart entry is fully inside the first screen.
-   * Enable it only for viewports where the layout already guarantees the entry;
-   * 360x640 and 375x667 wait for Issue #60 / PR #84.
+   * Every supported phone viewport (including the 360x640 / 375x667 short
+   * screens fixed for Issue #60) now guarantees the entry in both Chromium
+   * and WebKit.
    */
   readonly restartEntry?: boolean;
 }
@@ -285,8 +286,9 @@ export interface FirstScreenContractOptions {
  * in both directions and roughly square, and both HUD readouts, the back link
  * and the touch hint are fully inside the viewport.
  *
- * `restartEntry` adds the compact restart-entry assertion; pass it only for
- * viewports where the Chromium baseline already guarantees the entry.
+ * `restartEntry` also asserts the compact restart entry is fully inside the
+ * first screen; it is safe to enable for every viewport covered by the
+ * Chromium and WebKit contract matrices.
  */
 export async function expectFirstScreenContract(
   page: Page,

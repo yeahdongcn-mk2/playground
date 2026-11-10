@@ -8,16 +8,14 @@ import {
 /**
  * The narrow first-screen matrix for the `mobile-webkit` project. 320px is the
  * documented 34px geometric fallback; every width from 340px up keeps 36px
- * touch targets. 360x640 and 375x667 stay in the matrix without the restart
- * entry because the Chromium first-screen fix for those two sizes is tracked by
- * Issue #60 / PR #84; their board, HUD, back link and touch-hint assertions are
- * not relaxed.
+ * touch targets. All four viewports also assert the compact restart entry,
+ * including the 360x640 / 375x667 short-screen sizes fixed for Issue #60.
  */
 const WEBKIT_NARROW_VIEWPORTS = [
-  { width: 320, height: 640, minimumCellSize: 34, label: '320x640', restartEntry: true },
-  { width: 360, height: 640, minimumCellSize: 36, label: '360x640', restartEntry: false },
-  { width: 375, height: 667, minimumCellSize: 36, label: '375x667', restartEntry: false },
-  { width: 412, height: 839, minimumCellSize: 36, label: '412x839', restartEntry: true },
+  { width: 320, height: 640, minimumCellSize: 34, label: '320x640' },
+  { width: 360, height: 640, minimumCellSize: 36, label: '360x640' },
+  { width: 375, height: 667, minimumCellSize: 36, label: '375x667' },
+  { width: 412, height: 839, minimumCellSize: 36, label: '412x839' },
 ] as const;
 
 /**
@@ -47,7 +45,7 @@ test.describe('minesweeper first-screen contract on WebKit', () => {
       await openMinesweeper(page, { mines: LOSS_MINES });
 
       await expectFirstScreenContract(page, viewport.minimumCellSize, {
-        restartEntry: viewport.restartEntry,
+        restartEntry: true,
       });
     });
   }
