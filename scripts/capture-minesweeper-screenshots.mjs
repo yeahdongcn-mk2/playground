@@ -95,6 +95,23 @@ const LARGE_BEFORE = ARGS.includes('--large-before');
 const IS_COMPACT = RESTART || RESTART_BEFORE;
 const IS_NARROW =
   NARROW || NARROW_BEFORE || MIN || MIN_BEFORE || RESTART || RESTART_BEFORE;
+const CHROMIUM_NARROW_MODE =
+  NARROW ||
+  NARROW_BEFORE ||
+  MIN ||
+  MIN_BEFORE ||
+  RESTART ||
+  RESTART_BEFORE ||
+  SHORT ||
+  SHORT_BEFORE ||
+  LARGE ||
+  LARGE_BEFORE;
+
+if (IS_WEBKIT && CHROMIUM_NARROW_MODE && !WEBKIT_NARROW && !WEBKIT_NARROW_BEFORE) {
+  throw new Error(
+    'The --webkit flag captures the stable phone states only; use --webkit-narrow or --webkit-narrow-before for the WebKit narrow matrix. Do not combine --webkit with the Chromium narrow modes.',
+  );
+}
 const IS_NARROW_BEFORE = NARROW_BEFORE || MIN_BEFORE || RESTART_BEFORE;
 const NARROW_VIEWPORT =
   MIN || MIN_BEFORE || IS_COMPACT
@@ -138,18 +155,13 @@ const MODE = WEBKIT_NARROW_BEFORE
                   ? 'touch-before'
                   : 'after';
 /** Human-readable mode for the log; restart reuses the narrow capture path. */
-const MODE_LABEL =
-  WEBKIT_NARROW_BEFORE || WEBKIT_NARROW
-    ? MODE
-    : SHORT_BEFORE
-      ? 'short-before'
-      : SHORT
-        ? 'short'
-        : RESTART_BEFORE
-          ? 'restart-before'
-          : RESTART
-            ? 'restart'
-            : MODE;
+const MODE_LABEL = (() => {
+  if (WEBKIT_NARROW_BEFORE || WEBKIT_NARROW) return MODE;
+  if (IS_WEBKIT && MODE === 'touch-before') return 'webkit-touch-before';
+  if (RESTART_BEFORE) return 'restart-before';
+  if (RESTART) return 'restart';
+  return MODE;
+})();
 const BASE_URL = process.env.BASE_URL ?? ORIGIN;
 
 // The same deterministic layouts as tests/e2e/minesweeper-helpers.ts: a mine

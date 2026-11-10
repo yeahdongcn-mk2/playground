@@ -76,16 +76,16 @@ async function captureWebkitMobile(browser) {
   await mobile.close();
 }
 
+if (MODE === 'before' && IS_WEBKIT) {
+  throw new Error('The --webkit mode captures After screenshots only.');
+}
+
 const server = spawn(
   process.execPath,
   ['node_modules/vite/bin/vite.js', '--host', HOST, '--port', String(PORT), '--strictPort'],
   { stdio: 'ignore' },
 );
 process.on('exit', () => server.kill());
-
-if (MODE === 'before' && IS_WEBKIT) {
-  throw new Error('The --webkit mode captures After screenshots only.');
-}
 
 let browser;
 try {

@@ -147,6 +147,14 @@ describe('minesweeper screenshot modes', () => {
     expect(output).not.toContain('Captured');
   });
 
+  it('rejects combining --webkit with the Chromium-only narrow modes', () => {
+    const { status, output } = runScript(['--webkit', '--narrow']);
+
+    expect(status).toBe(1);
+    expect(output).toContain('use --webkit-narrow');
+    expect(output).not.toContain('Captured');
+  });
+
   it('still recognises every retained before mode', () => {
     for (const flag of RETAINED_BEFORE_FLAGS) {
       const { status, output } = runScript([flag]);
