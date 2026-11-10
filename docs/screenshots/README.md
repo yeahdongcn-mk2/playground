@@ -5,10 +5,10 @@
 ## webkit-narrow：扫雷窄屏首屏契约的 WebKit 矩阵（Issue #83 / 子任务 1）
 
 - Before 基线：`d6aeb3d`（t1 合入后的 `main`，也就是本子任务开始前的 `main`）。
-- After：本子任务分支 `agent/plan-83-t1`。`tests/e2e/minesweeper-helpers.ts` 抽出 Chromium 与 WebKit 共用的首屏契约（无横向溢出、81 格 ≥ 最小格且近似正方形、HUD 两个读数 / 返回大厅 / 触屏提示在首屏，重开入口按视口可选），新增 `tests/e2e/minesweeper.narrow.webkit.spec.ts` 覆盖 320×640、360×640、375×667、412×839。
+- After：`50391e2`（本子任务分支 `agent/plan-83-t1` 的实现提交；评审后只改本节文字与 PR 描述，不改变页面渲染）。`tests/e2e/minesweeper-helpers.ts` 抽出 Chromium 与 WebKit 共用的首屏契约（无横向溢出、81 格 ≥ 最小格且近似正方形、HUD 两个读数 / 返回大厅 / 触屏提示在首屏，重开入口按视口可选），新增 `tests/e2e/minesweeper.narrow.webkit.spec.ts` 覆盖 320×640、360×640、375×667、412×839。
 - 视觉差异与修复：WebKit 把带 padding 的 `.minesweeper-stage` 的 `aspect-ratio` 解析到内容盒，导致 stage 比宽度高出一个 padding + border 的高度，9×9 格子变成纵向长方形（412×839 下 39.33×41.33）。`src/games/minesweeper/view.ts` 给 `rows === cols` 的棋盘加 `data-square-board="true"`，`minesweeper.css` 在 ≤560px 时让 stage 由去内边距的 board 提供行 / 列比例；Chromium 的 9×9 布局与既有大棋盘（16×16 / 16×30）几何断言不变。
 - 视口 / 主题：320×640、360×640、375×667、412×839 CSS px；Playwright WebKit `iPhone SE (3rd gen)` 设备模拟（DPR 2、`isMobile: true`、`hasTouch: true`），深色主题、`reducedMotion: reduce`。Before / After 使用同一 URL（`#/games/minesweeper?debug=1`）、同一 9×9 READY 棋盘，均为视口截图（`fullPage: false`）。
-- 复现：Before 在 `d6aeb3d` 的干净 worktree 中 `npm ci && npm run build` 后用 `vite preview --host 127.0.0.1 --port 4174 --strictPort` 启动；After 在当前分支构建后用同一命令换 4173 端口。截图脚本使用 Playwright WebKit 的 `devices['iPhone SE (3rd gen)']`、`colorScheme: 'dark'`、`reducedMotion: 'reduce'`，按上表设置视口，打开页面并等待 `document.fonts.ready` 后截取视口。Linux 本地运行 WebKit 需要 Playwright 的系统依赖；CI 用 `npx playwright install --with-deps chromium webkit`。
+- 复现：这 8 张 WebKit 截图由**未入库的临时脚本**生成。脚本只存在于执行本次任务的 worktree 的 `.plan/capture-evidence-all.mjs`（`.plan/` 被 `.gitignore` 忽略），**没有提交到本仓库，也没有对应的 npm script**；仓库里的 `scripts/capture-minesweeper-screenshots.mjs` 只启动 Chromium，`npm run screenshots:minesweeper:narrow` 产出的是 360×740 等 Chromium 文件，不能产出本节这些 `*-minesweeper-webkit-narrow-*.png`。临时脚本全文见下方「未入库截图脚本」。复现步骤：Before 在 `d6aeb3d` 的干净 worktree 中 `npm ci && npm run build`，用 `vite preview --host 127.0.0.1 --port 4174 --strictPort` 启动；After 在 `50391e2` 构建后用同一命令换 `--port 4173`；然后在仓库根目录运行 `node .plan/capture-evidence-all.mjs`。Linux 本地运行 WebKit 需要 Playwright 的系统依赖；CI 用 `npx playwright install --with-deps chromium webkit`。
 
 | 文件 | 场景 | 视口 / 主题 | stage（Before → After） | 单格（Before → After） |
 | --- | --- | --- | --- | --- |
@@ -16,6 +16,42 @@
 | `before-minesweeper-webkit-narrow-360x640.png` / `after-minesweeper-webkit-narrow-360x640.png` | 9×9 READY（基线 `d6aeb3d` / 本子任务） | 360×640 / 深色 | 360×364 → 360×360 | 38.656×39.109 → 38.656×38.656 |
 | `before-minesweeper-webkit-narrow-375x667.png` / `after-minesweeper-webkit-narrow-375x667.png` | 9×9 READY（基线 `d6aeb3d` / 本子任务） | 375×667 / 深色 | 375×379 → 375×375 | 40.328×40.766 → 40.328×40.328 |
 | `before-minesweeper-webkit-narrow-412x839.png` / `after-minesweeper-webkit-narrow-412x839.png` | 9×9 READY（基线 `d6aeb3d` / 本子任务） | 412×839 / 深色 | 388×406 → 388×388 | 39.328×41.328 → 39.328×39.328 |
+
+### 未入库截图脚本
+
+以下是生成上表 8 张 PNG 的临时脚本全文，供复现参考。它**没有入库**，也没有对应的 npm script；运行前需按上文在 4174（Before）与 4173（After）启动两个 preview，并从仓库根目录执行。
+
+```js
+import { webkit, devices } from '@playwright/test';
+const browser = await webkit.launch();
+const context = await browser.newContext({
+  ...devices['iPhone SE (3rd gen)'],
+  colorScheme: 'dark',
+  reducedMotion: 'reduce',
+});
+for (const [label, base] of [['before', 'http://127.0.0.1:4174'], ['after', 'http://127.0.0.1:4173']]) {
+  for (const vp of [{ width: 320, height: 640 }, { width: 360, height: 640 }, { width: 375, height: 667 }, { width: 412, height: 839 }]) {
+    const page = await context.newPage();
+    await page.setViewportSize(vp);
+    await page.goto(`${base}/#/games/minesweeper?debug=1`);
+    await page.getByTestId('minesweeper-board').waitFor();
+    await page.getByTestId('status').waitFor();
+    await page.evaluate(() => document.fonts.ready);
+    await page.waitForTimeout(300);
+    const name = `docs/screenshots/${label}-minesweeper-webkit-narrow-${vp.width}x${vp.height}.png`;
+    await page.screenshot({ path: name, fullPage: false });
+    const metrics = await page.evaluate(() => {
+      const s = document.querySelector('.minesweeper-stage').getBoundingClientRect();
+      const c = document.querySelector('.minesweeper-cell').getBoundingClientRect();
+      const r = document.querySelector('[data-testid="mobile-restart-button"]').getBoundingClientRect();
+      return { stage: [s.width, s.height], cell: [c.width, c.height], restartBottom: r.y + r.height };
+    });
+    console.log(label, `${vp.width}x${vp.height}`, name, JSON.stringify(metrics));
+    await page.close();
+  }
+}
+await browser.close();
+```
 
 ### 证据限制
 
