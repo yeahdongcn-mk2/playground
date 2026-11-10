@@ -963,31 +963,28 @@ export async function mountMinesweeper(
     (event) => {
       // Any new press supersedes a pending touch hold: a second finger, a
       // mouse click after a cancelled hold, or a pen tap.
-      const hadActiveGesture = touchGesture !== null;
       cancelTouchGesture();
-      if (!hadActiveGesture) {
-        // With no gesture tracked, a pending token whose finger has lifted has
-        // no release click we can attribute, so drop it rather than let it
-        // swallow this new press's click. A gesture cancelled by movement or
-        // scroll still has its finger down, though: another pointer's press
-        // must not clear that finger's suppression, because its own release
-        // click is still coming. Keep a still-held token unless this press
-        // lands on the token's own cell: a tap on the same cell is ambiguous,
-        // so the new press wins. A detached token is kept the same way.
-        const pressedCell = currentCell(event.target);
-        for (const [pointerId, suppressed] of suppressedClicks) {
-          if (activeTouchPointers.has(pointerId)) {
-            const sameCell =
-              suppressed !== null &&
-              pressedCell !== null &&
-              suppressed.row === pressedCell.row &&
-              suppressed.col === pressedCell.col;
-            if (!sameCell) {
-              continue;
-            }
+      // A pending token whose finger has lifted has no release click we can
+      // attribute, so drop it rather than let it swallow this new press's
+      // click. A gesture cancelled by movement or scroll still has its finger
+      // down, though: another pointer's press must not clear that finger's
+      // suppression, because its own release click is still coming. Keep a
+      // still-held token unless this press lands on the token's own cell: a tap
+      // on the same cell is ambiguous, so the new press wins. A detached token
+      // is kept the same way.
+      const pressedCell = currentCell(event.target);
+      for (const [pointerId, suppressed] of suppressedClicks) {
+        if (activeTouchPointers.has(pointerId)) {
+          const sameCell =
+            suppressed !== null &&
+            pressedCell !== null &&
+            suppressed.row === pressedCell.row &&
+            suppressed.col === pressedCell.col;
+          if (!sameCell) {
+            continue;
           }
-          suppressedClicks.delete(pointerId);
         }
+        suppressedClicks.delete(pointerId);
       }
       // Only this pointer's stale token is cleared; another finger's pending
       // release click keeps its own entry.
@@ -1140,7 +1137,13 @@ export async function mountMinesweeper(
         }
         const consumed = matched ?? detached;
         if (consumed !== undefined) {
-          suppressedClicks.delete(consumed);
+          // Only a lifted finger's token is spent here. Another pointer's
+          // click can land on a still-suppressed cell while its owner is
+          // down; the click is swallowed, but the token stays for the owner's
+          // own release click.
+          if (!activeTouchPointers.has(consumed)) {
+            suppressedClicks.delete(consumed);
+          }
           return;
         }
         if (!target) {

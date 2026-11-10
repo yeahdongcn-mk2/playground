@@ -1146,6 +1146,66 @@ describe('minesweeper touch click suppression', () => {
     expect(statusOf(root)).toBe('playing');
   });
 
+  it("does not let another pointer's cell click clear a held token", async () => {
+    const { services } = createServices();
+    const root = await mount(services);
+
+    // A scroll cancels the hold on the mine while its finger is still down.
+    startTouchPress(root, MINE_ROW, MINE_COL, TOUCH_POINTER_ID);
+    window.dispatchEvent(new Event('scroll'));
+
+    // Another finger presses the board background and its release hits the
+    // held cell. That click is swallowed, but it is not the suppressed
+    // finger's release click, so it must not spend the held token.
+    board(root).dispatchEvent(
+      pointerEvent('pointerdown', {
+        pointerId: SECOND_TAP_POINTER_ID,
+        pointerType: 'touch',
+        isPrimary: false,
+        clientX: 5,
+        clientY: 5,
+      }),
+    );
+    board(root).dispatchEvent(
+      pointerEvent('pointerup', {
+        pointerId: SECOND_TAP_POINTER_ID,
+        pointerType: 'touch',
+        isPrimary: false,
+      }),
+    );
+    clickRelease(root, MINE_ROW, MINE_COL);
+    expect(cell(root, MINE_ROW, MINE_COL).dataset.revealed).toBeUndefined();
+    expect(statusOf(root)).toBe('ready');
+
+    // The held finger's own release click is still swallowed by its token.
+    endTouchPress(root, MINE_ROW, MINE_COL, TOUCH_POINTER_ID);
+    clickRelease(root, MINE_ROW, MINE_COL);
+    expect(cell(root, MINE_ROW, MINE_COL).dataset.revealed).toBeUndefined();
+    expect(statusOf(root)).toBe('ready');
+  });
+
+  it('lets a same-cell press win while another touch gesture is active', async () => {
+    const { services } = createServices();
+    const root = await mount(services);
+
+    // Flag (0,1), then hold it again to clear the flag: the second hold leaves
+    // a pending token while the cell is unflagged and its gesture still active.
+    pressAndHold(root, 0, 1);
+    endTouchPress(root, 0, 1);
+    clickRelease(root, 0, 1);
+    pressAndHold(root, 0, 1);
+    expect(snapshotCell(0, 1).flagged).toBe(false);
+
+    // A second finger presses the same cell while the first gesture is still
+    // active: the new press wins, so its release reveals instead of being
+    // swallowed by the first finger's token.
+    startTouchPress(root, 0, 1, SECOND_TAP_POINTER_ID);
+    endTouchPress(root, 0, 1, SECOND_TAP_POINTER_ID);
+    clickRelease(root, 0, 1);
+    expect(cell(root, 0, 1).dataset.revealed).toBe('true');
+    expect(statusOf(root)).toBe('playing');
+  });
+
   it('keeps a cancelled hold suppressed when a background click misses every cell', async () => {
     const { services } = createServices();
     const root = await mount(services);
