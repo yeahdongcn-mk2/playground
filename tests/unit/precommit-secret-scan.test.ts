@@ -226,6 +226,54 @@ const ORACLE_THIN_PLACEHOLDERS = [
   'YOUR_PASSWORD',
 ] as const;
 
+// Whole-value interpolation placeholders shared by the URL userinfo and Oracle
+// thin branches. `$` variables require a placeholder-word name, and the brace
+// form is the looser URL/Oracle thin name-like brace shape (which keeps
+// `{S3cr3t}` exempt, unlike the stricter JDBC brace escape shape). These must
+// not be reported in either password slot.
+const URL_WHOLE_VALUE_PLACEHOLDERS = [
+  '$DB_PASSWORD',
+  '$YOUR_PASSWORD',
+  '$CHANGE_ME',
+  '${DB_PASSWORD}',
+  '$(DB_PASSWORD)',
+  '{DB_PASSWORD}',
+  '{{DB_PASSWORD}}',
+  '{password123}',
+  '{S3cr3t}',
+  '<password>',
+  '[password]',
+  '%DB_PASSWORD%',
+] as const;
+
+// Real passwords that only start with an interpolation placeholder shape.
+// `PASSWORDx`/`PASSWORD123` are not placeholder-word variable names, `{S3cr3t`
+// is an unclosed brace, and every shape followed by another character does not
+// fill the whole value. Built from parts so this test file itself stays clean
+// for the scanner it exercises.
+const URL_PLACEHOLDER_SHAPE_PREFIX_PASSWORDS = [
+  ['$', 'PASSWORD', 'x'],
+  ['$', 'PASSWORD', '123'],
+  ['$(', 'PASSWORD', 'x)'],
+  ['${', 'PASSWORD', 'x}'],
+  ['{', 'S3cr3t'], // unclosed brace, as reported in the issue
+  ['{', 'DB_PASSWORD', '}x'],
+  ['{{', 'DB_PASSWORD', '}}x'],
+  ['<password>', 'x'],
+  ['[password]', 'x'],
+  ['%DB_PASSWORD%', 'x'],
+].map((parts) => parts.join(''));
+
+// Default-value interpolation is deliberately reported: the fallback can
+// contain a real secret, so only the plain `${VAR}` form is a whole-value
+// placeholder. The scanner rule comment and these tests pin that decision for
+// t2 to reuse. Built from parts so this test file itself stays clean for the
+// scanner it exercises.
+const URL_DEFAULT_VALUE_INTERPOLATION_PASSWORDS = [
+  ['${', 'DB_PASSWORD', ':-fallback}'],
+  ['${', 'DB_PASSWORD', ':-S3cr3t!}'],
+].map((parts) => parts.join(''));
+
 function oracleThinUrl(password: string): string {
   return `DATABASE_URL=${ORACLE_THIN_URL_PREFIX}${password}${ORACLE_THIN_URL_SUFFIX}`;
 }
@@ -766,6 +814,64 @@ describe('secret scan pre-commit hook', () => {
     writeFileSync(fixture, `${urls.map((url) => `DATABASE_URL=${url}`).join('\n')}\n`);
 
     expect(runScanner([fixture])).toEqual({ status: 0, stderr: '' });
+  });
+
+  it('does not flag whole-value interpolation placeholders in URL userinfo and Oracle thin slots', () => {
+    const dir = makeTempDir();
+    const fixture = join(dir, 'database-url-interpolation-placeholders.txt');
+    // The whole value must be the placeholder in both branches: URL userinfo
+    // ends at the `@` delimiter and Oracle thin uses the same slot.
+    const contents = URL_WHOLE_VALUE_PLACEHOLDERS.flatMap((placeholder) => [
+      `postgres://dbuser:${placeholder}@db.internal/app`,
+      oracleThinUrl(placeholder),
+    ]);
+    writeFileSync(fixture, `${contents.join('\n')}\n`);
+
+    expect(runScanner([fixture])).toEqual({ status: 0, stderr: '' });
+  });
+
+  it('still flags real passwords that start with URL userinfo or Oracle thin interpolation shapes', () => {
+    const dir = makeTempDir();
+    const fixture = join(dir, 'database-url-interpolation-prefixes.txt');
+    // A real password that only starts with the shape, or whose `$` variable
+    // name is not a placeholder-word segment, must still be reported.
+    const contents = URL_PLACEHOLDER_SHAPE_PREFIX_PASSWORDS.flatMap((password) => [
+      `postgres://dbuser:${password}@db.internal/app`,
+      oracleThinUrl(password),
+    ]);
+    writeFileSync(fixture, `${contents.join('\n')}\n`);
+
+    const failing = runScanner([fixture]);
+    expect(failing.status).toBe(1);
+    expect(failing.stderr).toContain('database-url-password');
+    // Every URL must be reported, not just the first line of the fixture.
+    for (const [index] of contents.entries()) {
+      expect(failing.stderr).toContain(
+        `database-url-interpolation-prefixes.txt:${index + 1}: [database-url-password]`,
+      );
+    }
+  });
+
+  it('reports default-value interpolation in URL userinfo and Oracle thin slots (deliberate tightening)', () => {
+    const dir = makeTempDir();
+    const fixture = join(dir, 'database-url-default-value-interpolation.txt');
+    // `${VAR:-fallback}` is reported even when the variable name contains a
+    // placeholder word, because the fallback can hide a real secret. The rule
+    // comment pins this decision, and t2 reuses it for JDBC property values.
+    const contents = URL_DEFAULT_VALUE_INTERPOLATION_PASSWORDS.flatMap((password) => [
+      `postgres://dbuser:${password}@db.internal/app`,
+      oracleThinUrl(password),
+    ]);
+    writeFileSync(fixture, `${contents.join('\n')}\n`);
+
+    const failing = runScanner([fixture]);
+    expect(failing.status).toBe(1);
+    expect(failing.stderr).toContain('database-url-password');
+    for (const [index] of contents.entries()) {
+      expect(failing.stderr).toContain(
+        `database-url-default-value-interpolation.txt:${index + 1}: [database-url-password]`,
+      );
+    }
   });
 
   it('fails on fixtures containing common private key headers', () => {
