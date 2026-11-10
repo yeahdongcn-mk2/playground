@@ -547,7 +547,7 @@ describe('browser coverage documentation', () => {
     }
   });
 
-  it('documents every WebKit mobile entry and keeps only the screenshot scripts Chromium-only', () => {
+  it('documents every WebKit mobile entry and the screenshot WebKit modes', () => {
     for (const [name, doc] of [
       ['README.md', README],
       ['docs/framework.md', FRAMEWORK],
@@ -568,11 +568,10 @@ describe('browser coverage documentation', () => {
       ).toMatch(/2048 与 breakout 的手机端 spec 也已在两引擎运行/);
       expect(
         doc,
-        `${name} should keep the screenshot scripts Chromium-only`,
-      ).toContain('截图脚本仍只在 Chromium');
-      // All phone game specs now run on both engines; calling any of them
-      // Chromium-only would misstate the matrix, while the screenshot scripts
-      // remain Chromium-only until the follow-up lands.
+        `${name} should document the screenshot WebKit commands`,
+      ).toContain('screenshots:minesweeper:webkit');
+      // All phone game specs and the stable screenshot scenarios now run on
+      // both engines; no part of the coverage should stay Chromium-only.
       expect(
         doc,
         `${name} should not call the WebKit-covered cases Chromium-only`,
@@ -634,7 +633,7 @@ describe('browser coverage documentation', () => {
       '字体度量',
       'any-pointer',
       '人工验收',
-      '#100',
+      'screenshots:minesweeper:webkit',
     ];
     for (const [name, doc] of [
       ['README.md', README],
@@ -646,9 +645,10 @@ describe('browser coverage documentation', () => {
       expect(doc, `${name} should state that real iOS still needs manual acceptance`).toMatch(
         /(?:真实 iOS|iOS Safari|真机)[^。\n]{0,40}人工验收|人工验收[^。\n]{0,40}(?:真实 iOS|iOS Safari|真机)/,
       );
-      expect(doc, `${name} should state that the rest is still Chromium-only`).toContain(
-        '截图脚本仍只在 Chromium',
-      );
+      expect(
+        doc,
+        `${name} should state that screenshots have WebKit modes`,
+      ).toContain('screenshots:minesweeper:webkit');
     }
   });
 

@@ -288,13 +288,13 @@ npm run test:e2e     # 先 build，再用 vite preview 跑 Chromium 桌面 / Pix
 npm run test:e2e:webkit # 先 build，只跑 mobile-webkit（iPhone SE (3rd gen)）
 ```
 
-当前提交本地通过：`typecheck`、`lint`、`build`、`check:budget` 通过；`npm run test:unit` 406 passed；`npm run test:e2e` 149 passed（桌面 85 + 手机 34 + WebKit 30）。
+当前提交本地通过：`typecheck`、`lint`、`build`、`check:budget` 通过；`npm run test:unit` 414 passed；`npm run test:e2e` 149 passed（桌面 85 + 手机 34 + WebKit 30）。
 
 - 单测只覆盖引擎无关逻辑；不要在 Node 里启动 Phaser。
 - 端到端使用 `data-testid`，覆盖进入 / 返回、最近游玩时间、键盘 / 鼠标 / 触屏、修饰键、重置、容器级缩放、未知路由、快速切换的晚到 mount、休眠时销毁和监听器清理；贪食蛇、俄罗斯方块、2048、打砖块与扫雷另有完整玩法用例（暂停 / 重开、计分 / 结束、窗口失焦暂停与恢复、手机端触屏按钮或拖动、像素绘制与监听器清理，扫雷另有左右键、固定雷盘、难度预设与自定义切换、非法自定义错误、格子可见文本、焦点迁移、畸形调试雷盘回退、胜利 / 踩雷与计时器 / 调试接缝清理）。
 - 端到端会先构建，`webServer` 启动 `npm run preview`，因此测试的是生产产物，而不是 dev server。需要固定状态时由游戏通过 hash 路由后的 `?debug=1`（例如 `/#/games/breakout?debug=1`）提供只读调试接缝，测试不依赖开发服务器。
 - 生产构建后可用 `npm run preview` 手工检查 `dist/`。
-- 截图由 `npm run screenshots`（通用页）与 `npm run screenshots:breakout` 等游戏专用脚本生成，来源说明见 [screenshots/README.md](./screenshots/README.md)。
+- 截图由 `npm run screenshots`（通用页）与 `npm run screenshots:breakout` 等游戏专用脚本生成；游戏与界面截图脚本的 `--webkit` 模式（例如 `npm run screenshots:minesweeper:webkit`、`npm run screenshots:minesweeper:webkit-narrow`）用 iPhone SE (3rd gen) 设备模拟产出 WebKit 证据，来源、复现命令与引擎 / 视口 / 主题记录见 [screenshots/README.md](./screenshots/README.md)。
 
 ### 12.1 浏览器覆盖与真实 iOS 限制
 
@@ -312,7 +312,7 @@ npm run test:e2e:webkit # 先 build，只跑 mobile-webkit（iPhone SE (3rd gen)
 
 - `mobile`（Pixel 7）项目运行 `tests/e2e/minesweeper.mobile.spec.ts` 的 Chromium 8 视口矩阵，并覆盖窄屏边界用例（用计算样式钉住短窄查询的 min-width / max-width / max-height 边界）；`chromium`（桌面 1440×1000）项目继续覆盖桌面交互，不运行该手机矩阵。
 - `mobile-webkit` 项目使用 `devices['iPhone SE (3rd gen)']`（WebKit 引擎），运行 `tests/e2e/minesweeper.webkit.spec.ts` 冒烟、`tests/e2e/minesweeper.narrow.webkit.spec.ts` 的 WebKit 4 视口矩阵，以及复用共享用例模块的手机端用例：`tests/e2e/framework.mobile.webkit.spec.ts`（共享 `tests/e2e/framework-mobile-cases.ts`）、`tests/e2e/minesweeper.mobile.webkit.spec.ts`（轻点 / 长按 / 双指针 / 取消与重开焦点，共享 `tests/e2e/minesweeper-mobile-touch-cases.ts`）、`tests/e2e/minesweeper.difficulty.mobile.webkit.spec.ts`（触屏难度预设与自定义表单，共享 `tests/e2e/minesweeper-difficulty-mobile-cases.ts`）、`tests/e2e/snake.mobile.webkit.spec.ts`（D-pad 触屏、触屏 / 键盘混用、暂停与死亡重开，共享 `tests/e2e/snake-mobile-cases.ts`）、`tests/e2e/tetris.mobile.webkit.spec.ts`（触屏按钮移动 / 旋转 / 暂停 / 硬降、堆顶结束与重开，共享 `tests/e2e/tetris-mobile-cases.ts`）、`tests/e2e/2048.mobile.webkit.spec.ts`（滑动开始 / 合并计分 / 无横向溢出，共享 `tests/e2e/2048-mobile-cases.ts`）和 `tests/e2e/breakout.mobile.webkit.spec.ts`（拖动挡板 / 无横向溢出，共享 `tests/e2e/breakout-mobile-cases.ts`）。滑动与拖动统一由 `tests/e2e/touch-input.ts` 的跨引擎指针事件 helper 注入。
-- Chromium 8 视口与 WebKit 4 视口矩阵的归属保持不变；截图脚本仍只在 Chromium 下运行，#100 继续跟踪截图脚本的 WebKit 覆盖。
+- Chromium 8 视口与 WebKit 4 视口矩阵的归属保持不变；截图脚本也提供 WebKit 模式，命令与引擎 / 视口 / 主题记录见 [screenshots/README.md](./screenshots/README.md)，Chromium 模式无回归。
 
 首次运行需要安装两个引擎：
 
@@ -322,13 +322,13 @@ npm run test:e2e        # 全部项目：Chromium 桌面 + Pixel 7 + mobile-webk
 npm run test:e2e:webkit # 只跑 mobile-webkit
 ```
 
-实测差异与处理方式（#100 仍跟踪截图脚本的 WebKit 覆盖）：
+实测差异与处理方式：
 
 - **动态地址栏与 `dvh`**：Playwright 不模拟 iOS 动态地址栏；`100dvh` 等于模拟视口内高（与 Chromium 一致），真实 Safari 地址栏伸缩仍需真机验收。
 - **安全区**：iPhone SE (3rd gen) 模拟下 `env(safe-area-inset-*)` 为 0px，刘海 / Home 指示条安全区未被模拟。
 - **字体度量**：Linux WebKit 回退字体使「返回大厅」文本比 Chromium 宽约 3%（68.33px vs 66.45px）；契约断言元素边界而非固定文本宽度。
 - **触屏媒体查询**：`any-pointer: coarse` 在两套模拟下都命中，touch-hint 与紧凑重开入口都会渲染。
-- **长按 / 双指针 / 滑动 / 拖动注入**：Playwright 没有跨引擎的「保持按住」触摸 API，WebKit 也没有 CDP；共享辅助函数在 Chromium 与 WebKit 两端统一派发同语义的 `PointerEvent`（pointerdown / pointermove / pointercancel / pointerup 与 release click），所以测试不再依赖 `newCDPSession` 或 `Input.dispatchTouchEvent`。产品代码不分叉，差异只在测试注入层；真实轻点仍用 `page.touchscreen.tap`，WebKit 环境假设用例会断言 release click 的构造器与 pointerId，防止注入形状与引擎实际行为漂移。
+- **长按 / 双指针 / 滑动 / 拖动注入**：Playwright 没有跨引擎的「保持按住」触摸 API，WebKit 也没有 CDP；e2e 共享辅助函数与截图脚本的 `scripts/lib/touch-input.mjs` 在 Chromium 与 WebKit 两端统一派发同语义的 `PointerEvent`（pointerdown / pointermove / pointercancel / pointerup 与 release click），所以测试与截图都不再依赖 `newCDPSession` 或 `Input.dispatchTouchEvent`。产品代码不分叉，差异只在测试 / 截图注入层；真实轻点仍用 `page.touchscreen.tap`，WebKit 环境假设用例会断言 release click 的构造器与 pointerId，防止注入形状与引擎实际行为漂移。
 - **真实 iOS**：CI 没有 iOS Safari / 真机，触屏手感、安全区与渲染像素仍需人工验收；WebKit 模拟通过不代表 iOS Safari 已完全兼容。
 
 ## 13. 环境与命令
@@ -352,4 +352,4 @@ Node.js `^22.12.0 || ^24.0.0 || >=26.0.0`（Vite 8 的要求）。CI（`.github/
 - 打砖块固定 480×720 逻辑球场与 10 列砖块，没有道具、多球或在线排行榜；难度曲线由砖块行数与球速控制。
 - 扫雷提供初级 / 中级 / 高级三档预设与 5–30 行、5–30 列的自定义棋盘；没有撤销、问号标记、道具或在线排行榜。
 - Lint 使用 oxlint 而不是 ESLint：TypeScript 7 暂无 JS Compiler API，`typescript-eslint` 的 peer 范围也尚未覆盖 TS 7；oxlint 负责 TS 语法与常见规则，目录边界由本地脚本补足。
-- 手机端使用 Playwright 的 Chromium / WebKit 设备模拟：扫雷窄屏首屏契约已在 Chromium 8 视口与 WebKit 4 视口验证，framework 手机端、扫雷触屏手势 / 触屏难度表单以及贪食蛇、俄罗斯方块、2048 与打砖块的手机端 spec 也已在两引擎运行，四个 WebKit 视口都断言重开入口在首屏内，但 WebKit 不等于 iOS Safari（不模拟动态地址栏与安全区），真实触屏手感与 iOS 渲染仍需人工验收。2048 与 breakout 的手机端 spec 也已在两引擎运行。截图脚本仍只在 Chromium 下运行，#100 继续跟踪截图脚本的 WebKit 覆盖。扫雷窄屏契约的边界是最低支持视口 320×640（高度 <640 不保证）；宽度 ≥340px 且高度 ≥640px 时 81 格 ≥36×36px，320–339px 为几何降级区间（每格 ≥34×34px），因为 9×36px 加边框与 gap 无法放进 320px；矩阵外组合（例如 375×640、400×667）不承诺重开入口在首屏内，列数 >9 的大棋盘只按比例缩小并显示中文降级提示（#86）、不再保证 36px。
+- 手机端使用 Playwright 的 Chromium / WebKit 设备模拟：扫雷窄屏首屏契约已在 Chromium 8 视口与 WebKit 4 视口验证，framework 手机端、扫雷触屏手势 / 触屏难度表单以及贪食蛇、俄罗斯方块、2048 与打砖块的手机端 spec 也已在两引擎运行，四个 WebKit 视口都断言重开入口在首屏内，但 WebKit 不等于 iOS Safari（不模拟动态地址栏与安全区），真实触屏手感与 iOS 渲染仍需人工验收。2048 与 breakout 的手机端 spec 也已在两引擎运行。截图脚本的 WebKit 模式覆盖大厅、空白画布、扫雷（含窄屏矩阵与成绩榜）、贪食蛇、2048 与打砖块的稳定场景；俄罗斯方块只有 e2e 覆盖、没有截图脚本。扫雷窄屏契约的边界是最低支持视口 320×640（高度 <640 不保证）；宽度 ≥340px 且高度 ≥640px 时 81 格 ≥36×36px，320–339px 为几何降级区间（每格 ≥34×34px），因为 9×36px 加边框与 gap 无法放进 320px；矩阵外组合（例如 375×640、400×667）不承诺重开入口在首屏内，列数 >9 的大棋盘只按比例缩小并显示中文降级提示（#86）、不再保证 36px。

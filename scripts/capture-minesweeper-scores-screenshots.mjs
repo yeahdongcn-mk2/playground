@@ -1,7 +1,16 @@
-import { spawn } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
-import { chromium } from '@playwright/test';
+import {
+  WEBKIT_ENGINE,
+  captureScreenshot,
+  closeCaptureBrowser,
+  createPhoneContext,
+  engineLabel,
+  launchCaptureBrowser,
+  parseCaptureEngine,
+  startPreviewServer,
+  stopPreviewServer,
+} from './lib/capture-runtime.mjs';
 import { assertPortAvailable, parsePreviewPort } from './lib/preview-port.mjs';
 
 /**
@@ -9,6 +18,8 @@ import { assertPortAvailable, parsePreviewPort } from './lib/preview-port.mjs';
  *
  *   npm run screenshots:minesweeper:scores
  *   BASE_URL=http://127.0.0.1:4192 node scripts/capture-minesweeper-scores-screenshots.mjs --before
+ *   npm run screenshots:minesweeper:scores:webkit
+ *   npm run screenshots:minesweeper:scores-clear:webkit
  *
  * Pass `--clear` for the clear-records follow-up: the After run requires the
  * enabled 「清空记录」 action in the populated panel, while `--before` must point
@@ -25,14 +36,21 @@ import { assertPortAvailable, parsePreviewPort } from './lib/preview-port.mjs';
  * free port instead of editing this file. When that port is already taken, the
  * script fails with an explicit bind error instead of quietly talking to the
  * other server.
+ *
+ * `--webkit` captures the 320×640 phone panel on the iPhone SE WebKit device
+ * as `after-<prefix>-webkit.png`; it is an After-only mode and the desktop
+ * evidence stays Chromium.
  */
 
 const HOST = '127.0.0.1';
 const PORT = parsePreviewPort();
 const ORIGIN = `http://${HOST}:${PORT}`;
 const OUTPUT = 'docs/screenshots';
-const BEFORE = process.argv.includes('--before');
-const CLEAR = process.argv.includes('--clear');
+const ARGS = process.argv.slice(2);
+const BEFORE = ARGS.includes('--before');
+const CLEAR = ARGS.includes('--clear');
+const ENGINE = parseCaptureEngine(ARGS);
+const IS_WEBKIT = ENGINE === WEBKIT_ENGINE;
 const FILE_PREFIX = CLEAR ? 'minesweeper-clear-scores' : 'minesweeper-scores';
 const BASE_URL = process.env.BASE_URL ?? ORIGIN;
 
@@ -103,11 +121,7 @@ async function settle(page) {
 }
 
 async function capture(page, name) {
-  await page.screenshot({
-    path: `${OUTPUT}/${name}`,
-    fullPage: true,
-    animations: 'disabled',
-  });
+  await captureScreenshot(page, name, { engine: ENGINE, fullPage: true });
 }
 
 async function seedScores(page) {
@@ -207,6 +221,22 @@ async function captureMobile(browser) {
   await context.close();
 }
 
+/** Capture the 320×640 leaderboard panel on the WebKit engine. */
+async function captureWebkitMobile(browser) {
+  const context = await createPhoneContext(browser, ENGINE, {
+    viewport: { width: 320, height: 640 },
+  });
+  const page = await context.newPage();
+  await seedScores(page);
+  await openWin(page);
+  await capture(page, `after-${FILE_PREFIX}-webkit.png`);
+  await context.close();
+}
+
+if (BEFORE && IS_WEBKIT) {
+  throw new Error('The --webkit mode captures After screenshots only.');
+}
+
 await mkdir(OUTPUT, { recursive: true });
 
 try {
@@ -217,19 +247,11 @@ try {
     await assertPortAvailable(PORT, HOST);
     let stderr = '';
     let startupFailure = null;
-    server = spawn(
-      process.execPath,
-      [
-        'node_modules/vite/bin/vite.js',
-        'preview',
-        '--host',
-        HOST,
-        '--port',
-        String(PORT),
-        '--strictPort',
-      ],
-      { stdio: ['ignore', 'pipe', 'pipe'] },
-    );
+    server = startPreviewServer({
+      host: HOST,
+      port: PORT,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
     server.stderr?.setEncoding('utf8');
     server.stderr?.on('data', (chunk) => {
       stderr = `${stderr}${chunk}`.slice(-4000);
@@ -247,20 +269,22 @@ try {
     });
   }
 
-  const browser = await chromium.launch();
+  const browser = await launchCaptureBrowser(ENGINE);
   try {
-    await captureDesktop(browser);
-    await captureMobile(browser);
+    if (IS_WEBKIT) {
+      await captureWebkitMobile(browser);
+    } else {
+      await captureDesktop(browser);
+      await captureMobile(browser);
+    }
   } finally {
-    await browser.close();
+    await closeCaptureBrowser(browser);
   }
 } finally {
-  if (server) {
-    server.kill('SIGTERM');
-    server = null;
-  }
+  stopPreviewServer(server);
+  server = null;
 }
 
 console.log(
-  `Saved ${BEFORE ? 'Before' : 'After'} Minesweeper leaderboard screenshots to ${OUTPUT}/`,
+  `Saved ${BEFORE ? 'Before' : 'After'} Minesweeper leaderboard screenshots on ${engineLabel(ENGINE)} to ${OUTPUT}/`,
 );

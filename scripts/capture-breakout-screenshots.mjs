@@ -1,24 +1,42 @@
-import { spawn } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
-import { chromium } from '@playwright/test';
+import {
+  WEBKIT_ENGINE,
+  captureScreenshot,
+  closeCaptureBrowser,
+  createPhoneContext,
+  engineLabel,
+  launchCaptureBrowser,
+  parseCaptureEngine,
+  startPreviewServer,
+  stopPreviewServer,
+} from './lib/capture-runtime.mjs';
 
 /**
  * Capture the Before / After evidence for the breakout integration.
  *
  *   npm run screenshots:breakout
  *   BASE_URL=http://127.0.0.1:4184 node scripts/capture-breakout-screenshots.mjs --before
+ *   npm run screenshots:breakout:webkit
  *
  * The after mode builds first (the npm script does) and serves the production
  * preview. The before mode must point BASE_URL at a main baseline preview;
  * main has no breakout route, so no debug seam is needed there.
+ *
+ * `--webkit` captures the four stable phone states (ready / playing /
+ * levelclear / gameover) on the iPhone SE WebKit device as
+ * `after-breakout-<state>-webkit.png`. It is an After-only mode; the desktop and
+ * hub evidence stay Chromium.
  */
 
 const HOST = '127.0.0.1';
 const PORT = 4185;
 const ORIGIN = `http://${HOST}:${PORT}`;
 const OUTPUT = 'docs/screenshots';
-const MODE = process.argv.includes('--before') ? 'before' : 'after';
+const ARGS = process.argv.slice(2);
+const MODE = ARGS.includes('--before') ? 'before' : 'after';
+const ENGINE = parseCaptureEngine(ARGS);
+const IS_WEBKIT = ENGINE === WEBKIT_ENGINE;
 const BASE_URL = process.env.BASE_URL ?? ORIGIN;
 
 // A single brick with the ball already aimed at its bottom edge. The engine
@@ -55,11 +73,7 @@ async function settle(page) {
 }
 
 async function capture(page, name, fullPage) {
-  await page.screenshot({
-    path: `${OUTPUT}/${name}`,
-    fullPage,
-    animations: 'disabled',
-  });
+  await captureScreenshot(page, name, { engine: ENGINE, fullPage });
 }
 
 function debugUrl(params) {
@@ -206,6 +220,37 @@ async function captureMobile(browser) {
   await context.close();
 }
 
+/** Capture the stable breakout phone states on the WebKit engine. */
+async function captureWebkitMobile(browser) {
+  const context = await createPhoneContext(browser, ENGINE);
+
+  const ready = await context.newPage();
+  await openReady(ready);
+  await capture(ready, 'after-breakout-ready-webkit.png', false);
+  await ready.close();
+
+  const playing = await context.newPage();
+  await openPlaying(playing);
+  await capture(playing, 'after-breakout-playing-webkit.png', false);
+  await playing.close();
+
+  const cleared = await context.newPage();
+  await openLevelClear(cleared);
+  await capture(cleared, 'after-breakout-levelclear-webkit.png', false);
+  await cleared.close();
+
+  const over = await context.newPage();
+  await openGameOver(over);
+  await capture(over, 'after-breakout-gameover-webkit.png', false);
+  await over.close();
+
+  await context.close();
+}
+
+if (MODE === 'before' && IS_WEBKIT) {
+  throw new Error('The --webkit mode captures After screenshots only.');
+}
+
 if (MODE === 'before' && !process.env.BASE_URL) {
   throw new Error(
     'The before mode needs BASE_URL pointing at a preview of the main baseline (see docs/screenshots/README.md).',
@@ -213,30 +258,23 @@ if (MODE === 'before' && !process.env.BASE_URL) {
 }
 
 if (!process.env.BASE_URL) {
-  server = spawn(
-    process.execPath,
-    [
-      'node_modules/vite/bin/vite.js',
-      'preview',
-      '--host',
-      HOST,
-      '--port',
-      String(PORT),
-      '--strictPort',
-    ],
-    { stdio: 'ignore' },
-  );
-  process.on('exit', () => server?.kill());
+  server = startPreviewServer({ port: PORT, host: HOST, stdio: 'ignore' });
   await waitForServer(ORIGIN);
 }
 
 await mkdir(OUTPUT, { recursive: true });
-const browser = await chromium.launch();
+const browser = await launchCaptureBrowser(ENGINE);
 try {
-  await captureDesktop(browser);
-  await captureMobile(browser);
-  console.log(`Captured ${MODE} breakout screenshots in ${OUTPUT}`);
+  if (IS_WEBKIT) {
+    await captureWebkitMobile(browser);
+  } else {
+    await captureDesktop(browser);
+    await captureMobile(browser);
+  }
+  console.log(
+    `Captured ${MODE} breakout screenshots on ${engineLabel(ENGINE)} in ${OUTPUT}`,
+  );
 } finally {
-  await browser.close();
-  server?.kill();
+  await closeCaptureBrowser(browser);
+  stopPreviewServer(server);
 }
