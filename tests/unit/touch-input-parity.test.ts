@@ -1,29 +1,34 @@
+import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Locator, Page } from '@playwright/test';
 import {
+  dispatchTouchPointerEvent as E2E_DISPATCH,
   endTouch,
   RELEASE_CLICK_POINTER_ID as E2E_RELEASE_CLICK_POINTER_ID,
   startTouch,
   TOUCH_POINTER_ID as E2E_TOUCH_POINTER_ID,
 } from '../e2e/touch-input';
 import {
+  dispatchTouchPointerEvent as SHARED_DISPATCH,
   RELEASE_CLICK_POINTER_ID as SCRIPT_RELEASE_CLICK_POINTER_ID,
   TOUCH_POINTER_ID as SCRIPT_TOUCH_POINTER_ID,
   touchLongPress,
 } from '../../scripts/lib/touch-input.mjs';
 
 /**
- * Parity guard for the two touch injectors.
+ * Guard for the one shared touch injector.
  *
  * Gesture e2e tests drive the product through `tests/e2e/touch-input.ts`, while
  * the screenshot scripts drive the same product code through
- * `scripts/lib/touch-input.mjs`. The two modules are separate copies, so a
- * shape change on one side (a reused click pointer id, a touch-typed release
- * click, a different `detail` or `buttons`) can silently stop the screenshots
- * from reproducing the input the tests exercise. This test runs both helpers
- * against the same fake page/locator and compares the exact event sequence they
- * dispatch. Node has neither `PointerEvent` nor `document`, so the fakes below
- * stand in for the Playwright page context and record the events.
+ * `scripts/lib/touch-input.mjs`. The e2e module must re-export the shared
+ * constants, types and dispatch function instead of keeping a copy, so a shape
+ * change (a reused click pointer id, a touch-typed release click, a different
+ * `detail` or `buttons`) cannot land on one side only. This test pins that
+ * re-export, checks the e2e source no longer builds `PointerEvent`s itself, and
+ * runs the gesture adapter and `touchLongPress` against the same fake
+ * page/locator to compare the exact event sequences. Node has neither
+ * `PointerEvent` nor `document`, so the fakes below stand in for the Playwright
+ * page context and record the events.
  */
 
 interface RecordedPointerEvent {
@@ -150,6 +155,22 @@ describe('touch injector parity', () => {
     expect(E2E_TOUCH_POINTER_ID).toBe(SCRIPT_TOUCH_POINTER_ID);
     expect(E2E_RELEASE_CLICK_POINTER_ID).toBe(SCRIPT_RELEASE_CLICK_POINTER_ID);
     expect(E2E_TOUCH_POINTER_ID).not.toBe(E2E_RELEASE_CLICK_POINTER_ID);
+  });
+
+  it('re-exports the shared dispatch implementation instead of owning a copy', () => {
+    // Same function object, not merely an equal-looking wrapper: the e2e entry
+    // must consume the implementation the screenshot scripts use.
+    expect(E2E_DISPATCH).toBe(SHARED_DISPATCH);
+
+    const source = readFileSync(new URL('../e2e/touch-input.ts', import.meta.url), 'utf8');
+    expect(source).toContain("from '../../scripts/lib/touch-input.mjs'");
+    // The duplicated event construction must stay deleted: a local
+    // `PointerEvent`, a hard-coded touch id 2 or release-click id 1 would mean
+    // the two entries can drift again.
+    expect(source).not.toMatch(/new\s+PointerEvent\b/);
+    expect(source).not.toMatch(/\bTOUCH_POINTER_ID\s*=\s*2\b/);
+    expect(source).not.toMatch(/\bRELEASE_CLICK_POINTER_ID\s*=\s*1\b/);
+    expect(source).not.toMatch(/\bfunction\s+dispatchTouchPointerEvent\b/);
   });
 
   it('dispatches the same event sequence from the e2e helper and the screenshot script', async () => {
