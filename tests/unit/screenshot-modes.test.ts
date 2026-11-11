@@ -30,6 +30,7 @@ const PLAYWRIGHT_CONFIG = join(ROOT, 'playwright.config.ts');
 
 const REMOVED_FLAG = '--before';
 const REMOVED_COMMAND = 'screenshots:minesweeper:before';
+const HISTORICAL_OVERWRITE_FLAG = '--allow-historical-overwrite';
 const RETAINED_BEFORE_FLAGS = [
   '--touch-before',
   '--narrow-before',
@@ -959,6 +960,91 @@ describe('minesweeper scores screenshot preview startup', () => {
   });
 
   it(
+    'refuses to overwrite the #45 historical After evidence by default',
+    { timeout: 30_000 },
+    async () => {
+      const owner = await listenOnRandomPort();
+      const screenshotsBefore = screenshotHashes();
+      try {
+        const env = { ...process.env };
+        delete env.BASE_URL;
+        delete env.PREVIEW_ENTRY;
+        // An occupied port would produce the port error if the guard did not
+        // run first, so the guard message also proves the refusal precedes the
+        // preview probe.
+        env.PREVIEW_PORT = String(owner.port);
+
+        const { status, output } = spawnNode(SCORES_SCRIPT, [], env);
+
+        expect(status).toBe(1);
+        expect(output).toContain('#45');
+        expect(output).toContain('historical After evidence');
+        expect(output).toContain(HISTORICAL_OVERWRITE_FLAG);
+        expect(output).toContain('after-minesweeper-scores-desktop.png');
+        expect(output).toContain('after-minesweeper-scores-320x640.png');
+        expect(output).toContain('清空记录');
+        expect(output).not.toContain('Cannot start the preview server');
+        expect(output).not.toContain('Saved');
+        // Byte-for-byte proof that neither historical PNG was rewritten.
+        expect(screenshotHashes()).toEqual(screenshotsBefore);
+      } finally {
+        await owner.close();
+      }
+    },
+  );
+
+  it(
+    'lets --allow-historical-overwrite through to the preview startup path',
+    { timeout: 30_000 },
+    async () => {
+      const owner = await listenOnRandomPort();
+      const screenshotsBefore = screenshotHashes();
+      try {
+        const env = { ...process.env };
+        delete env.BASE_URL;
+        delete env.PREVIEW_ENTRY;
+        env.PREVIEW_PORT = String(owner.port);
+
+        const { status, output } = spawnNode(
+          SCORES_SCRIPT,
+          [HISTORICAL_OVERWRITE_FLAG],
+          env,
+        );
+
+        expect(status).toBe(1);
+        // The guard is bypassed: the run now reaches the occupied-port check,
+        // which is the next startup step after the guard.
+        expect(output).toContain(
+          `Cannot start the preview server on 127.0.0.1:${owner.port}`,
+        );
+        expect(output).not.toContain('Refusing to overwrite');
+        expect(output).not.toContain('Saved');
+        expect(screenshotHashes()).toEqual(screenshotsBefore);
+      } finally {
+        await owner.close();
+      }
+    },
+  );
+
+  it('scopes the historical-evidence guard to the plain Chromium After mode', () => {
+    const source = readFileSync(SCORES_SCRIPT, 'utf8');
+    const guard = source.indexOf(
+      'if (!BEFORE && !CLEAR && !IS_WEBKIT && !ALLOW_HISTORICAL_OVERWRITE)',
+    );
+
+    expect(guard).toBeGreaterThan(-1);
+    // The guard runs after mode validation but before the output directory,
+    // port probe and preview spawn, so a refused run touches nothing.
+    expect(guard).toBeGreaterThan(source.indexOf('if (CLEAR && IS_WEBKIT)'));
+    expect(guard).toBeLessThan(source.indexOf('await mkdir(OUTPUT'));
+    expect(guard).toBeLessThan(source.indexOf('await assertPortAvailable'));
+    expect(guard).toBeLessThan(source.indexOf('startPreviewServer({'));
+    expect(source).toContain(
+      "const ALLOW_HISTORICAL_OVERWRITE = ARGS.includes('--allow-historical-overwrite');",
+    );
+  });
+
+  it(
     'fails fast without screenshots when PREVIEW_PORT is taken',
     { timeout: 30_000 },
     async () => {
@@ -970,7 +1056,11 @@ describe('minesweeper scores screenshot preview startup', () => {
         delete env.PREVIEW_ENTRY;
         env.PREVIEW_PORT = String(owner.port);
 
-        const { status, output } = spawnNode(SCORES_SCRIPT, [], env);
+        const { status, output } = spawnNode(
+          SCORES_SCRIPT,
+          [HISTORICAL_OVERWRITE_FLAG],
+          env,
+        );
 
         expect(status).toBe(1);
         // The specific failure names the real port and the fix; a generic
@@ -1011,7 +1101,11 @@ describe('minesweeper scores screenshot preview startup', () => {
         // with a process that dies right after an otherwise successful probe.
         env.PREVIEW_ENTRY = fakePreview;
 
-        const { status, output } = spawnNode(SCORES_SCRIPT, [], env);
+        const { status, output } = spawnNode(
+          SCORES_SCRIPT,
+          [HISTORICAL_OVERWRITE_FLAG],
+          env,
+        );
 
         expect(status).toBe(1);
         expect(output).toContain(

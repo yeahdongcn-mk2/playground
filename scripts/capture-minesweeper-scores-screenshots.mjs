@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import {
   WEBKIT_ENGINE,
@@ -42,6 +43,15 @@ import { waitForPreviewServer } from './lib/preview-server.mjs';
  * as `after-<prefix>-webkit.png`; it is an After-only mode and the desktop
  * evidence stays Chromium. The clear-records variant is Chromium-only because
  * the current panel always renders the clear action.
+ *
+ * The plain Chromium After mode refuses to overwrite the
+ * `after-minesweeper-scores-*.png` files: they are the #45 subtask 1 historical
+ * evidence, captured before the current panel gained the 「清空记录」 action.
+ * Re-running `npm run screenshots:minesweeper:scores` on today's UI would
+ * silently replace them with the current panel. Pass
+ * `--allow-historical-overwrite` to regenerate them on purpose, and update
+ * docs/screenshots/README.md plus the full-page sizes at the same time. The
+ * `--before`, `--clear` and `--webkit` modes never hit this guard.
  */
 
 const HOST = '127.0.0.1';
@@ -51,10 +61,15 @@ const OUTPUT = 'docs/screenshots';
 const ARGS = process.argv.slice(2);
 const BEFORE = ARGS.includes('--before');
 const CLEAR = ARGS.includes('--clear');
+const ALLOW_HISTORICAL_OVERWRITE = ARGS.includes('--allow-historical-overwrite');
 const ENGINE = parseCaptureEngine(ARGS);
 const IS_WEBKIT = ENGINE === WEBKIT_ENGINE;
 const FILE_PREFIX = CLEAR ? 'minesweeper-clear-scores' : 'minesweeper-scores';
 const BASE_URL = process.env.BASE_URL ?? ORIGIN;
+const HISTORICAL_AFTER_EVIDENCE = [
+  `${OUTPUT}/after-minesweeper-scores-desktop.png`,
+  `${OUTPUT}/after-minesweeper-scores-320x640.png`,
+];
 
 // Same deterministic beginner layout as tests/e2e/minesweeper-helpers.ts:
 // a mine block in the top-left corner plus (0, 3). Revealing (8, 8) wins.
@@ -208,6 +223,23 @@ if (CLEAR && IS_WEBKIT) {
   throw new Error(
     'The --webkit mode captures the shared scores panel only; the clear-records variant is Chromium-only.',
   );
+}
+
+// The plain Chromium After mode would otherwise overwrite the #45 subtask 1
+// historical evidence with today's panel, which already has 「清空记录」. Fail
+// before creating the output directory, probing the port or launching anything.
+if (!BEFORE && !CLEAR && !IS_WEBKIT && !ALLOW_HISTORICAL_OVERWRITE) {
+  const existing = HISTORICAL_AFTER_EVIDENCE.filter((file) => existsSync(file));
+  if (existing.length > 0) {
+    throw new Error(
+      'Refusing to overwrite the #45 subtask 1 historical After evidence: ' +
+        `${existing.join(', ')}. The current UI already includes the 「清空记录」 ` +
+        'action, so this command would replace the historical baseline and drift ' +
+        'from docs/screenshots/README.md. Re-run with --allow-historical-overwrite ' +
+        'only when intentionally regenerating these files, and update that document ' +
+        'plus the full-page sizes in the same change.',
+    );
+  }
 }
 
 await mkdir(OUTPUT, { recursive: true });
