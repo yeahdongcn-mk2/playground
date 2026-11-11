@@ -49,14 +49,85 @@ const EXPECTED_FONT_VERSIONS = [
   { name: 'fonts-wqy-zenhei', version: '0.9.45-8' },
 ];
 
+/** The recorded container font list, as the fingerprint line formats it. */
+const EXPECTED_FONT_LIST = EXPECTED_FONT_VERSIONS.map(
+  ({ name, version }) => `${name}@${version}`,
+).join(',');
+
 /** One real container log line from docs/screenshots/README.md. */
 const CONTAINER_LOG_LINE =
   'capture-env: source=container target=webkit dpr=2 ' +
   `image=${PLAYWRIGHT_IMAGE_REPOSITORY}:${PLAYWRIGHT_IMAGE_PIN.tag}@${PLAYWRIGHT_IMAGE_PIN.digest} ` +
   'node=v26.13.0 playwright=1.64.1 browser=27.2 ' +
-  `fonts=${EXPECTED_FONT_VERSIONS.map(({ name, version }) => `${name}@${version}`).join(',')} ` +
+  `fonts=${EXPECTED_FONT_LIST} ` +
   'env=EGL_PLATFORM=surfaceless,LIBGL_ALWAYS_SOFTWARE=1,' +
   '__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json';
+
+/**
+ * A host fingerprint: on the host the image, font versions and EGL variables
+ * are unavailable by design, and the source is not the fixed container.
+ */
+const HOST_LOG_LINE =
+  'capture-env: source=host target=webkit dpr=2 image=unavailable ' +
+  'node=v26.13.0 playwright=1.64.1 browser=unavailable fonts=unavailable env=unavailable';
+
+/** Manifest environment drifts that must be rejected and exit 2 through the CLI. */
+const MANIFEST_ENVIRONMENT_DRIFT_CASES: Array<{
+  label: string;
+  problem: string;
+  drift: (manifest: ScreenshotSha256Manifest) => void;
+}> = [
+  {
+    label: 'a host environment source',
+    drift: (manifest) => {
+      manifest.environment.source = 'host';
+    },
+    problem: 'environment.source is "host", expected "container"',
+  },
+  {
+    label: 'an unknown capture target',
+    drift: (manifest) => {
+      manifest.environment.target = 'tablet';
+    },
+    problem: 'environment.target "tablet" is not a capture target',
+  },
+  {
+    label: 'a drifted image repository',
+    drift: (manifest) => {
+      manifest.environment.image.repository = 'ghcr.io/example/playwright';
+    },
+    problem:
+      'environment.image.repository is "ghcr.io/example/playwright", ' +
+      `expected "${PLAYWRIGHT_IMAGE_REPOSITORY}"`,
+  },
+  {
+    label: 'a drifted image tag',
+    drift: (manifest) => {
+      manifest.environment.image.tag = 'v9.9.9-noble';
+    },
+    problem: `environment.image.tag is "v9.9.9-noble", expected "${PLAYWRIGHT_IMAGE_PIN.tag}"`,
+  },
+];
+
+/** Capture image references whose tag or digest drifted from the fixed pin. */
+const IMAGE_DRIFT_CASES: Array<{ label: string; logLine: string; actual: string }> = [
+  {
+    label: 'tag',
+    logLine: CONTAINER_LOG_LINE.replace(
+      `:${PLAYWRIGHT_IMAGE_PIN.tag}@`,
+      ':v9.9.9-noble@',
+    ),
+    actual: `${PLAYWRIGHT_IMAGE_REPOSITORY}:v9.9.9-noble@${PLAYWRIGHT_IMAGE_PIN.digest}`,
+  },
+  {
+    label: 'digest',
+    logLine: CONTAINER_LOG_LINE.replace(
+      PLAYWRIGHT_IMAGE_PIN.digest,
+      `sha256:${'0'.repeat(64)}`,
+    ),
+    actual: `${PLAYWRIGHT_IMAGE_REPOSITORY}:${PLAYWRIGHT_IMAGE_PIN.tag}@sha256:${'0'.repeat(64)}`,
+  },
+];
 
 const tempDirs: string[] = [];
 
@@ -219,6 +290,33 @@ describe('capture sha256 manifest', () => {
     expect(problems.some((problem) => problem.includes('environment.fonts'))).toBe(true);
   });
 
+  it.each(MANIFEST_ENVIRONMENT_DRIFT_CASES)(
+    'rejects $label in the manifest and exits 2 through the CLI',
+    ({ drift, problem }) => {
+      const manifest = committedManifest();
+      drift(manifest);
+      expect(
+        manifestEnvironmentMismatches(manifest).some((entry) =>
+          entry.includes(problem),
+        ),
+      ).toBe(true);
+
+      const dir = makeTempDir();
+      const bytes = makePng();
+      writePng(dir, EXPECTED_FILES[0] as string, bytes);
+      const result = runCli([
+        '--dir',
+        dir,
+        '--manifest',
+        writeManifest(dir, manifest),
+      ]);
+
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain('does not match the fixed capture environment');
+      expect(result.stderr).toContain(problem);
+    },
+  );
+
   it('rejects stale provenance and non-container recapture commands', () => {
     const manifest = committedManifest();
     if (manifest.captures[0]) {
@@ -338,6 +436,83 @@ describe('capture environment fingerprint', () => {
       'capture log has no "capture-env:" fingerprint line',
     );
   });
+
+  it('reports a log whose only fingerprint is for another target', () => {
+    const manifest = committedManifest();
+    const desktopLine = CONTAINER_LOG_LINE.replaceAll(
+      'target=webkit dpr=2',
+      'target=desktop dpr=1',
+    );
+    const verification = verifyCaptureEnvironment({
+      logText: `${desktopLine}\n`,
+      environment: manifest.environment,
+    });
+
+    expect(verification.ok).toBe(false);
+    expect(verification.fingerprints).toEqual([]);
+    expect(verification.problems).toContain(
+      'capture log has no fingerprint for target "webkit" (logged targets: desktop)',
+    );
+  });
+
+  it('reports host fingerprints as a container environment mismatch', () => {
+    const manifest = committedManifest();
+    const verification = verifyCaptureEnvironment({
+      logText: `${HOST_LOG_LINE}\n`,
+      environment: manifest.environment,
+    });
+
+    expect(verification.ok).toBe(false);
+    expect(verification.problems).toContain(
+      'capture environment source is "host", expected "container"',
+    );
+    expect(verification.problems).toContain(
+      'capture environment image is unavailable, expected the pinned container image',
+    );
+    expect(verification.problems).toContain(
+      'capture environment EGL variables are unavailable',
+    );
+    expect(verification.problems).toContain(
+      `capture environment fonts are "unavailable", expected "${EXPECTED_FONT_LIST}"`,
+    );
+  });
+
+  it.each(IMAGE_DRIFT_CASES)('reports a drifted capture image $label', ({ logLine, actual }) => {
+    const manifest = committedManifest();
+    const verification = verifyCaptureEnvironment({
+      logText: `${logLine}\n`,
+      environment: manifest.environment,
+    });
+
+    expect(verification.ok).toBe(false);
+    expect(verification.problems).toContain(
+      `capture environment image is "${actual}", ` +
+        `expected "${PLAYWRIGHT_IMAGE_REPOSITORY}:${PLAYWRIGHT_IMAGE_PIN.tag}@${PLAYWRIGHT_IMAGE_PIN.digest}"`,
+    );
+  });
+
+  it('reports a drifted font package version', () => {
+    const firstFont = EXPECTED_FONT_VERSIONS[0] as { name: string; version: string };
+    const driftedFont = `${firstFont.name}@${firstFont.version}-drift`;
+    const driftedLine = CONTAINER_LOG_LINE.replace(
+      `${firstFont.name}@${firstFont.version}`,
+      driftedFont,
+    );
+    const manifest = committedManifest();
+    const verification = verifyCaptureEnvironment({
+      logText: `${driftedLine}\n`,
+      environment: manifest.environment,
+    });
+
+    const actualFonts = EXPECTED_FONT_LIST.replace(
+      `${firstFont.name}@${firstFont.version}`,
+      driftedFont,
+    );
+    expect(verification.ok).toBe(false);
+    expect(verification.problems).toContain(
+      `capture environment fonts are "${actualFonts}", expected "${EXPECTED_FONT_LIST}"`,
+    );
+  });
 });
 
 describe('verifyScreenshotSha256', () => {
@@ -431,6 +606,64 @@ describe('verifyScreenshotSha256', () => {
       'npm run screenshots:container -- screenshots:webkit',
     );
     expect(result.stderr).toContain(CONTAINER_LOG_LINE.replace('dpr=2', 'dpr=1'));
+  });
+
+  it('exits 1 when the log has no fingerprint for the manifest target', () => {
+    const dir = makeTempDir();
+    const bytes = makePng();
+    writePng(dir, EXPECTED_FILES[0] as string, bytes);
+    const manifestPath = writeManifest(dir, fixtureManifest(bytes));
+    const logPath = join(dir, 'capture.log');
+    const desktopLine = CONTAINER_LOG_LINE.replaceAll(
+      'target=webkit dpr=2',
+      'target=desktop dpr=1',
+    );
+    writeFileSync(logPath, `${desktopLine}\n`);
+
+    const result = runCli([
+      '--dir',
+      dir,
+      '--manifest',
+      manifestPath,
+      '--log',
+      logPath,
+    ]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Environment fingerprint mismatch');
+    expect(result.stderr).toContain(
+      'capture log has no fingerprint for target "webkit"',
+    );
+    expect(result.stderr).toContain('logged targets: desktop');
+    expect(result.stderr).toContain('committed PNG hashes still match the manifest');
+  });
+
+  it('exits 1 and explains a host capture log against the container contract', () => {
+    const dir = makeTempDir();
+    const bytes = makePng();
+    writePng(dir, EXPECTED_FILES[0] as string, bytes);
+    const manifestPath = writeManifest(dir, fixtureManifest(bytes));
+    const logPath = join(dir, 'capture.log');
+    writeFileSync(logPath, `${HOST_LOG_LINE}\n`);
+
+    const result = runCli([
+      '--dir',
+      dir,
+      '--manifest',
+      manifestPath,
+      '--log',
+      logPath,
+    ]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Environment fingerprint mismatch');
+    expect(result.stderr).toContain(
+      'capture environment source is "host", expected "container"',
+    );
+    expect(result.stderr).toContain('capture environment image is unavailable');
+    expect(result.stderr).toContain(
+      'capture environment EGL variables are unavailable',
+    );
+    expect(result.stderr).toContain('capture environment fonts are "unavailable"');
+    expect(result.stderr).toContain('committed PNG hashes still match the manifest');
   });
 
   it('exits 2 for a malformed capture-env log instead of reporting drift', () => {
