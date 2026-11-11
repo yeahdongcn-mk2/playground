@@ -11,6 +11,7 @@ import {
   dprForCaptureTarget,
   formatCaptureEnvironmentFingerprint,
   imageTagForPlaywrightVersion,
+  normalizeCaptureTargets,
   probeFontPackages,
   readPlaywrightVersion,
   resolveCaptureImage,
@@ -86,6 +87,20 @@ describe('capture target DPR contract', () => {
     expect(dprForCaptureTarget('mobile')).toBe(2);
     expect(dprForCaptureTarget('webkit')).toBe(2);
     expect(() => dprForCaptureTarget('tablet')).toThrow(/Unknown capture target "tablet"/);
+  });
+
+  it('normalizes comma-separated and array target declarations', () => {
+    expect(normalizeCaptureTargets(' desktop, mobile ')).toEqual(['desktop', 'mobile']);
+    expect(normalizeCaptureTargets(['desktop', 'mobile'])).toEqual(['desktop', 'mobile']);
+    expect(normalizeCaptureTargets('webkit')).toEqual(['webkit']);
+    expect(normalizeCaptureTargets('')).toBeNull();
+    expect(normalizeCaptureTargets(undefined)).toBeNull();
+  });
+
+  it('rejects an unknown target inside a declared list', () => {
+    expect(() => normalizeCaptureTargets('desktop,tablet')).toThrow(
+      /Unknown capture target "tablet"/,
+    );
   });
 });
 
@@ -203,12 +218,31 @@ describe('assertContainerCaptureEnvironment', () => {
     expect(
       assertContainerCaptureEnvironment({
         env: CONTAINER_ENV,
-        target: 'webkit',
+        targets: ['webkit'],
         version: '1.64.1',
       }),
     ).toEqual({
-      target: 'webkit',
-      dpr: 2,
+      targets: ['webkit'],
+      dprs: [2],
+      imageTag: PLAYWRIGHT_IMAGE_PIN.tag,
+      version: '1.64.1',
+    });
+  });
+
+  it('accepts a mixed desktop / mobile target list with matching DPRs', () => {
+    expect(
+      assertContainerCaptureEnvironment({
+        env: {
+          ...CONTAINER_ENV,
+          CAPTURE_TARGET: 'desktop,mobile',
+          CAPTURE_TARGET_DPR: '1,2',
+        },
+        targets: ['desktop', 'mobile'],
+        version: '1.64.1',
+      }),
+    ).toEqual({
+      targets: ['desktop', 'mobile'],
+      dprs: [1, 2],
       imageTag: PLAYWRIGHT_IMAGE_PIN.tag,
       version: '1.64.1',
     });
@@ -257,6 +291,31 @@ describe('assertContainerCaptureEnvironment', () => {
         version: '1.64.1',
       }),
     ).toThrow(/CAPTURE_TARGET_DPR/);
+  });
+
+  it('rejects a target / DPR list that does not describe the same targets', () => {
+    expect(() =>
+      assertContainerCaptureEnvironment({
+        env: {
+          ...CONTAINER_ENV,
+          CAPTURE_TARGET: 'desktop,mobile',
+          CAPTURE_TARGET_DPR: '1',
+        },
+        targets: ['desktop', 'mobile'],
+        version: '1.64.1',
+      }),
+    ).toThrow(/does not match CAPTURE_TARGET="desktop,mobile"/);
+    expect(() =>
+      assertContainerCaptureEnvironment({
+        env: {
+          ...CONTAINER_ENV,
+          CAPTURE_TARGET: 'desktop,mobile',
+          CAPTURE_TARGET_DPR: '1,1',
+        },
+        targets: ['desktop', 'mobile'],
+        version: '1.64.1',
+      }),
+    ).toThrow(/Capture DPR 1 does not match target "mobile": expected 2/);
   });
 
   it('rejects an image tag that does not match the lockfile version', () => {

@@ -85,9 +85,27 @@ export function captureTargets(scripts) {
     .sort();
 }
 
-/** The capture target (DPR contract) a screenshot npm script belongs to. */
-export function captureTargetForScript(script) {
-  return script.includes('webkit') ? 'webkit' : 'desktop';
+/**
+ * The capture targets (DPR contract) a screenshot npm script records.
+ *
+ * WebKit scripts only capture the WebKit phone target. Chromium screenshot
+ * scripts capture desktop and phone evidence in the same run, while the
+ * dedicated minesweeper narrow / short / large modes and the Chromium
+ * touch-before baseline only capture phone evidence.
+ */
+const MOBILE_ONLY_CAPTURE_TARGETS = [
+  /^screenshots:minesweeper:(narrow|min|restart|short|large)(-before)?$/,
+  /^screenshots:minesweeper:touch-before$/,
+];
+
+export function captureTargetsForScript(script) {
+  if (script.includes('webkit')) {
+    return ['webkit'];
+  }
+  if (MOBILE_ONLY_CAPTURE_TARGETS.some((pattern) => pattern.test(script))) {
+    return ['mobile'];
+  }
+  return ['desktop', 'mobile'];
 }
 
 /** The preview port a target starts, or null when it does not start one. */
@@ -204,7 +222,7 @@ export function buildDockerRunArgs({
   if (image === undefined || containerImage === undefined) {
     throw new Error('buildDockerRunArgs needs the resolved capture image.');
   }
-  const captureTarget = captureTargetForScript(target);
+  const captureTargets = captureTargetsForScript(target);
   const args = [
     'run',
     '--rm',
@@ -228,9 +246,9 @@ export function buildDockerRunArgs({
     '--env',
     `${CAPTURE_IMAGE_DIGEST_VAR}=${imageDigest}`,
     '--env',
-    `${CAPTURE_TARGET_VAR}=${captureTarget}`,
+    `${CAPTURE_TARGET_VAR}=${captureTargets.join(',')}`,
     '--env',
-    `${CAPTURE_TARGET_DPR_VAR}=${dprForCaptureTarget(captureTarget)}`,
+    `${CAPTURE_TARGET_DPR_VAR}=${captureTargets.map((captureTarget) => dprForCaptureTarget(captureTarget)).join(',')}`,
   ];
 
   for (const name of CAPTURE_EGL_VARS) {
@@ -340,10 +358,9 @@ export async function runContainerCapture({
   const image = resolveCaptureImage({ readFile, lockfilePath });
 
   if (env[CAPTURE_CONTAINER_FLAG] === '1') {
-    const captureTarget = captureTargetForScript(target);
     assertContainerCaptureEnvironment({
       env,
-      target: captureTarget,
+      targets: captureTargetsForScript(target),
       version: image.version,
     });
     await ensureDependencies({ repoRoot, env, readFile, existsSync });
@@ -417,7 +434,6 @@ export async function runContainerCapture({
 
   try {
     const { code, signal } = await waitForChild(child, 'docker run');
-    stream.end();
     if (code !== 0) {
       throw new Error(
         `Container capture "${target}" failed` +

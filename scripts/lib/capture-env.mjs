@@ -46,7 +46,12 @@ export const PLAYWRIGHT_IMAGE_PIN = Object.freeze({
 export const CAPTURE_CONTAINER_FLAG = 'CAPTURE_CONTAINER';
 export const CAPTURE_IMAGE_TAG_VAR = 'CAPTURE_IMAGE_TAG';
 export const CAPTURE_IMAGE_DIGEST_VAR = 'CAPTURE_IMAGE_DIGEST';
+/**
+ * Comma-separated list of every capture target the run records. A Chromium run
+ * captures desktop and phone evidence, so a single target would misdescribe it.
+ */
 export const CAPTURE_TARGET_VAR = 'CAPTURE_TARGET';
+/** Comma-separated DPRs, in the same order as {@link CAPTURE_TARGET_VAR}. */
 export const CAPTURE_TARGET_DPR_VAR = 'CAPTURE_TARGET_DPR';
 
 /**
@@ -199,11 +204,42 @@ export function dprForCaptureTarget(target) {
   return dpr;
 }
 
-function parseDpr(value) {
-  if (typeof value !== 'string' || !/^\d+$/.test(value.trim())) {
+/**
+ * Normalize a declared capture-target list.
+ *
+ * A capture run can record more than one target (Chromium runs capture both
+ * desktop and phone evidence), so the container contract stores the targets
+ * and their DPRs as comma-separated lists. Accepts an array, a single target or
+ * the comma-separated string form; returns `null` for an absent declaration and
+ * rejects any unknown target.
+ */
+export function normalizeCaptureTargets(targets) {
+  if (targets === undefined || targets === null) {
     return null;
   }
-  return Number(value.trim());
+  const list = Array.isArray(targets) ? targets : [targets];
+  const normalized = list
+    .flatMap((value) => String(value).split(','))
+    .map((value) => value.trim())
+    .filter((value) => value !== '');
+  if (normalized.length === 0) {
+    return null;
+  }
+  for (const target of normalized) {
+    dprForCaptureTarget(target);
+  }
+  return normalized;
+}
+
+function parseDprList(value) {
+  if (typeof value !== 'string' || value.trim() === '') {
+    return null;
+  }
+  const parts = value.split(',').map((part) => part.trim());
+  if (parts.some((part) => !/^\d+$/.test(part))) {
+    return null;
+  }
+  return parts.map(Number);
 }
 
 /**
@@ -338,6 +374,7 @@ export function formatCaptureEnvironmentFingerprint(fingerprint) {
 export function assertContainerCaptureEnvironment({
   env = process.env,
   target,
+  targets,
   version,
   lockfilePath,
   readFile,
@@ -364,32 +401,49 @@ export function assertContainerCaptureEnvironment({
     }
   }
 
-  const envTarget = env[CAPTURE_TARGET_VAR];
-  if (envTarget === undefined || envTarget === '') {
+  const envTargets = normalizeCaptureTargets(env[CAPTURE_TARGET_VAR]);
+  if (envTargets === null) {
     throw new Error(
       `Missing required capture environment variable "${CAPTURE_TARGET_VAR}": ` +
-        `expected one of ${CAPTURE_TARGETS.join(', ')}.`,
+        `expected one or more of ${CAPTURE_TARGETS.join(', ')}.`,
     );
   }
-  if (target !== undefined && envTarget !== target) {
+  const expectedTargets = normalizeCaptureTargets(targets ?? target);
+  if (
+    expectedTargets !== null &&
+    (expectedTargets.length !== envTargets.length ||
+      expectedTargets.some((value, index) => value !== envTargets[index]))
+  ) {
+    const plural = expectedTargets.length === 1 ? '' : 's';
+    const verb = expectedTargets.length === 1 ? 'does' : 'do';
     throw new Error(
-      `Capture target "${target}" does not match ${CAPTURE_TARGET_VAR}="${envTarget}".`,
+      `Capture target${plural} "${expectedTargets.join(',')}" ${verb} not match ` +
+        `${CAPTURE_TARGET_VAR}="${envTargets.join(',')}".`,
     );
   }
 
-  const expectedDpr = dprForCaptureTarget(envTarget);
-  const actualDpr = parseDpr(env[CAPTURE_TARGET_DPR_VAR]);
-  if (actualDpr === null) {
+  const expectedDprs = envTargets.map((value) => dprForCaptureTarget(value));
+  const actualDprs = parseDprList(env[CAPTURE_TARGET_DPR_VAR]);
+  if (actualDprs === null) {
     throw new Error(
       `Missing or invalid capture environment variable "${CAPTURE_TARGET_DPR_VAR}": ` +
-        `expected "${expectedDpr}" for target "${envTarget}".`,
+        `expected "${expectedDprs.join(',')}" for targets "${envTargets.join(',')}".`,
     );
   }
-  if (actualDpr !== expectedDpr) {
+  if (actualDprs.length !== envTargets.length) {
     throw new Error(
-      `Capture DPR ${actualDpr} does not match target "${envTarget}": expected ${expectedDpr}.`,
+      `Capture DPR list "${actualDprs.join(',')}" does not match ` +
+        `${CAPTURE_TARGET_VAR}="${envTargets.join(',')}".`,
     );
   }
+  envTargets.forEach((value, index) => {
+    if (actualDprs[index] !== expectedDprs[index]) {
+      throw new Error(
+        `Capture DPR ${actualDprs[index]} does not match target "${value}": ` +
+          `expected ${expectedDprs[index]}.`,
+      );
+    }
+  });
 
   const imageTag = env[CAPTURE_IMAGE_TAG_VAR];
   if (imageTag === undefined || imageTag === '') {
@@ -403,8 +457,8 @@ export function assertContainerCaptureEnvironment({
   assertImageTagMatchesPlaywrightVersion(imageTag, playwrightVersion);
 
   return {
-    target: envTarget,
-    dpr: expectedDpr,
+    targets: envTargets,
+    dprs: actualDprs,
     imageTag,
     version: playwrightVersion,
   };

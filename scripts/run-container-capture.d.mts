@@ -85,7 +85,8 @@ export function readPackageScripts(options?: {
   readFile?: (path: string, encoding?: 'utf8') => string;
 }): Record<string, string>;
 export function captureTargets(scripts: Record<string, string>): string[];
-export function captureTargetForScript(script: string): 'desktop' | 'webkit';
+/** Capture targets (in DPR order) a screenshot npm script records. */
+export function captureTargetsForScript(script: string): string[];
 export function previewPortForTarget(
   target: string,
   value?: string,

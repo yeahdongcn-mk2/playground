@@ -1,5 +1,14 @@
-import type { Browser, BrowserContext, Page } from '@playwright/test';
+import type {
+  Browser,
+  BrowserContext,
+  BrowserContextOptions,
+  Page,
+} from '@playwright/test';
 import type { ChildProcess } from 'node:child_process';
+import type {
+  CaptureEnvironmentFingerprint,
+  CaptureTarget,
+} from './capture-env.mjs';
 
 export const WEBKIT_FLAG: string;
 export const WEBKIT_NARROW_FLAG: string;
@@ -14,6 +23,31 @@ export function parseCaptureEngine(args?: readonly string[]): CaptureEngine;
 export function engineLabel(engine: CaptureEngine): 'Chromium' | 'WebKit';
 export function launchCaptureBrowser(engine: CaptureEngine): Promise<Browser>;
 export function closeCaptureBrowser(browser?: Browser | null): Promise<void>;
+
+export interface LogCaptureEnvironmentOptions {
+  env?: Record<string, string | undefined>;
+  run?: {
+    browserVersion?: string | null;
+    nodeVersion?: string;
+    playwrightVersion?: string;
+    fontPackages?: CaptureEnvironmentFingerprint['fonts'];
+  };
+}
+
+export function logCaptureEnvironment(
+  target: CaptureTarget,
+  browser: Pick<Browser, 'version'>,
+  options?: LogCaptureEnvironmentOptions,
+): void;
+
+export function createDesktopContext(
+  browser: Browser,
+  options?: BrowserContextOptions,
+): Promise<BrowserContext>;
+export function createMobileContext(
+  browser: Browser,
+  options?: BrowserContextOptions,
+): Promise<BrowserContext>;
 
 export interface StartPreviewServerOptions {
   port: number;
@@ -47,8 +81,8 @@ export interface PhoneContextResult {
   isMobile?: boolean;
   hasTouch?: boolean;
   userAgent?: string;
-  colorScheme?: string;
-  reducedMotion?: string;
+  colorScheme?: 'dark' | 'light';
+  reducedMotion?: 'reduce' | 'no-preference';
 }
 
 export function phoneContextOptions(
@@ -64,7 +98,7 @@ export function createPhoneContext(
 export function captureRecord(
   name: string,
   engine: CaptureEngine,
-  viewport: Viewport | null,
+  viewport: Viewport | null | undefined,
   colorScheme?: string,
   reducedMotion?: string,
 ): string;

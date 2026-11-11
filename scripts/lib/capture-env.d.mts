@@ -72,15 +72,17 @@ export interface ProbeFontPackagesOptions {
 
 export interface AssertContainerCaptureEnvironmentOptions {
   env?: Record<string, string | undefined>;
-  target?: string;
+  /** Expected target set for the run; a single target or a list. */
+  target?: string | readonly string[];
+  targets?: readonly string[];
   version?: string;
   lockfilePath?: string;
   readFile?: (path: string, encoding: 'utf8') => string;
 }
 
 export interface ContainerCaptureEnvironment {
-  target: string;
-  dpr: number;
+  targets: string[];
+  dprs: number[];
   imageTag: string;
   version: string;
 }
@@ -111,6 +113,9 @@ export function resolveCaptureImage(
   options?: ResolveCaptureImageOptions,
 ): CaptureImage;
 export function dprForCaptureTarget(target: string): number;
+export function normalizeCaptureTargets(
+  targets?: string | readonly string[] | null,
+): string[] | null;
 export function probeFontPackages(
   options?: ProbeFontPackagesOptions,
 ): CaptureFontPackage[] | 'unavailable';

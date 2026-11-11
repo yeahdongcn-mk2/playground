@@ -4,6 +4,8 @@ import {
   WEBKIT_ENGINE,
   captureScreenshot,
   closeCaptureBrowser,
+  createDesktopContext,
+  createMobileContext,
   createPhoneContext,
   engineLabel,
   launchCaptureBrowser,
@@ -167,7 +169,7 @@ async function openWin(page) {
 }
 
 async function captureDesktop(browser) {
-  const context = await browser.newContext({
+  const context = await createDesktopContext(browser, {
     viewport: { width: 1440, height: 1000 },
     colorScheme: 'dark',
     deviceScaleFactor: 1,
@@ -184,7 +186,7 @@ async function captureDesktop(browser) {
 }
 
 async function captureMobile(browser) {
-  const context = await browser.newContext({
+  const context = await createMobileContext(browser, {
     viewport: { width: 320, height: 640 },
     screen: { width: 320, height: 640 },
     colorScheme: 'dark',

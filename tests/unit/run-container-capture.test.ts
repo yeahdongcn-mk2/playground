@@ -1,10 +1,12 @@
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import type { spawnSync } from 'node:child_process';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   CAPTURE_EGL_ENV,
   CAPTURE_EGL_VARS,
@@ -15,7 +17,7 @@ import {
 import {
   CAPTURE_LOCK_HASH_FILE,
   buildDockerRunArgs,
-  captureTargetForScript,
+  captureTargetsForScript,
   captureTargets,
   ensureCaptureImage,
   ensureContainerDependencies,
@@ -74,6 +76,35 @@ function envArgsOf(args: readonly string[]): string[] {
   return args.flatMap((arg, index) => (arg === '--env' ? [args[index + 1] ?? ''] : []));
 }
 
+const HOST_SCRIPTS = JSON.stringify({
+  scripts: { 'screenshots:webkit': 'node scripts/capture-screenshots.mjs --webkit' },
+});
+const HOST_LOCKFILE = JSON.stringify({
+  packages: { 'node_modules/@playwright/test': { version: '1.64.1' } },
+});
+
+function fakeHostReadFile(path: string): string {
+  if (path.endsWith('package-lock.json')) {
+    return HOST_LOCKFILE;
+  }
+  if (path.endsWith('package.json')) {
+    return HOST_SCRIPTS;
+  }
+  throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+}
+
+interface FakeDockerRunChild extends EventEmitter {
+  stdout: PassThrough;
+  stderr: PassThrough;
+}
+
+function fakeDockerRunChild(): FakeDockerRunChild {
+  const child = new EventEmitter() as FakeDockerRunChild;
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  return child;
+}
+
 describe('container capture target whitelist', () => {
   it('accepts the screenshot npm scripts and rejects the entry itself', () => {
     const targets = captureTargets(SCRIPTS);
@@ -107,14 +138,55 @@ describe('container capture target whitelist', () => {
 });
 
 describe('container capture target DPR and preview port', () => {
-  it('maps WebKit targets to DPR 2 and everything else to desktop DPR 1', () => {
-    expect(captureTargetForScript('screenshots:webkit')).toBe('webkit');
-    expect(captureTargetForScript('screenshots:minesweeper:webkit-narrow')).toBe(
+  it('maps every screenshot script to the targets it actually records', () => {
+    expect(captureTargetsForScript('screenshots:webkit')).toEqual(['webkit']);
+    expect(captureTargetsForScript('screenshots:minesweeper:webkit-narrow')).toEqual([
       'webkit',
-    );
-    expect(captureTargetForScript('screenshots:snake:webkit')).toBe('webkit');
-    expect(captureTargetForScript('screenshots')).toBe('desktop');
-    expect(captureTargetForScript('screenshots:minesweeper')).toBe('desktop');
+    ]);
+    expect(captureTargetsForScript('screenshots:snake:webkit')).toEqual(['webkit']);
+    expect(captureTargetsForScript('screenshots')).toEqual(['desktop', 'mobile']);
+    expect(captureTargetsForScript('screenshots:minesweeper')).toEqual([
+      'desktop',
+      'mobile',
+    ]);
+    expect(captureTargetsForScript('screenshots:minesweeper:scores')).toEqual([
+      'desktop',
+      'mobile',
+    ]);
+    // The Before variants capture the same desktop + phone pair.
+    expect(captureTargetsForScript('screenshots:2048:before')).toEqual([
+      'desktop',
+      'mobile',
+    ]);
+    expect(captureTargetsForScript('screenshots:breakout:before')).toEqual([
+      'desktop',
+      'mobile',
+    ]);
+    expect(captureTargetsForScript('screenshots:minesweeper:scores-before')).toEqual([
+      'desktop',
+      'mobile',
+    ]);
+    expect(captureTargetsForScript('screenshots:minesweeper:scores-clear')).toEqual([
+      'desktop',
+      'mobile',
+    ]);
+    // These modes only create Chromium phone contexts, so a run captured them
+    // at DPR 2 and never wrote a desktop image.
+    expect(captureTargetsForScript('screenshots:minesweeper:narrow')).toEqual([
+      'mobile',
+    ]);
+    expect(captureTargetsForScript('screenshots:minesweeper:min-before')).toEqual([
+      'mobile',
+    ]);
+    expect(captureTargetsForScript('screenshots:minesweeper:short')).toEqual([
+      'mobile',
+    ]);
+    expect(captureTargetsForScript('screenshots:minesweeper:large')).toEqual([
+      'mobile',
+    ]);
+    expect(captureTargetsForScript('screenshots:minesweeper:touch-before')).toEqual([
+      'mobile',
+    ]);
   });
 
   it('uses the preview port each screenshot script starts', () => {
@@ -177,7 +249,7 @@ describe('docker run construction', () => {
     );
   });
 
-  it('declares desktop DPR 1 for the Chromium screenshot target', () => {
+  it('declares desktop DPR 1 and mobile DPR 2 for a Chromium screenshot target', () => {
     const args = buildDockerRunArgs({
       target: 'screenshots',
       repoRoot: '/repo',
@@ -187,9 +259,23 @@ describe('docker run construction', () => {
       env: {},
     });
     const envArgs = envArgsOf(args);
-    expect(envArgs).toContain('CAPTURE_TARGET=desktop');
-    expect(envArgs).toContain('CAPTURE_TARGET_DPR=1');
+    expect(envArgs).toContain('CAPTURE_TARGET=desktop,mobile');
+    expect(envArgs).toContain('CAPTURE_TARGET_DPR=1,2');
     expect(envArgs.some((value) => value.startsWith('PREVIEW_PORT='))).toBe(false);
+  });
+
+  it('declares only mobile DPR 2 for the phone-only narrow modes', () => {
+    const args = buildDockerRunArgs({
+      target: 'screenshots:minesweeper:narrow',
+      repoRoot: '/repo',
+      image,
+      containerImage: localCaptureImageName(),
+      previewPort: 4186,
+      env: {},
+    });
+    const envArgs = envArgsOf(args);
+    expect(envArgs).toContain('CAPTURE_TARGET=mobile');
+    expect(envArgs).toContain('CAPTURE_TARGET_DPR=2');
   });
 });
 
@@ -360,6 +446,149 @@ describe('in-container capture run', () => {
       }),
     ).rejects.toThrow(/Capture DPR 1 does not match target "webkit": expected 2/);
     expect(calls).toEqual([]);
+  });
+});
+
+describe('host container capture run', () => {
+  const tempDirs: string[] = [];
+
+  afterEach(() => {
+    while (tempDirs.length > 0) {
+      rmSync(tempDirs.pop()!, { recursive: true, force: true });
+    }
+    vi.restoreAllMocks();
+  });
+
+  function hostHarness({
+    exitCode = 0,
+    env = {},
+    checkPort = vi.fn(async () => {}),
+  }: {
+    exitCode?: number;
+    env?: Env;
+    checkPort?: (port: number, host?: string) => Promise<void>;
+  } = {}) {
+    const argv = ['screenshots:webkit'];
+    const logDir = mkdtempSync(join(tmpdir(), 'capture-container-'));
+    tempDirs.push(logDir);
+    const now = '2026-11-12T00-00-00-000Z';
+    const logPath = join(logDir, `screenshots-webkit-${now}.log`);
+    const calls: Array<{ command: string; args: readonly string[] }> = [];
+    const spawn = vi.fn((command: string, args: readonly string[]) => {
+      calls.push({ command, args: [...args] });
+      const child = fakeDockerRunChild();
+      queueMicrotask(() => {
+        child.stdout.write('container stdout\n');
+        child.stderr.write('container stderr\n');
+        child.stdout.end();
+        child.stderr.end();
+        child.emit('exit', exitCode, null);
+      });
+      return child;
+    });
+    const logger = { log: vi.fn() };
+    const options: RunContainerCaptureOptions = {
+      argv,
+      env,
+      spawn: spawn as unknown as NonNullable<RunContainerCaptureOptions['spawn']>,
+      spawnSync: fakeSpawnSync({ status: 0 }),
+      readFile: fakeHostReadFile,
+      existsSync: () => true,
+      repoRoot: '/repo',
+      logDir,
+      ensureDependencies: async () => false,
+      checkPort,
+      logger,
+      now: () => now,
+      uid: 1000,
+      gid: 1000,
+    };
+    return { options, calls, spawn, logger, checkPort, logPath };
+  }
+
+  it('spawns docker run with the built args and forwards child output', async () => {
+    const harness = hostHarness();
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    await expect(runContainerCapture(harness.options)).resolves.toBe(0);
+
+    expect(harness.calls).toHaveLength(1);
+    const [call] = harness.calls;
+    expect(call?.command).toBe('docker');
+    expect(call?.args.slice(0, 2)).toEqual(['run', '--rm']);
+    expect(call?.args).toContain(localCaptureImageName());
+    expect(envArgsOf(call?.args ?? [])).toContain('CAPTURE_TARGET=webkit');
+    expect(envArgsOf(call?.args ?? [])).toContain('CAPTURE_TARGET_DPR=2');
+    expect(call?.args.slice(-1)).toEqual(['screenshots:webkit']);
+    expect(harness.logger.log).toHaveBeenCalledWith(`capture log: ${harness.logPath}`);
+
+    const written = (spy: { mock: { calls: unknown[][] } }) =>
+      spy.mock.calls.map(([chunk]) => String(chunk)).join('');
+    expect(written(stdout)).toContain('container stdout');
+    expect(written(stderr)).toContain('container stderr');
+    await vi.waitFor(
+      () => {
+        const log = readFileSync(harness.logPath, 'utf8');
+        expect(log).toContain('container stdout\n');
+        expect(log).toContain('container stderr\n');
+      },
+      { timeout: 5000 },
+    );
+
+    stdout.mockRestore();
+    stderr.mockRestore();
+  });
+
+  it('wraps a preview-port failure with the capture target name', async () => {
+    const checkPort = vi.fn(async () => {
+      throw new Error('port 4174 is already in use');
+    });
+    const harness = hostHarness({ checkPort });
+
+    await expect(runContainerCapture(harness.options)).rejects.toThrow(
+      'Cannot run container capture "screenshots:webkit": port 4174 is already in use',
+    );
+    expect(checkPort).toHaveBeenCalledWith(4174);
+    expect(harness.spawn).not.toHaveBeenCalled();
+    expect(harness.logger.log).not.toHaveBeenCalled();
+  });
+
+  it('checks the host port configured through PREVIEW_PORT', async () => {
+    const harness = hostHarness({ env: { PREVIEW_PORT: '4999' } });
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    await expect(runContainerCapture(harness.options)).resolves.toBe(0);
+    expect(harness.checkPort).toHaveBeenCalledWith(4999);
+    expect(envArgsOf(harness.calls[0]?.args ?? [])).toContain('PREVIEW_PORT=4999');
+    await vi.waitFor(
+      () => {
+        expect(readFileSync(harness.logPath, 'utf8')).toContain('container stdout\n');
+      },
+      { timeout: 5000 },
+    );
+  });
+
+  it('fails with the log path when docker exits non-zero', async () => {
+    const harness = hostHarness({ exitCode: 3 });
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    const error = await runContainerCapture(harness.options).catch(
+      (reason: unknown) => reason,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain(
+      'Container capture "screenshots:webkit" failed (exit 3).',
+    );
+    expect((error as Error).message).toContain(harness.logPath);
+    await vi.waitFor(
+      () => {
+        expect(readFileSync(harness.logPath, 'utf8')).toContain('container stdout\n');
+      },
+      { timeout: 5000 },
+    );
   });
 });
 
