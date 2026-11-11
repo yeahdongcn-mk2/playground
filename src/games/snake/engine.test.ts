@@ -398,3 +398,58 @@ describe('SnakeEngine', () => {
     }
   });
 });
+
+/**
+ * The snake capture script pins seed 7, the first fruit at (11,10) and three
+ * fixed ticks. These values are what `after-snake-playing.png` draws; changing
+ * the engine's food spawn order without re-capturing the committed PNG fails
+ * here.
+ */
+describe('deterministic screenshot scenario', () => {
+  const SCREENSHOT_SEED = 7;
+  const SCREENSHOT_TICKS = 3;
+  const FIRST_FRUIT = { x: 11, y: 10 };
+
+  function advanceScreenshotRun(seed = SCREENSHOT_SEED): SnakeEngine {
+    const engine = new SnakeEngine({
+      rng: createSeededRng(seed),
+      initialFood: FIRST_FRUIT,
+    });
+    engine.start();
+    for (let index = 0; index < SCREENSHOT_TICKS; index += 1) {
+      engine.step();
+    }
+    return engine;
+  }
+
+  it('reaches the same snake, next fruit and HUD state on the same seed and ticks', () => {
+    const first = advanceScreenshotRun();
+    const second = advanceScreenshotRun();
+
+    expect(second.state).toEqual(first.state);
+    expect(first.state).toMatchObject({
+      status: 'running',
+      direction: 'right',
+      score: 10,
+      stepMs: 144,
+    });
+    expect(first.state.snake).toEqual([
+      { x: 13, y: 10 },
+      { x: 12, y: 10 },
+      { x: 11, y: 10 },
+      { x: 10, y: 10 },
+    ]);
+    // The first fruit is fixed; this next fruit is the seeded RNG result.
+    expect(first.state.food).toEqual({ x: 4, y: 0 });
+  });
+
+  it('moves the next fruit with a different seed, so the capture depends on it', () => {
+    const screenshotRun = advanceScreenshotRun();
+    const otherSeed = advanceScreenshotRun(1);
+
+    expect(screenshotRun.state.food).toEqual({ x: 4, y: 0 });
+    expect(otherSeed.state.food).toEqual({ x: 12, y: 12 });
+    expect(otherSeed.state.food).not.toEqual(screenshotRun.state.food);
+    expect(otherSeed.state.score).toBe(10);
+  });
+});

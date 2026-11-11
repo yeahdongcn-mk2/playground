@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { directionFromCode, isEditableTarget } from '../../core/input';
 import type { Direction, SnakeEngine, SnakeSnapshot, StepResult } from './engine';
+import { advanceFixedTicks } from './fixed-ticks';
 
 const COLORS = {
   canvas: 0x070b14,
@@ -23,6 +24,8 @@ export interface SnakeSceneCallbacks {
   onPauseToggle(): void;
   onRestart(): void;
   onReady?(): void;
+  /** Fired after a debug fixed-tick capture sequence has been advanced. */
+  onFixedTicks?(ticks: number): void;
 }
 
 interface BoardMetrics {
@@ -60,6 +63,8 @@ export class SnakeScene extends Phaser.Scene {
   private accumulator = 0;
   private deathFlashUntil = 0;
   private readyFired = false;
+  private fixedTicks: number | null = null;
+  private frozen = false;
 
   constructor(engine: SnakeEngine, callbacks: SnakeSceneCallbacks, reduceMotion = false) {
     super('snake');
@@ -88,9 +93,51 @@ export class SnakeScene extends Phaser.Scene {
   resetRunState(): void {
     this.accumulator = 0;
     this.deathFlashUntil = 0;
+    this.frozen = false;
+  }
+
+  /**
+   * Debug/capture seam. The next update advances exactly `ticks` engine ticks
+   * instead of the wall-clock `delta`, draws that final state and freezes the
+   * run afterwards. The captured state therefore depends only on the engine
+   * seed, the initial fruit and this tick count, not on frame timing. Normal
+   * play never calls this.
+   */
+  requestFixedTicks(ticks: number): void {
+    this.fixedTicks = Math.max(0, Math.floor(ticks));
   }
 
   update(time: number, delta: number): void {
+    if (this.fixedTicks !== null) {
+      const ticks = this.fixedTicks;
+      this.fixedTicks = null;
+      this.accumulator = 0;
+      advanceFixedTicks(ticks, () => {
+        if (this.engine.currentStatus !== 'running') {
+          return false;
+        }
+        const result = this.engine.step();
+        this.callbacks.onStep(result);
+        this.handleFeedback(result, time);
+        return this.engine.currentStatus === 'running';
+      });
+      this.drawGame(this.engine.state, time);
+      this.frozen = true;
+      // Do not sleep the Phaser loop here: a slept WebGL canvas can capture as
+      // black. Keeping the loop alive only re-renders the retained, frozen
+      // graphics, while `frozen` stops any further engine ticks. The capture
+      // marker fires after this frame's render, so a snapshot can never catch a
+      // half-drawn board.
+      this.game.events.once(Phaser.Core.Events.POST_RENDER, () => {
+        this.callbacks.onFixedTicks?.(ticks);
+      });
+      return;
+    }
+
+    if (this.frozen) {
+      return;
+    }
+
     const status = this.engine.currentStatus;
 
     if (status === 'running') {
