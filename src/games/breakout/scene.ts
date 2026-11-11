@@ -1,5 +1,10 @@
 import Phaser from 'phaser';
-import type { BreakoutEngine, BreakoutSnapshot, BreakoutUpdate } from './engine';
+import type {
+  BreakoutEngine,
+  BreakoutSnapshot,
+  BreakoutUpdate,
+} from './engine';
+import { advanceFixedSteps } from './fixed-steps';
 import { courtMetrics, type CourtMetrics } from './geometry';
 import { BREAKOUT_COLORS as COLORS, BRICK_COLORS } from './palette';
 
@@ -7,6 +12,8 @@ export interface BreakoutSceneCallbacks {
   /** Fired after a simulation update that changed score, lives or status. */
   onStep(result: BreakoutUpdate): void;
   onReady?(): void;
+  /** Fired after a debug fixed-step capture sequence has been advanced. */
+  onFixedSteps?(steps: number): void;
 }
 
 /**
@@ -21,6 +28,7 @@ export class BreakoutScene extends Phaser.Scene {
 
   private layer!: Phaser.GameObjects.Graphics;
   private readyFired = false;
+  private fixedSteps: number | null = null;
 
   constructor(
     engine: BreakoutEngine,
@@ -47,7 +55,35 @@ export class BreakoutScene extends Phaser.Scene {
     }
   }
 
+  /**
+   * Debug/capture seam. The next update advances exactly `steps` fixed
+   * simulation steps instead of the wall-clock `delta`, draws that final state
+   * and pauses the game loop afterwards. The captured state therefore depends
+   * only on the engine seed and this step count, not on frame timing. Normal
+   * play never calls this.
+   */
+  requestFixedSteps(steps: number): void {
+    this.fixedSteps = Math.max(0, Math.floor(steps));
+  }
+
   update(_time: number, delta: number): void {
+    if (this.fixedSteps !== null) {
+      const steps = this.fixedSteps;
+      this.fixedSteps = null;
+      advanceFixedSteps(steps, (delta) => this.advance(delta));
+      this.draw(this.engine.state);
+      // The game step that is already running still renders after this scene
+      // update; sleeping only stops the following frames, so the deterministic
+      // state above is exactly what the screenshot sees.
+      this.game.loop.sleep();
+      this.callbacks.onFixedSteps?.(steps);
+      return;
+    }
+    this.advance(delta);
+    this.draw(this.engine.state);
+  }
+
+  private advance(delta: number): void {
     const result = this.engine.update(delta);
     if (
       result.destroyedBricks.length > 0 ||
@@ -58,7 +94,6 @@ export class BreakoutScene extends Phaser.Scene {
       this.handleFeedback(result);
       this.callbacks.onStep(result);
     }
-    this.draw(this.engine.state);
   }
 
   private readonly handleResize = (): void => {

@@ -836,3 +836,59 @@ describe('snapshots and validation', () => {
     ).toThrow(RangeError);
   });
 });
+
+/**
+ * The breakout capture script pins this seed and step count. These expected
+ * numbers are what `after-breakout-playing-{desktop,mobile,webkit}.png` draw;
+ * changing the serve, physics or fixed-step behaviour without re-capturing the
+ * committed PNGs fails here.
+ */
+describe('deterministic screenshot scenario', () => {
+  const SCREENSHOT_SEED = 7;
+  const SCREENSHOT_STEPS = 120;
+
+  function advanceScreenshotRun(): BreakoutEngine {
+    const engine = new BreakoutEngine({ rng: createSeededRng(SCREENSHOT_SEED) });
+    expect(engine.start()).toBe(true);
+    for (let index = 0; index < SCREENSHOT_STEPS; index += 1) {
+      engine.update(FIXED_STEP_MS);
+    }
+    return engine;
+  }
+
+  it('reaches the same state on the same seed and fixed step count', () => {
+    const first = advanceScreenshotRun();
+    const second = advanceScreenshotRun();
+
+    expect(second.state).toEqual(first.state);
+    expect(first.state).toMatchObject({
+      status: 'running',
+      score: 0,
+      lives: 3,
+      level: 1,
+      ballSpeed: 320,
+    });
+    expect(first.state.paddle.x).toBe(240);
+    expect(first.state.bricks).toHaveLength(40);
+    expect(first.state.ball).toEqual({
+      x: 79.99999999999939,
+      y: 384.87187078898114,
+      vx: -159.99999999999997,
+      vy: -277.1281292110204,
+      radius: 8,
+      attached: false,
+    });
+  });
+
+  it('serves in the seed-dependent direction, not a wall-clock one', () => {
+    const screenshotRun = advanceScreenshotRun();
+    const otherSeed = new BreakoutEngine({ rng: createSeededRng(1) });
+    expect(otherSeed.start()).toBe(true);
+    for (let index = 0; index < SCREENSHOT_STEPS; index += 1) {
+      otherSeed.update(FIXED_STEP_MS);
+    }
+
+    expect(screenshotRun.state.ball.vx).toBeLessThan(0);
+    expect(otherSeed.state.ball.vx).toBeGreaterThan(0);
+  });
+});

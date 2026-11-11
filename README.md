@@ -149,7 +149,7 @@ pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和
 | `R` | 立即重新开始 |
 | 在球场上拖动 / 按住左右两侧 | 触屏或鼠标拖动挡板（窄屏或触屏设备显示提示） |
 
-打砖块同样通过 hash 路由后的 query `?debug=1`（例如 `/#/games/breakout?debug=1`；开发服务器默认启用，生产构建需要在路由后显式带上）安装调试接缝：只读状态、用 `bricks=row,col;...` 固定砖块、用 `ball=x,y,vx,vy` 固定球、用 `lives` / `level` / `seed` / `speed` 固定初始状态，以及 e2e 专用的 `destroy()` 销毁入口；绘制像素断言还会带 `renderer=canvas` 固定 Canvas 渲染器。正常入口不显示调试 UI。
+打砖块同样通过 hash 路由后的 query `?debug=1`（例如 `/#/games/breakout?debug=1`；开发服务器默认启用，生产构建需要在路由后显式带上）安装调试接缝：只读状态、用 `bricks=row,col;...` 固定砖块、用 `ball=x,y,vx,vy` 固定球、用 `lives` / `level` / `seed` / `speed` 固定初始状态、用 `steps=<n>` 在开始后以固定步长精确推进 n 个固定步后暂停主循环（仅截图确定性使用），以及 e2e 专用的 `destroy()` 销毁入口；绘制像素断言还会带 `renderer=canvas` 固定 Canvas 渲染器。正常入口不显示调试 UI。
 
 ## 扫雷玩法
 
@@ -392,9 +392,9 @@ games/<game>/scene → 对应引擎（动态 import）
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过
-npm run test:unit    # 524 passed（含贪食蛇 21、俄罗斯方块 38、2048 41、打砖块 39、扫雷 150 个规则 / 难度 / 成绩 / 视图 / 调试用例，以及 2048 截图确定性 4 例、截图脚本端口 11 例、截图模式 58 例、预览服务启动 7 例）
+npm run test:unit    # 533 passed（含贪食蛇 21、俄罗斯方块 38、2048 41、打砖块 41、扫雷 150 个规则 / 难度 / 成绩 / 视图 / 调试用例，以及 2048 截图确定性 4 例、打砖块截图确定性 7 例、截图脚本端口 11 例、截图模式 58 例、预览服务启动 7 例）
 npm run build        # 通过
-npm run check:budget # 通过（入口 10.91 KB gzip，全部 JS 404.55 KB gzip）
+npm run check:budget # 通过（入口 10.90 KB gzip，全部 JS 404.75 KB gzip）
 npm run test:e2e     # 153 passed（桌面 86 + 手机 36 + WebKit 31）
 ```
 
