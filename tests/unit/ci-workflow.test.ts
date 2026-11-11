@@ -99,6 +99,7 @@ const isAptAcquireConfig = (step: WorkflowStep): boolean =>
   (step.run ?? '').includes(APT_ACQUIRE_CONFIG_PATH);
 const isE2e = (step: WorkflowStep): boolean => (step.run ?? '').trim() === 'npm run test:e2e';
 const SCREENSHOT_DOC_DIMS_COMMAND = 'npm run verify:screenshots:doc-dims';
+const SCREENSHOT_SHA256_COMMAND = 'npm run verify:screenshots:sha256';
 /** Unit-test report reused by the doc count check instead of rerunning the suite. */
 const UNIT_TEST_REPORT = '"$RUNNER_TEMP/vitest-report.json"';
 const UNIT_TEST_COMMAND = `npm run test:unit -- --reporter=default --reporter=json --outputFile=${UNIT_TEST_REPORT}`;
@@ -108,6 +109,8 @@ const isUnitTests = (step: WorkflowStep): boolean =>
 const isBuild = (step: WorkflowStep): boolean => (step.run ?? '').trim() === 'npm run build';
 const isScreenshotDocDims = (step: WorkflowStep): boolean =>
   (step.run ?? '').trim() === SCREENSHOT_DOC_DIMS_COMMAND;
+const isScreenshotSha256 = (step: WorkflowStep): boolean =>
+  (step.run ?? '').trim() === SCREENSHOT_SHA256_COMMAND;
 const isDocCounts = (step: WorkflowStep): boolean =>
   (step.run ?? '').trim() === DOC_COUNTS_COMMAND;
 const isWebkitScreenshotSmoke = (step: WorkflowStep): boolean =>
@@ -135,6 +138,7 @@ describe('CI workflow', () => {
       UNIT_TEST_COMMAND,
       DOC_COUNTS_COMMAND,
       'npm run verify:screenshots:doc-dims',
+      SCREENSHOT_SHA256_COMMAND,
       'npm run build',
       'npm run check:budget',
       'npm run test:e2e',
@@ -225,6 +229,24 @@ describe('CI workflow', () => {
 
     // The doc-dims check only reads committed files, so keeping the existing
     // 20-minute budget is safe; a regression in that budget should fail here.
+    expect(verify?.['timeout-minutes']).toBe(20);
+  });
+
+  it('verifies the committed screenshot sha256 manifest before the build', () => {
+    const step = requireStep(isScreenshotSha256, 'a screenshot evidence sha256 step');
+    expect(step.name).toBe('Screenshot evidence sha256 manifest');
+    expect((step.run ?? '').trim()).toBe(SCREENSHOT_SHA256_COMMAND);
+    // The CI step checks committed evidence from a clean checkout, so it must
+    // not depend on a capture log.
+    expect((step.run ?? '').trim()).not.toContain('--log');
+    expect(step['continue-on-error']).toBeUndefined();
+
+    const docDimsIndex = stepIndex(isScreenshotDocDims);
+    const buildIndex = stepIndex(isBuild);
+    expect(docDimsIndex).toBeGreaterThanOrEqual(0);
+    expect(buildIndex).toBeGreaterThanOrEqual(0);
+    expect(stepIndex(isScreenshotSha256)).toBeGreaterThan(docDimsIndex);
+    expect(stepIndex(isScreenshotSha256)).toBeLessThan(buildIndex);
     expect(verify?.['timeout-minutes']).toBe(20);
   });
 
