@@ -118,8 +118,9 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(WEBKIT_HISTORICAL).toContain('同一捕获提交');
     expect(WEBKIT_HISTORICAL).toContain('4f488a3e');
     expect(WEBKIT_HISTORICAL).toContain('两次 sha256 不同');
-    expect(WEBKIT_HISTORICAL).toContain('0.037%');
-    expect(WEBKIT_HISTORICAL).toContain('1833');
+    expect(WEBKIT_HISTORICAL).toContain('672285de');
+    expect(WEBKIT_HISTORICAL).toContain('0ea38c8d');
+    expect(WEBKIT_HISTORICAL).toContain('不能把单次采样的 0.22% 当作稳定结论');
     expect(driftBullets(WEBKIT_HISTORICAL)).toContain('after-2048-ready-webkit.png');
   });
 
@@ -130,11 +131,15 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(WEBKIT_HISTORICAL).toContain(CONTAINER_IMAGE);
     expect(WEBKIT_HISTORICAL).toContain('ready 0.011%');
     expect(WEBKIT_HISTORICAL).toContain('113 px');
+    expect(WEBKIT_HISTORICAL).toContain('574 px');
+    expect(WEBKIT_HISTORICAL).toContain('210 px');
+    expect(WEBKIT_HISTORICAL).toContain('236 px');
     expect(WEBKIT_HISTORICAL).toContain('playing 0.06%');
     expect(WEBKIT_HISTORICAL).toContain('lost 0.02%');
     expect(WEBKIT_HISTORICAL).toContain('won 0.02%');
     expect(WEBKIT_HISTORICAL).toContain('10 / 14 / 12 / 12');
-    expect(WEBKIT_HISTORICAL).toContain('同一捕获环境连续两跑');
+    expect(WEBKIT_HISTORICAL).toContain('也只在部分状态逐字节一致');
+    expect(WEBKIT_HISTORICAL).toContain('2048 ready 在同一容器两跑不同');
   });
 
   it('makes the CI manifest, not sha256, the authoritative webkit-narrow check', () => {
@@ -143,6 +148,7 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(WEBKIT_HISTORICAL).toContain('WebKit narrow screenshot smoke test');
     expect(WEBKIT_HISTORICAL).toContain('npm run verify:screenshots:webkit');
     expect(WEBKIT_HISTORICAL).toContain('内置的 23 个');
+    expect(WEBKIT_HISTORICAL).toContain('不带 `--log` 时不校验');
     expect(WEBKIT_HISTORICAL).toContain('--log');
     expect(WEBKIT_HISTORICAL).toContain('engine=webkit');
     expect(WEBKIT_HISTORICAL).toContain('视口');
@@ -159,6 +165,8 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(WEBKIT_HISTORICAL_TITLE).toBeTruthy();
     expect(WEBKIT_NARROW).toContain('不是与已提交 PNG 的 sha256 比对');
     expect(WEBKIT_NARROW).toContain('ci-webkit-narrow-manifest.json');
+    expect(WEBKIT_NARROW).toContain('按内置 23 个 WebKit 产物清单');
+    expect(WEBKIT_NARROW).toContain('不校验日志中的');
     expect(WEBKIT_NARROW).toContain(WEBKIT_HISTORICAL_TITLE);
     expect(HISTORICAL).toContain(WEBKIT_HISTORICAL_TITLE);
     expect(HISTORICAL).toContain('#199');
