@@ -54,6 +54,9 @@ jobs:
       - name: Unit tests
         run: npm run test:unit
 
+      - name: Screenshot doc dimensions
+        run: npm run verify:screenshots:doc-dims
+
       - name: Production build
         run: npm run build
 
