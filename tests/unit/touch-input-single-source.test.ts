@@ -7,10 +7,10 @@ import { describe, expect, it } from 'vitest';
  * `scripts/lib/touch-input.mjs` owns the touch pointer ids and the
  * `releaseTouchClick` sequence (release-click pointer id, `pointerType:
  * 'mouse'`, `detail: 1`, `buttons: 0`). The e2e entry
- * `tests/e2e/touch-input.ts` and the minesweeper screenshot entry must consume
- * that implementation instead of rebuilding it. These checks read the source
- * so a copy can never be reintroduced just because the runtime parity tests
- * still happen to agree.
+ * `tests/e2e/touch-input.ts`, the module's own `touchLongPress` and the
+ * minesweeper screenshot entry must consume that implementation instead of
+ * rebuilding it. These checks read the source so a copy can never be
+ * reintroduced just because the runtime parity tests still happen to agree.
  */
 
 const SHARED = new URL('../../scripts/lib/touch-input.mjs', import.meta.url);
@@ -82,6 +82,23 @@ describe('touch injector single source', () => {
     // a raw `'click'` here would hide a copy behind the dispatch defaults.
     expect(e2e).not.toMatch(/'click'/);
     expect(e2e.match(/releaseTouchClick\(/g)).toHaveLength(1);
+  });
+
+  it('calls the helper from touchLongPress instead of rebuilding the sequence', () => {
+    const shared = stripComments(read(SHARED));
+
+    // The definition plus the single `touchLongPress` call site. A third
+    // occurrence means a second release-click sequence grew back inside the
+    // shared module itself, which the e2e-only check above cannot see.
+    expect(shared.match(/\breleaseTouchClick\s*\(/g)).toHaveLength(2);
+
+    const start = shared.indexOf('export async function touchLongPress');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const body = shared.slice(start, shared.indexOf('\n}', start));
+    expect(body).toMatch(/\breleaseTouchClick\s*\(/);
+    // The release-click shape must not be inlined again at the call site.
+    expect(body).not.toMatch(/pointerType:\s*'mouse'/);
+    expect(body).not.toMatch(/\bdetail:\s*1\b/);
   });
 
   it('routes both injection entries through the shared module', () => {
