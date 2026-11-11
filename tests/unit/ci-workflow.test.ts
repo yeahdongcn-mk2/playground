@@ -88,11 +88,17 @@ const isPlaywrightInstall = (step: WorkflowStep): boolean =>
   (step.run ?? '').trim() === PLAYWRIGHT_INSTALL_COMMAND;
 const isE2e = (step: WorkflowStep): boolean => (step.run ?? '').trim() === 'npm run test:e2e';
 const SCREENSHOT_DOC_DIMS_COMMAND = 'npm run verify:screenshots:doc-dims';
+/** Unit-test report reused by the doc count check instead of rerunning the suite. */
+const UNIT_TEST_REPORT = '"$RUNNER_TEMP/vitest-report.json"';
+const UNIT_TEST_COMMAND = `npm run test:unit -- --reporter=default --reporter=json --outputFile=${UNIT_TEST_REPORT}`;
+const DOC_COUNTS_COMMAND = `npm run verify:doc-counts -- --report ${UNIT_TEST_REPORT}`;
 const isUnitTests = (step: WorkflowStep): boolean =>
-  (step.run ?? '').trim() === 'npm run test:unit';
+  (step.run ?? '').trim() === UNIT_TEST_COMMAND;
 const isBuild = (step: WorkflowStep): boolean => (step.run ?? '').trim() === 'npm run build';
 const isScreenshotDocDims = (step: WorkflowStep): boolean =>
   (step.run ?? '').trim() === SCREENSHOT_DOC_DIMS_COMMAND;
+const isDocCounts = (step: WorkflowStep): boolean =>
+  (step.run ?? '').trim() === DOC_COUNTS_COMMAND;
 const isWebkitScreenshotSmoke = (step: WorkflowStep): boolean =>
   commandsOf(step).some((command) => command.includes(NARROW_CAPTURE_COMMAND));
 const E2E_FLAKE_CHECK_COMMAND = 'node scripts/check-e2e-flakes.mjs';
@@ -115,7 +121,8 @@ describe('CI workflow', () => {
       'npx playwright install --with-deps chromium webkit',
       'npm run typecheck',
       'npm run lint',
-      'npm run test:unit',
+      UNIT_TEST_COMMAND,
+      DOC_COUNTS_COMMAND,
       'npm run verify:screenshots:doc-dims',
       'npm run build',
       'npm run check:budget',
@@ -158,6 +165,35 @@ describe('CI workflow', () => {
 
     // The doc-dims check only reads committed files, so keeping the existing
     // 20-minute budget is safe; a regression in that budget should fail here.
+    expect(verify?.['timeout-minutes']).toBe(20);
+  });
+
+  it('runs the doc test count check after the unit tests and before the build', () => {
+    const step = requireStep(isDocCounts, 'a doc test count check step');
+    expect(step.name).toBe('Verify doc test counts');
+    expect((step.run ?? '').trim()).toBe(DOC_COUNTS_COMMAND);
+    expect(step['continue-on-error']).toBeUndefined();
+
+    const unitTests = requireStep(isUnitTests, 'a unit tests step');
+    const unitCommand = (unitTests.run ?? '').trim();
+    expect(unitCommand).toBe(UNIT_TEST_COMMAND);
+    // Keep the default reporter so a unit-test failure still shows its output,
+    // and write the JSON report the count check reuses.
+    expect(unitCommand).toContain('--reporter=default');
+    expect(unitCommand).toContain(`--outputFile=${UNIT_TEST_REPORT}`);
+
+    // Reusing the report keeps the count check from running the whole suite again.
+    expect((step.run ?? '').trim()).toContain(`--report ${UNIT_TEST_REPORT}`);
+    expect((step.run ?? '').trim()).not.toContain('test:unit');
+
+    const unitTestsIndex = stepIndex(isUnitTests);
+    const buildIndex = stepIndex(isBuild);
+    const checkIndex = stepIndex(isDocCounts);
+    expect(unitTestsIndex).toBeGreaterThanOrEqual(0);
+    expect(buildIndex).toBeGreaterThanOrEqual(0);
+    expect(checkIndex).toBeGreaterThan(unitTestsIndex);
+    expect(checkIndex).toBeLessThan(buildIndex);
+
     expect(verify?.['timeout-minutes']).toBe(20);
   });
 
