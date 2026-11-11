@@ -68,6 +68,9 @@ jobs:
         env:
           CI: 'true'
 
+      - name: Check target e2e flakes
+        run: node scripts/check-e2e-flakes.mjs
+
       - name: WebKit narrow screenshot smoke test
         run: |
           set -euo pipefail

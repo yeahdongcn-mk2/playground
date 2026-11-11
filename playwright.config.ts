@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+import { DEFAULT_E2E_REPORT_PATH } from './scripts/lib/e2e-flakes.mjs';
 
 const PORT = 4173;
 
@@ -8,7 +9,11 @@ export default defineConfig({
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
   workers: process.env.CI ? 1 : undefined,
-  reporter: process.env.CI ? [['github'], ['list']] : [['list']],
+  // CI writes a JSON report so scripts/check-e2e-flakes.mjs can fail the job
+  // when the guarded mobile-webkit case only passes after a retry.
+  reporter: process.env.CI
+    ? [['github'], ['list'], ['json', { outputFile: DEFAULT_E2E_REPORT_PATH }]]
+    : [['list']],
   outputDir: 'test-results',
   use: {
     baseURL: `http://127.0.0.1:${PORT}`,
