@@ -65,7 +65,8 @@ describe('framework mobile settle wait guard', () => {
 
     expect(result).toEqual(settled);
     expect(samples).toHaveLength(0);
-    // Six polls: the live trail broke the streak, the next five stayed settled.
+    // Seven polls: the live trail broke the streak; the next five stayed
+    // settled, so only the six unsettled polls waited between reads.
     expect(waits).toEqual(Array(6).fill(BLANK_SETTLE_INTERVAL_MS));
   });
 
