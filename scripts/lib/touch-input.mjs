@@ -11,9 +11,10 @@ import { setTimeout as delay } from 'node:timers/promises';
  * drift apart. Both dispatch the `pointerdown` / `pointerup` / release `click`
  * a real touch produces. The finger events carry `pointerType: 'touch'` and the
  * touch pointer id (2); the release click is the mouse-mediated event WebKit
- * delivers (`pointerType: 'mouse'`, pointer id 1, `detail: 1`), so the same
- * view code runs on both engines and nothing depends on `newCDPSession` or
- * `Input.dispatchTouchEvent`.
+ * delivers (`pointerType: 'mouse'`, pointer id 1, `detail: 1`). That release
+ * sequence lives only in `releaseTouchClick`, which both `touchLongPress` and
+ * the e2e gesture adapter call, so the same view code runs on both engines and
+ * nothing depends on `newCDPSession` or `Input.dispatchTouchEvent`.
  */
 
 /**
@@ -92,6 +93,25 @@ export async function dispatchTouchPointerEvent(
   }, init);
 }
 
+/**
+ * Dispatch the release `click` a real touch produces.
+ *
+ * A real touch does not produce a touch-typed click: WebKit reports it as a
+ * mouse-mediated `PointerEvent` with pointer id `RELEASE_CLICK_POINTER_ID`,
+ * `pointerType: 'mouse'`, `detail: 1` and no pressed buttons. Those options are
+ * fixed here so callers cannot accidentally reuse the touch pointer id or drop
+ * one of the fields; `options.target` only chooses where the event lands.
+ */
+export async function releaseTouchClick(page, point, options = {}) {
+  const { target = null } = options;
+  await dispatchTouchPointerEvent(page, 'click', point, RELEASE_CLICK_POINTER_ID, {
+    target,
+    detail: 1,
+    buttons: 0,
+    pointerType: 'mouse',
+  });
+}
+
 /** Hold a touch on `locator`, release it and emit the release click. */
 export async function touchLongPress(
   page,
@@ -107,14 +127,5 @@ export async function touchLongPress(
   await dispatchTouchPointerEvent(page, 'pointerdown', point, pointerId, { target: locator });
   await delay(holdMs);
   await dispatchTouchPointerEvent(page, 'pointerup', point, pointerId, { target: locator });
-  // A real touch does not produce a touch `click`: WebKit reports it as a
-  // mouse-mediated PointerEvent with pointerId 1, pointerType 'mouse' and
-  // detail 1. Do not reuse the touch id here, or the injection keeps drifting
-  // from the shape a real finger delivers.
-  await dispatchTouchPointerEvent(page, 'click', point, RELEASE_CLICK_POINTER_ID, {
-    target: locator,
-    detail: 1,
-    buttons: 0,
-    pointerType: 'mouse',
-  });
+  await releaseTouchClick(page, point, { target: locator });
 }
