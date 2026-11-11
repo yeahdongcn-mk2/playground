@@ -52,7 +52,8 @@
     "lint": "oxlint src tests && node scripts/check-boundaries.mjs",
     "check:budget": "node scripts/check-budget.mjs",
     "verify:screenshots:webkit": "node scripts/verify-screenshot-artifacts.mjs",
-    "verify:screenshots:doc-dims": "node scripts/check-screenshot-doc-dims.mjs"
+    "verify:screenshots:doc-dims": "node scripts/check-screenshot-doc-dims.mjs",
+    "verify:doc-counts": "node scripts/check-doc-counts.mjs"
   },
   "dependencies": {
     "phaser": "^4.2.1"

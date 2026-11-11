@@ -228,6 +228,7 @@ pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和
 | `npm run preview` | 本地预览生产构建 |
 | `npm run typecheck` | 只做 TypeScript 类型检查 |
 | `npm run test:unit` | Vitest 单元测试 |
+| `npm run verify:doc-counts` | 校验三份文档记录的单测计数与 Vitest 实测 `numTotalTests` 一致 |
 | `npm run test:e2e` | 先构建，再用 `vite preview` 跑全部 Playwright 项目（Chromium 桌面 / Pixel 7 + `mobile-webkit`） |
 | `npm run test:e2e:webkit` | 先构建，再只跑 `mobile-webkit` 项目（iPhone SE (3rd gen)）：framework 手机端、扫雷 WebKit 冒烟、触屏手势 / 触屏难度表单、贪食蛇 / 俄罗斯方块 / 2048 / 打砖块的手机端用例，以及 320×640 / 360×640 / 375×667 / 412×839 窄屏契约 |
 | `npm run lint` | oxlint + 模块依赖方向检查 |
@@ -392,7 +393,7 @@ games/<game>/scene → 对应引擎（动态 import）
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过
-npm run test:unit    # 628 passed（含贪食蛇 27（引擎 23 + 调试 4）、俄罗斯方块 38、2048 41、打砖块 41、扫雷 150 个规则 / 难度 / 成绩 / 视图 / 调试用例，以及 2048 截图确定性 4 例、贪食蛇截图确定性 8 例、打砖块截图确定性 7 例、截图脚本端口 11 例、截图模式 58 例、预览服务启动 7 例、framework 手机端 tap 诊断 10 例、framework 手机端停稳等待 3 例、e2e flaky 门禁 26 例、ci-workflow 新增 2 例断言、flake-watch workflow 9 例、flaky 口径文档 8 例、新增触摸注入单一来源与 release click 6 例）
+npm run test:unit    # 650 passed（含贪食蛇 27（引擎 23 + 调试 4）、俄罗斯方块 38、2048 41、打砖块 41、扫雷 150 个规则 / 难度 / 成绩 / 视图 / 调试用例，以及 2048 截图确定性 4 例、贪食蛇截图确定性 8 例、打砖块截图确定性 7 例、截图脚本端口 11 例、截图模式 58 例、预览服务启动 7 例、framework 手机端 tap 诊断 10 例、framework 手机端停稳等待 3 例、e2e flaky 门禁 26 例、ci-workflow 新增 2 例断言、flake-watch workflow 9 例、flaky 口径文档 8 例、新增触摸注入单一来源与 release click 6 例、文档计数真值校验 22 例）
 npm run build        # 通过
 npm run check:budget # 通过（入口 10.91 KB gzip，全部 JS 405.11 KB gzip）
 npm run test:e2e     # 153 passed（桌面 86 + 手机 36 + WebKit 31）
