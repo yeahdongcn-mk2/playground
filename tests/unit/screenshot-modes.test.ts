@@ -658,7 +658,10 @@ describe('WebKit screenshot modes', () => {
       expect(source, file).not.toContain('Input.dispatchTouchEvent');
     }
     const touchHelper = readFileSync(join(SCRIPT_DIR, 'lib', 'touch-input.mjs'), 'utf8');
-    expect(touchHelper).toContain("pointerType: 'touch'");
+    expect(touchHelper).toContain('export const TOUCH_POINTER_ID = 2');
+    expect(touchHelper).toContain('export const RELEASE_CLICK_POINTER_ID = 1');
+    expect(touchHelper).toContain("pointerType: options.pointerType ?? 'touch'");
+    expect(touchHelper).toContain("pointerType: 'mouse'");
     expect(touchHelper).toContain("'pointerdown'");
     expect(touchHelper).toContain("'pointerup'");
     expect(touchHelper).toContain("'click'");
