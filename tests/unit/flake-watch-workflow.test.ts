@@ -143,6 +143,25 @@ describe('flake-watch workflow', () => {
     );
   });
 
+  it('summarizes the Playwright JSON report stats instead of only the outcome', () => {
+    const summary = requireStep(
+      (step) => (step.run ?? '').includes('GITHUB_STEP_SUMMARY'),
+      'a step-summary step',
+    );
+
+    // Deleting the report-reading branch must fail this test: the summary has
+    // to point at the report and keep every first-run stat in the output.
+    expect(summary.run).toContain('test-results/e2e-report.json');
+    expect(summary.run).toContain('JSON.parse');
+    for (const stat of ['stats.expected', 'stats.unexpected', 'stats.flaky', 'stats.skipped']) {
+      expect(summary.run, `the summary should report ${stat}`).toContain(stat);
+    }
+    for (const label of ['首跑通过：', '失败：', '重试后通过：', '跳过：']) {
+      expect(summary.run, `the summary should label ${label}`).toContain(label);
+    }
+    expect(summary.run).toContain('无法读取 Playwright JSON 报告');
+  });
+
   it('uploads the Playwright report and failure evidence when the check finishes', () => {
     const upload = requireStep(
       (step) => (step.uses ?? '').startsWith('actions/upload-artifact@'),
