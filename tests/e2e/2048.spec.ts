@@ -108,6 +108,69 @@ test.describe('2048 gameplay', () => {
     await expectNoHorizontalOverflow(page);
   });
 
+  test('takes the debug seed from the URL instead of a fresh random seed', async ({
+    page,
+  }) => {
+    // COLOR_BOARD + ArrowLeft merges into 4/8 and 16/32, then seed 135 spawns
+    // a 2 at (0,3). The engine unit test pins the same board, seed and move.
+    const seed135Board = [
+      [4, 8, null, 2],
+      [16, 32, null, null],
+      [null, null, null, null],
+      [null, null, null, null],
+    ];
+
+    // Omitting `seed` must wire the documented fallback (1) into the engine;
+    // treating a missing value as 0 would land on a different starting board.
+    await open2048(page);
+    await expect.poll(async () => (await readState(page)).board).toEqual([
+      [null, null, null, null],
+      [null, null, null, 2],
+      [null, null, 4, null],
+      [null, null, null, null],
+    ]);
+
+    // Without a `board` parameter the seam still has to seed the two starting
+    // tiles, which exercises the no-board `{ rng }` branch in the view.
+    await page.goto('/#/');
+    await expect(page.getByTestId('game-card-2048')).toBeVisible();
+    await open2048(page, { seed: 135 });
+    await expect.poll(async () => (await readState(page)).board).toEqual([
+      [null, 2, null, null],
+      [null, null, null, null],
+      [null, null, null, null],
+      [null, 2, null, null],
+    ]);
+
+    await page.goto('/#/');
+    await expect(page.getByTestId('game-card-2048')).toBeVisible();
+    await open2048(page, { board: COLOR_BOARD, seed: 135 });
+    await page.keyboard.press('ArrowLeft');
+    await expect(page.getByTestId('score')).toHaveText('60');
+    await expect.poll(async () => (await readState(page)).board).toEqual(seed135Board);
+
+    // A second mount with the same seed must spawn at the same cell, so a
+    // per-mount Date.now()/Math.random() fallback would almost certainly fail.
+    await page.goto('/#/');
+    await expect(page.getByTestId('game-card-2048')).toBeVisible();
+    await open2048(page, { board: COLOR_BOARD, seed: 135 });
+    await page.keyboard.press('ArrowLeft');
+    await expect.poll(async () => (await readState(page)).board).toEqual(seed135Board);
+
+    // A different seed must move the spawn to the empty (2,0) cell; ignoring
+    // the URL seed would make both exact-board assertions above unreliable.
+    await page.goto('/#/');
+    await expect(page.getByTestId('game-card-2048')).toBeVisible();
+    await open2048(page, { board: COLOR_BOARD, seed: 136 });
+    await page.keyboard.press('ArrowLeft');
+    await expect.poll(async () => (await readState(page)).board).toEqual([
+      [4, 8, null, null],
+      [16, 32, null, null],
+      [2, null, null, null],
+      [null, null, null, null],
+    ]);
+  });
+
   test('ends when no move is possible and restarts three ways', async ({ page }) => {
     await open2048(page, { board: NEAR_STUCK_BOARD });
     await startGame(page);
