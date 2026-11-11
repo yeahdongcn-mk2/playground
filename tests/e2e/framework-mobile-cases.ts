@@ -1,9 +1,9 @@
-import { canvasBox, expect, openBlankGame, readPosition, test } from './fixtures';
+import { waitForBlankSettled } from '../../scripts/lib/blank-settle.mjs';
+import { canvasBox, expect, openBlankGame, test } from './fixtures';
 import {
   collectFrameworkTapDiagnostics,
   formatFrameworkTapDiagnostics,
   installFrameworkTapProbe,
-  isFrameworkTapSettled,
   readFrameworkTapPageSnapshot,
   readFrameworkTapProbe,
   type FrameworkTapTarget,
@@ -11,8 +11,6 @@ import {
 
 /** The product-level position tolerance already used by this case. */
 const TAP_TOLERANCE = 8;
-/** The poll budget this case already uses; diagnostics must not widen it. */
-const TAP_TIMEOUT_MS = 3_000;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -24,9 +22,13 @@ function errorMessage(error: unknown): string {
  * interaction is verified once and executed by both engines instead of being
  * copied into a second spec.
  *
- * The tap poll is wrapped so a failure reports whether the tap reached the
- * canvas, whether the readout moved and whether the frame loop advanced
- * instead of only `Timeout 3000ms exceeded` (issue #117).
+ * The tap result is awaited with the blank scene's deterministic settle loop:
+ * the readout must stay on the tapped canvas point with no trail left for
+ * several consecutive samples. A wall-clock poll can pass on one lucky frame
+ * and fail on a cold CI start (issue #117), so it is not used here. The wait is
+ * still wrapped with the tap diagnostics so a failure reports whether the tap
+ * reached the canvas, whether the readout moved and whether the frame loop
+ * advanced instead of only a timeout.
  */
 export function defineFrameworkMobileCases(): void {
   test.describe('mobile shell', () => {
@@ -69,15 +71,15 @@ export function defineFrameworkMobileCases(): void {
         tapError = errorMessage(error);
       }
       try {
-        await expect
-          .poll(async () => isFrameworkTapSettled(await readPosition(page), target), {
-            timeout: TAP_TIMEOUT_MS,
-            message: `readout should reach canvas point (${target.localX}, ${target.localY}) ±${TAP_TOLERANCE}`,
-          })
-          .toBe(true);
+        await waitForBlankSettled(
+          page,
+          { x: target.localX, y: target.localY },
+          { tolerance: TAP_TOLERANCE },
+        );
       } catch (error) {
         // A closed/crashed page makes collection throw too; keep the original
-        // assertion error and say that diagnostics could not be collected.
+        // settle error (which names the last readout) and say that diagnostics
+        // could not be collected.
         let diagnosticMessage: string;
         try {
           const diagnostics = await collectFrameworkTapDiagnostics(page, {

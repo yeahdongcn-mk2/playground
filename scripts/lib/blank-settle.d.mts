@@ -18,6 +18,7 @@ export interface BlankSettleOptions {
   intervalMs?: number;
   timeoutMs?: number;
   required?: number;
+  tolerance?: number;
 }
 
 export const BLANK_TARGET_TOLERANCE: number;
