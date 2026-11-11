@@ -1,5 +1,9 @@
 import { spawn } from 'node:child_process';
 import { chromium, devices, webkit } from '@playwright/test';
+import {
+  captureEnvironmentFingerprint,
+  formatCaptureEnvironmentFingerprint,
+} from './capture-env.mjs';
 
 /** Engine selector shared by every screenshot script. */
 export const WEBKIT_FLAG = '--webkit';
@@ -29,9 +33,32 @@ export function engineLabel(engine) {
   return engine === WEBKIT_ENGINE ? 'WebKit' : 'Chromium';
 }
 
+/**
+ * Log the fixed capture environment fingerprint (Issue #199).
+ *
+ * Host runs report `source=host` with unavailable image / font / EGL fields, so
+ * the existing `npm run screenshots:*` commands keep working unchanged. Strict
+ * container validation is not done here; the container entry owns it.
+ */
+function logCaptureEnvironment(engine, browser) {
+  try {
+    const fingerprint = captureEnvironmentFingerprint({
+      target: engine === WEBKIT_ENGINE ? 'webkit' : 'desktop',
+      run: { browserVersion: browser.version() },
+    });
+    console.log(formatCaptureEnvironmentFingerprint(fingerprint));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.warn(`capture-env: unavailable (${detail})`);
+  }
+}
+
 /** Launch the engine a capture script selected. */
 export async function launchCaptureBrowser(engine) {
-  return engine === WEBKIT_ENGINE ? webkit.launch() : chromium.launch();
+  const browser =
+    engine === WEBKIT_ENGINE ? await webkit.launch() : await chromium.launch();
+  logCaptureEnvironment(engine, browser);
+  return browser;
 }
 
 /** Close a capture browser without masking the capture error. */

@@ -4,6 +4,29 @@
 
 引擎标注：文件名 `-desktop` 为 Chromium 1440×1000；`-mobile` 为 Chromium 手机截图（扫雷 `-mobile` 为 Pixel 7 412×839，扫雷成绩为 320×640；其余手机图多为自定义 390×844，大厅为全页长图）；`-webkit` / `-webkit-narrow-*` 为 WebKit `iPhone SE (3rd gen)` 设备模拟。WebKit 手机截图的命令、设备参数与引擎 / 视口 / 主题记录见「webkit-phone」与「webkit-narrow」两节；Chromium 的既有命令与文件名保持不变。
 
+## 固定捕获环境（Issue #199）
+
+- 目的：把浏览器构建、字体、DPR 与 EGL / 软件渲染固定到同一环境，让截图捕获可复现；宿主上的普通 `npm run screenshots:*` 命令保持不变，只多打印一行环境指纹，不会因为缺少字体 / EGL 探测而失败。
+- 镜像 tag / digest：`mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f`。tag 的版本来自 `package-lock.json` 的 `@playwright/test`（当前 1.64.1），digest 固定多架构镜像；契约常量在 `scripts/lib/capture-env.mjs` 的 `PLAYWRIGHT_IMAGE_PIN`。升级 Playwright 时必须同时更新该常量、`docker/capture/Dockerfile` 的 `FROM` 与本节。
+- 容器镜像：`docker/capture/Dockerfile` 以上述 digest 为基础，只校验官方镜像自带的 `libegl1` / `libegl-mesa0` / `libgl1` / `libgl1-mesa-dri` / `libglx-mesa0` 与 EGL vendor 文件，不安装任何额外系统包；构建失败会指出缺失的包名。
+- 字体：保留官方镜像自带字体，不额外引入会改变光栅的字体；固定清单为 `fonts-freefont-ttf`、`fonts-ipafont-gothic`、`fonts-liberation`、`fonts-noto-color-emoji`、`fonts-tlwg-loma-otf`、`fonts-unifont`、`fonts-wqy-zenhei`。字体版本由容器内 `dpkg-query` 实测记录，不预置未知版本；记录与实际不一致时按环境差异处理，而不是静默重拍。
+- EGL / 软件渲染变量：`EGL_PLATFORM=surfaceless`、`LIBGL_ALWAYS_SOFTWARE=1`、`__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json`。缺少 WebKit 会报 `Could not create surfaceless EGL display`；容器入口会校验这三个变量，缺失或值不符时指出变量名与期望值。
+- 按捕获目标的 DPR（不做全局常量）：
+
+| 捕获目标 | DPR | 说明 |
+| --- | --- | --- |
+| `desktop` | 1 | Chromium 桌面视口截图 |
+| `mobile` | 2 | Chromium 手机截图（含扫雷 Pixel 7 与 390×844 大厅） |
+| `webkit` | 2 | WebKit `iPhone SE (3rd gen)` 设备模拟与窄屏矩阵 |
+
+- 环境指纹：`captureEnvironmentFingerprint({ target, run })` 按固定字段顺序输出 `source`（`host` / `container`）、`target`、`dpr`、`image`、`node`、`playwright`、`browser`（`browser.version()`）、`fonts`、`env`。容器内记录镜像 tag / digest、Node 与 Playwright 版本、字体包版本、三个 EGL 变量与目标 DPR；宿主上标 `source=host`，`image` / `fonts` / `env` 记为 `unavailable`，不抛错。启动浏览器时打印一行，例如容器内：
+  ```text
+  capture-env: source=container target=webkit dpr=2 image=mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f node=v26.13.0 playwright=1.64.1 browser=27.2 fonts=fonts-freefont-ttf@20211204+svn4273-2,fonts-ipafont-gothic@00303-21ubuntu1,fonts-liberation@1:2.1.5-3,fonts-noto-color-emoji@2.047-0ubuntu0.24.04.1,fonts-tlwg-loma-otf@1:0.7.3-1,fonts-unifont@1:15.1.01-1build1,fonts-wqy-zenhei@0.9.45-8 env=EGL_PLATFORM=surfaceless,LIBGL_ALWAYS_SOFTWARE=1,__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json
+  ```
+  宿主上同一行是 `source=host ... image=unavailable ... fonts=unavailable env=unavailable`。
+- 容器命令：`npm run screenshots:container -- <target> [passthrough...]`，其中 `<target>` 是现有的截图 npm script（例如 `screenshots:webkit`、`screenshots`、`screenshots:snake`）；透传参数直接跟在 target 后，例如 `npm run screenshots:container -- screenshots:webkit --allow-historical-overwrite`。入口会预检 Docker CLI / daemon、镜像 tag 与锁文件版本、target 白名单和该 target 的预览端口，再挂载仓库、按需在容器内 `npm ci`、构建并执行原截图命令；产物经挂载写回宿主 `docs/screenshots/`，日志写到 `test-results/capture-container/<target>-<timestamp>.log`（已被 `.gitignore` 忽略）。捕获只依赖容器内浏览器，宿主不需要安装 Playwright 浏览器。
+- 验收口径：2026-11-12 在临时工作副本中以 `npm run screenshots:container -- screenshots:webkit` 连跑两次，`after-blank-webkit.png` 的 sha256 两次相同且等于已提交的 `cd4ed3fea1e0a068661c8102ee0b58b0601b3a249e480d76224d22782a0e088f`；顺带写出的 `after-hub-webkit.png` 不纳入本子任务验收。容器内日志中的指纹与本节记录的镜像 tag / digest、EGL 变量与 DPR 一致。
+
 ## 历史 After 证据与当前构建不一致（Issue #137）
 
 - 权威对照口径：逐字节比较只在同一构建、同一捕获环境下的确定性产物之间成立。需要与历史提交对照时，用同一脚本在父提交（或该图的历史捕获 commit）的干净 worktree 里重拍，再与同一次重拍的另一次运行比较；不要求重跑结果等于已提交的历史 `fullPage` PNG。历史 After 图只代表各自 PR 时点的 UI 快照，不是当前构建的确定性基准。
