@@ -4,9 +4,16 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { Page } from '@playwright/test';
 import { describe, expect, it, vi } from 'vitest';
+import {
+  CAPTURE_CONTAINER_FLAG,
+  CAPTURE_EGL_ENV,
+  CAPTURE_IMAGE_DIGEST_VAR,
+  CAPTURE_IMAGE_TAG_VAR,
+  PLAYWRIGHT_IMAGE_PIN,
+} from '../../scripts/lib/capture-env.mjs';
 import {
   captureRecord,
   captureScreenshot,
@@ -914,6 +921,84 @@ describe('minesweeper screenshot preview port', () => {
       }
     },
   );
+});
+
+describe('fixed-environment historical overwrite guard (Issue #199)', () => {
+  const GUARD_MODULE = join(ROOT, 'scripts', 'lib', 'screenshot-evidence.mjs');
+  const PROTECTED_FILE = 'after-2048-ready-desktop.png';
+
+  /** A minimal harness that runs the real guard through a child process. */
+  function guardHarness(): string {
+    return [
+      `import { guardHistoricalAfterEvidence } from ${JSON.stringify(pathToFileURL(GUARD_MODULE).href)};`,
+      'const write = guardHistoricalAfterEvidence({',
+      `  file: ${JSON.stringify(PROTECTED_FILE)},`,
+      '  allowHistoricalOverwrite: true,',
+      '  manifestPath: process.env.TEST_MANIFEST,',
+      '  log: { warn: (message) => console.log(message) },',
+      '});',
+      "console.log('write=' + write);",
+    ].join('\n');
+  }
+
+  /** Run the guard harness with an explicit environment. */
+  function runGuard(env: NodeJS.ProcessEnv): { status: number | null; output: string } {
+    const result = spawnSync(
+      process.execPath,
+      ['--input-type=module', '--eval', guardHarness()],
+      { cwd: ROOT, encoding: 'utf8', timeout: 30_000, env },
+    );
+    return {
+      status: result.status,
+      output: `${result.stdout ?? ''}${result.stderr ?? ''}`,
+    };
+  }
+
+  it('passes the capture environment to the shared guard from every wrapped script', () => {
+    for (const script of [SCRIPT_2048, SCRIPT_BREAKOUT, SNAKE_SCRIPT, SCRIPT]) {
+      const source = readFileSync(script, 'utf8');
+      expect(source, script).toContain('guardHistoricalAfterEvidence({');
+      expect(source, script).toContain('env: process.env');
+    }
+  });
+
+  it('rejects the overwrite flag on the host with the file and container entry', () => {
+    const env = { ...process.env };
+    delete env[CAPTURE_CONTAINER_FLAG];
+
+    const { status, output } = runGuard(env);
+
+    expect(status).toBe(1);
+    expect(output).toContain(`historical After evidence ${PROTECTED_FILE}`);
+    expect(output).toContain('npm run screenshots:container');
+  });
+
+  it('allows the overwrite inside the fixed container and prints the checklist', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'screenshot-modes-env-'));
+    const manifestPath = join(dir, 'capture-sha256-manifest.json');
+    writeFileSync(manifestPath, JSON.stringify({ captures: [{ file: PROTECTED_FILE }] }));
+    try {
+      const env = {
+        ...process.env,
+        [CAPTURE_CONTAINER_FLAG]: '1',
+        [CAPTURE_IMAGE_TAG_VAR]: PLAYWRIGHT_IMAGE_PIN.tag,
+        [CAPTURE_IMAGE_DIGEST_VAR]: PLAYWRIGHT_IMAGE_PIN.digest,
+        ...CAPTURE_EGL_ENV,
+        TEST_MANIFEST: manifestPath,
+      };
+
+      const { status, output } = runGuard(env);
+
+      expect(status).toBe(0);
+      expect(output).toContain(`Overwriting historical After evidence ${PROTECTED_FILE}`);
+      expect(output).toContain('8ec4adc');
+      expect(output).toContain('docs/screenshots/README.md');
+      expect(output).toContain('capture-sha256-manifest.json');
+      expect(output).toContain('write=true');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('minesweeper scores screenshot preview startup', () => {

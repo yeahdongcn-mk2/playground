@@ -9,6 +9,11 @@ const SCREENSHOTS_README = readFileSync(
   'utf8',
 );
 const ROOT_README = readFileSync(join(ROOT, 'README.md'), 'utf8');
+const SNAKE_DESIGN = readFileSync(join(ROOT, 'docs', 'snake-design.md'), 'utf8');
+const HISTORICAL_SECTION = SCREENSHOTS_README.slice(
+  SCREENSHOTS_README.indexOf('## 历史 After 证据与当前构建不一致（Issue #137）'),
+  SCREENSHOTS_README.indexOf('## CI：截图文档整页尺寸校验（Issue #134）'),
+);
 
 const SCORES_HEADING = '## scores：扫雷本地最高用时榜';
 const SCORES_CLEAR_HEADING = '## scores-clear：扫雷最高用时「清空记录」';
@@ -105,5 +110,37 @@ describe('scores screenshot historical evidence docs', () => {
     expect(row).toContain('历史证据');
     expect(row).toContain('清空记录');
     expect(row).toContain(OVERWRITE_FLAG);
+  });
+});
+
+describe('fixed-container historical overwrite docs (Issue #199)', () => {
+  it('documents that the overwrite flag only works inside the fixed container', () => {
+    expect(HISTORICAL_SECTION).toContain('npm run screenshots:container');
+    expect(HISTORICAL_SECTION).toContain(OVERWRITE_FLAG);
+    expect(HISTORICAL_SECTION).toContain('固定容器');
+    expect(HISTORICAL_SECTION).toContain('source=container');
+  });
+
+  it('documents the docs capture commit and sha256 manifest update checklist', () => {
+    expect(HISTORICAL_SECTION).toContain('capture-sha256-manifest.json');
+    expect(HISTORICAL_SECTION).toContain('捕获 commit');
+    expect(HISTORICAL_SECTION).toContain('checklist');
+  });
+
+  it('shows the container form of the snake overwrite command', () => {
+    expect(SNAKE_DESIGN).toContain(
+      'npm run screenshots:container -- screenshots:snake --allow-historical-overwrite',
+    );
+    expect(SNAKE_DESIGN).toContain('capture-sha256-manifest.json');
+  });
+
+  it('shows the container form in every root README screenshot row that mentions the flag', () => {
+    const rows = ROOT_README.split('\n').filter(
+      (line) => line.startsWith('| `npm run screenshots') && line.includes(OVERWRITE_FLAG),
+    );
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row).toContain('npm run screenshots:container');
+    }
   });
 });

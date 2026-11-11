@@ -83,6 +83,7 @@ async function capture(page, name, fullPage = true) {
     file: name,
     mode: MODE,
     allowHistoricalOverwrite: ALLOW_HISTORICAL_OVERWRITE,
+    env: process.env,
   });
   if (!write) return;
   await captureScreenshot(page, name, { engine: ENGINE, fullPage });
