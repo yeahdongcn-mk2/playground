@@ -8,23 +8,27 @@
 
 - 权威对照口径：逐字节比较只在同一构建、同一捕获环境下的确定性产物之间成立。需要与历史提交对照时，用同一脚本在父提交（或该图的历史捕获 commit）的干净 worktree 里重拍，再与同一次重拍的另一次运行比较；不要求重跑结果等于已提交的历史 `fullPage` PNG。历史 After 图只代表各自 PR 时点的 UI 快照，不是当前构建的确定性基准。
 - 页脚漂移：`60bc3f3`（#36）把共享页脚文案从「四款游戏已上线」改成「五款游戏已上线」。桌面整页图（`fullPage: true`）会把页脚一起截入，因此在这之前捕获的桌面 After 图用当前构建重跑必然不同；差异通常只落在页脚文本带，不能据此判定当前 UI 或截图脚本回归。
-- 本次核对出的历史桌面整页图（保留原产物，不重拍、不改 PNG）：
+- 本次核对出的历史 After 图（保留原产物，不重拍、不改 PNG；整页尺寸只写已提交 PNG 的值，当前构建重跑尺寸仅作正文对照）：
   - `after-2048-ready-desktop.png`：`8ec4adc`（#26）捕获。
   - `after-breakout-ready-desktop.png` / `after-breakout-levelclear-desktop.png` / `after-breakout-gameover-desktop.png`：`26e84fa`（#29）捕获。
-- 不在此列：`after-2048-playing-desktop.png` / `after-2048-gameover-desktop.png` 已在 `8dbe3e7`（#145）按固定 seed 重拍，打砖块的 `after-breakout-playing-desktop.png` 也已在后续任务按当前构建重拍；这些图与当前构建一致，不受本口径影响。
-- 各图的历史证据说明仍以对应小节为准：2048 见「t4：2048（PR #26）」的「生成」与「证据限制」，打砖块见「t5：打砖块（Issue #27 / 子任务 1）」的「生成」与「证据限制」。
+  - `after-snake-ready.png` / `after-snake-gameover.png` / `after-snake-mobile.png`：`048fe5a`（#14）捕获。桌面整页图除页脚文本带外，画布区域还有每通道差 1 的像素（bbox 约 x 245–876、y 218–847）；手机图不含页脚，重跑仍有约 54596 个像素每通道差 1。
+  - `after-breakout-ready-mobile.png` / `after-breakout-gameover-mobile.png`：`26e84fa`（#29）捕获。这两张手机视口图的重跑差异覆盖游戏区约 y=472..1565，不是页脚。
+  - `after-minesweeper-ready-desktop.png` / `after-minesweeper-playing-desktop.png` / `after-minesweeper-lost-desktop.png` / `after-minesweeper-won-desktop.png` 与对应 `after-minesweeper-ready-mobile.png` / `after-minesweeper-playing-mobile.png` / `after-minesweeper-lost-mobile.png` / `after-minesweeper-won-mobile.png`：`993f5e7`（#61）捕获。当前构建重跑桌面整页为 1440×1529（won 为 1440×1598），已提交 PNG 仍是表格里的整页 1440×1324；手机图尺寸同为 1082×2202，但约 50.7–56.1 万像素不同。原因是 #85 最高用时榜、#87「清空记录」等侧栏 UI 变更后未重拍。
+- 上述历史图都只代表各自捕获时点的 UI，不能作为当前构建「重跑必须逐字节一致」的基准。
+- 不在此列：`after-2048-playing-desktop.png` / `after-2048-gameover-desktop.png` 已在 `8dbe3e7`（#145）按固定 seed 重拍，打砖块的 `after-breakout-playing-desktop.png` / `after-breakout-playing-mobile.png` 与贪食蛇的 `after-snake-playing.png` 也已在后续任务按当前构建重拍；这些图与当前构建一致，不受本口径影响。
+- 各图的历史证据说明仍以对应小节为准：2048 见「t4：2048（PR #26）」的「生成」与「证据限制」，打砖块见「t5：打砖块（Issue #27 / 子任务 1）」的「生成」与「证据限制」，贪食蛇见「t3：贪食蛇（PR #14）」的「生成」与「证据限制」，扫雷桌面见「t6：扫雷（Issue #33 / 子任务 1）」、手机见「t7：扫雷触屏与手机布局（Issue #33 / 子任务 2）」。
 
 ## CI：截图文档整页尺寸校验（Issue #134）
 
 - 覆盖范围：`docs/screenshots/README.md` 表格里带 `整页 W×H` 的单元格与 `docs/screenshots/<file>.png` 的 PNG 签名 / IHDR 宽高逐项比对；只读 README 与已提交 PNG，不执行截图脚本、不写文件，也不需要浏览器或生产构建。
 - CI 位置：`.github/workflows/ci.yml` 的 `verify` job，在 `Unit tests`（`npm run test:unit`）之后、`Production build`（`npm run build`）之前新增名为 `Screenshot doc dimensions` 的步骤；`verify` 的 `timeout-minutes` 保持 20。放在构建前，尺寸漂移会尽早失败。
 - 步骤命令：`npm run verify:screenshots:doc-dims`（即 `node scripts/check-screenshot-doc-dims.mjs`）。
-- 复现命令：`npm run verify:screenshots:doc-dims`。通过时输出 `OK: 检查了 12 个文件 / 12 行 README，整页尺寸全部一致。` 并以 0 退出。
+- 复现命令：`npm run verify:screenshots:doc-dims`。通过时输出 `OK: 检查了 14 个文件 / 14 行 README，整页尺寸全部一致。` 并以 0 退出；该计数与 `tests/unit/screenshot-doc-dims.test.ts` 的 CLI 契约断言一致。
 - 失败表现：把 `after-minesweeper-scores-desktop.png` 行的 `整页 1440×1606` 改成 `1440×1607` 后，本地实测输出：
 
 ```text
-FAIL: 发现 1 处整页尺寸问题（检查了 12 个文件 / 12 行 README）：
-  README 162: after-minesweeper-scores-desktop.png: 整页 1440×1607 != PNG 1440×1606（尺寸不一致）
+FAIL: 发现 1 处整页尺寸问题（检查了 14 个文件 / 14 行 README）：
+  README 176: after-minesweeper-scores-desktop.png: 整页 1440×1607 != PNG 1440×1606（尺寸不一致）
 ```
 
   命令以 1 退出；恢复文档后重新通过。PNG 缺失、PNG 签名错误或 IHDR 截断时同样逐条给出 README 行号、文件名、文档值与实际 PNG 状态。
@@ -213,9 +217,9 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
 | 文件 | 场景 | 视口 / 主题 | 说明 |
 | --- | --- | --- | --- |
 | `before-minesweeper-ready-desktop.png` | 扫雷 READY（基线 `9f9aa54`） | 1440×1000 / 深色 / 整页 1440×1027 | 侧栏没有难度卡片；9×9 隐藏棋盘、HUD 与操作说明。 |
-| `after-minesweeper-ready-desktop.png` | 扫雷 READY（本子任务） | 1440×1000 / 深色 / 整页 1440×1324 | 侧栏在操作与本局状态卡之后新增难度卡片，初级预设为 `aria-pressed="true"`，自定义表单显示 9 / 9 / 10；棋盘与 HUD 仍是初级 READY。整页高度增加来自新增侧栏卡片。 |
+| `after-minesweeper-ready-desktop.png` | 扫雷 READY（本子任务，#61 历史证据） | 1440×1000 / 深色 / 整页 1440×1324 | 侧栏在操作与本局状态卡之后新增难度卡片，初级预设为 `aria-pressed="true"`，自定义表单显示 9 / 9 / 10；棋盘与 HUD 仍是初级 READY。整页高度增加来自新增侧栏卡片。 |
 
-本次同时刷新了 `after-hub-desktop.png` / `after-hub-mobile.png`（大厅卡片描述改为支持难度选择）与 4 张桌面玩法截图；手机玩法截图只显示首屏，难度卡片位于侧栏下方、首屏不可见，其滚动后的可操作性由手机 e2e 覆盖。
+本次同时刷新了 `after-hub-desktop.png` / `after-hub-mobile.png`（大厅卡片描述改为支持难度选择）与 4 张桌面玩法截图；手机玩法截图只显示首屏，难度卡片位于侧栏下方、首屏不可见，其滚动后的可操作性由手机 e2e 覆盖。这 4 张桌面玩法图与 t7 的 4 张手机玩法图最后捕获于 `993f5e7`（#61）；当前构建重跑桌面整页为 1440×1529（won 为 1440×1598），手机图约 50.7–56.1 万像素不同，原因是 #85 最高用时榜、#87「清空记录」等侧栏 UI 变更后未重拍。表格中的「整页 1440×1324」是已提交 PNG 的值，不能作为当前构建「重跑必须逐字节一致」的基准；权威对照口径见文首「历史 After 证据与当前构建不一致（Issue #137）」。
 
 ### 证据限制
 
@@ -283,12 +287,14 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
 
 | 文件 | 场景 | 视口 / 主题 | 说明 |
 | --- | --- | --- | --- |
-| `after-minesweeper-ready-mobile.png` | 扫雷 READY（手机） | Pixel 7 412×839 / 深色 | 触屏提示、轻点 / 长按说明，以及位于首屏内的「重开」入口；9×9 格子加大到约 39 px 触控目标。 |
-| `after-minesweeper-playing-mobile.png` | 扫雷游玩中（手机） | Pixel 7 412×839 / 深色 | 真实触摸轻点翻开、长按 0.5 秒插旗后的状态；HUD 剩余雷数随之减少。 |
-| `after-minesweeper-lost-mobile.png` | 扫雷 BOOM（手机） | Pixel 7 412×839 / 深色 | 触摸踩雷后的失败遮罩。 |
-| `after-minesweeper-won-mobile.png` | 扫雷 CLEARED（手机） | Pixel 7 412×839 / 深色 | 触摸翻开最后一格后的胜利遮罩。 |
+| `after-minesweeper-ready-mobile.png` | 扫雷 READY（手机，#61 历史证据） | Pixel 7 412×839 / 深色 | 触屏提示、轻点 / 长按说明，以及位于首屏内的「重开」入口；9×9 格子加大到约 39 px 触控目标。 |
+| `after-minesweeper-playing-mobile.png` | 扫雷游玩中（手机，#61 历史证据） | Pixel 7 412×839 / 深色 | 真实触摸轻点翻开、长按 0.5 秒插旗后的状态；HUD 剩余雷数随之减少。 |
+| `after-minesweeper-lost-mobile.png` | 扫雷 BOOM（手机，#61 历史证据） | Pixel 7 412×839 / 深色 | 触摸踩雷后的失败遮罩。 |
+| `after-minesweeper-won-mobile.png` | 扫雷 CLEARED（手机，#61 历史证据） | Pixel 7 412×839 / 深色 | 触摸翻开最后一格后的胜利遮罩。 |
 
 `after-hub-desktop.png` / `after-hub-mobile.png` 也随本子任务刷新，因为扫雷卡片新增了触屏操作说明；`after-minesweeper-*-desktop.png` 因侧栏新增「触屏」操作行而重新生成，桌面鼠标左键 / 右键行为不变。
+
+以上 4 张手机玩法图同样是历史证据：最后捕获于 `993f5e7`（#61），当前构建重跑尺寸仍为 1082×2202，但 ready / playing / lost / won 分别约有 50.8 / 50.9 / 50.7 / 56.1 万像素不同，范围约 50.7–56.1 万像素。原因是 #85 最高用时榜、#87「清空记录」等侧栏 UI 变更后未重拍；它们只代表 #61 时点的 UI，不能作为当前构建「重跑必须逐字节一致」的基准。权威对照口径见文首「历史 After 证据与当前构建不一致（Issue #137）」。
 
 ### 证据限制
 
@@ -320,10 +326,12 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
 | --- | --- | --- | --- |
 | `after-hub-desktop.png` | 大厅 | 1440×1000 / 深色 | 新增扫雷卡片与入口。 |
 | `after-hub-mobile.png` | 大厅（手机） | 390×844（DPR 2）/ 深色 | 整页单列布局，含扫雷卡片。 |
-| `after-minesweeper-ready-desktop.png` | 扫雷 READY | 1440×1000 / 深色 / 整页 | 9×9 隐藏棋盘、HUD、侧栏与操作提示；文件已由难度选择子任务刷新为含难度卡片的整页截图。 |
-| `after-minesweeper-playing-desktop.png` | 扫雷游玩中 | 1440×1000 / 深色 / 整页 | 翻开部分棋盘、一面旗子、剩余雷数与计时；侧栏含难度卡片。 |
-| `after-minesweeper-won-desktop.png` | 扫雷 CLEARED | 1440×1000 / 深色 / 整页 1440×1324 | 固定雷盘翻开全部安全格后的胜利遮罩；侧栏在状态卡后含难度卡片。 |
-| `after-minesweeper-lost-desktop.png` | 扫雷 BOOM | 1440×1000 / 深色 / 整页 1440×1324 | 固定雷盘踩雷后的失败遮罩与全部雷；侧栏在状态卡后含难度卡片。 |
+| `after-minesweeper-ready-desktop.png` | 扫雷 READY（#61 历史证据） | 1440×1000 / 深色 / 整页 1440×1324 | 9×9 隐藏棋盘、HUD、侧栏与操作提示；文件已由难度选择子任务刷新为含难度卡片的整页截图。 |
+| `after-minesweeper-playing-desktop.png` | 扫雷游玩中（#61 历史证据） | 1440×1000 / 深色 / 整页 1440×1324 | 翻开部分棋盘、一面旗子、剩余雷数与计时；侧栏含难度卡片。 |
+| `after-minesweeper-won-desktop.png` | 扫雷 CLEARED（#61 历史证据） | 1440×1000 / 深色 / 整页 1440×1324 | 固定雷盘翻开全部安全格后的胜利遮罩；侧栏在状态卡后含难度卡片。 |
+| `after-minesweeper-lost-desktop.png` | 扫雷 BOOM（#61 历史证据） | 1440×1000 / 深色 / 整页 1440×1324 | 固定雷盘踩雷后的失败遮罩与全部雷；侧栏在状态卡后含难度卡片。 |
+
+以上 4 张桌面玩法图是历史证据：最后捕获于 `993f5e7`（#61），当前构建重跑桌面整页为 1440×1529（won 为 1440×1598），已提交 PNG 与表中「整页 1440×1324」一致；原因是 #85 最高用时榜、#87「清空记录」等侧栏 UI 变更后未重拍。它们只代表 #61 时点的 UI，不能作为当前构建「重跑必须逐字节一致」的基准；权威对照口径见文首「历史 After 证据与当前构建不一致（Issue #137）」。
 
 ### 证据限制
 
@@ -339,7 +347,7 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
 - Before 基线：main `63bf67e`（PR #28 合入打砖块规则引擎后、接入共享框架前的提交）。大厅还没有打砖块卡片，`#/games/breakout` 显示「没有找到这个游戏」。
 - After：PR #29 的截图捕获提交 [`abed3bc`](https://github.com/yeahdongcn-mk2/playground/commit/abed3bc0346fe738f24ef4e51666ca1ddb369f48)（分支 `agent/plan-27-t1`）。其后提交只修改 `tests/e2e/` 与 `docs/screenshots/README.md`，不改变界面；PR 描述中附有 Before / After 截图链接。
 - 视口 / 主题：桌面 1440×1000、手机 390×844（DPR 2），深色主题，`reducedMotion: reduce`。桌面与手机大厅均为整页截图（`fullPage: true`），手机 Before / After 用同一口径，保证单列布局中的打砖块卡片进入画面。
-- 生成：`npm run screenshots:breakout`（生产构建 + `vite preview`，固定砖块 / 球 / 生命走 `?debug=1` 调试接缝）。`after-breakout-ready-desktop.png` / `after-breakout-levelclear-desktop.png` / `after-breakout-gameover-desktop.png` 是 `26e84fa`（#29）捕获的历史页脚证据，用当前构建重跑必然不同；权威对照口径见「历史 After 证据与当前构建不一致（Issue #137）」。
+- 生成：`npm run screenshots:breakout`（生产构建 + `vite preview`，固定砖块 / 球 / 生命走 `?debug=1` 调试接缝）。`after-breakout-ready-desktop.png` / `after-breakout-levelclear-desktop.png` / `after-breakout-gameover-desktop.png` 与 `after-breakout-ready-mobile.png` / `after-breakout-gameover-mobile.png` 是 `26e84fa`（#29）捕获的历史证据：桌面整页图含旧页脚，手机图重跑差异覆盖游戏区约 y=472..1565（不是页脚），用当前构建重跑必然不同；权威对照口径见「历史 After 证据与当前构建不一致（Issue #137）」。
 - 游玩截图确定性：`openPlaying()` 固定 `?debug=1&seed=7&steps=120`。点击「开始游戏」后，调试接缝在下一帧内以引擎固定的 120 Hz 步长（`FIXED_STEP_MS`）精确推进 120 个固定步（约 1 秒模拟时间），随后暂停主循环；截图脚本等待 `data-debug-steps=120` 标记后再截图。所以球、挡板与砖块状态只由 seed 与步数决定，不依赖真实帧时序。因此 3 张 `after-breakout-playing-{desktop,mobile,webkit}.png` 是确定性产物：同一构建、预览端口 4185 空闲时连续两次执行 `npm run screenshots:breakout`（以及 `npm run screenshots:breakout:webkit`）得到的 sha256 完全一致，并等于已提交产物；ready / levelclear / gameover / hub 等未走该接缝的图不受影响。复现命令：`npm run screenshots:breakout && npm run screenshots:breakout:webkit`，随后用 `sha256sum docs/screenshots/after-breakout-playing-{desktop,mobile,webkit}.png` 对照。WebKit 产物在官方 Playwright 容器（`mcr.microsoft.com/playwright:v1.64.1-noble`，与仓库的 Playwright 1.64.1 对应）内捕获，避免宿主 EGL / 字体环境差异。本子任务重生成的桌面整页 playing 图带当前页脚，与其余 desktop 图的旧页脚不一致；页脚漂移统一由 #137 跟踪，不影响本子任务的确定性验收。
 - 预览端口：默认 `4185`；共享主机或并行 worktree 用 `PREVIEW_PORT=4186 npm run screenshots:breakout` 覆盖（`PREVIEW_PORT` 为空串时回退 `4185`；`screenshots:breakout:webkit` 复用同一启动路径与端口）。端口已被占用时脚本在启动 preview 前以非零状态退出，错误包含实际端口、`the port is already in use` 与 `Set PREVIEW_PORT` 建议，不会写出或覆盖任何截图；端口探测通过后 preview 提前退出时报告子进程退出码与 stderr，不再静默连到端口上的其它服务。Before 模式（`screenshots:breakout:before`）以 `BASE_URL` 为准，不启动 preview、不探测端口。
 - 复现 Before：在 `63bf67e` 的干净 worktree 里 `npm ci && npm run build`，用 `node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4184 --strictPort` 启动预览，然后在当前分支运行 `BASE_URL=http://127.0.0.1:4184 npm run screenshots:breakout:before`。
@@ -361,18 +369,18 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
 | --- | --- | --- | --- |
 | `after-hub-desktop.png` | 大厅 | 1440×1000 / 深色 | 新增打砖块卡片与入口。 |
 | `after-hub-mobile.png` | 大厅（手机） | 390×844（DPR 2）/ 深色 | 整页单列布局，含打砖块卡片。 |
-| `after-breakout-ready-desktop.png` | 打砖块 READY | 1440×1000 / 深色 | 球场、分层砖块、HUD 与开始遮罩。 |
+| `after-breakout-ready-desktop.png` | 打砖块 READY（#29 历史证据） | 1440×1000 / 深色 | 球场、分层砖块、HUD 与开始遮罩。 |
 | `after-breakout-playing-desktop.png` | 打砖块游玩中 | 1440×1000 / 深色 | 挡板、球、砖墙与 HUD。 |
-| `after-breakout-levelclear-desktop.png` | 打砖块 LEVEL CLEAR | 1440×1000 / 深色 | 固定单砖清空后的过关遮罩。 |
-| `after-breakout-gameover-desktop.png` | 打砖块 GAME OVER | 1440×1000 / 深色 | 固定单条命结束后的结算与重开入口。 |
-| `after-breakout-ready-mobile.png` | 打砖块 READY（手机） | 390×844（DPR 2）/ 深色 | 手机端球场与开始遮罩。 |
+| `after-breakout-levelclear-desktop.png` | 打砖块 LEVEL CLEAR（#29 历史证据） | 1440×1000 / 深色 | 固定单砖清空后的过关遮罩。 |
+| `after-breakout-gameover-desktop.png` | 打砖块 GAME OVER（#29 历史证据） | 1440×1000 / 深色 | 固定单条命结束后的结算与重开入口。 |
+| `after-breakout-ready-mobile.png` | 打砖块 READY（手机，#29 历史证据） | 390×844（DPR 2）/ 深色 | 手机端球场与开始遮罩。 |
 | `after-breakout-playing-mobile.png` | 打砖块游玩中（手机） | 390×844（DPR 2）/ 深色 | 手机端球场、HUD 与触屏提示。 |
-| `after-breakout-gameover-mobile.png` | 打砖块 GAME OVER（手机） | 390×844（DPR 2）/ 深色 | 手机端结算与重开入口。 |
+| `after-breakout-gameover-mobile.png` | 打砖块 GAME OVER（手机，#29 历史证据） | 390×844（DPR 2）/ 深色 | 手机端结算与重开入口。 |
 
 ### 证据限制
 
 - main 没有打砖块页面，所以 Before 只能对比大厅（同一视口 / 主题）与真实未注册路由，不能与旧版打砖块页面逐像素对比。
-- 桌面整页 After 图与当前构建的对照口径见「历史 After 证据与当前构建不一致（Issue #137）」：`after-breakout-{ready,levelclear,gameover}-desktop.png` 是历史页脚证据，逐字节比较只在同一构建、同一捕获环境下成立。
+- 桌面整页与手机 ready / gameover After 图与当前构建的对照口径见「历史 After 证据与当前构建不一致（Issue #137）」：这些图是 #29 历史证据，逐字节比较只在同一构建、同一捕获环境下成立。
 - 手机端为 Playwright 设备模拟（390×844、DPR 2、触摸、大厅整页截图），不是真实设备截图。
 - 截图来自生产构建；绘制行为另有 e2e 读取 canvas 像素验证，不依赖截图比对。
 
@@ -455,11 +463,11 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
 | 文件 | 场景 | 视口 / 主题 | 说明 |
 | --- | --- | --- | --- |
 | `after-hub-desktop.png` | 大厅 | 1440×1000 / 深色 | 新增贪食蛇卡片，主 CTA 改为「开始贪食蛇」。 |
-| `after-snake-ready.png` | 贪食蛇 READY | 1440×1000 / 深色 | HUD、棋盘、覆盖层与 D-pad（桌面隐藏）。 |
+| `after-snake-ready.png` | 贪食蛇 READY（#14 历史证据） | 1440×1000 / 深色 | HUD、棋盘、覆盖层与 D-pad（桌面隐藏）。 |
 | `after-snake-playing.png` | 贪食蛇游玩中 | 1440×1000 / 深色 | 固定首果被吃后，按固定 seed / tick 冻结的得分、长度、速度与下一颗果实。 |
-| `after-snake-gameover.png` | 贪食蛇 GAME OVER | 1440×1000 / 深色 | 撞墙结算、最高分与重开入口。 |
+| `after-snake-gameover.png` | 贪食蛇 GAME OVER（#14 历史证据） | 1440×1000 / 深色 | 撞墙结算、最高分与重开入口。 |
 | `after-hub-mobile.png` | 大厅 | 390×844（DPR 2）/ 深色 | 单列布局。 |
-| `after-snake-mobile.png` | 贪食蛇（手机） | 390×844（DPR 2）/ 深色 | 棋盘、D-pad 与操作面板堆叠。 |
+| `after-snake-mobile.png` | 贪食蛇（手机，#14 历史证据） | 390×844（DPR 2）/ 深色 | 棋盘、D-pad 与操作面板堆叠。 |
 
 `after-hub-desktop.png` / `after-hub-mobile.png` 是跨任务共用的文件名，当前已由 t4 / t5 / t6 更新为含 2048、打砖块与扫雷的五游戏大厅（手机为整页截图）；t3 表格里的「新增贪食蛇卡片」描述当时状态。
 
@@ -476,7 +484,8 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
   ```
   两次运行生成的 `after-snake-playing.png` sha256 应完全一致并等于已提交产物。本子任务实测旧产物（Before）`fe38ad4f0f4d8d8f1fb86895159e3d9ab5dc5ceb687bdc80b9784c55446ca367`，新产物（After，两次运行相同）`b0c8e07878fe1e4573a7aaf52e2591d5759b083970a76e34fc65a12f47c4b058`。
 - 提交范围：脚本仍会顺带写出 ready / gameover / mobile / hub，提交前用 `git checkout --` 还原它们，只保留本任务的 `after-snake-playing.png` 与文档 / 测试改动，未受影响的已提交产物保持不变。
-- 页脚：`after-snake-playing.png` 是桌面整页图，重生成后带当前页脚「五款游戏已上线」；ready / gameover 桌面图仍是历史产物，页脚漂移由 #137 统一跟踪，不计入本次确定性修复。
+- 页脚：`after-snake-playing.png` 是桌面整页图，重生成后带当前页脚「五款游戏已上线」；ready / gameover 桌面图与手机图仍是历史产物，页脚漂移由 #137 统一跟踪，不计入本次确定性修复。
+- 历史证据：`after-snake-ready.png` / `after-snake-gameover.png` / `after-snake-mobile.png` 最后捕获于 `048fe5a`（#14）；桌面整页图除页脚外画布区域还有每通道差 1 的像素（bbox 约 x 245–876、y 218–847），手机图重跑仍有约 54596 个像素每通道差 1。它们只代表 #14 时点的 UI，不能作为当前构建「重跑必须逐字节一致」的基准；权威对照口径见「历史 After 证据与当前构建不一致（Issue #137）」。
 
 ### 证据限制
 
