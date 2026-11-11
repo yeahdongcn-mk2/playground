@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { WEBKIT_SCREENSHOT_ARTIFACTS } from '../../scripts/lib/screenshot-artifacts.mjs';
 import type { ScreenshotArtifact } from '../../scripts/lib/screenshot-artifacts.mjs';
+import { DEFAULT_E2E_REPORT_PATH } from '../../scripts/lib/e2e-flakes.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const WORKFLOW_PATH = join(ROOT, '.github', 'workflows', 'ci.yml');
@@ -94,6 +95,9 @@ const isScreenshotDocDims = (step: WorkflowStep): boolean =>
   (step.run ?? '').trim() === SCREENSHOT_DOC_DIMS_COMMAND;
 const isWebkitScreenshotSmoke = (step: WorkflowStep): boolean =>
   commandsOf(step).some((command) => command.includes(NARROW_CAPTURE_COMMAND));
+const E2E_FLAKE_CHECK_COMMAND = 'node scripts/check-e2e-flakes.mjs';
+const isE2eFlakeCheck = (step: WorkflowStep): boolean =>
+  (step.run ?? '').trim() === E2E_FLAKE_CHECK_COMMAND;
 
 describe('CI workflow', () => {
   it('keeps running on pull requests', () => {
@@ -192,6 +196,42 @@ describe('CI workflow', () => {
     expect(stepIndex(isWebkitScreenshotSmoke)).toBeGreaterThan(e2eIndex);
     expect(verify?.['timeout-minutes']).toBe(20);
     expect(smoke['continue-on-error']).toBeUndefined();
+  });
+
+  it('runs the target e2e flake gate after the e2e tests without continue-on-error', () => {
+    const check = requireStep(isE2eFlakeCheck, 'a target e2e flake check step');
+    expect(check.name).toBe('Check target e2e flakes');
+    expect((check.run ?? '').trim()).toBe(E2E_FLAKE_CHECK_COMMAND);
+    expect(check['continue-on-error']).toBeUndefined();
+
+    const e2e = requireStep(isE2e, 'an "npm run test:e2e" step');
+    expect(e2e.env?.CI).toBe('true');
+
+    const e2eIndex = stepIndex(isE2e);
+    const checkIndex = stepIndex(isE2eFlakeCheck);
+    const smokeIndex = stepIndex(isWebkitScreenshotSmoke);
+    expect(e2eIndex).toBeGreaterThanOrEqual(0);
+    expect(smokeIndex).toBeGreaterThanOrEqual(0);
+    expect(checkIndex).toBeGreaterThan(e2eIndex);
+    expect(checkIndex).toBeLessThan(smokeIndex);
+  });
+
+  it('writes the Playwright JSON report the flake gate reads when running in CI', async () => {
+    const previousCi = process.env.CI;
+    process.env.CI = 'true';
+    try {
+      const { default: config } = await import('../../playwright.config');
+      expect(config.reporter).toContainEqual([
+        'json',
+        { outputFile: DEFAULT_E2E_REPORT_PATH },
+      ]);
+    } finally {
+      if (previousCi === undefined) {
+        delete process.env.CI;
+      } else {
+        process.env.CI = previousCi;
+      }
+    }
   });
 
   it('keeps the CI narrow screenshot manifest aligned with the WebKit artifact list', () => {
