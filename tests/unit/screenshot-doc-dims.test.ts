@@ -114,12 +114,12 @@ describe('parseDocDimensions', () => {
     expect(parseDocDimensions('| `a.png` | 1440×1000 / 深色 |')).toEqual([]);
   });
 
-  it('lists the 12 documented full-page rows in the committed README', () => {
+  it('lists the 14 documented full-page rows in the committed README', () => {
     const rows = parseDocDimensions(readFileSync(README, 'utf8'));
     const files = rows.flatMap((row) => row.files);
 
-    expect(rows).toHaveLength(12);
-    expect(files).toHaveLength(12);
+    expect(rows).toHaveLength(14);
+    expect(files).toHaveLength(14);
     expect(
       files.filter((file) => file.includes('scores') && !file.includes('clear')),
     ).toHaveLength(4);
@@ -256,8 +256,8 @@ describe('check-screenshot-doc-dims CLI', () => {
 
     expect(stderr).toBe('');
     expect(status).toBe(0);
-    expect(stdout).toContain('12 个文件');
-    expect(stdout).toContain('12 行');
+    expect(stdout).toContain('14 个文件');
+    expect(stdout).toContain('14 行');
     expect(stdout).toContain('整页尺寸全部一致');
   });
 
