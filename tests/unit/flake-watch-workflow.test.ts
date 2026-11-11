@@ -1,12 +1,16 @@
-import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { DEFAULT_E2E_REPORT_PATH } from '../../scripts/lib/e2e-flakes.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const WORKFLOW_PATH = join(ROOT, '.github', 'workflows', 'flake-watch.yml');
 const WORKFLOW_SOURCE = readFileSync(WORKFLOW_PATH, 'utf8');
+const SUMMARY_SCRIPT = join(ROOT, 'scripts', 'flake-watch-summary.mjs');
 const REPEAT_COUNT = 5;
 const TEST_STEP_ID = 'flake-watch';
 const TEST_COMMAND_TOKENS = [
@@ -128,38 +132,61 @@ describe('flake-watch workflow', () => {
     expect(WORKFLOW_SOURCE).not.toContain('continue-on-error');
   });
 
-  it('records the repeat count and result in the step summary', () => {
+  it('writes the step summary through the summary script', () => {
     const summary = requireStep(
       (step) => (step.run ?? '').includes('GITHUB_STEP_SUMMARY'),
       'a step-summary step',
     );
     expect(summary.if).toBe('always()');
+    expect(summary.run).toContain('node scripts/flake-watch-summary.mjs');
     expect(summary.run).toContain('$GITHUB_STEP_SUMMARY');
-    expect(summary.run).toContain(`重复次数：${REPEAT_COUNT}`);
-    expect(summary.run).toContain('结果：');
     expect(summary.env?.FLAKE_WATCH_OUTCOME).toBe(`\${{ steps.${TEST_STEP_ID}.outcome }}`);
     expect(stepIndex((step) => (step.run ?? '').includes('GITHUB_STEP_SUMMARY'))).toBeGreaterThan(
       stepIndex(isFlakeCheck),
     );
   });
 
-  it('summarizes the Playwright JSON report stats instead of only the outcome', () => {
-    const summary = requireStep(
-      (step) => (step.run ?? '').includes('GITHUB_STEP_SUMMARY'),
-      'a step-summary step',
-    );
+  it('summarizes the Playwright JSON report stats in the step summary', () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'flake-watch-summary-'));
+    try {
+      const reportPath = join(workDir, DEFAULT_E2E_REPORT_PATH);
+      mkdirSync(dirname(reportPath), { recursive: true });
+      writeFileSync(
+        reportPath,
+        JSON.stringify({ stats: { expected: 5, unexpected: 2, flaky: 1, skipped: 3 } }),
+      );
 
-    // Deleting the report-reading branch must fail this test: the summary has
-    // to point at the report and keep every first-run stat in the output.
-    expect(summary.run).toContain('test-results/e2e-report.json');
-    expect(summary.run).toContain('JSON.parse');
-    for (const stat of ['stats.expected', 'stats.unexpected', 'stats.flaky', 'stats.skipped']) {
-      expect(summary.run, `the summary should report ${stat}`).toContain(stat);
+      // Run the real script against a report fixture at the canonical path, so
+      // deleting a stat or swapping its label fails here instead of silently
+      // changing the job summary.
+      const summary = execFileSync(process.execPath, [SUMMARY_SCRIPT], {
+        cwd: workDir,
+        encoding: 'utf8',
+        env: { ...process.env, FLAKE_WATCH_OUTCOME: 'success', FLAKE_WATCH_REPORT_PATH: '' },
+      });
+      expect(summary).toContain('重复次数：5');
+      expect(summary).toContain('重试次数：0');
+      expect(summary).toContain('结果：success');
+      expect(summary).toContain('首跑通过：5');
+      expect(summary).toContain('失败：2');
+      expect(summary).toContain('重试后通过：1');
+      expect(summary).toContain('跳过：3');
+
+      // A missing report must still produce a summary and name the problem.
+      const missing = execFileSync(process.execPath, [SUMMARY_SCRIPT], {
+        cwd: workDir,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          FLAKE_WATCH_OUTCOME: 'failure',
+          FLAKE_WATCH_REPORT_PATH: join(workDir, 'missing.json'),
+        },
+      });
+      expect(missing).toContain('结果：failure');
+      expect(missing).toContain('无法读取 Playwright JSON 报告');
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
     }
-    for (const label of ['首跑通过：', '失败：', '重试后通过：', '跳过：']) {
-      expect(summary.run, `the summary should label ${label}`).toContain(label);
-    }
-    expect(summary.run).toContain('无法读取 Playwright JSON 报告');
   });
 
   it('uploads the Playwright report and failure evidence when the check finishes', () => {

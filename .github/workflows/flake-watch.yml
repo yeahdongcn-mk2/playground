@@ -54,34 +54,7 @@ jobs:
         if: always()
         env:
           FLAKE_WATCH_OUTCOME: ${{ steps.flake-watch.outcome }}
-        run: |
-          node --input-type=module >> "$GITHUB_STEP_SUMMARY" <<'EOF'
-          import { readFileSync } from 'node:fs';
-
-          const outcome = process.env.FLAKE_WATCH_OUTCOME ?? 'unknown';
-          const lines = [
-            '## mobile-webkit 首跑稳定性',
-            '',
-            '- 重复次数：5',
-            '- 重试次数：0',
-            `- 结果：${outcome}`,
-          ];
-
-          try {
-            const report = JSON.parse(readFileSync('test-results/e2e-report.json', 'utf8'));
-            const stats = report.stats ?? {};
-            lines.push(
-              `- 首跑通过：${stats.expected ?? 0}`,
-              `- 失败：${stats.unexpected ?? 0}`,
-              `- 重试后通过：${stats.flaky ?? 0}`,
-              `- 跳过：${stats.skipped ?? 0}`,
-            );
-          } catch (error) {
-            lines.push(`- 无法读取 Playwright JSON 报告：${error.message}`);
-          }
-
-          console.log(lines.join('\n'));
-          EOF
+        run: node scripts/flake-watch-summary.mjs >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Playwright report
         if: always()
