@@ -86,6 +86,12 @@ const PLAYWRIGHT_INSTALL_COMMAND = 'npx playwright install --with-deps chromium 
 const isPlaywrightInstall = (step: WorkflowStep): boolean =>
   (step.run ?? '').trim() === PLAYWRIGHT_INSTALL_COMMAND;
 const isE2e = (step: WorkflowStep): boolean => (step.run ?? '').trim() === 'npm run test:e2e';
+const SCREENSHOT_DOC_DIMS_COMMAND = 'npm run verify:screenshots:doc-dims';
+const isUnitTests = (step: WorkflowStep): boolean =>
+  (step.run ?? '').trim() === 'npm run test:unit';
+const isBuild = (step: WorkflowStep): boolean => (step.run ?? '').trim() === 'npm run build';
+const isScreenshotDocDims = (step: WorkflowStep): boolean =>
+  (step.run ?? '').trim() === SCREENSHOT_DOC_DIMS_COMMAND;
 const isWebkitScreenshotSmoke = (step: WorkflowStep): boolean =>
   commandsOf(step).some((command) => command.includes(NARROW_CAPTURE_COMMAND));
 
@@ -106,6 +112,7 @@ describe('CI workflow', () => {
       'npm run typecheck',
       'npm run lint',
       'npm run test:unit',
+      'npm run verify:screenshots:doc-dims',
       'npm run build',
       'npm run check:budget',
       'npm run test:e2e',
@@ -128,6 +135,26 @@ describe('CI workflow', () => {
     const e2eIndex = stepIndex(isE2e);
     expect(e2eIndex, 'verify job should still run "npm run test:e2e"').toBeGreaterThanOrEqual(0);
     expect(installIndex).toBeLessThan(e2eIndex);
+  });
+
+  it('runs the screenshot doc dimension check between the unit tests and the build', () => {
+    const step = requireStep(isScreenshotDocDims, 'a screenshot doc dimensions step');
+    expect(step.name).toBe('Screenshot doc dimensions');
+    expect((step.run ?? '').trim()).toBe(SCREENSHOT_DOC_DIMS_COMMAND);
+    expect(step['continue-on-error']).toBeUndefined();
+
+    const unitTestsIndex = stepIndex(isUnitTests);
+    const buildIndex = stepIndex(isBuild);
+    expect(unitTestsIndex, 'verify job should still run "npm run test:unit"').toBeGreaterThanOrEqual(
+      0,
+    );
+    expect(buildIndex, 'verify job should still run "npm run build"').toBeGreaterThanOrEqual(0);
+    expect(stepIndex(isScreenshotDocDims)).toBeGreaterThan(unitTestsIndex);
+    expect(stepIndex(isScreenshotDocDims)).toBeLessThan(buildIndex);
+
+    // The doc-dims check only reads committed files, so keeping the existing
+    // 20-minute budget is safe; a regression in that budget should fail here.
+    expect(verify?.['timeout-minutes']).toBe(20);
   });
 
   it('runs the WebKit narrow screenshot smoke test after the e2e tests', () => {
