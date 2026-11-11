@@ -152,16 +152,16 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
 - Before 基线：`a60062e`（存储模块 #82 合入后的 `main`，也就是本子任务开始前的 `main`）。侧栏只有操作、本局与难度卡片，还没有最高用时卡片；`localStorage` 里预置的成绩键会被忽略。
 - After：本子任务分支 `agent/plan-45-t1` 的提交 [`338d06c`](https://github.com/yeahdongcn-mk2/playground/commit/338d06c)（含审查修正与最终截图）。侧栏在难度卡片之后新增「最高用时」卡片：三档预设按初级 / 中级 / 高级固定顺序展示，没有记录的档位显示 `—`；自定义棋盘按配置单列并显示长标签；整张榜为空时显示「还没有记录」。截图场景先向本机存储预置一条 30×30 / 100 雷（首点不安全）的自定义记录，再以固定初级雷盘从 (8, 8) 一次获胜，因此 After 面板同时显示新写入的初级成绩、未记录预设的占位与一条自定义成绩。
 - 视口 / 主题：桌面 1440×1000 CSS px、DPR 1；手机 320×640 CSS px、DPR 2、`isMobile: true`、`hasTouch: true`；两者均为深色主题、`reducedMotion: reduce`，Before / After 使用同一 URL、同一固定雷盘、同一 WON 状态，均为整页截图（`fullPage: true`）。
-- 生成 After：`npm run screenshots:minesweeper:scores`（生产构建 + `vite preview`）。
+- 生成 After（历史证据，默认冻结）：`npm run screenshots:minesweeper:scores` 最初在 #45 子任务 1 生成这两张 After 图。当前 UI 已包含「清空记录」，再次执行该命令会静默把历史证据替换成当前界面；脚本现在会在启动 preview、浏览器或写文件之前以非零状态退出，提示这是 #45 历史证据并给出 `--allow-historical-overwrite`。确需重新生成时显式加该参数，并同步更新本节表格的整页尺寸与说明；当前 UI 的 After 证据见下一节 `scores-clear`。
 - 预览端口：默认 `4192`，共享主机或并行 worktree 用 `PREVIEW_PORT=4193 npm run screenshots:minesweeper:scores` 覆盖（`PREVIEW_PORT` 为空串时回退 `4192`）。端口已被占用时脚本会在启动 preview 前以非零状态退出，错误包含实际端口、`the port is already in use` 与 `Set PREVIEW_PORT` 的处理建议，不会写出或覆盖任何截图；端口探测通过后 preview 提前退出时，脚本报告子进程退出码与 stderr，不会再静默连到端口上的其它服务、之后才以无关的定位器超时报错。
 - 复现 Before：在 `a60062e` 的干净 worktree 里 `npm ci && npm run build`，用 `node node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4192 --strictPort` 启动预览，再运行 `BASE_URL=http://127.0.0.1:4192 npm run screenshots:minesweeper:scores-before`（Before 模式不启动 preview，端口以 `BASE_URL` 为准）。
 
 | 文件 | 场景 | 视口 / 主题 | 说明 |
 | --- | --- | --- | --- |
 | `before-minesweeper-scores-desktop.png` | 扫雷 WON（基线 `a60062e`） | 1440×1000 / 深色 / 整页 1440×1324 | 侧栏没有最高用时卡片；胜利遮罩、固定雷盘与 After 相同。 |
-| `after-minesweeper-scores-desktop.png` | 扫雷 WON（本子任务） | 1440×1000 / 深色 / 整页 1440×1606 | 难度卡片后新增最高用时卡片：初级显示刚写入的用时，中级 / 高级显示 `—`，自定义区显示预置的 30×30 / 100 雷（首点不安全）记录。 |
+| `after-minesweeper-scores-desktop.png` | 扫雷 WON（#45 子任务 1 历史证据） | 1440×1000 / 深色 / 整页 1440×1606 | 难度卡片后新增最高用时卡片：初级显示刚写入的用时，中级 / 高级显示 `—`，自定义区显示预置的 30×30 / 100 雷（首点不安全）记录；该时期还没有「清空记录」按钮，默认不被当前命令覆盖。 |
 | `before-minesweeper-scores-320x640.png` | 扫雷 WON（320×640 基线 `a60062e`） | 320×640 / 深色 / 整页 640×3580 | 手机整页截图没有最高用时卡片，页面无横向溢出。 |
-| `after-minesweeper-scores-320x640.png` | 扫雷 WON（320×640 本子任务） | 320×640 / 深色 / 整页 640×4098 | 长自定义标签在卡片内换行，320px 下页面无横向溢出；新增卡片使整页高度增加。 |
+| `after-minesweeper-scores-320x640.png` | 扫雷 WON（320×640，#45 子任务 1 历史证据） | 320×640 / 深色 / 整页 640×4098 | 长自定义标签在卡片内换行，320px 下页面无横向溢出；新增卡片使整页高度增加，该时期还没有「清空记录」按钮，默认不被当前命令覆盖。 |
 
 ### 证据限制
 
