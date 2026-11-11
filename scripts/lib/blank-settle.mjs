@@ -63,8 +63,10 @@ export function readBlankReadout(page) {
 /**
  * Poll the HUD readout until the orb has stayed on the click target with no
  * trail for `required` consecutive samples, then return the settled sample.
- * The readout, timer and delay are injectable so a unit test can drive the
- * whole loop with a fake page instead of relying on file-text assertions.
+ * The readout, timer, delay, sample count and tolerance are injectable so a
+ * unit test can drive the whole loop with a fake page instead of relying on
+ * file-text assertions. The e2e framework case reuses this loop with its own
+ * product-level tolerance instead of a fixed wall-clock poll.
  *
  * A scene that never settles throws, naming the last readout, rather than
  * silently capturing an intermediate frame.
@@ -79,6 +81,7 @@ export async function waitForBlankSettled(
     intervalMs = BLANK_SETTLE_INTERVAL_MS,
     timeoutMs = BLANK_SETTLE_TIMEOUT_MS,
     required = BLANK_STABLE_SAMPLES,
+    tolerance = BLANK_TARGET_TOLERANCE,
   } = {},
 ) {
   const deadline = now() + timeoutMs;
@@ -86,7 +89,7 @@ export async function waitForBlankSettled(
   let last = null;
   while (now() < deadline) {
     last = await read(page);
-    streak = nextBlankStableStreak(streak, last, target, { required });
+    streak = nextBlankStableStreak(streak, last, target, { required, tolerance });
     if (streak >= required) {
       return last;
     }
