@@ -4,6 +4,8 @@ import {
   WEBKIT_ENGINE,
   captureScreenshot,
   closeCaptureBrowser,
+  createDesktopContext,
+  createMobileContext,
   createPhoneContext,
   engineLabel,
   launchCaptureBrowser,
@@ -139,7 +141,7 @@ try {
   if (IS_WEBKIT) {
     await captureWebkitMobile(browser);
   } else {
-    const desktop = await browser.newContext({
+    const desktop = await createDesktopContext(browser, {
       viewport: { width: 1440, height: 1000 },
       colorScheme: 'dark',
       reducedMotion: 'reduce',
@@ -162,7 +164,7 @@ try {
       await settle(snakeRoute);
       await capture(snakeRoute, 'before-framework-snake-route.png', true);
 
-      const mobile = await browser.newContext({
+      const mobile = await createMobileContext(browser, {
         viewport: { width: 390, height: 844 },
         deviceScaleFactor: 2,
         isMobile: true,
@@ -214,7 +216,7 @@ try {
       await over.waitForTimeout(300);
       await capture(over, 'after-snake-gameover.png', true);
 
-      const mobile = await browser.newContext({
+      const mobile = await createMobileContext(browser, {
         viewport: { width: 390, height: 844 },
         deviceScaleFactor: 2,
         isMobile: true,

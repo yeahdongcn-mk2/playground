@@ -6,6 +6,8 @@ import {
   WEBKIT_NARROW_FLAG,
   captureScreenshot,
   closeCaptureBrowser,
+  createDesktopContext,
+  createMobileContext,
   createPhoneContext,
   engineLabel,
   launchCaptureBrowser,
@@ -253,7 +255,7 @@ async function openWon(page) {
 }
 
 async function captureDesktop(browser) {
-  const context = await browser.newContext({
+  const context = await createDesktopContext(browser, {
     viewport: { width: 1440, height: 1000 },
     colorScheme: 'dark',
     deviceScaleFactor: 1,
@@ -292,7 +294,7 @@ async function captureDesktop(browser) {
 }
 
 async function captureMobile(browser) {
-  const context = await browser.newContext({
+  const context = await createMobileContext(browser, {
     viewport: { width: 390, height: 844 },
     colorScheme: 'dark',
     deviceScaleFactor: 2,
@@ -350,7 +352,7 @@ function touchMobileName(prefix, state) {
 async function captureTouchMobile(browser, prefix) {
   const context = IS_WEBKIT
     ? await createPhoneContext(browser, ENGINE)
-    : await browser.newContext({
+    : await createMobileContext(browser, {
         ...devices['Pixel 7'],
         colorScheme: 'dark',
         reducedMotion: 'reduce',
@@ -441,7 +443,7 @@ async function captureWebkitNarrow(browser, prefix) {
  */
 async function captureNarrow(browser, prefix, viewport, fileNameSuffix = '') {
   const { width, height } = viewport;
-  const context = await browser.newContext({
+  const context = await createMobileContext(browser, {
     viewport,
     screen: viewport,
     colorScheme: 'dark',
@@ -493,7 +495,7 @@ async function openLargeBoard(page) {
 
 async function captureLarge(browser, prefix) {
   for (const viewport of LARGE_VIEWPORTS) {
-    const context = await browser.newContext({
+    const context = await createMobileContext(browser, {
       viewport,
       screen: viewport,
       colorScheme: 'dark',

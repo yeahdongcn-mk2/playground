@@ -1,5 +1,9 @@
 import { spawn } from 'node:child_process';
 import { chromium, devices, webkit } from '@playwright/test';
+import {
+  captureEnvironmentFingerprint,
+  formatCaptureEnvironmentFingerprint,
+} from './capture-env.mjs';
 
 /** Engine selector shared by every screenshot script. */
 export const WEBKIT_FLAG = '--webkit';
@@ -27,6 +31,54 @@ export function parseCaptureEngine(args = process.argv.slice(2)) {
 /** Human-readable engine name for logs and docs. */
 export function engineLabel(engine) {
   return engine === WEBKIT_ENGINE ? 'WebKit' : 'Chromium';
+}
+
+/** Targets already logged for one browser, so each run logs each target once. */
+const loggedTargetsByBrowser = new WeakMap();
+
+function markTargetLogged(browser, target) {
+  let logged = loggedTargetsByBrowser.get(browser);
+  if (logged === undefined) {
+    logged = new Set();
+    loggedTargetsByBrowser.set(browser, logged);
+  }
+  if (logged.has(target)) {
+    return false;
+  }
+  logged.add(target);
+  return true;
+}
+
+/**
+ * Log the fixed capture environment fingerprint (Issue #199) for one target.
+ *
+ * The fingerprint is recorded when a browser first creates a context for that
+ * target, not at browser launch: a single Chromium run captures both desktop
+ * (DPR 1) and phone (DPR 2) evidence, and a launch-time guess would label the
+ * phone images `desktop`. Deduped per browser and target, so a run with several
+ * desktop or phone contexts still emits one line per target.
+ *
+ * Host runs report `source=host` with unavailable image / font / EGL fields, so
+ * the existing `npm run screenshots:*` commands keep working unchanged. Errors
+ * are logged as a warning instead of failing the capture; strict container
+ * validation is owned by the container entry.
+ */
+export function logCaptureEnvironment(target, browser, { env, run } = {}) {
+  if (loggedTargetsByBrowser.get(browser)?.has(target)) {
+    return;
+  }
+  try {
+    const fingerprint = captureEnvironmentFingerprint({
+      target,
+      run: { browserVersion: browser.version(), ...run },
+      env,
+    });
+    console.log(formatCaptureEnvironmentFingerprint(fingerprint));
+    markTargetLogged(browser, target);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.warn(`capture-env: unavailable (${detail})`);
+  }
 }
 
 /** Launch the engine a capture script selected. */
@@ -64,6 +116,20 @@ export function startPreviewServer({
 /** Stop a preview spawned by {@link startPreviewServer}. */
 export function stopPreviewServer(server) {
   server?.kill('SIGTERM');
+}
+
+/** Create a desktop context and record the desktop DPR-1 fingerprint. */
+export async function createDesktopContext(browser, options = {}) {
+  const context = await browser.newContext(options);
+  logCaptureEnvironment('desktop', browser);
+  return context;
+}
+
+/** Create a phone context and record the phone DPR-2 fingerprint. */
+export async function createMobileContext(browser, options = {}) {
+  const context = await browser.newContext(options);
+  logCaptureEnvironment('mobile', browser);
+  return context;
 }
 
 /**
@@ -112,7 +178,11 @@ export function phoneContextOptions(
 
 /** Create a phone context on the selected engine. */
 export async function createPhoneContext(browser, engine, options) {
-  return browser.newContext(phoneContextOptions(engine, options));
+  const context = await browser.newContext(phoneContextOptions(engine, options));
+  // WebKit phone evidence is its own target; Chromium phone evidence is the
+  // `mobile` target of a run that also captures desktop.
+  logCaptureEnvironment(engine === WEBKIT_ENGINE ? 'webkit' : 'mobile', browser);
+  return context;
 }
 
 /** One-line record that ties a screenshot file to engine, viewport and theme. */
