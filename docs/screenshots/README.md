@@ -23,12 +23,12 @@
 - 覆盖范围：`docs/screenshots/README.md` 表格里带 `整页 W×H` 的单元格与 `docs/screenshots/<file>.png` 的 PNG 签名 / IHDR 宽高逐项比对；只读 README 与已提交 PNG，不执行截图脚本、不写文件，也不需要浏览器或生产构建。
 - CI 位置：`.github/workflows/ci.yml` 的 `verify` job，在 `Unit tests`（`npm run test:unit`）之后、`Production build`（`npm run build`）之前新增名为 `Screenshot doc dimensions` 的步骤；`verify` 的 `timeout-minutes` 保持 20。放在构建前，尺寸漂移会尽早失败。
 - 步骤命令：`npm run verify:screenshots:doc-dims`（即 `node scripts/check-screenshot-doc-dims.mjs`）。
-- 复现命令：`npm run verify:screenshots:doc-dims`。通过时输出 `OK: 检查了 12 个文件 / 12 行 README，整页尺寸全部一致。` 并以 0 退出。
+- 复现命令：`npm run verify:screenshots:doc-dims`。通过时输出 `OK: 检查了 14 个文件 / 14 行 README，整页尺寸全部一致。` 并以 0 退出；该计数与 `tests/unit/screenshot-doc-dims.test.ts` 的 CLI 契约断言一致。
 - 失败表现：把 `after-minesweeper-scores-desktop.png` 行的 `整页 1440×1606` 改成 `1440×1607` 后，本地实测输出：
 
 ```text
-FAIL: 发现 1 处整页尺寸问题（检查了 12 个文件 / 12 行 README）：
-  README 162: after-minesweeper-scores-desktop.png: 整页 1440×1607 != PNG 1440×1606（尺寸不一致）
+FAIL: 发现 1 处整页尺寸问题（检查了 14 个文件 / 14 行 README）：
+  README 176: after-minesweeper-scores-desktop.png: 整页 1440×1607 != PNG 1440×1606（尺寸不一致）
 ```
 
   命令以 1 退出；恢复文档后重新通过。PNG 缺失、PNG 签名错误或 IHDR 截断时同样逐条给出 README 行号、文件名、文档值与实际 PNG 状态。
