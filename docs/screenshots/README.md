@@ -49,7 +49,7 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
   - After：`npm run screenshots:minesweeper:webkit-narrow`（生产构建 + `vite preview`，端口 `4186`，可用 `PREVIEW_PORT` 覆盖）。
   - Before：在 `d6aeb3d` 的干净 worktree 中 `npm ci && npm run build`，启动 `vite preview --host 127.0.0.1 --port 4174 --strictPort`，然后在当前分支运行 `BASE_URL=http://127.0.0.1:4174 npm run screenshots:minesweeper:webkit-narrow-before`。
   - 两个命令都使用 `iPhone SE (3rd gen)` WebKit 设备模拟，循环 320×640、360×640、375×667、412×839 四个视口，输出到 `docs/screenshots/`；脚本会为每张图打印 `engine=webkit, viewport=<W>x<H>, theme=dark, reducedMotion=reduce` 记录。
-  - 长按 / 触控注入复用 `scripts/lib/touch-input.mjs`（e2e 的 `tests/e2e/touch-input.ts` 直接 re-export 同一实现），不再依赖 Chromium CDP；Chromium 的既有 `screenshots:minesweeper:*` 命令与文件名保持不变。
+  - 长按 / 触控注入复用 `scripts/lib/touch-input.mjs`：e2e 的 `tests/e2e/touch-input.ts` 也使用同一实现（re-export 常量、类型与 `dispatchTouchPointerEvent`，并调用 `releaseTouchClick`），不再依赖 Chromium CDP；Chromium 的既有 `screenshots:minesweeper:*` 命令与文件名保持不变。
 
 | 文件 | 场景 | 视口 / 主题 | stage（Before → After） | 单格（Before → After） | 重开入口底部（After） |
 | --- | --- | --- | --- | --- | --- |
@@ -102,7 +102,7 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
 ### 证据限制
 
 - 这是当前 head 的静态视觉证据，不是 UI 改动的 Before / After 对比；本轮没有改变页面渲染，目的是让 t1–t3 已稳定的手机端场景在 WebKit 引擎下可复现地留下截图。
-- 截图脚本的 WebKit 模式与 e2e 的 `mobile-webkit` project 使用同一设备参数；长按 / 触摸注入使用 `scripts/lib/touch-input.mjs`，e2e 的 `tests/e2e/touch-input.ts` 直接 re-export 同一实现，因此两侧行为语义一致。
+- 截图脚本的 WebKit 模式与 e2e 的 `mobile-webkit` project 使用同一设备参数；长按 / 触摸注入使用 `scripts/lib/touch-input.mjs`，e2e 的 `tests/e2e/touch-input.ts` 也使用同一实现（含 `releaseTouchClick`），因此两侧行为语义一致。
 
 ## short：扫雷 360×640 / 375×667 短窄视口首屏重开入口（Issue #60 / t1）
 

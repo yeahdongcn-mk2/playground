@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   dispatchTouchPointerEvent,
   RELEASE_CLICK_POINTER_ID,
+  releaseTouchClick,
   TOUCH_POINTER_ID,
   touchLongPress,
 } from '../../scripts/lib/touch-input.mjs';
@@ -16,7 +17,9 @@ import type { Locator, Page } from '@playwright/test';
  * and record exactly which events the helper dispatches. This pins the real
  * WebKit shape: the held touch uses pointer id 2 / 'touch', while the release
  * click is the mouse-mediated pointer id 1 / 'mouse' / detail 1, so the two ids
- * can never collapse back into one.
+ * can never collapse back into one. `releaseTouchClick` is also covered through
+ * both delivery paths (the page's element under the point and an explicit
+ * locator), because both the screenshot long press and the e2e helper use it.
  */
 
 interface RecordedPointerEvent {
@@ -152,6 +155,26 @@ describe('screenshot touch injection shape', () => {
       [25, 40],
       [25, 40],
     ]);
+  });
+
+  it('dispatches the shared release click through the page path', async () => {
+    await releaseTouchClick(fakePage(), { x: 7, y: 8 });
+
+    expect(sink.dispatched.map(shape)).toEqual([
+      { type: 'click', pointerId: 1, pointerType: 'mouse', detail: 1, buttons: 0 },
+    ]);
+    expect(sink.dispatched[0]?.clientX).toBe(7);
+    expect(sink.dispatched[0]?.clientY).toBe(8);
+  });
+
+  it('dispatches the shared release click through the locator path', async () => {
+    await releaseTouchClick(fakePage(), { x: 25, y: 40 }, { target: fakeLocator(sink) });
+
+    expect(sink.dispatched.map(shape)).toEqual([
+      { type: 'click', pointerId: 1, pointerType: 'mouse', detail: 1, buttons: 0 },
+    ]);
+    expect(sink.dispatched[0]?.clientX).toBe(25);
+    expect(sink.dispatched[0]?.clientY).toBe(40);
   });
 
   it('dispatches touch events by default and accepts an explicit mouse release', async () => {

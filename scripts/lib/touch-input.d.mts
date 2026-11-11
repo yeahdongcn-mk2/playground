@@ -45,10 +45,26 @@ export function dispatchTouchPointerEvent(
   options?: DispatchTouchOptions,
 ): Promise<void>;
 
+export interface ReleaseTouchClickOptions {
+  /** Deliver the click here instead of the element under the point. */
+  target?: Locator | null;
+}
+
+/**
+ * Dispatch the mouse-mediated release `click` a real touch produces. The
+ * pointer id, `pointerType: 'mouse'`, `detail: 1` and `buttons: 0` are fixed by
+ * the shared implementation; only the delivery target can be chosen.
+ */
+export function releaseTouchClick(
+  page: Page,
+  point: TouchPoint,
+  options?: ReleaseTouchClickOptions,
+): Promise<void>;
+
 /**
  * Hold a touch on `locator`, release it and emit the release click. The held
  * events use the touch pointer id (default `TOUCH_POINTER_ID`); the release
- * click uses `RELEASE_CLICK_POINTER_ID` with `pointerType: 'mouse'`.
+ * click goes through `releaseTouchClick`.
  */
 export function touchLongPress(
   page: Page,

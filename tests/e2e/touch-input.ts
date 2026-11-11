@@ -2,6 +2,7 @@ import type { Locator, Page } from '@playwright/test';
 import {
   dispatchTouchPointerEvent,
   RELEASE_CLICK_POINTER_ID,
+  releaseTouchClick,
   TOUCH_POINTER_ID,
 } from '../../scripts/lib/touch-input.mjs';
 import type {
@@ -18,17 +19,16 @@ import type {
  * constants, types and `dispatchTouchPointerEvent`, so e2e gestures and
  * screenshots can never drift apart; only the Playwright `Page` / `Locator`
  * gesture adapter (`startTouch`, `moveTouch`, `endTouch`, `cancelTouch`) stays
- * local.
+ * local. The release-click sequence itself is `releaseTouchClick`, imported
+ * from the same module and never rebuilt here.
  *
  * Playwright's `page.touchscreen` only exposes `tap`, and only Chromium has a
  * CDP session that can hold a finger down and move it. WebKit has neither, so
  * swipes and drags are injected as the pointer events a real touch produces:
  * `pointerdown` / `pointermove` / `pointerup` (or `pointercancel`) with
  * `pointerType: 'touch'`, plus the release `click` where a browser would emit
- * one. The release click keeps the real WebKit shape instead of reusing the
- * touch id: `PointerEvent` with `pointerId: 1`, `pointerType: 'mouse'` and
- * `detail: 1`. Both engines drive the same product code path, and no test
- * depends on a Chromium-only CDP session.
+ * one. Both engines drive the same product code path, and no test depends on a
+ * Chromium-only CDP session.
  */
 export {
   dispatchTouchPointerEvent,
@@ -100,23 +100,9 @@ export async function endTouch(
     buttons: 0,
   });
   if (options.click) {
-    // A real touch does not produce a touch `click`: WebKit reports it as a
-    // mouse-mediated PointerEvent with pointerId 1, pointerType 'mouse' and
-    // detail 1, even though pointerdown / pointerup used the touch id 2. Do not
-    // reuse the gesture id here, or the long-press suppression cases would no
-    // longer exercise the shape a real finger delivers.
-    await dispatchTouchPointerEvent(
-      gesture.page,
-      'click',
-      gesture.last,
-      RELEASE_CLICK_POINTER_ID,
-      {
-        target: gesture.target ?? undefined,
-        detail: 1,
-        buttons: 0,
-        pointerType: 'mouse',
-      },
-    );
+    await releaseTouchClick(gesture.page, gesture.last, {
+      target: gesture.target ?? undefined,
+    });
   }
 }
 
