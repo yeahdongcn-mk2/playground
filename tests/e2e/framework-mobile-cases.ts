@@ -76,19 +76,40 @@ export function defineFrameworkMobileCases(): void {
           })
           .toBe(true);
       } catch (error) {
-        const diagnostics = await collectFrameworkTapDiagnostics(page, {
-          target,
-          canvas: box,
-          baseline,
-          probeBefore,
-          elapsedMs: Date.now() - startedAt,
-          tapError,
+        // A closed/crashed page makes collection throw too; keep the original
+        // assertion error and say that diagnostics could not be collected.
+        let diagnosticMessage: string;
+        try {
+          const diagnostics = await collectFrameworkTapDiagnostics(page, {
+            target,
+            canvas: box,
+            baseline,
+            probeBefore,
+            elapsedMs: Date.now() - startedAt,
+            tapError,
+          });
+          diagnosticMessage = formatFrameworkTapDiagnostics(diagnostics);
+        } catch (collectionError) {
+          diagnosticMessage = `诊断采集失败: ${errorMessage(collectionError)}`;
+        }
+        throw new Error(`${diagnosticMessage}\n\n原始断言错误: ${errorMessage(error)}`, {
+          cause: error,
         });
-        throw new Error(
-          `${formatFrameworkTapDiagnostics(diagnostics)}\n\n原始断言错误: ${errorMessage(error)}`,
-          { cause: error },
-        );
       }
+
+      // Falsifiable wiring check: the success path must prove the probe really
+      // saw the tap. Without this, a probe that stopped counting would still
+      // pass every test and only produce a wrong failure message later.
+      const probeAfter = await readFrameworkTapProbe(page);
+      const canvasHits =
+        probeAfter.canvasPointerDown +
+        probeAfter.canvasTouchStart -
+        (probeBefore.canvasPointerDown + probeBefore.canvasTouchStart);
+      expect(canvasHits, 'tap 探针应记录到 canvas 上的 pointerdown/touchstart').toBeGreaterThan(0);
+      expect(probeAfter.lastPointerDown?.target ?? probeAfter.lastTouchStart?.target).toBe(
+        'game-canvas',
+      );
+
       await expect(page.getByTestId('input-mode')).toHaveText('指针 / 触屏');
 
       await page.getByTestId('reset').tap();

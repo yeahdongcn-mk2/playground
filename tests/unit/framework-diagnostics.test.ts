@@ -38,11 +38,16 @@ function probeSnapshot(
   rafFrames: number,
   pointerDown: number,
   touchStart: number,
+  target = 'game-canvas',
 ): FrameworkTapProbeSnapshot {
-  const event = { x: 40, y: 100, target: 'game-canvas' };
+  const event = { x: 40, y: 100, target };
   return {
     pointerDown,
+    // Only a target inside the canvas moves the readout, so a document-level
+    // event on some other element stays out of the canvas counters.
+    canvasPointerDown: target === 'game-canvas' ? pointerDown : 0,
     touchStart,
+    canvasTouchStart: target === 'game-canvas' ? touchStart : 0,
     click: touchStart,
     rafFrames,
     lastPointerDown: pointerDown > 0 ? event : null,
@@ -97,6 +102,29 @@ describe('framework mobile tap diagnostics', () => {
     expect(message).toContain('blank-stage data-state=ready');
     expect(message).toContain('页面可见性=visible');
     expect(message).toContain('rAF +180 帧 / 3000ms');
+  });
+
+  it('does not blame the readout when the tap landed outside the canvas', () => {
+    const evidence = diagnostics({
+      readout: BASELINE,
+      // The event reached the document (so the old document-level counter was
+      // non-zero), but its target was `blank-stage`, not the canvas.
+      probeAfter: probeSnapshot(280, 1, 1, 'blank-stage'),
+    });
+
+    const assessment = assessFrameworkTapDiagnostics(evidence);
+    expect(assessment.verdict).toBe('tap-not-delivered');
+    expect(assessment.tapDelivered).toBe(false);
+    expect(assessment.pointerDown).toBe(1);
+    expect(assessment.canvasPointerDown).toBe(0);
+    expect(assessment.touchStart).toBe(1);
+    expect(assessment.canvasTouchStart).toBe(0);
+
+    const message = formatFrameworkTapDiagnostics(evidence);
+    expect(message).toContain('判定: tap 没有送达 canvas');
+    expect(message).toContain('canvas pointerdown +0、canvas touchstart +0');
+    expect(message).toContain('document 级 pointerdown +1、touchstart +1');
+    expect(message).toContain('最后 pointerdown=(40, 100) @ blank-stage');
   });
 
   it('blames the readout when a delivered tap left it unchanged', () => {

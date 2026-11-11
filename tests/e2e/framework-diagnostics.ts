@@ -19,8 +19,14 @@ export interface FrameworkTapProbeEvent {
 
 /** Counters the `addInitScript` probe keeps in the page. */
 export interface FrameworkTapProbeSnapshot {
+  /** `pointerdown` events seen anywhere in the document. */
   readonly pointerDown: number;
+  /** `pointerdown` events whose target is inside the game canvas. */
+  readonly canvasPointerDown: number;
+  /** `touchstart` events seen anywhere in the document. */
   readonly touchStart: number;
+  /** `touchstart` events whose target is inside the game canvas. */
+  readonly canvasTouchStart: number;
   readonly click: number;
   readonly rafFrames: number;
   readonly lastPointerDown: FrameworkTapProbeEvent | null;
@@ -81,8 +87,14 @@ export interface FrameworkTapAssessment {
   readonly readoutUpdated: boolean;
   readonly frameLoopAdvanced: boolean;
   readonly withinTolerance: boolean;
+  /** Document-level `pointerdown` delta; includes taps outside the canvas. */
   readonly pointerDown: number;
+  /** Document-level `touchstart` delta; includes taps outside the canvas. */
   readonly touchStart: number;
+  /** `pointerdown` delta whose target was the game canvas. */
+  readonly canvasPointerDown: number;
+  /** `touchstart` delta whose target was the game canvas. */
+  readonly canvasTouchStart: number;
   readonly frames: number;
 }
 
@@ -95,93 +107,112 @@ interface FrameworkTapProbeWindow {
 }
 
 /**
- * Install the tap/readout/frame probe before the first navigation.
+ * The probe body. It is kept as one exported, self-contained function because
+ * `addInitScript` serializes it into the browser and because a unit test runs
+ * the very same function in jsdom: a probe that silently stops counting must
+ * fail a test instead of only producing a wrong failure message later.
  *
- * The `addInitScript` callback is serialized into the browser, so everything it
- * needs must be declared inside it. Counting listeners on `document` (capture
- * phase) means the probe does not have to race the asynchronously created
- * canvas and still records whether the event reached the canvas subtree.
+ * Counting listeners on `document` (capture phase) means the probe does not
+ * have to race the asynchronously created canvas, and it still records whether
+ * the event reached the canvas subtree. Every counter is kept twice: once for
+ * the whole document (to see where a stray tap landed) and once for events
+ * whose target is the canvas (the only ones that can move the readout).
  */
-export async function installFrameworkTapProbe(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    type EventRecord = { x: number; y: number; target: string };
+export function frameworkTapProbeInitScript(): void {
+  type EventRecord = { x: number; y: number; target: string };
 
-    let pointerDown = 0;
-    let touchStart = 0;
-    let click = 0;
-    let rafFrames = 0;
-    let lastPointerDown: EventRecord | null = null;
-    let lastTouchStart: EventRecord | null = null;
+  let pointerDown = 0;
+  let canvasPointerDown = 0;
+  let touchStart = 0;
+  let canvasTouchStart = 0;
+  let click = 0;
+  let rafFrames = 0;
+  let lastPointerDown: EventRecord | null = null;
+  let lastTouchStart: EventRecord | null = null;
 
-    const describeTarget = (target: EventTarget | null): string => {
-      if (target instanceof Element) {
-        if (target.closest('canvas[data-testid="game-canvas"]')) {
-          return 'game-canvas';
-        }
-        if (target.closest('[data-testid="blank-stage"]')) {
-          return 'blank-stage';
-        }
-        return target.tagName.toLowerCase();
+  const describeTarget = (target: EventTarget | null): string => {
+    if (target instanceof Element) {
+      if (target.closest('canvas[data-testid="game-canvas"]')) {
+        return 'game-canvas';
       }
-      return target === null ? 'null' : String(target);
-    };
+      if (target.closest('[data-testid="blank-stage"]')) {
+        return 'blank-stage';
+      }
+      return target.tagName.toLowerCase();
+    }
+    return target === null ? 'null' : String(target);
+  };
 
-    document.addEventListener(
-      'pointerdown',
-      (event) => {
-        pointerDown += 1;
-        lastPointerDown = {
-          x: event.clientX,
-          y: event.clientY,
-          target: describeTarget(event.target),
-        };
-      },
-      true,
-    );
-    document.addEventListener(
-      'touchstart',
-      (event) => {
-        touchStart += 1;
-        const touch = event.touches[0] ?? event.changedTouches[0];
-        lastTouchStart = {
-          x: touch?.clientX ?? -1,
-          y: touch?.clientY ?? -1,
-          target: describeTarget(event.target),
-        };
-      },
-      true,
-    );
-    document.addEventListener(
-      'click',
-      () => {
-        click += 1;
-      },
-      true,
-    );
+  document.addEventListener(
+    'pointerdown',
+    (event) => {
+      pointerDown += 1;
+      const target = describeTarget(event.target);
+      if (target === 'game-canvas') {
+        canvasPointerDown += 1;
+      }
+      lastPointerDown = {
+        x: event.clientX,
+        y: event.clientY,
+        target,
+      };
+    },
+    true,
+  );
+  document.addEventListener(
+    'touchstart',
+    (event) => {
+      touchStart += 1;
+      const touch = event.touches[0] ?? event.changedTouches[0];
+      const target = describeTarget(event.target);
+      if (target === 'game-canvas') {
+        canvasTouchStart += 1;
+      }
+      lastTouchStart = {
+        x: touch?.clientX ?? -1,
+        y: touch?.clientY ?? -1,
+        target,
+      };
+    },
+    true,
+  );
+  document.addEventListener(
+    'click',
+    () => {
+      click += 1;
+    },
+    true,
+  );
 
-    // Phaser drives its loop through window.requestAnimationFrame. Wrapping it
-    // is enough to tell a throttled/hidden page from a running loop; returning
-    // the native id keeps cancelAnimationFrame working untouched.
-    const nativeRequest = window.requestAnimationFrame.bind(window);
-    window.requestAnimationFrame = ((callback: FrameRequestCallback): number =>
-      nativeRequest((time) => {
-        rafFrames += 1;
-        callback(time);
-      })) as typeof window.requestAnimationFrame;
+  // Phaser drives its loop through window.requestAnimationFrame. Wrapping it
+  // is enough to tell a throttled/hidden page from a running loop; returning
+  // the native id keeps cancelAnimationFrame working untouched.
+  const nativeRequest = window.requestAnimationFrame.bind(window);
+  window.requestAnimationFrame = ((callback: FrameRequestCallback): number =>
+    nativeRequest((time) => {
+      rafFrames += 1;
+      callback(time);
+    })) as typeof window.requestAnimationFrame;
 
-    Object.assign(window, {
-      __frameworkTapProbe: {
-        snapshot: (): FrameworkTapProbeSnapshot => ({
-          pointerDown,
-          touchStart,
-          click,
-          rafFrames,
-          lastPointerDown,
-          lastTouchStart,
-        }),
-      } satisfies FrameworkTapProbeApi,
-    } satisfies FrameworkTapProbeWindow);
-  });
+  Object.assign(window, {
+    __frameworkTapProbe: {
+      snapshot: (): FrameworkTapProbeSnapshot => ({
+        pointerDown,
+        canvasPointerDown,
+        touchStart,
+        canvasTouchStart,
+        click,
+        rafFrames,
+        lastPointerDown,
+        lastTouchStart,
+      }),
+    } satisfies FrameworkTapProbeApi,
+  } satisfies FrameworkTapProbeWindow);
+}
+
+/** Install the tap/readout/frame probe before the first navigation. */
+export async function installFrameworkTapProbe(page: Page): Promise<void> {
+  await page.addInitScript(frameworkTapProbeInitScript);
 }
 
 /** Read the counters kept by `installFrameworkTapProbe`. */
@@ -266,8 +297,19 @@ export function assessFrameworkTapDiagnostics(
     0,
     diagnostics.probeAfter.touchStart - diagnostics.probeBefore.touchStart,
   );
+  const canvasPointerDown = Math.max(
+    0,
+    diagnostics.probeAfter.canvasPointerDown - diagnostics.probeBefore.canvasPointerDown,
+  );
+  const canvasTouchStart = Math.max(
+    0,
+    diagnostics.probeAfter.canvasTouchStart - diagnostics.probeBefore.canvasTouchStart,
+  );
   const frames = Math.max(0, diagnostics.probeAfter.rafFrames - diagnostics.probeBefore.rafFrames);
-  const tapDelivered = pointerDown > 0 || touchStart > 0;
+  // A tap only counts as delivered when it reached the canvas: a document-level
+  // hit on `blank-stage`/HUD cannot move the readout and must be reported as
+  // "tap 没有送达 canvas", not as "readout 没有更新".
+  const tapDelivered = canvasPointerDown > 0 || canvasTouchStart > 0;
   const readoutUpdated = Boolean(
     current && baseline && (current.x !== baseline.x || current.y !== baseline.y),
   );
@@ -297,6 +339,8 @@ export function assessFrameworkTapDiagnostics(
     withinTolerance,
     pointerDown,
     touchStart,
+    canvasPointerDown,
+    canvasTouchStart,
     frames,
   };
 }
@@ -348,7 +392,7 @@ export function formatFrameworkTapDiagnostics(diagnostics: FrameworkTapDiagnosti
     `tap 目标: viewport (${round1(target.viewportX)}, ${round1(target.viewportY)}) → canvas 内 (${round1(target.localX)}, ${round1(target.localY)})，容差 ±${target.tolerance}`,
     `canvas: x=${round1(canvas.x)} y=${round1(canvas.y)} width=${round1(canvas.width)} height=${round1(canvas.height)}`,
     `blank-stage data-state=${diagnostics.page.stageState ?? '元素缺失'}，页面可见性=${diagnostics.page.visibility}`,
-    `tap 送达: ${assessment.tapDelivered ? '是' : '否'}（相对 tap 前：canvas pointerdown +${assessment.pointerDown}、touchstart +${assessment.touchStart}；最后 pointerdown=${formatEvent(diagnostics.probeAfter.lastPointerDown)}）`,
+    `tap 送达: ${assessment.tapDelivered ? '是' : '否'}（canvas pointerdown +${assessment.canvasPointerDown}、canvas touchstart +${assessment.canvasTouchStart}；document 级 pointerdown +${assessment.pointerDown}、touchstart +${assessment.touchStart}；最后 pointerdown=${formatEvent(diagnostics.probeAfter.lastPointerDown)}）`,
     `tap 后 readout: ${formatReadout(diagnostics.page.readout)}`,
     `readout 更新: ${assessment.readoutUpdated ? '是' : '否'}${baselineSuffix}`,
     `帧循环推进: ${assessment.frameLoopAdvanced ? '是' : '否'}（rAF +${assessment.frames} 帧 / ${Math.round(diagnostics.elapsedMs)}ms）`,
