@@ -201,6 +201,19 @@ function readDebugInt(raw: string | null, min: number, max: number): number | un
   return value;
 }
 
+/**
+ * `?debug=1&steps=<n>`: advance exactly `n` fixed simulation steps after a
+ * serve and pause the loop, so the captured state depends only on the seed and
+ * the step count. Undefined outside debug mode or for an absent / invalid
+ * value, leaving normal play and every other debug scene untouched.
+ */
+function debugStepCount(): number | undefined {
+  if (!debugEnabled()) {
+    return undefined;
+  }
+  return readDebugInt(debugParams().get('steps'), 0, 100_000);
+}
+
 /** `row,col;row,col` in the engine's logical brick grid. */
 function parseDebugBricks(raw: string | null): BrickSpec[] | undefined {
   if (!raw) {
@@ -337,8 +350,11 @@ export async function mountBreakout(
   const announcer = query<HTMLElement>(root, '[data-testid="announcer"]');
 
   const engine = createEngine();
+  const fixedStepCount = debugStepCount();
   let started = engine.currentStatus !== 'ready';
   let lastStatus: BreakoutStatus = engine.currentStatus;
+  let activeScene: BreakoutScene | null = null;
+  let debugStepsPaused = false;
 
   const controller = new AbortController();
   const listenerSignal = controller.signal;
@@ -442,6 +458,12 @@ export async function mountBreakout(
     started = true;
     services.audio.unlock();
     services.audio.play('start');
+    if (fixedStepCount !== undefined) {
+      // Guard the focus / visibility wake-ups until the deterministic frame has
+      // been advanced and the scene has paused the loop itself.
+      debugStepsPaused = true;
+      activeScene?.requestFixedSteps(fixedStepCount);
+    }
     sync();
   }
 
@@ -576,7 +598,7 @@ export async function mountBreakout(
 
   const onWindowFocus = (): void => {
     windowFocused = true;
-    if (!document.hidden) {
+    if (!document.hidden && !debugStepsPaused) {
       runtime?.game.loop.wake();
     }
   };
@@ -668,9 +690,16 @@ export async function mountBreakout(
           window.clearTimeout(readyTimer);
           resolveReady?.();
         },
+        onFixedSteps(steps) {
+          sync();
+          // The capture script waits for this marker, so it can never snapshot
+          // a half-advanced fixed-step sequence.
+          gameRoot.dataset.debugSteps = String(steps);
+        },
       },
       services.reduceMotion,
     );
+    activeScene = scene;
 
     runtime = createPhaser2DGame({
       parent: boardElement,
@@ -734,7 +763,7 @@ export async function mountBreakout(
     if (document.hidden) {
       releasePaddle();
       activeRuntime.game.loop.sleep();
-    } else if (windowFocused) {
+    } else if (windowFocused && !debugStepsPaused) {
       activeRuntime.game.loop.wake();
     }
   };

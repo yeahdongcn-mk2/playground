@@ -35,6 +35,12 @@ import { waitForPreviewServer } from './lib/preview-server.mjs';
  * levelclear / gameover) on the iPhone SE WebKit device as
  * `after-breakout-<state>-webkit.png`. It is an After-only mode; the desktop and
  * hub evidence stay Chromium.
+ *
+ * The playing states pin `seed=7` and `?debug=1&steps=120`: the debug seam
+ * pauses the loop and advances exactly 120 fixed simulation steps (1 s at the
+ * engine's 120 Hz step), so their PNGs are reproducible byte-for-byte instead
+ * of depending on wall-clock frame timing. See docs/screenshots/README.md for
+ * the reproducible sha256 procedure.
  */
 
 const HOST = '127.0.0.1';
@@ -56,6 +62,11 @@ const BRICK_BOTTOM = 72 + 24;
 const BRICK_CENTER_X = 24 + (480 - 48 - 9 * 4) / 10 / 2;
 const BALL_UNDER_BRICK = `${BRICK_CENTER_X},${BRICK_BOTTOM + 8 - 1},0,-200`;
 const BALL_BELOW_COURT = '240,740,0,50';
+
+// The playing screenshots are deterministic: the debug seam advances exactly
+// PLAYING_STEPS fixed engine steps after the serve and then pauses the loop.
+const PLAYING_SEED = 7;
+const PLAYING_STEPS = 120;
 
 let server = null;
 
@@ -87,11 +98,19 @@ async function openReady(page) {
 }
 
 async function openPlaying(page) {
-  await openBreakout(page, { seed: 7 });
+  await openBreakout(page, { seed: PLAYING_SEED, steps: PLAYING_STEPS });
   await page.getByTestId('overlay').getByRole('button', { name: '开始游戏' }).click();
   await page.getByTestId('overlay').waitFor({ state: 'hidden' });
   await page.getByTestId('status').filter({ hasText: '进行中' }).waitFor();
-  await page.waitForTimeout(800);
+  // Wait for the debug seam to finish its fixed steps. It pauses the game loop
+  // afterwards, so no wall-clock delay can change the state before capture.
+  await page.waitForFunction(
+    (steps) =>
+      document
+        .querySelector('[data-testid="breakout-game"]')
+        ?.getAttribute('data-debug-steps') === String(steps),
+    PLAYING_STEPS,
+  );
   await settle(page);
 }
 
