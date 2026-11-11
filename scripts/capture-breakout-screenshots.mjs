@@ -37,10 +37,10 @@ import { waitForPreviewServer } from './lib/preview-server.mjs';
  * hub evidence stay Chromium.
  *
  * The playing states pin `seed=7` and `?debug=1&steps=120`: the debug seam
- * pauses the loop and advances exactly 120 fixed simulation steps (1 s at the
- * engine's 120 Hz step), so their PNGs are reproducible byte-for-byte instead
- * of depending on wall-clock frame timing. See docs/screenshots/README.md for
- * the reproducible sha256 procedure.
+ * advances exactly 120 fixed simulation steps (1 s at the engine's 120 Hz step)
+ * and then pauses the loop, so their PNGs are reproducible byte-for-byte
+ * instead of depending on wall-clock frame timing. See
+ * docs/screenshots/README.md for the reproducible sha256 procedure.
  */
 
 const HOST = '127.0.0.1';

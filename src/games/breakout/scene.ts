@@ -1,10 +1,10 @@
 import Phaser from 'phaser';
-import {
-  FIXED_STEP_MS,
-  type BreakoutEngine,
-  type BreakoutSnapshot,
-  type BreakoutUpdate,
+import type {
+  BreakoutEngine,
+  BreakoutSnapshot,
+  BreakoutUpdate,
 } from './engine';
+import { advanceFixedSteps } from './fixed-steps';
 import { courtMetrics, type CourtMetrics } from './geometry';
 import { BREAKOUT_COLORS as COLORS, BRICK_COLORS } from './palette';
 
@@ -70,9 +70,7 @@ export class BreakoutScene extends Phaser.Scene {
     if (this.fixedSteps !== null) {
       const steps = this.fixedSteps;
       this.fixedSteps = null;
-      for (let index = 0; index < steps; index += 1) {
-        this.advance(FIXED_STEP_MS);
-      }
+      advanceFixedSteps(steps, (delta) => this.advance(delta));
       this.draw(this.engine.state);
       // The game step that is already running still renders after this scene
       // update; sleeping only stops the following frames, so the deterministic
