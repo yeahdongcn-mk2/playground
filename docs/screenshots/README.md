@@ -397,6 +397,22 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
 | `after-2048-playing-mobile.png` | 2048 游玩中（手机） | 390×844（DPR 2）/ 深色 | 手机端棋盘、HUD 与滑动提示。 |
 | `after-2048-gameover-mobile.png` | 2048 GAME OVER（手机） | 390×844（DPR 2）/ 深色 | 手机端结算与重开入口。 |
 
+### 确定性重截（playing / gameover）
+
+- 调试接缝：仅在 `?debug=1` 时启用。`seed` 是有限数字时按其播种，缺省或非法（空白、`abc`、`Infinity`、`NaN`）回退 `1`；不带 `debug` 时保持原有的随机初始局面与随机生成。
+- 固定参数：`seed=135`，playing / gameover 都只按一次 `ArrowLeft`。
+  - playing：`MERGE_BOARD` = `2,2,4,4/8,8,16,16/.,.,.,./.,.,.,.`，合并后得分 `60`，seed 135 在 `(0,3)` 生成 `2`。
+  - gameover：`STUCK_BOARD` = `2,2,16,8/8,4,2,16/4,8,16,2/16,2,4,8`，左移后只剩 `(0,3)` 空格，seed 135 生成 `2`，结算文本为 `本局 4 分 · 最大方块 16`。
+- 复现命令（同一构建、预览端口空闲；Chromium 与 WebKit 分开执行并各跑两次）：
+  ```sh
+  npm run screenshots:2048
+  npm run screenshots:2048:webkit
+  sha256sum docs/screenshots/after-2048-{playing,gameover}-{desktop,mobile,webkit}.png
+  ```
+  两次运行的 6 个 sha256 应完全一致，且等于已提交产物。本任务只提交这 6 张 playing / gameover 图；脚本仍会顺带写出 ready / hub，提交前用 `git checkout --` 还原它们，保持未受影响的已提交产物不变。WebKit 产物在官方 Playwright 容器（`mcr.microsoft.com/playwright:v1.64.1-noble`，与仓库的 Playwright 1.64.1 对应）内捕获，避免宿主 EGL / 字体环境差异。
+- 等待条件：截图前等待 `document.fonts.ready`、两个 `requestAnimationFrame`（让最后的状态变更完成画布绘制），以及 gameover 的 `本局 4 分 · 最大方块 16` 结算文本；不再只依赖固定 timeout。
+- 页脚：`after-2048-playing-desktop.png` / `after-2048-gameover-desktop.png` 是 `fullPage` 截图，包含当前页脚「五款游戏已上线」。这两张按本次确定性接缝重新生成，所以与 t4 时（页脚仍为「四款游戏已上线」）的历史证据不同；ready 桌面图不在本次范围，保持历史产物，页脚漂移仍由 #137 跟踪。
+
 ### 证据限制
 
 - main 没有 2048 页面，所以 Before 只能对比大厅（同一视口 / 主题）与真实未注册路由，不能与旧版 2048 页面逐像素对比。

@@ -662,3 +662,68 @@ describe('snapshots', () => {
     ]);
   });
 });
+
+/**
+ * The screenshot script pins these two boards, seed 135 and ArrowLeft. The
+ * expected boards below are what `npm run screenshots:2048` therefore draws;
+ * changing the engine's spawn order without re-capturing the committed PNGs
+ * fails here.
+ */
+describe('deterministic screenshot scenario', () => {
+  const MERGE_BOARD: Board = [
+    [2, 2, 4, 4],
+    [8, 8, 16, 16],
+    [null, null, null, null],
+    [null, null, null, null],
+  ];
+  const STUCK_BOARD_WITH_MERGE: Board = [
+    [2, 2, 16, 8],
+    [8, 4, 2, 16],
+    [4, 8, 16, 2],
+    [16, 2, 4, 8],
+  ];
+
+  function screenshotEngine(board: Board): Game2048Engine {
+    return new Game2048Engine({ rng: createSeededRng(135), initialBoard: board });
+  }
+
+  it('spawns the same playing tile on the same board, seed and direction', () => {
+    const first = screenshotEngine(MERGE_BOARD);
+    const second = screenshotEngine(MERGE_BOARD);
+
+    const firstMove = first.move('left');
+    const secondMove = second.move('left');
+
+    expect(firstMove.spawned).toEqual({ row: 0, col: 3, value: 2 });
+    expect(secondMove.spawned).toEqual(firstMove.spawned);
+    expect(first.state).toEqual(second.state);
+    expect(first.state.board).toEqual([
+      [4, 8, null, 2],
+      [16, 32, null, null],
+      EMPTY_ROW,
+      EMPTY_ROW,
+    ]);
+    expect(first.score).toBe(60);
+    expect(first.currentStatus).toBe('playing');
+  });
+
+  it('reaches the same game-over board on the same seed and direction', () => {
+    const first = screenshotEngine(STUCK_BOARD_WITH_MERGE);
+    const second = screenshotEngine(STUCK_BOARD_WITH_MERGE);
+
+    const firstMove = first.move('left');
+    const secondMove = second.move('left');
+
+    expect(firstMove.gameOver).toBe(true);
+    expect(firstMove.spawned).toEqual({ row: 0, col: 3, value: 2 });
+    expect(secondMove.spawned).toEqual(firstMove.spawned);
+    expect(first.state).toEqual(second.state);
+    expect(first.state.board).toEqual([
+      [4, 16, 8, 2],
+      [8, 4, 2, 16],
+      [4, 8, 16, 2],
+      [16, 2, 4, 8],
+    ]);
+    expect(first.score).toBe(4);
+  });
+});

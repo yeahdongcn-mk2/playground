@@ -34,6 +34,10 @@ import { waitForPreviewServer } from './lib/preview-server.mjs';
  * `--webkit` captures the three stable phone states (ready / playing /
  * gameover) on the iPhone SE WebKit device as `after-2048-<state>-webkit.png`.
  * It is an After-only mode; the desktop and hub evidence stay Chromium.
+ *
+ * Playing and gameover pin `seed=135` in addition to the board, so the tile
+ * spawned after ArrowLeft is deterministic. See docs/screenshots/README.md for
+ * the reproducible sha256 procedure and its conditions.
  */
 
 const HOST = '127.0.0.1';
@@ -48,11 +52,27 @@ const BASE_URL = process.env.BASE_URL ?? ORIGIN;
 const COLOR_BOARD = '2,4,8,16/32,64,128,256/512,1024,2048,./.,.,.,.';
 const MERGE_BOARD = '2,2,4,4/8,8,16,16/.,.,.,./.,.,.,.';
 const STUCK_BOARD = '2,2,16,8/8,4,2,16/4,8,16,2/16,2,4,8';
+/** Fixed debug RNG seed; the engine test pins the same value and boards. */
+const DEBUG_SEED = '135';
 
 let server = null;
 
+/** URL after the hash route, e.g. `#/games/2048?debug=1&board=...&seed=135`. */
+function gameUrl(board) {
+  return `${BASE_URL}/#/games/2048?debug=1&board=${board}&seed=${DEBUG_SEED}`;
+}
+
 async function settle(page) {
   await page.evaluate(() => document.fonts.ready);
+  // Two animation frames commit the canvas paint triggered by the last state
+  // change; the timeout only keeps the Phaser loop as a fallback, so the
+  // deterministic result does not depend on a fixed wall-clock delay alone.
+  await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+      }),
+  );
   await page.waitForTimeout(300);
 }
 
@@ -61,7 +81,7 @@ async function capture(page, name, fullPage) {
 }
 
 async function open2048(page, board) {
-  await page.goto(`${BASE_URL}/#/games/2048?debug=1&board=${board}`, {
+  await page.goto(gameUrl(board), {
     waitUntil: 'networkidle',
   });
   await page.waitForSelector('[data-testid="2048-board"] canvas');
@@ -118,6 +138,12 @@ async function captureDesktop(browser) {
     await open2048(over, STUCK_BOARD);
     await over.keyboard.press('ArrowLeft');
     await over.getByTestId('overlay-title').filter({ hasText: '无路可走' }).waitFor();
+    // Wait for the final score line, not just the overlay: it proves the
+    // game-over text and the deterministic seeded spawn have both rendered.
+    await over
+      .getByTestId('overlay-score')
+      .filter({ hasText: '本局 4 分 · 最大方块 16' })
+      .waitFor();
     await settle(over);
     await capture(over, 'after-2048-gameover-desktop.png', true);
     await over.close();
@@ -178,6 +204,12 @@ async function captureMobile(browser) {
     await open2048(over, STUCK_BOARD);
     await over.keyboard.press('ArrowLeft');
     await over.getByTestId('overlay-title').filter({ hasText: '无路可走' }).waitFor();
+    // Wait for the final score line, not just the overlay: it proves the
+    // game-over text and the deterministic seeded spawn have both rendered.
+    await over
+      .getByTestId('overlay-score')
+      .filter({ hasText: '本局 4 分 · 最大方块 16' })
+      .waitFor();
     await settle(over);
     await capture(over, 'after-2048-gameover-mobile.png', false);
     await over.close();
@@ -208,6 +240,10 @@ async function captureWebkitMobile(browser) {
   await open2048(over, STUCK_BOARD);
   await over.keyboard.press('ArrowLeft');
   await over.getByTestId('overlay-title').filter({ hasText: '无路可走' }).waitFor();
+  await over
+    .getByTestId('overlay-score')
+    .filter({ hasText: '本局 4 分 · 最大方块 16' })
+    .waitFor();
   await settle(over);
   await capture(over, 'after-2048-gameover-webkit.png', false);
   await over.close();

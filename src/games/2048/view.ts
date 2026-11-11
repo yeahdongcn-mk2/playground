@@ -2,6 +2,7 @@ import { query, setText } from '../../core/dom';
 import type { GameHandle, GameServices } from '../../core/game';
 import { directionFromCode, isEditableTarget } from '../../core/input';
 import type { Phaser2DRuntime } from '../../engine/phaser2d';
+import { resolveDebugSeed } from './debug';
 import {
   createSeededRng,
   Game2048Engine,
@@ -182,16 +183,21 @@ function debugRenderer(): 'canvas' | undefined {
   return debugParams().get('renderer') === 'canvas' ? 'canvas' : undefined;
 }
 
-function debugEngineOptions(): Pick<Game2048Options, 'initialBoard'> {
+/**
+ * Deterministic debug options. With `?debug=1` the RNG is seeded from `seed`
+ * (missing or invalid values fall back to 1); a `board` parameter additionally
+ * replaces the random starting layout. Without `debug` the existing random
+ * behavior is untouched.
+ */
+function debugEngineOptions(): Pick<Game2048Options, 'initialBoard' | 'rng'> {
   if (!debugEnabled()) {
     return {};
   }
-  const raw = debugParams().get('board');
-  if (!raw) {
-    return {};
-  }
-  const board = parseDebugBoard(raw);
-  return board ? { initialBoard: board } : {};
+  const params = debugParams();
+  const rng = createSeededRng(resolveDebugSeed(params.get('seed')));
+  const raw = params.get('board');
+  const board = raw ? parseDebugBoard(raw) : undefined;
+  return board ? { rng, initialBoard: board } : { rng };
 }
 
 /**
