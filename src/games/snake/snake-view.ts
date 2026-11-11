@@ -8,6 +8,7 @@ import {
   oppositeDirection,
   SnakeEngine,
 } from './engine';
+import { resolveDebugSeed, resolveDebugTicks } from './debug';
 import type { SnakeScene } from './scene';
 import './snake.css';
 
@@ -176,8 +177,12 @@ export async function mountSnake(
   const announcer = query<HTMLElement>(root, '[data-testid="announcer"]');
 
   const engine = (() => {
-    // Seed once per mount; restarts reuse the sequence but each page load varies.
-    const rng = createSeededRng((Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0);
+    // Seed once per mount; restarts reuse the sequence but each page load varies
+    // unless the debug `seed` parameter pins it for reproducible captures.
+    const seed = debugSeedFromHash();
+    const rng = createSeededRng(
+      seed ?? ((Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0),
+    );
     const initialFood = debugFoodFromHash();
     if (!initialFood) {
       return new SnakeEngine({ rng });
@@ -189,6 +194,7 @@ export async function mountSnake(
       return new SnakeEngine({ rng });
     }
   })();
+  const fixedTickCount = debugTicksFromHash();
 
   let best = services.storage.getNumber(HIGH_SCORE_KEY, 0);
   let runStartBest = best;
@@ -198,6 +204,12 @@ export async function mountSnake(
   const listenerSignal = controller.signal;
   mountSignal.addEventListener('abort', () => controller.abort(), { once: true });
   let pausedByVisibility = false;
+  /**
+   * Set once a debug fixed-tick count is requested. It keeps focus / visibility
+   * events from waking the loop or pausing the engine before the deterministic
+   * screenshot state has been advanced and frozen.
+   */
+  let debugTicksPaused = false;
 
   function sync(result?: StepResult): void {
     const state = engine.state;
@@ -316,6 +328,13 @@ export async function mountSnake(
     }
     services.audio.unlock();
     services.audio.play('start');
+    if (fixedTickCount !== undefined) {
+      debugTicksPaused = true;
+      // The loop may be asleep after a visibility change; wake it so the next
+      // frame can advance the fixed ticks.
+      runtime?.game.loop.wake();
+      scene?.requestFixedTicks(fixedTickCount);
+    }
     sync();
   }
 
@@ -419,6 +438,12 @@ export async function mountSnake(
           window.clearTimeout(readyTimer);
           resolveReady?.();
         },
+        onFixedTicks(ticks) {
+          sync();
+          // The capture script waits for this marker, so it can never snapshot
+          // a half-advanced fixed-tick sequence.
+          gameRoot.dataset.debugTicks = String(ticks);
+        },
       },
       services.reduceMotion,
     );
@@ -468,6 +493,9 @@ export async function mountSnake(
   bindSwipe(boardElement, handleDirection, listenerSignal);
 
   const onVisibilityChange = (): void => {
+    if (debugTicksPaused) {
+      return;
+    }
     if (document.hidden) {
       pausedByVisibility = engine.currentStatus === 'running';
       if (engine.currentStatus === 'running') {
@@ -488,7 +516,7 @@ export async function mountSnake(
   document.addEventListener('visibilitychange', onVisibilityChange, { signal: listenerSignal });
 
   const onWindowBlur = (): void => {
-    if (engine.currentStatus === 'running') {
+    if (!debugTicksPaused && engine.currentStatus === 'running') {
       engine.pause();
       sync();
     }
@@ -530,17 +558,37 @@ function debugEnabled(): boolean {
   return query ? new URLSearchParams(query).has('debug') : false;
 }
 
+/** Query string after the hash route, e.g. `#/games/snake?debug=1&food=11,10`. */
+function debugParams(): URLSearchParams {
+  const hash = window.location.hash;
+  const queryIndex = hash.indexOf('?');
+  return new URLSearchParams(
+    queryIndex >= 0 ? hash.slice(queryIndex + 1) : window.location.search,
+  );
+}
+
+/** Test seam used by Playwright to pin the next-fruit RNG deterministically. */
+function debugSeedFromHash(): number | undefined {
+  if (!debugEnabled()) {
+    return undefined;
+  }
+  return resolveDebugSeed(debugParams().get('seed'));
+}
+
+/** Test seam used by screenshots to freeze the run after a fixed tick count. */
+function debugTicksFromHash(): number | undefined {
+  if (!debugEnabled()) {
+    return undefined;
+  }
+  return resolveDebugTicks(debugParams().get('ticks'));
+}
+
 /** Test seam used by Playwright to place the first fruit deterministically. */
 function debugFoodFromHash(): Cell | undefined {
   if (!debugEnabled()) {
     return undefined;
   }
-  const hash = window.location.hash;
-  const queryIndex = hash.indexOf('?');
-  const params = new URLSearchParams(
-    queryIndex >= 0 ? hash.slice(queryIndex + 1) : window.location.search,
-  );
-  const raw = params.get('food');
+  const raw = debugParams().get('food');
   if (!raw) {
     return undefined;
   }

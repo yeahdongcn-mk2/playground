@@ -25,6 +25,12 @@ import { waitForPreviewServer } from './lib/preview-server.mjs';
  * player gets in development. `--webkit` captures the stable phone frame on the
  * iPhone SE WebKit device as `after-snake-webkit.png`.
  *
+ * The playing screenshot pins `seed=7&ticks=3`: the debug seam seeds the
+ * next-fruit RNG and advances exactly three engine ticks, then freezes the run,
+ * so its PNG is reproducible byte-for-byte instead of depending on wall-clock
+ * frame timing. See docs/screenshots/README.md for the reproducible sha256
+ * procedure.
+ *
  * The dev server port is 5188 by default; on a shared host set `PREVIEW_PORT`
  * to a free port instead of editing this file. When that port is already
  * taken, the script fails with an explicit bind error instead of quietly
@@ -42,6 +48,13 @@ const ARGS = process.argv.slice(2);
 const MODE = ARGS.includes('--before') ? 'before' : 'after';
 const ENGINE = parseCaptureEngine(ARGS);
 const IS_WEBKIT = ENGINE === WEBKIT_ENGINE;
+
+// The playing screenshot is deterministic: the debug seam advances exactly
+// PLAYING_TICKS engine ticks after the fixed first fruit and then freezes the
+// run, so the captured snake, next fruit, score and length depend only on this
+// seed and tick count. The engine test pins the same values.
+const PLAYING_SEED = 7;
+const PLAYING_TICKS = 3;
 
 async function settle(page) {
   await page.evaluate(() => document.fonts.ready);
@@ -159,11 +172,22 @@ try {
       await capture(ready, 'after-snake-ready.png', true);
 
       const playing = await desktop.newPage();
-      await playing.goto(`${ORIGIN}/#/games/snake?debug=1&food=11,10`, { waitUntil: 'networkidle' });
+      await playing.goto(
+        `${ORIGIN}/#/games/snake?debug=1&food=11,10&seed=${PLAYING_SEED}&ticks=${PLAYING_TICKS}`,
+        { waitUntil: 'networkidle' },
+      );
       await waitForSnakeReady(playing);
       await playing.keyboard.press('Space');
-      await playing.waitForFunction(() => window.__playground?.getState().score >= 10);
-      await playing.waitForTimeout(120);
+      // Wait for the debug seam to finish its fixed ticks. It freezes the run
+      // afterwards, so no wall-clock delay can change the state.
+      await playing.waitForFunction(
+        (ticks) =>
+          document
+            .querySelector('[data-testid="snake-game"]')
+            ?.getAttribute('data-debug-ticks') === String(ticks),
+        PLAYING_TICKS,
+      );
+      await settle(playing);
       await capture(playing, 'after-snake-playing.png', true);
 
       const over = await desktop.newPage();

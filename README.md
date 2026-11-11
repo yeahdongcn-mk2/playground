@@ -234,7 +234,7 @@ pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和
 | `npm run check:budget` | 检查入口无引擎、gzip 体积预算 |
 | `npm run screenshots` | 构建后生成 `docs/screenshots/` 中的界面截图 |
 | `npm run screenshots:webkit` | 构建后用 WebKit 生成大厅与空白画布的 375×667 手机截图 |
-| `npm run screenshots:snake` | 生成贪食蛇 Before / After 截图（开发服务器 + 固定首果） |
+| `npm run screenshots:snake` | 生成贪食蛇 Before / After 截图（开发服务器 + 固定首果；游玩图固定 seed / tick） |
 | `npm run screenshots:snake:webkit` | 用开发服务器 + WebKit 生成贪食蛇手机 ready 截图 |
 | `npm run screenshots:2048` | 构建后生成 2048 大厅与 ready / playing / gameover 截图 |
 | `npm run screenshots:2048:before` | 用 `BASE_URL` 指定的 main 预览生成 2048 Before 截图 |
@@ -392,9 +392,9 @@ games/<game>/scene → 对应引擎（动态 import）
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过
-npm run test:unit    # 533 passed（含贪食蛇 21、俄罗斯方块 38、2048 41、打砖块 41、扫雷 150 个规则 / 难度 / 成绩 / 视图 / 调试用例，以及 2048 截图确定性 4 例、打砖块截图确定性 7 例、截图脚本端口 11 例、截图模式 58 例、预览服务启动 7 例）
+npm run test:unit    # 547 passed（含贪食蛇 27（引擎 23 + 调试 4）、俄罗斯方块 38、2048 41、打砖块 41、扫雷 150 个规则 / 难度 / 成绩 / 视图 / 调试用例，以及 2048 截图确定性 4 例、贪食蛇截图确定性 8 例、打砖块截图确定性 7 例、截图脚本端口 11 例、截图模式 58 例、预览服务启动 7 例）
 npm run build        # 通过
-npm run check:budget # 通过（入口 10.90 KB gzip，全部 JS 404.75 KB gzip）
+npm run check:budget # 通过（入口 10.91 KB gzip，全部 JS 405.09 KB gzip）
 npm run test:e2e     # 153 passed（桌面 86 + 手机 36 + WebKit 31）
 ```
 

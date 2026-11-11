@@ -425,7 +425,7 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
 - Before 基线：t2 已合入 main 的 `60c0206`（squash commit，树内容 = t2 分支 head `c9e8dec`）。截图在 `c9e8dec` 的干净 worktree 捕获。
 - After：本 PR head（见 PR 描述中的 commit SHA）。
 - 视口 / 主题：桌面 1440×1000、手机 390×844（DPR 2），深色主题，`reducedMotion: reduce`。
-- 生成：`npm run screenshots:snake`（开发服务器 + 固定首果 `?food=11,10`）。
+- 生成：`npm run screenshots:snake`（开发服务器 + 固定首果 `?food=11,10`；游玩图另固定 `seed=7&ticks=3`）。
 - 端口：贪食蛇截图需要 DEV-only 的固定首果接缝，因此 `npm run screenshots:snake` / `npm run screenshots:snake:webkit` 启动的是 `vite` 开发服务器（不是 `vite preview`），默认 `127.0.0.1:5188`，可用 `PREVIEW_PORT=5189 npm run screenshots:snake` 覆盖（`PREVIEW_PORT` 为空串时回退 `5188`；`--webkit` 复用同一启动路径与端口）。端口已被占用时脚本在启动前以非零状态退出，错误包含实际端口、`the port is already in use` 与 `Set PREVIEW_PORT` 建议，并明确说明占用的是开发服务器而不是 preview，不会写出或覆盖任何截图；端口探测通过后开发服务器提前退出时报告子进程退出码与 stderr，不再静默连到端口上的其它服务。
 - 复现 Before：`git worktree add /tmp/t2-baseline 60c0206`，把本分支的 `scripts/capture-snake-screenshots.mjs` 复制进去，在 worktree 里 `npm ci && node scripts/capture-snake-screenshots.mjs --before`。`--before` 读取当前工作树，不要在本分支直接运行，否则 Before 会被贪食蛇构建覆盖。
 
@@ -444,18 +444,33 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
 | --- | --- | --- | --- |
 | `after-hub-desktop.png` | 大厅 | 1440×1000 / 深色 | 新增贪食蛇卡片，主 CTA 改为「开始贪食蛇」。 |
 | `after-snake-ready.png` | 贪食蛇 READY | 1440×1000 / 深色 | HUD、棋盘、覆盖层与 D-pad（桌面隐藏）。 |
-| `after-snake-playing.png` | 贪食蛇游玩中 | 1440×1000 / 深色 | 固定首果被吃后的得分、长度与速度。 |
+| `after-snake-playing.png` | 贪食蛇游玩中 | 1440×1000 / 深色 | 固定首果被吃后，按固定 seed / tick 冻结的得分、长度、速度与下一颗果实。 |
 | `after-snake-gameover.png` | 贪食蛇 GAME OVER | 1440×1000 / 深色 | 撞墙结算、最高分与重开入口。 |
 | `after-hub-mobile.png` | 大厅 | 390×844（DPR 2）/ 深色 | 单列布局。 |
 | `after-snake-mobile.png` | 贪食蛇（手机） | 390×844（DPR 2）/ 深色 | 棋盘、D-pad 与操作面板堆叠。 |
 
 `after-hub-desktop.png` / `after-hub-mobile.png` 是跨任务共用的文件名，当前已由 t4 / t5 / t6 更新为含 2048、打砖块与扫雷的五游戏大厅（手机为整页截图）；t3 表格里的「新增贪食蛇卡片」描述当时状态。
 
+### 游玩截图确定性
+
+- 调试接缝：游玩图访问 `?debug=1&food=11,10&seed=7&ticks=3`。`food` 固定第一颗果实；`seed` 只固定吃下首果后下一颗果实的 RNG；`ticks` 让场景在开始后精确推进 3 个引擎 tick（每 tick 前进一格，吃首果后 `stepMs` 为 144 ms），随后冻结运行并等待 `[data-testid="snake-game"][data-debug-ticks="3"]` 标记再截图，不再依赖 `score >= 10` 后的 120 ms 真实时间。
+- 确定性状态：最终蛇头 `(13,10)`、长度 4、得分 10、速度 `1.04×`，下一颗果实在 `(4,0)`；这些值只由固定首果、seed 与 tick 数决定，同一 seed 与 tick 数在 `src/games/snake/engine.test.ts` 的 deterministic screenshot scenario 中钉住。
+- 冻结方式：调试接缝只停止引擎 tick，保留 Phaser 循环重绘已冻结的 Graphics；直接 sleep 掉 WebGL 循环会让截图捕获到黑屏画布，因此不再使用 `game.loop.sleep()`。
+- 复现命令（同一工作树、开发端口 5188 空闲）：
+  ```sh
+  npm run screenshots:snake
+  npm run screenshots:snake
+  sha256sum docs/screenshots/after-snake-playing.png
+  ```
+  两次运行生成的 `after-snake-playing.png` sha256 应完全一致并等于已提交产物。本子任务实测旧产物（Before）`fe38ad4f0f4d8d8f1fb86895159e3d9ab5dc5ceb687bdc80b9784c55446ca367`，新产物（After，两次运行相同）`b0c8e07878fe1e4573a7aaf52e2591d5759b083970a76e34fc65a12f47c4b058`。
+- 提交范围：脚本仍会顺带写出 ready / gameover / mobile / hub，提交前用 `git checkout --` 还原它们，只保留本任务的 `after-snake-playing.png` 与文档 / 测试改动，未受影响的已提交产物保持不变。
+- 页脚：`after-snake-playing.png` 是桌面整页图，重生成后带当前页脚「五款游戏已上线」；ready / gameover 桌面图仍是历史产物，页脚漂移由 #137 统一跟踪，不计入本次确定性修复。
+
 ### 证据限制
 
 - 贪食蛇页面在 baseline 不存在：`before-framework-snake-route.png` 是 t2 访问该路由的真实「没有找到这个游戏」响应，不是 mockup；`before-framework-blank.png` 是 t2 唯一的游戏页。大厅是同一页面、同一视口的前后对比；游戏页只能做状态对比，不能与不存在的旧贪食蛇页逐像素对比。
 - 手机端为 Playwright 设备模拟（Pixel 7 视口与触摸），不是真实设备截图。
-- `after-snake-*` 来自开发服务器，用于固定首果和覆盖层状态；生产构建由 `npm run build` 与 e2e 单独验证。
+- `after-snake-*` 来自开发服务器，用于固定首果、固定 seed / tick 与覆盖层状态；生产构建由 `npm run build` 与 e2e 单独验证。
 
 ## t2：共享框架
 
