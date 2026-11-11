@@ -392,7 +392,7 @@ games/<game>/scene → 对应引擎（动态 import）
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过
-npm run test:unit    # 621 passed（含贪食蛇 27（引擎 23 + 调试 4）、俄罗斯方块 38、2048 41、打砖块 41、扫雷 150 个规则 / 难度 / 成绩 / 视图 / 调试用例，以及 2048 截图确定性 4 例、贪食蛇截图确定性 8 例、打砖块截图确定性 7 例、截图脚本端口 11 例、截图模式 58 例、预览服务启动 7 例、framework 手机端 tap 诊断 10 例、framework 手机端停稳等待 3 例、e2e flaky 门禁 26 例、ci-workflow 新增 2 例断言、flake-watch workflow 9 例、flaky 口径文档 8 例）
+npm run test:unit    # 622 passed（含贪食蛇 27（引擎 23 + 调试 4）、俄罗斯方块 38、2048 41、打砖块 41、扫雷 150 个规则 / 难度 / 成绩 / 视图 / 调试用例，以及 2048 截图确定性 4 例、贪食蛇截图确定性 8 例、打砖块截图确定性 7 例、截图脚本端口 11 例、截图模式 58 例、预览服务启动 7 例、framework 手机端 tap 诊断 10 例、framework 手机端停稳等待 3 例、e2e flaky 门禁 26 例、ci-workflow 新增 2 例断言、flake-watch workflow 9 例、flaky 口径文档 8 例）
 npm run build        # 通过
 npm run check:budget # 通过（入口 10.91 KB gzip，全部 JS 405.11 KB gzip）
 npm run test:e2e     # 153 passed（桌面 86 + 手机 36 + WebKit 31）
@@ -435,7 +435,7 @@ Playwright 的 WebKit 是 Linux 上的 WebKit 构建，不等于 iOS Safari。�
 - **安全区**：iPhone SE (3rd gen) 模拟下 `env(safe-area-inset-*)` 恒为 0px，刘海 / Home 指示条安全区没有被模拟；依赖安全区的布局只能靠真机验收。
 - **字体度量**：Linux WebKit 的回退字体让「返回大厅」文本比 Chromium 宽约 3%（68.33px vs 66.45px）。契约断言元素边界而不是固定文本宽度，因此两引擎都通过；真实 iOS 系统字体仍可能不同。
 - **触屏媒体查询**：`any-pointer: coarse` 在两套模拟下都命中，touch-hint 与紧凑重开入口都会渲染；真实设备的指针能力与手感仍需人工确认。
-- **长按 / 双指针 / 滑动 / 拖动注入**：Playwright 没有跨引擎的「保持按住」触摸 API，WebKit 也没有 CDP；e2e 共享辅助函数与截图脚本的 `scripts/lib/touch-input.mjs` 在 Chromium 与 WebKit 两端统一派发同语义的 `PointerEvent`（pointerdown / pointermove / pointercancel / pointerup 与 release click），所以测试与截图都不再依赖 `newCDPSession` 或 `Input.dispatchTouchEvent`。产品代码不分叉，差异只在测试 / 截图注入层；真实轻点仍用 `page.touchscreen.tap`，WebKit 环境假设用例会记录真实 tap 的 pointerdown / pointerup / click，断言 pointerdown 的 touch id 2 与 release click 的 mouse id 1、pointerType 差异，并断言注入事件与真实形状一致，防止注入形状与引擎实际行为漂移。
+- **长按 / 双指针 / 滑动 / 拖动注入**：Playwright 没有跨引擎的「保持按住」触摸 API，WebKit 也没有 CDP；`scripts/lib/touch-input.mjs` 是 e2e 与截图脚本共用的唯一触摸注入实现，`tests/e2e/touch-input.ts` 只保留 Playwright `Page` / `Locator` 手势适配层并 re-export 其常量、类型与 `dispatchTouchPointerEvent`，两者在 Chromium 与 WebKit 两端统一派发同语义的 `PointerEvent`（pointerdown / pointermove / pointercancel / pointerup 与 release click），所以测试与截图都不再依赖 `newCDPSession` 或 `Input.dispatchTouchEvent`。产品代码不分叉，差异只在测试 / 截图注入层；真实轻点仍用 `page.touchscreen.tap`，WebKit 环境假设用例会记录真实 tap 的 pointerdown / pointerup / click，断言 pointerdown 的 touch id 2 与 release click 的 mouse id 1、pointerType 差异，并断言注入事件与真实形状一致，防止注入形状与引擎实际行为漂移。
 - **真实 iOS**：CI 没有 iOS Safari 或真机，触屏手感、安全区与渲染像素仍需人工验收；WebKit 模拟通过不代表 iOS Safari 已完全兼容。2048 与 breakout 的手机端 spec 也已在两引擎运行；截图脚本的 WebKit 模式覆盖大厅、空白画布、扫雷（含窄屏矩阵与成绩榜）、贪食蛇、2048 与打砖块的稳定场景，均使用同一 iPhone SE (3rd gen) 设备模拟。
 
 ## 已知限制

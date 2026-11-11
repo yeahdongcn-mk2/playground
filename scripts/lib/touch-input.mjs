@@ -1,22 +1,25 @@
 import { setTimeout as delay } from 'node:timers/promises';
 
 /**
- * One held touch for screenshot scripts.
+ * The single touch-injection implementation shared by the screenshot scripts
+ * and the e2e gesture helper.
  *
  * Playwright only exposes `touchscreen.tap`; holding a finger down needs a CDP
- * session on Chromium, and WebKit has no CDP. This mirrors
- * `tests/e2e/touch-input.ts`: dispatch the `pointerdown` / `pointerup` / release
- * `click` a real touch produces. The finger events carry `pointerType: 'touch'`
- * and the touch pointer id (2); the release click is the mouse-mediated event
- * WebKit delivers (`pointerType: 'mouse'`, pointer id 1, `detail: 1`), so the
- * same view code runs on both engines and the scripts no longer depend on
- * `newCDPSession` or `Input.dispatchTouchEvent`.
+ * session on Chromium, and WebKit has no CDP. `tests/e2e/touch-input.ts`
+ * re-exports the constants, types and dispatch function defined here and adds
+ * only its `Page` / `Locator` gesture adapter, so tests and screenshots cannot
+ * drift apart. Both dispatch the `pointerdown` / `pointerup` / release `click`
+ * a real touch produces. The finger events carry `pointerType: 'touch'` and the
+ * touch pointer id (2); the release click is the mouse-mediated event WebKit
+ * delivers (`pointerType: 'mouse'`, pointer id 1, `detail: 1`), so the same
+ * view code runs on both engines and nothing depends on `newCDPSession` or
+ * `Input.dispatchTouchEvent`.
  */
 
 /**
  * Pointer id a real touch reports for the finger itself. Both engines report 2
- * for the first touch on an emulated phone, the same value
- * `tests/e2e/touch-input.ts` exports.
+ * for the first touch on an emulated phone; both the screenshot scripts and the
+ * e2e gesture helper use this value.
  */
 export const TOUCH_POINTER_ID = 2;
 

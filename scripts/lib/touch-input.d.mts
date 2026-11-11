@@ -5,6 +5,14 @@ export interface TouchPoint {
   y: number;
 }
 
+/** Pointer event types the shared touch injector can dispatch. */
+export type TouchPointerType =
+  | 'pointerdown'
+  | 'pointermove'
+  | 'pointerup'
+  | 'pointercancel'
+  | 'click';
+
 /**
  * Pointer id a real touch reports for the finger itself. Both engines report 2
  * for the first touch on an emulated phone.
@@ -31,7 +39,7 @@ export interface DispatchTouchOptions {
 
 export function dispatchTouchPointerEvent(
   page: Page,
-  type: 'pointerdown' | 'pointermove' | 'pointerup' | 'pointercancel' | 'click',
+  type: TouchPointerType,
   point: TouchPoint,
   pointerId: number,
   options?: DispatchTouchOptions,

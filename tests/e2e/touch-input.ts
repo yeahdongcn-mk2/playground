@@ -1,7 +1,24 @@
 import type { Locator, Page } from '@playwright/test';
+import {
+  dispatchTouchPointerEvent,
+  RELEASE_CLICK_POINTER_ID,
+  TOUCH_POINTER_ID,
+} from '../../scripts/lib/touch-input.mjs';
+import type {
+  DispatchTouchOptions,
+  TouchPoint,
+  TouchPointerType,
+} from '../../scripts/lib/touch-input.mjs';
 
 /**
  * Cross-engine touch input for gesture tests.
+ *
+ * `scripts/lib/touch-input.mjs` is the single implementation of the injected
+ * pointer events shared with the screenshot scripts. This module re-exports its
+ * constants, types and `dispatchTouchPointerEvent`, so e2e gestures and
+ * screenshots can never drift apart; only the Playwright `Page` / `Locator`
+ * gesture adapter (`startTouch`, `moveTouch`, `endTouch`, `cancelTouch`) stays
+ * local.
  *
  * Playwright's `page.touchscreen` only exposes `tap`, and only Chromium has a
  * CDP session that can hold a finger down and move it. WebKit has neither, so
@@ -13,32 +30,12 @@ import type { Locator, Page } from '@playwright/test';
  * `detail: 1`. Both engines drive the same product code path, and no test
  * depends on a Chromium-only CDP session.
  */
-
-export interface TouchPoint {
-  readonly x: number;
-  readonly y: number;
-}
-
-/**
- * Pointer id a real touch reports for the finger itself. Both engines report 2
- * for the first touch on an emulated phone; the minesweeper helper passes it
- * explicitly so its long-press cases exercise the same shape a real tap does.
- */
-export const TOUCH_POINTER_ID = 2;
-
-/**
- * Pointer id WebKit reports for the mouse-mediated release click a touch
- * produces. It differs from the touch pointerdown id on purpose: the product
- * must not match the click back by pointer id.
- */
-export const RELEASE_CLICK_POINTER_ID = 1;
-
-export type TouchPointerType =
-  | 'pointerdown'
-  | 'pointermove'
-  | 'pointerup'
-  | 'pointercancel'
-  | 'click';
+export {
+  dispatchTouchPointerEvent,
+  RELEASE_CLICK_POINTER_ID,
+  TOUCH_POINTER_ID,
+};
+export type { DispatchTouchOptions, TouchPoint, TouchPointerType };
 
 export interface TouchGesture {
   readonly page: Page;
@@ -67,74 +64,6 @@ export interface StartTouchOptions {
 export interface EndTouchOptions {
   /** Also dispatch the release click a real touch produces. */
   readonly click?: boolean;
-}
-
-export interface DispatchTouchOptions {
-  readonly target?: Locator;
-  readonly detail?: number;
-  readonly buttons?: number;
-  /**
-   * Pointer type carried by the event. Touch event streams use 'touch'; the
-   * release click a real touch produces is mouse-mediated ('mouse').
-   */
-  readonly pointerType?: 'touch' | 'mouse';
-}
-
-/** Dispatch one touch pointer event at a viewport point. */
-export async function dispatchTouchPointerEvent(
-  page: Page,
-  type: TouchPointerType,
-  point: TouchPoint,
-  pointerId: number,
-  options: DispatchTouchOptions = {},
-): Promise<void> {
-  const init = {
-    type,
-    pointerId,
-    pointerType: options.pointerType ?? 'touch',
-    clientX: point.x,
-    clientY: point.y,
-    buttons:
-      options.buttons ?? (type === 'pointerdown' || type === 'pointermove' ? 1 : 0),
-    detail: options.detail ?? 0,
-  };
-  if (options.target) {
-    await options.target.evaluate((element, eventInit) => {
-      element.dispatchEvent(
-        new PointerEvent(eventInit.type, {
-          bubbles: true,
-          cancelable: true,
-          pointerId: eventInit.pointerId,
-          pointerType: eventInit.pointerType,
-          isPrimary: true,
-          clientX: eventInit.clientX,
-          clientY: eventInit.clientY,
-          button: 0,
-          buttons: eventInit.buttons,
-          detail: eventInit.detail,
-        }),
-      );
-    }, init);
-    return;
-  }
-  await page.evaluate((eventInit) => {
-    const element =
-      document.elementFromPoint(eventInit.clientX, eventInit.clientY) ?? document.body;
-    element.dispatchEvent(
-      new PointerEvent(eventInit.type, {
-        bubbles: true,
-        cancelable: true,
-        pointerId: eventInit.pointerId,
-        pointerType: eventInit.pointerType,
-        isPrimary: true,
-        clientX: eventInit.clientX,
-        clientY: eventInit.clientY,
-        button: 0,
-        buttons: eventInit.buttons,
-        detail: eventInit.detail,
-      }),
-    );
-  }, init);
 }
 
 /** Begin a held touch at `point`. */

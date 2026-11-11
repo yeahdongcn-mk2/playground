@@ -288,7 +288,7 @@ npm run test:e2e     # 先 build，再用 vite preview 跑 Chromium 桌面 / Pix
 npm run test:e2e:webkit # 先 build，只跑 mobile-webkit（iPhone SE (3rd gen)）
 ```
 
-当前提交本地通过：`typecheck`、`lint`、`build`、`check:budget` 通过；`npm run test:unit` 621 passed；`npm run test:e2e` 153 passed（桌面 86 + 手机 36 + WebKit 31）。
+当前提交本地通过：`typecheck`、`lint`、`build`、`check:budget` 通过；`npm run test:unit` 622 passed；`npm run test:e2e` 153 passed（桌面 86 + 手机 36 + WebKit 31）。
 
 - 单测只覆盖引擎无关逻辑；不要在 Node 里启动 Phaser。
 - 端到端使用 `data-testid`，覆盖进入 / 返回、最近游玩时间、键盘 / 鼠标 / 触屏、修饰键、重置、容器级缩放、未知路由、快速切换的晚到 mount、休眠时销毁和监听器清理；贪食蛇、俄罗斯方块、2048、打砖块与扫雷另有完整玩法用例（暂停 / 重开、计分 / 结束、窗口失焦暂停与恢复、手机端触屏按钮或拖动、像素绘制与监听器清理，扫雷另有左右键、固定雷盘、难度预设与自定义切换、非法自定义错误、格子可见文本、焦点迁移、畸形调试雷盘回退、胜利 / 踩雷与计时器 / 调试接缝清理）。
@@ -311,7 +311,7 @@ npm run test:e2e:webkit # 先 build，只跑 mobile-webkit（iPhone SE (3rd gen)
 现有 Playwright 覆盖：
 
 - `mobile`（Pixel 7）项目运行 `tests/e2e/minesweeper.mobile.spec.ts` 的 Chromium 8 视口矩阵，并覆盖窄屏边界用例（用计算样式钉住短窄查询的 min-width / max-width / max-height 边界）；`chromium`（桌面 1440×1000）项目继续覆盖桌面交互，不运行该手机矩阵。
-- `mobile-webkit` 项目使用 `devices['iPhone SE (3rd gen)']`（WebKit 引擎），运行 `tests/e2e/minesweeper.webkit.spec.ts` 冒烟、`tests/e2e/minesweeper.narrow.webkit.spec.ts` 的 WebKit 4 视口矩阵（环境假设用例另记录真实 tap 的 pointerdown / pointerup / click，要求 pointerdown 的 touch id 与 release click 的 mouse id 不同，并断言注入形状与真实一致），以及复用共享用例模块的手机端用例：`tests/e2e/framework.mobile.webkit.spec.ts`（共享 `tests/e2e/framework-mobile-cases.ts`）、`tests/e2e/minesweeper.mobile.webkit.spec.ts`（轻点 / 长按 / 双指针 / 取消与重开焦点，并断言长按未插旗 / 已插旗格只切换一次旗标且不翻开，共享 `tests/e2e/minesweeper-mobile-touch-cases.ts`）、`tests/e2e/minesweeper.difficulty.mobile.webkit.spec.ts`（触屏难度预设与自定义表单，共享 `tests/e2e/minesweeper-difficulty-mobile-cases.ts`）、`tests/e2e/snake.mobile.webkit.spec.ts`（D-pad 触屏、触屏 / 键盘混用、暂停与死亡重开，共享 `tests/e2e/snake-mobile-cases.ts`）、`tests/e2e/tetris.mobile.webkit.spec.ts`（触屏按钮移动 / 旋转 / 暂停 / 硬降、堆顶结束与重开，共享 `tests/e2e/tetris-mobile-cases.ts`）、`tests/e2e/2048.mobile.webkit.spec.ts`（滑动开始 / 合并计分 / 无横向溢出，共享 `tests/e2e/2048-mobile-cases.ts`）和 `tests/e2e/breakout.mobile.webkit.spec.ts`（拖动挡板 / 无横向溢出，共享 `tests/e2e/breakout-mobile-cases.ts`）。滑动与拖动统一由 `tests/e2e/touch-input.ts` 的跨引擎指针事件 helper 注入。
+- `mobile-webkit` 项目使用 `devices['iPhone SE (3rd gen)']`（WebKit 引擎），运行 `tests/e2e/minesweeper.webkit.spec.ts` 冒烟、`tests/e2e/minesweeper.narrow.webkit.spec.ts` 的 WebKit 4 视口矩阵（环境假设用例另记录真实 tap 的 pointerdown / pointerup / click，要求 pointerdown 的 touch id 与 release click 的 mouse id 不同，并断言注入形状与真实一致），以及复用共享用例模块的手机端用例：`tests/e2e/framework.mobile.webkit.spec.ts`（共享 `tests/e2e/framework-mobile-cases.ts`）、`tests/e2e/minesweeper.mobile.webkit.spec.ts`（轻点 / 长按 / 双指针 / 取消与重开焦点，并断言长按未插旗 / 已插旗格只切换一次旗标且不翻开，共享 `tests/e2e/minesweeper-mobile-touch-cases.ts`）、`tests/e2e/minesweeper.difficulty.mobile.webkit.spec.ts`（触屏难度预设与自定义表单，共享 `tests/e2e/minesweeper-difficulty-mobile-cases.ts`）、`tests/e2e/snake.mobile.webkit.spec.ts`（D-pad 触屏、触屏 / 键盘混用、暂停与死亡重开，共享 `tests/e2e/snake-mobile-cases.ts`）、`tests/e2e/tetris.mobile.webkit.spec.ts`（触屏按钮移动 / 旋转 / 暂停 / 硬降、堆顶结束与重开，共享 `tests/e2e/tetris-mobile-cases.ts`）、`tests/e2e/2048.mobile.webkit.spec.ts`（滑动开始 / 合并计分 / 无横向溢出，共享 `tests/e2e/2048-mobile-cases.ts`）和 `tests/e2e/breakout.mobile.webkit.spec.ts`（拖动挡板 / 无横向溢出，共享 `tests/e2e/breakout-mobile-cases.ts`）。滑动与拖动统一由 `tests/e2e/touch-input.ts` 注入；该模块只保留 `Page` / `Locator` 手势适配层，常量、类型与 `dispatchTouchPointerEvent` 直接 re-export 自截图脚本共用实现 `scripts/lib/touch-input.mjs`。
 - Chromium 8 视口与 WebKit 4 视口矩阵的归属保持不变；截图脚本也提供 WebKit 模式，命令与引擎 / 视口 / 主题记录见 [screenshots/README.md](./screenshots/README.md)，Chromium 模式无回归。
 
 首次运行需要安装两个引擎：
@@ -328,7 +328,7 @@ npm run test:e2e:webkit # 只跑 mobile-webkit
 - **安全区**：iPhone SE (3rd gen) 模拟下 `env(safe-area-inset-*)` 为 0px，刘海 / Home 指示条安全区未被模拟。
 - **字体度量**：Linux WebKit 回退字体使「返回大厅」文本比 Chromium 宽约 3%（68.33px vs 66.45px）；契约断言元素边界而非固定文本宽度。
 - **触屏媒体查询**：`any-pointer: coarse` 在两套模拟下都命中，touch-hint 与紧凑重开入口都会渲染。
-- **长按 / 双指针 / 滑动 / 拖动注入**：Playwright 没有跨引擎的「保持按住」触摸 API，WebKit 也没有 CDP；e2e 共享辅助函数与截图脚本的 `scripts/lib/touch-input.mjs` 在 Chromium 与 WebKit 两端统一派发同语义的 `PointerEvent`（pointerdown / pointermove / pointercancel / pointerup 与 release click），所以测试与截图都不再依赖 `newCDPSession` 或 `Input.dispatchTouchEvent`。产品代码不分叉，差异只在测试 / 截图注入层；真实轻点仍用 `page.touchscreen.tap`，WebKit 环境假设用例会记录真实 tap 的 pointerdown / pointerup / click，断言 pointerdown 的 touch id 2 与 release click 的 mouse id 1、pointerType 差异，并断言注入事件与真实形状一致，防止注入形状与引擎实际行为漂移。
+- **长按 / 双指针 / 滑动 / 拖动注入**：Playwright 没有跨引擎的「保持按住」触摸 API，WebKit 也没有 CDP；`scripts/lib/touch-input.mjs` 是 e2e 与截图脚本共用的唯一触摸注入实现，`tests/e2e/touch-input.ts` 只保留 Playwright `Page` / `Locator` 手势适配层并 re-export 其常量、类型与 `dispatchTouchPointerEvent`，两者在 Chromium 与 WebKit 两端统一派发同语义的 `PointerEvent`（pointerdown / pointermove / pointercancel / pointerup 与 release click），所以测试与截图都不再依赖 `newCDPSession` 或 `Input.dispatchTouchEvent`。产品代码不分叉，差异只在测试 / 截图注入层；真实轻点仍用 `page.touchscreen.tap`，WebKit 环境假设用例会记录真实 tap 的 pointerdown / pointerup / click，断言 pointerdown 的 touch id 2 与 release click 的 mouse id 1、pointerType 差异，并断言注入事件与真实形状一致，防止注入形状与引擎实际行为漂移。
 - **真实 iOS**：CI 没有 iOS Safari / 真机，触屏手感、安全区与渲染像素仍需人工验收；WebKit 模拟通过不代表 iOS Safari 已完全兼容。
 
 ## 13. 环境与命令
