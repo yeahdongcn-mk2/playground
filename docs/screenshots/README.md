@@ -40,6 +40,25 @@
 - 验收口径：2026-11-12 在临时工作副本中以 `npm run screenshots:container -- screenshots:webkit` 连跑两次，`after-blank-webkit.png` 的 sha256 两次相同且等于已提交的 `cd4ed3fea1e0a068661c8102ee0b58b0601b3a249e480d76224d22782a0e088f`；顺带写出的 `after-hub-webkit.png` 不纳入本子任务验收。容器内日志中的指纹与本节记录的镜像 tag / digest、EGL 变量与 DPR 一致。
 - 容器路径下的 e2e 与截图尺寸 / 渲染一致性：CI 的 `verify` 在同一镜像内跑完 e2e、flake gate、截图尺寸校验与 WebKit 窄屏重拍。[run 43563009824](https://github.com/yeahdongcn-mk2/playground/actions/runs/43563009824) 的冷缓存 attempt 1（verify 4m22s、e2e 3m09s）与有缓存 [attempt 2](https://github.com/yeahdongcn-mk2/playground/actions/runs/43563009824/attempts/2)（verify 4m18s、e2e 3m11s）全部步骤成功，`End-to-end tests`、`Check target e2e flakes`、`Screenshot doc dimensions`、`WebKit narrow screenshot smoke test` 均通过，日志没有 `playwright install`、`--with-deps` 或 apt GET。结论：容器路径没有改变 e2e 结果；已提交截图的文档尺寸仍与 PNG 逐项一致（24 行 / 24 文件），容器内重拍的 4 张 WebKit 窄屏图保持 DPR 2 尺寸（640×1280、720×1280、750×1334、824×1678）。渲染一致性按本节与「webkit-phone」的既有口径：同一容器内的确定性截图可逐字节一致，历史 After 图只与相同构建 / 捕获环境比较；容器缩小跨环境字体与 EGL 差异，但不能保证重跑结果等于已提交 PNG。
 
+### 已提交证据 sha256 清单与校验（Issue #199）
+
+- 清单文件：`docs/screenshots/capture-sha256-manifest.json`。它只收录文档已注明由官方 Playwright 容器捕获、且 sha256 等于已提交产物的 WebKit 确定性证据；不纳入 #137 标记的历史 After 证据，也不纳入宿主捕获的桌面 / 手机变体。扩大覆盖必须先按 #137 护栏显式刷新证据，属于后续独立工作。
+- 清单覆盖（4 张，`sha256` 是已提交 PNG 的字节指纹；捕获 commit 是当前字节进入仓库的提交）：
+
+| 文件 | sha256 | 固定容器内重拍命令 | 捕获 commit |
+| --- | --- | --- | --- |
+| `after-blank-webkit.png` | `cd4ed3fea1e0a068661c8102ee0b58b0601b3a249e480d76224d22782a0e088f` | `npm run screenshots:container -- screenshots:webkit` | `f5b87c05b3c55694c3605530de4bcf8e20097a80`（#162） |
+| `after-2048-playing-webkit.png` | `4173dce84c814f2573fa506360f95bab477c985b37a2dfe2d5b0d1c2c5992a91` | `npm run screenshots:container -- screenshots:2048:webkit` | `8dbe3e7e40e1a17ac84f5b715ce6383cbf039187`（#145） |
+| `after-2048-gameover-webkit.png` | `bf7548b7c7fc696b89e9d1ed00c48f0d1bdb2274575c278240e6c801630ba837` | `npm run screenshots:container -- screenshots:2048:webkit` | `8dbe3e7e40e1a17ac84f5b715ce6383cbf039187`（#145） |
+| `after-breakout-playing-webkit.png` | `27297f5f79792511e1d2a56cc1a1c5565922ba10e7fda3de798c663769147704` | `npm run screenshots:container -- screenshots:breakout:webkit` | `bc7759432d66034141261a483a50454ee0631235`（#159） |
+
+- 每条记录还带 `provenance.container`（镜像 tag / digest）与期望环境指纹：镜像 `mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f`，`EGL_PLATFORM=surfaceless`、`LIBGL_ALWAYS_SOFTWARE=1`、`__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json`，目标 `webkit` / DPR 2，字体版本与上文容器日志记录一致（`fonts-freefont-ttf@20211204+svn4273-2`、`fonts-ipafont-gothic@00303-21ubuntu1`、`fonts-liberation@1:2.1.5-3`、`fonts-noto-color-emoji@2.047-0ubuntu0.24.04.1`、`fonts-tlwg-loma-otf@1:0.7.3-1`、`fonts-unifont@1:15.1.01-1build1`、`fonts-wqy-zenhei@0.9.45-8`）。
+- 命令与退出码：`npm run verify:screenshots:sha256`（即 `node scripts/verify-screenshot-sha256.mjs`）读取清单，逐个校验文件存在且 PNG sha256 与期望一致；传入 `--log <捕获日志>` 时再校验日志中的 `capture-env:` 指纹。全部一致退出 0；哈希不一致或环境指纹不一致退出 1，并把「环境指纹不一致」与「哈希不一致」分开报告（哈希失败会列出文件、期望 / 实际 sha256、实际环境指纹与固定容器内重拍命令）；清单非法（含重复文件、sha256 不是 64 位 hex、`environment` / `provenance.container` / 重拍命令与固定契约不一致）或捕获日志中的 `capture-env:` 行格式非法时退出 2。缺少已提交 PNG 按哈希失败处理（退出 1），因为它同样说明证据与清单不一致。
+- 本地带日志复核示例：`npm run verify:screenshots:sha256 -- --log test-results/capture-container/screenshots-webkit-<timestamp>.log`。
+- CI：`.github/workflows/ci.yml` 的 `verify` job 在 `Screenshot doc dimensions` 之后、`Production build` 之前运行 `Screenshot evidence sha256 manifest` 步骤（`npm run verify:screenshots:sha256`，不带日志），干净检出即校验已提交证据，防止静默替换；`tests/unit/ci-workflow.test.ts` 钉住该步骤的命令与位置。
+- 刷新流程（固定容器重拍后显式更新清单，不静默改写）：在临时工作副本（不要在准备提交的 worktree 里直接覆盖已提交 PNG）用上表的固定容器命令重拍所需目标，连续两次运行并对每份日志分别执行带 `--log` 的校验；只有两次 sha256 相同且环境指纹一致时，才在同一改动里显式更新清单的 `sha256` / `provenance` 与本节表格，并说明重拍原因。重拍、替换已提交 PNG 或修改历史证据都必须走 #137 的显式刷新口径（`--allow-historical-overwrite` 等护栏）；校验器本身只读清单和 PNG，不会改写文件。
+- 单测：`tests/unit/screenshot-sha256.test.ts` 用临时目录构造 PNG / 日志夹具，覆盖清单解析（非法条目、重复文件、非 64 位 hex）、全部一致时的退出 0、缺文件 / 哈希漂移 / 环境指纹漂移 / 非法日志的可读报错与退出码，以及清单环境 / `provenance.container` / 重拍命令与固定契约不一致时的退出 2；并断言清单的镜像 tag / EGL / 目标 DPR 与 `scripts/lib/capture-env.mjs` 常量一致、字体版本来自容器记录。不依赖真实浏览器或 Docker。
+
 ## 通用大厅整页证据（Issue #161 / 子任务 1）
 
 - 目的：`scripts/capture-screenshots.mjs` 已为 Chromium 大厅显式补上 `fullPage: true`；本节记录重拍后的两张共享整页证据，并让 `npm run verify:screenshots:doc-dims` 逐张校验它们。
