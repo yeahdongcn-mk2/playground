@@ -1,13 +1,19 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { Page } from '@playwright/test';
 import { describe, expect, it } from 'vitest';
 import {
+  BLANK_SETTLE_INTERVAL_MS,
+  BLANK_SETTLE_TIMEOUT_MS,
   BLANK_STABLE_SAMPLES,
   BLANK_TARGET_TOLERANCE,
   isBlankAtTarget,
   nextBlankStableStreak,
+  readBlankReadout,
+  waitForBlankSettled,
 } from '../../scripts/lib/blank-settle.mjs';
+import type { BlankReadoutSample } from '../../scripts/lib/blank-settle.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SCRIPT = readFileSync(
@@ -20,21 +26,201 @@ const SCENE = readFileSync(
   'utf8',
 );
 
+/** The body of `tapBlankCanvas`, where the settle wait must stay awaited. */
+function tapBlankCanvasBody(): string {
+  const match = /async function tapBlankCanvas\b[\s\S]*?\n}/.exec(SCRIPT);
+  if (!match) {
+    throw new Error('capture-screenshots.mjs no longer defines tapBlankCanvas');
+  }
+  return match[0];
+}
+
+/** Drop comments so a commented-out call cannot satisfy the static pin. */
+function stripComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/[^\n]*/g, '');
+}
+
 /**
  * Guard for the committed blank-canvas PNGs. The blank scene has no RNG, so
  * determinism only needs the orb to snap to the pointer target and the trail
- * to fade out before the screenshot. These tests runtime-test the settle
- * predicate and statically pin the capture script, the trail readout and the
- * scene state that feeds it. Dropping the trail wait or reinstating a
- * wall-clock delay fails here instead of silently restoring flaky captures.
+ * to fade out before the screenshot. The settle loop is runtime-tested with a
+ * fake page, and the capture script is statically pinned so deleting the
+ * `await waitForBlankSettled(...)` inside `tapBlankCanvas` fails here instead
+ * of silently restoring click-and-capture-immediately frames.
  */
 describe('blank canvas screenshot determinism guard', () => {
-  it('waits for a settled readout instead of the old 700 ms delay', () => {
+  it('reads x, y and trail from the blank HUD readout', async () => {
+    let selector = '';
+    const page = {
+      locator(candidate: string) {
+        selector = candidate;
+        return {
+          evaluate(
+            fn: (element: { dataset: Record<string, string> }) => unknown,
+          ) {
+            return Promise.resolve(
+              fn({ dataset: { x: '12', y: '34', trail: '0' } }),
+            );
+          },
+        };
+      },
+    } as unknown as Page;
+
+    await expect(readBlankReadout(page)).resolves.toEqual({
+      x: 12,
+      y: 34,
+      trail: 0,
+    });
+    expect(selector).toBe('[data-testid="readout"]');
+  });
+
+  it('polls until the required run of settled samples (movement resets it)', async () => {
+    const target = { x: 100, y: 60 };
+    const samples: BlankReadoutSample[] = [
+      { x: 40, y: 20, trail: 0 }, // stale reading from before the click
+      { x: 100, y: 60, trail: 1 }, // on target but the trail is still alive
+      { x: 100, y: 60, trail: 0 }, // streak 1
+      { x: 101, y: 60, trail: 0 }, // streak 2
+      { x: 150, y: 60, trail: 0 }, // movement resets the streak
+      { x: 100, y: 60, trail: 0 }, // streak 1
+      { x: 100, y: 60, trail: 0 }, // streak 2
+      { x: 100, y: 60, trail: 0 }, // streak 3 -> settled
+    ];
+    let current = 0;
+    const reads: number[] = [];
+    const waits: number[] = [];
+
+    const result = await waitForBlankSettled({} as Page, target, {
+      required: 3,
+      intervalMs: 25,
+      timeoutMs: 10_000,
+      now: () => current,
+      read: async () => {
+        reads.push(current);
+        const sample = samples.shift();
+        if (!sample) {
+          throw new Error('read after the expected settle');
+        }
+        return sample;
+      },
+      wait: async (_page, delayMs) => {
+        waits.push(delayMs);
+        current += delayMs;
+      },
+    });
+
+    expect(result).toEqual({ x: 100, y: 60, trail: 0 });
+    expect(samples).toHaveLength(0);
+    expect(reads).toHaveLength(8);
+    // No delay after the settled sample: the capture follows immediately.
+    expect(waits).toEqual(Array(7).fill(25));
+  });
+
+  it('throws with the last readout when the orb never settles', async () => {
+    const target = { x: 100, y: 60 };
+    let current = 1_000;
+    const waits: number[] = [];
+
+    const error = await waitForBlankSettled({} as Page, target, {
+      intervalMs: 100,
+      timeoutMs: 250,
+      now: () => current,
+      read: async () => ({ x: 0, y: 0, trail: 1 }),
+      wait: async (_page, delayMs) => {
+        waits.push(delayMs);
+        current += delayMs;
+      },
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(
+      'Blank canvas did not settle at (100, 60) within 250 ms ' +
+        '(last readout x=0, y=0, trail=1)',
+    );
+    // It polls until the deadline, then fails instead of capturing.
+    expect(waits.length).toBeGreaterThan(0);
+    expect(current).toBeGreaterThanOrEqual(1_250);
+  });
+
+  it('uses the production defaults: five settled samples, 100 ms apart', async () => {
+    const target = { x: 10, y: 20 };
+    const settled = { x: 10, y: 20, trail: 0 };
+    const samples: BlankReadoutSample[] = [
+      settled,
+      settled,
+      settled,
+      settled,
+      settled,
+    ];
+    let current = 0;
+    const waits: number[] = [];
+
+    const result = await waitForBlankSettled({} as Page, target, {
+      now: () => current,
+      read: async () => {
+        const sample = samples.shift();
+        if (!sample) {
+          throw new Error('read after the expected settle');
+        }
+        return sample;
+      },
+      wait: async (_page, delayMs) => {
+        waits.push(delayMs);
+        current += delayMs;
+      },
+    });
+
+    expect(result).toEqual(settled);
+    expect(samples).toHaveLength(0);
+    // Exactly BLANK_STABLE_SAMPLES reads; the default interval between them.
+    expect(waits).toEqual(
+      Array(BLANK_STABLE_SAMPLES - 1).fill(BLANK_SETTLE_INTERVAL_MS),
+    );
+  });
+
+  it('wires the default page read/wait path', async () => {
+    const target = { x: 5, y: 6 };
+    const waits: number[] = [];
+    const page = {
+      locator(selector: string) {
+        expect(selector).toBe('[data-testid="readout"]');
+        return {
+          evaluate(
+            fn: (element: { dataset: Record<string, string> }) => unknown,
+          ) {
+            return Promise.resolve(
+              fn({ dataset: { x: '5', y: '6', trail: '0' } }),
+            );
+          },
+        };
+      },
+      async waitForTimeout(delayMs: number) {
+        waits.push(delayMs);
+      },
+    } as unknown as Page;
+
+    await expect(waitForBlankSettled(page, target)).resolves.toEqual({
+      x: 5,
+      y: 6,
+      trail: 0,
+    });
+    expect(waits).toEqual(
+      Array(BLANK_STABLE_SAMPLES - 1).fill(BLANK_SETTLE_INTERVAL_MS),
+    );
+  });
+
+  it('keeps the settle wait inside tapBlankCanvas instead of the old delay', () => {
+    const body = stripComments(tapBlankCanvasBody());
+    expect(body).toMatch(/await\s+waitForBlankSettled\(\s*page,\s*target\b/);
     expect(SCRIPT).not.toContain('waitForTimeout(700)');
-    expect(SCRIPT).toContain('nextBlankStableStreak(streak, last, target)');
-    expect(SCRIPT).toContain('[data-testid="readout"]');
-    expect(SCRIPT).toContain('BLANK_SETTLE_TIMEOUT_MS');
-    expect(SCRIPT).toContain('did not settle');
+    expect(SCRIPT).toContain(
+      "import { waitForBlankSettled } from './lib/blank-settle.mjs';",
+    );
+    // The polling constants and failure message live in the tested module.
+    expect(BLANK_SETTLE_INTERVAL_MS).toBe(100);
+    expect(BLANK_SETTLE_TIMEOUT_MS).toBe(15_000);
   });
 
   it('settles every blank scene (desktop, mobile, WebKit)', () => {
@@ -53,6 +239,9 @@ describe('blank canvas screenshot determinism guard', () => {
 
   it('accepts only a sample at the target and with no trail left', () => {
     const target = { x: 120, y: 80 };
+    // Pin the documented capture contract, not just self-consistency.
+    expect(BLANK_TARGET_TOLERANCE).toBe(2);
+    expect(BLANK_STABLE_SAMPLES).toBe(5);
     expect(isBlankAtTarget({ x: 120, y: 80, trail: 0 }, target)).toBe(true);
     expect(
       isBlankAtTarget(

@@ -10,10 +10,7 @@ import {
   startPreviewServer,
   stopPreviewServer,
 } from './lib/capture-runtime.mjs';
-import {
-  BLANK_STABLE_SAMPLES,
-  nextBlankStableStreak,
-} from './lib/blank-settle.mjs';
+import { waitForBlankSettled } from './lib/blank-settle.mjs';
 import { assertPortAvailable, parsePreviewPort } from './lib/preview-port.mjs';
 import { waitForPreviewServer } from './lib/preview-server.mjs';
 
@@ -47,36 +44,6 @@ const ENGINE = parseCaptureEngine(ARGS);
 const IS_WEBKIT = ENGINE === WEBKIT_ENGINE;
 
 let server = null;
-
-const BLANK_SETTLE_INTERVAL_MS = 100;
-const BLANK_SETTLE_TIMEOUT_MS = 15_000;
-
-async function readBlankReadout(page) {
-  return page.locator('[data-testid="readout"]').evaluate((element) => ({
-    x: Number(element.dataset.x),
-    y: Number(element.dataset.y),
-    trail: Number(element.dataset.trail),
-  }));
-}
-
-async function waitForBlankSettled(page, target) {
-  const deadline = Date.now() + BLANK_SETTLE_TIMEOUT_MS;
-  let streak = 0;
-  let last = null;
-  while (Date.now() < deadline) {
-    last = await readBlankReadout(page);
-    streak = nextBlankStableStreak(streak, last, target);
-    if (streak >= BLANK_STABLE_SAMPLES) {
-      return last;
-    }
-    await page.waitForTimeout(BLANK_SETTLE_INTERVAL_MS);
-  }
-  throw new Error(
-    `Blank canvas did not settle at (${target.x}, ${target.y}) within ` +
-      `${BLANK_SETTLE_TIMEOUT_MS} ms (last readout x=${last?.x}, ` +
-      `y=${last?.y}, trail=${last?.trail})`,
-  );
-}
 
 /**
  * Click or tap a canvas fraction, then wait until the orb has snapped to that

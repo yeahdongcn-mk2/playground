@@ -521,7 +521,7 @@ npm run screenshots
 
   两次运行的 3 个 sha256 应完全一致，并等于已提交产物：`after-blank-desktop.png` `24c34e278b7272834077ea6696cc0b5087d87dfb20323ec796ba97c719f3fb47`、`after-blank-mobile.png` `a097836e00acfe0c9965ecde6e72b7f40b366e4bdd82b1d6af705bcbefa685ff`、`after-blank-webkit.png` `cd4ed3fea1e0a068661c8102ee0b58b0601b3a249e480d76224d22782a0e088f`。WebKit 产物在官方 Playwright 容器（`mcr.microsoft.com/playwright:v1.64.1-noble`，与仓库的 Playwright 1.64.1 对应）内捕获，避免宿主 EGL / 字体环境差异（本机直接运行会因 `Could not create surfaceless EGL display` 失败）。
 - Before / After：旧产物 sha256 分别为 `0aa5b5d35c5c4894423f8a37fb97bddf0731206a1435a786ae3a4be01a14f0c6`、`155681ac86f01f8d7b728e2e0569b30a9fbc519565744087f7524dc54b1fb5d3`、`5274dcadc087a17f0e03e243edc4be83ab2f743d8a908e9d64943ced384230b8`；本轮 3 张图都按上述等待重新生成。旧 desktop / mobile 产物来自 t2 时期，后续任务改过页面文案与布局，因此新旧图的差异不只在 orb / trail 位置；本子任务只对当前 head 的逐字节可复现性负责，不把旧图当作像素级回归基准。`after-blank-desktop.png` 是 1440×1000 视口截图（`fullPage: false`），不是整页图，不包含页脚；脚本仍会写出 hub 图，提交前用 `git checkout -- docs/screenshots/after-hub-*.png` 还原，保持未受影响的已提交产物不变。
-- 回归护栏：`tests/unit/capture-blank-determinism.test.ts` 运行时覆盖 `nextBlankStableStreak`（移动中、target 未到、trail 未清零都会把连续计数归零），并静态钉住脚本不再含 `waitForTimeout(700)`、3 个场景都走同一等待、`view.ts` 暴露 `data-trail`。
+- 回归护栏：`tests/unit/capture-blank-determinism.test.ts` 用 fake page 运行时覆盖 `scripts/lib/blank-settle.mjs` 的 `waitForBlankSettled`（未连续 N 次落点且 `trail` 未清零就不返回、移动会重置连续计数、超时带最后读数报错）与 `nextBlankStableStreak`，并静态钉住 `capture-screenshots.mjs` 的 `tapBlankCanvas` 内确实 `await waitForBlankSettled(page, target)`、3 个场景都走同一等待、脚本不再含 `waitForTimeout(700)`、`view.ts` 暴露 `data-trail`。删除该等待会让单测失败。
 
 ### 证据限制
 
