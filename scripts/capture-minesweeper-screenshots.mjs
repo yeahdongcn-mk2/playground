@@ -15,6 +15,10 @@ import {
 } from './lib/capture-runtime.mjs';
 import { assertPortAvailable, parsePreviewPort } from './lib/preview-port.mjs';
 import { waitForPreviewServer } from './lib/preview-server.mjs';
+import {
+  HISTORICAL_OVERWRITE_FLAG,
+  guardHistoricalAfterEvidence,
+} from './lib/screenshot-evidence.mjs';
 import { touchLongPress } from './lib/touch-input.mjs';
 
 /**
@@ -62,6 +66,12 @@ import { touchLongPress } from './lib/touch-input.mjs';
  * that had no minesweeper route. Its screenshots remain as historical
  * evidence, but passing --before is rejected instead of being treated as the
  * after mode.
+ *
+ * The After mode (Chromium and WebKit phone states) skips the frozen desktop /
+ * mobile / WebKit gameplay PNGs and prints a warning unless
+ * `--allow-historical-overwrite` is passed. Hub captures, the dedicated narrow /
+ * short / large / restart modes and the `--webkit-narrow` CI matrix keep
+ * writing, so current evidence and the CI smoke re-capture still refresh.
  */
 
 if (process.argv.slice(2).includes('--before')) {
@@ -77,6 +87,7 @@ const PORT = parsePreviewPort(process.env.PREVIEW_PORT, 4186);
 const ORIGIN = `http://${HOST}:${PORT}`;
 const OUTPUT = 'docs/screenshots';
 const ARGS = process.argv.slice(2);
+const ALLOW_HISTORICAL_OVERWRITE = ARGS.includes(HISTORICAL_OVERWRITE_FLAG);
 const ENGINE = parseCaptureEngine(ARGS);
 const IS_WEBKIT = ENGINE === WEBKIT_ENGINE;
 const WEBKIT_NARROW = ARGS.includes(WEBKIT_NARROW_FLAG);
@@ -189,6 +200,12 @@ async function settle(page) {
 }
 
 async function capture(page, name, fullPage) {
+  const write = guardHistoricalAfterEvidence({
+    file: name,
+    mode: MODE,
+    allowHistoricalOverwrite: ALLOW_HISTORICAL_OVERWRITE,
+  });
+  if (!write) return;
   await captureScreenshot(page, name, { engine: ENGINE, fullPage });
 }
 

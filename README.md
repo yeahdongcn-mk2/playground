@@ -235,16 +235,16 @@ pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和
 | `npm run check:budget` | 检查入口无引擎、gzip 体积预算 |
 | `npm run screenshots` | 构建后生成 `docs/screenshots/` 中的界面截图 |
 | `npm run screenshots:webkit` | 构建后用 WebKit 生成大厅与空白画布的 375×667 手机截图 |
-| `npm run screenshots:snake` | 生成贪食蛇 Before / After 截图（开发服务器 + 固定首果；游玩图固定 seed / tick）；ready / gameover 桌面图与手机图为 #14 历史证据，对照口径见 `docs/screenshots/README.md` 的「历史 After 证据与当前构建不一致（Issue #137）」 |
+| `npm run screenshots:snake` | 生成贪食蛇 Before / After 截图（开发服务器 + 固定首果；游玩图固定 seed / tick）；ready / gameover 桌面图与手机图为 #14 历史证据，脚本默认跳过并警告，确需重建用 `npm run screenshots:snake -- --allow-historical-overwrite`；对照口径见 `docs/screenshots/README.md` 的「历史 After 证据与当前构建不一致（Issue #137）」 |
 | `npm run screenshots:snake:webkit` | 用开发服务器 + WebKit 生成贪食蛇手机 ready 截图 |
-| `npm run screenshots:2048` | 构建后生成 2048 大厅与 ready / playing / gameover 截图；ready 桌面整页图为历史证据，对照口径见 `docs/screenshots/README.md` 的「历史 After 证据与当前构建不一致（Issue #137）」 |
+| `npm run screenshots:2048` | 构建后生成 2048 大厅与 ready / playing / gameover 截图；ready 桌面整页图与手机图为历史证据，脚本默认跳过并警告，确需重建用 `npm run screenshots:2048 -- --allow-historical-overwrite`；对照口径见 `docs/screenshots/README.md` 的「历史 After 证据与当前构建不一致（Issue #137）」 |
 | `npm run screenshots:2048:before` | 用 `BASE_URL` 指定的 main 预览生成 2048 Before 截图 |
-| `npm run screenshots:2048:webkit` | 构建后用 WebKit 生成 2048 ready / playing / gameover 手机截图 |
-| `npm run screenshots:breakout` | 构建后生成打砖块大厅与 ready / playing / levelclear / gameover 截图；ready / levelclear / gameover 桌面整页图与 ready / gameover 手机图为历史证据，对照口径见 `docs/screenshots/README.md` 的「历史 After 证据与当前构建不一致（Issue #137）」 |
+| `npm run screenshots:2048:webkit` | 构建后用 WebKit 生成 2048 ready / playing / gameover 手机截图；ready 历史图默认跳过并警告，确需重建用 `npm run screenshots:2048:webkit -- --allow-historical-overwrite` |
+| `npm run screenshots:breakout` | 构建后生成打砖块大厅与 ready / playing / levelclear / gameover 截图；ready / levelclear / gameover 桌面整页图与 ready / gameover 手机图为历史证据，脚本默认跳过并警告，确需重建用 `npm run screenshots:breakout -- --allow-historical-overwrite`；对照口径见 `docs/screenshots/README.md` 的「历史 After 证据与当前构建不一致（Issue #137）」 |
 | `npm run screenshots:breakout:before` | 用 `BASE_URL` 指定的 main 预览生成打砖块 Before 截图 |
-| `npm run screenshots:breakout:webkit` | 构建后用 WebKit 生成打砖块 ready / playing / levelclear / gameover 手机截图 |
-| `npm run screenshots:minesweeper` | 构建后生成扫雷大厅、桌面玩法与 Pixel 7 手机玩法截图；4 张桌面与 4 张手机玩法图为 #61 历史证据，对照口径见 `docs/screenshots/README.md` 的「历史 After 证据与当前构建不一致（Issue #137）」 |
-| `npm run screenshots:minesweeper:webkit` | 构建后用 WebKit 生成扫雷 ready / playing / lost / won 手机截图 |
+| `npm run screenshots:breakout:webkit` | 构建后用 WebKit 生成打砖块 ready / playing / levelclear / gameover 手机截图；ready / levelclear / gameover 历史图默认跳过并警告，确需重建用 `npm run screenshots:breakout:webkit -- --allow-historical-overwrite` |
+| `npm run screenshots:minesweeper` | 构建后生成扫雷大厅、桌面玩法与 Pixel 7 手机玩法截图；4 张桌面与 4 张手机玩法图为 #61 历史证据，脚本默认跳过并警告，确需重建用 `npm run screenshots:minesweeper -- --allow-historical-overwrite`；对照口径见 `docs/screenshots/README.md` 的「历史 After 证据与当前构建不一致（Issue #137）」 |
+| `npm run screenshots:minesweeper:webkit` | 构建后用 WebKit 生成扫雷 ready / playing / lost / won 手机截图；4 张历史 WebKit 图默认跳过并警告，确需重建用 `npm run screenshots:minesweeper:webkit -- --allow-historical-overwrite` |
 | `npm run screenshots:minesweeper:webkit-before` | 用 `BASE_URL` 指定的触屏改动前基线生成 WebKit 手机 Before 截图（需外部基线，不提交 Before 文件） |
 | `npm run screenshots:minesweeper:touch-before` | 用 `BASE_URL` 指定的触屏改动前基线生成手机扫雷 Before 截图 |
 | `npm run screenshots:minesweeper:narrow` | 构建后生成 360×740 扫雷窄屏 ready 截图 |
@@ -393,7 +393,7 @@ games/<game>/scene → 对应引擎（动态 import）
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过
-npm run test:unit    # 680 passed（含贪食蛇 27（引擎 23 + 调试 4）、俄罗斯方块 38、2048 41、打砖块 41、扫雷 150 个规则 / 难度 / 成绩 / 视图 / 调试用例，以及 2048 截图确定性 4 例、贪食蛇截图确定性 8 例、打砖块截图确定性 7 例、截图脚本端口 11 例、截图模式 61 例、截图历史证据文档契约 17 例（scores 6 + 2048 / 打砖块 / 贪食蛇 / 打砖块手机 / 扫雷 11）、WebKit 证据口径文档契约 9 例、预览服务启动 7 例、framework 手机端 tap 诊断 10 例、framework 手机端停稳等待 3 例、e2e flaky 门禁 26 例、ci-workflow 3 例断言（含计数检查）、flake-watch workflow 9 例、flaky 口径文档 8 例、新增触摸注入单一来源与 release click 6 例、文档计数真值校验 22 例）
+npm run test:unit    # 706 passed（含贪食蛇 27（引擎 23 + 调试 4）、俄罗斯方块 38、2048 41、打砖块 41、扫雷 150 个规则 / 难度 / 成绩 / 视图 / 调试用例，以及 2048 截图确定性 4 例、贪食蛇截图确定性 8 例、打砖块截图确定性 7 例、截图脚本端口 11 例、截图模式 61 例、截图历史证据文档契约 17 例（scores 6 + 2048 / 打砖块 / 贪食蛇 / 打砖块手机 / 扫雷 11）、WebKit 证据口径文档契约 9 例、截图历史证据保护契约 26 例、预览服务启动 7 例、framework 手机端 tap 诊断 10 例、framework 手机端停稳等待 3 例、e2e flaky 门禁 26 例、ci-workflow 3 例断言（含计数检查）、flake-watch workflow 9 例、flaky 口径文档 8 例、新增触摸注入单一来源与 release click 6 例、文档计数真值校验 22 例）
 npm run build        # 通过
 npm run check:budget # 通过（入口 10.91 KB gzip，全部 JS 405.11 KB gzip）
 npm run test:e2e     # 153 passed（桌面 86 + 手机 36 + WebKit 31）
