@@ -237,7 +237,7 @@ pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和
 | `npm run screenshots:webkit` | 构建后用 WebKit 生成大厅与空白画布的 375×667 手机截图 |
 | `npm run screenshots:snake` | 生成贪食蛇 Before / After 截图（开发服务器 + 固定首果；游玩图固定 seed / tick）；ready / gameover 桌面图与手机图为 #14 历史证据，脚本默认跳过并警告，确需重建用 `npm run screenshots:snake -- --allow-historical-overwrite`；对照口径见 `docs/screenshots/README.md` 的「历史 After 证据与当前构建不一致（Issue #137）」 |
 | `npm run screenshots:snake:webkit` | 用开发服务器 + WebKit 生成贪食蛇手机 ready 截图 |
-| `npm run screenshots:2048` | 构建后生成 2048 大厅与 ready / playing / gameover 截图；ready 桌面整页图为历史证据，脚本默认跳过并警告，确需重建用 `npm run screenshots:2048 -- --allow-historical-overwrite`；对照口径见 `docs/screenshots/README.md` 的「历史 After 证据与当前构建不一致（Issue #137）」 |
+| `npm run screenshots:2048` | 构建后生成 2048 大厅与 ready / playing / gameover 截图；ready 桌面整页图与手机图为历史证据，脚本默认跳过并警告，确需重建用 `npm run screenshots:2048 -- --allow-historical-overwrite`；对照口径见 `docs/screenshots/README.md` 的「历史 After 证据与当前构建不一致（Issue #137）」 |
 | `npm run screenshots:2048:before` | 用 `BASE_URL` 指定的 main 预览生成 2048 Before 截图 |
 | `npm run screenshots:2048:webkit` | 构建后用 WebKit 生成 2048 ready / playing / gameover 手机截图；ready 历史图默认跳过并警告，确需重建用 `npm run screenshots:2048:webkit -- --allow-historical-overwrite` |
 | `npm run screenshots:breakout` | 构建后生成打砖块大厅与 ready / playing / levelclear / gameover 截图；ready / levelclear / gameover 桌面整页图与 ready / gameover 手机图为历史证据，脚本默认跳过并警告，确需重建用 `npm run screenshots:breakout -- --allow-historical-overwrite`；对照口径见 `docs/screenshots/README.md` 的「历史 After 证据与当前构建不一致（Issue #137）」 |

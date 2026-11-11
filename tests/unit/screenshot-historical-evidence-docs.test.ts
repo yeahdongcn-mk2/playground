@@ -25,6 +25,7 @@ const BREAKOUT_CAPTURE_COMMIT = '26e84fa';
 const SNAKE_CAPTURE_COMMIT = '048fe5a';
 const MINESWEEPER_CAPTURE_COMMIT = '993f5e7';
 const GAME_2048_READY = 'after-2048-ready-desktop.png';
+const GAME_2048_READY_MOBILE = 'after-2048-ready-mobile.png';
 const BREAKOUT_HISTORICAL = [
   'after-breakout-ready-desktop.png',
   'after-breakout-levelclear-desktop.png',
@@ -150,7 +151,10 @@ describe('historical After evidence docs for 2048 / breakout / snake / minesweep
   it('points the 2048 section at the shared standard', () => {
     expect(GAME_2048).toContain(HISTORICAL_TITLE);
     expect(GAME_2048).toContain(GAME_2048_READY);
+    expect(GAME_2048).toContain(GAME_2048_READY_MOBILE);
     expect(GAME_2048).toContain(GAME_2048_CAPTURE_COMMIT);
+    expect(HISTORICAL).toContain(GAME_2048_READY_MOBILE);
+    expect(captureLines(HISTORICAL).join('\n')).toContain(GAME_2048_READY_MOBILE);
     expect(GAME_2048).toContain('逐字节比较只在同一构建、同一捕获环境下成立');
     const generationLines = GAME_2048.split('\n').filter(
       (line) => line.includes('生成：') && line.includes('npm run screenshots:2048'),

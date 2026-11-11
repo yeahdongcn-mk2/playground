@@ -43,9 +43,10 @@ import {
  * spawned after ArrowLeft is deterministic. See docs/screenshots/README.md for
  * the reproducible sha256 procedure and its conditions.
  *
- * The After mode skips the frozen `after-2048-ready-desktop.png` historical
- * evidence and prints a warning unless `--allow-historical-overwrite` is
- * passed; the playing / gameover / hub / mobile captures still refresh.
+ * The After mode skips the frozen `after-2048-ready-desktop.png` and
+ * `after-2048-ready-mobile.png` historical evidence and prints a warning unless
+ * `--allow-historical-overwrite` is passed; the playing / gameover / hub
+ * captures still refresh.
  */
 
 const HOST = '127.0.0.1';

@@ -52,6 +52,14 @@ export const HISTORICAL_AFTER_EVIDENCE = Object.freeze(
       note: '2048 ready 桌面整页图含旧页脚「四款游戏已上线」，当前构建重跑必然不同。',
     },
     {
+      file: 'after-2048-ready-mobile.png',
+      game: '2048',
+      issue: '#26',
+      trackingIssue: '#137',
+      captureCommit: '8ec4adc',
+      note: '2048 ready 手机图：#26 的历史产物，当前构建重跑有 15599 个像素不同（每通道最大 20，集中在棋盘面板边缘），重跑会静默覆盖历史产物。',
+    },
+    {
       file: 'after-breakout-ready-desktop.png',
       game: 'breakout',
       issue: '#29',

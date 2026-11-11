@@ -37,6 +37,7 @@ const CAPTURE_SCRIPTS = [
 /** The frozen set from Issue #137's t1–t3 documentation. */
 const EXPECTED_EVIDENCE = [
   { file: 'after-2048-ready-desktop.png', game: '2048', issue: '#26', commit: '8ec4adc' },
+  { file: 'after-2048-ready-mobile.png', game: '2048', issue: '#26', commit: '8ec4adc' },
   {
     file: 'after-breakout-ready-desktop.png',
     game: 'breakout',
@@ -177,7 +178,6 @@ const EXPECTED_EVIDENCE = [
 const REFRESHABLE = [
   'after-hub-desktop.png',
   'after-hub-mobile.png',
-  'after-2048-ready-mobile.png',
   'after-2048-playing-desktop.png',
   'after-2048-gameover-desktop.png',
   'after-2048-playing-mobile.png',
@@ -235,7 +235,7 @@ describe('historical After evidence list (Issue #137)', () => {
     expect(files.slice().sort()).toEqual(
       EXPECTED_EVIDENCE.map((entry) => entry.file).slice().sort(),
     );
-    expect(files).toHaveLength(25);
+    expect(files).toHaveLength(26);
 
     for (const expected of EXPECTED_EVIDENCE) {
       const entry = findHistoricalAfterEvidence(expected.file);
@@ -266,8 +266,10 @@ describe('historical After evidence list (Issue #137)', () => {
 
   it('returns an entry only for an exact file name match', () => {
     expect(findHistoricalAfterEvidence('after-2048-ready-desktop.png')).not.toBeNull();
+    expect(findHistoricalAfterEvidence('after-2048-ready-mobile.png')).not.toBeNull();
     expect(findHistoricalAfterEvidence('after-2048-ready-desktop.png ')).toBeNull();
     expect(findHistoricalAfterEvidence('after-2048-playing-desktop.png')).toBeNull();
+    expect(findHistoricalAfterEvidence('after-2048-playing-mobile.png')).toBeNull();
     expect(findHistoricalAfterEvidence('before-2048-ready-desktop.png')).toBeNull();
   });
 });

@@ -9,7 +9,7 @@
 - 权威对照口径：逐字节比较只在同一构建、同一捕获环境下的确定性产物之间成立。需要与历史提交对照时，用同一脚本在父提交（或该图的历史捕获 commit）的干净 worktree 里重拍，再与同一次重拍的另一次运行比较；不要求重跑结果等于已提交的历史 `fullPage` PNG。历史 After 图只代表各自 PR 时点的 UI 快照，不是当前构建的确定性基准。
 - 页脚漂移：`60bc3f3`（#36）把共享页脚文案从「四款游戏已上线」改成「五款游戏已上线」。桌面整页图（`fullPage: true`）会把页脚一起截入，因此在这之前捕获的桌面 After 图用当前构建重跑必然不同；差异通常只落在页脚文本带，不能据此判定当前 UI 或截图脚本回归。
 - 本次核对出的历史 After 图（保留原产物，不重拍、不改 PNG；整页尺寸只写已提交 PNG 的值，当前构建重跑尺寸仅作正文对照）：
-  - `after-2048-ready-desktop.png`：`8ec4adc`（#26）捕获。
+  - `after-2048-ready-desktop.png` / `after-2048-ready-mobile.png`：`8ec4adc`（#26）捕获。桌面整页图含旧页脚；手机 ready 图当前构建重跑有 15599 个像素不同（每通道最大 20，集中在棋盘面板边缘），不是页脚。
   - `after-breakout-ready-desktop.png` / `after-breakout-levelclear-desktop.png` / `after-breakout-gameover-desktop.png`：`26e84fa`（#29）捕获。
   - `after-snake-ready.png` / `after-snake-gameover.png` / `after-snake-mobile.png`：`048fe5a`（#14）捕获。桌面整页图除页脚文本带外，画布区域还有每通道差 1 的像素（bbox 约 x 245–876、y 218–847）；手机图不含页脚，重跑仍有约 54596 个像素每通道差 1。
   - `after-breakout-ready-mobile.png` / `after-breakout-gameover-mobile.png`：`26e84fa`（#29）捕获。这两张手机视口图的重跑差异覆盖游戏区约 y=472..1565，不是页脚。
@@ -406,7 +406,7 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
 - Before 基线：main `d54ae9f`（PR #26 的父提交）。大厅还没有 2048 卡片，`#/games/2048` 显示「没有找到这个游戏」。
 - After：本 PR head（见 PR 描述中的 commit SHA）。
 - 视口 / 主题：桌面 1440×1000、手机 390×844（DPR 2），深色主题，`reducedMotion: reduce`。桌面与手机大厅均为整页截图（`fullPage: true`）；手机 Before 用同一口径重截，保证单列布局中的 2048 卡片进入画面。
-- 生成：`npm run screenshots:2048`（生产构建 + `vite preview`，固定棋盘走 `?debug=1` 调试接缝）。`after-2048-ready-desktop.png` 是 `8ec4adc`（#26）捕获的历史页脚证据，用当前构建重跑必然不同；脚本默认跳过这张历史图并打印守卫警告，确需重建时用 `npm run screenshots:2048 -- --allow-historical-overwrite`，并在同一改动中同步本节捕获 commit 与尺寸；权威对照口径见「历史 After 证据与当前构建不一致（Issue #137）」。
+- 生成：`npm run screenshots:2048`（生产构建 + `vite preview`，固定棋盘走 `?debug=1` 调试接缝）。`after-2048-ready-desktop.png` / `after-2048-ready-mobile.png` 是 `8ec4adc`（#26）捕获的历史证据：桌面整页图含旧页脚，手机 ready 图当前构建重跑有 15599 个像素不同（每通道最大 20，集中在棋盘面板边缘）；脚本默认跳过这两张历史图并打印守卫警告，确需重建时用 `npm run screenshots:2048 -- --allow-historical-overwrite`，并在同一改动中同步本节捕获 commit 与尺寸；权威对照口径见「历史 After 证据与当前构建不一致（Issue #137）」。
 - 预览端口：默认 `4183`；共享主机或并行 worktree 用 `PREVIEW_PORT=4184 npm run screenshots:2048` 覆盖（`PREVIEW_PORT` 为空串时回退 `4183`；`screenshots:2048:webkit` 复用同一启动路径与端口）。端口已被占用时脚本在启动 preview 前以非零状态退出，错误包含实际端口、`the port is already in use` 与 `Set PREVIEW_PORT` 建议，不会写出或覆盖任何截图；端口探测通过后 preview 提前退出时报告子进程退出码与 stderr，不再静默连到端口上的其它服务。Before 模式（`screenshots:2048:before`）以 `BASE_URL` 为准，不启动 preview、不探测端口。
 - 复现 Before：在 `d54ae9f` 的干净 worktree 里 `npm ci && npm run build`，用 `node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4184 --strictPort` 启动预览，然后在分支运行 `BASE_URL=http://127.0.0.1:4184 npm run screenshots:2048:before`。
 
@@ -446,7 +446,7 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
   npm run screenshots:2048:webkit
   sha256sum docs/screenshots/after-2048-{playing,gameover}-{desktop,mobile,webkit}.png
   ```
-  两次运行的 6 个 sha256 应完全一致，且等于已提交产物。本任务只提交这 6 张 playing / gameover 图；After 守卫现在会跳过 ready 桌面 / WebKit 历史图，只顺带写出 hub，提交前用 `git checkout --` 还原 hub，保持未受影响的已提交产物不变。WebKit 产物在官方 Playwright 容器（`mcr.microsoft.com/playwright:v1.64.1-noble`，与仓库的 Playwright 1.64.1 对应）内捕获，避免宿主 EGL / 字体环境差异。
+  两次运行的 6 个 sha256 应完全一致，且等于已提交产物。本任务只提交这 6 张 playing / gameover 图；After 守卫现在会跳过 ready 桌面 / 手机 / WebKit 历史图，只顺带写出 hub，提交前用 `git checkout --` 还原 hub，保持未受影响的已提交产物不变。WebKit 产物在官方 Playwright 容器（`mcr.microsoft.com/playwright:v1.64.1-noble`，与仓库的 Playwright 1.64.1 对应）内捕获，避免宿主 EGL / 字体环境差异。
 - 等待条件：截图前等待 `document.fonts.ready`、两个 `requestAnimationFrame`（让最后的状态变更完成画布绘制），以及 gameover 的 `本局 4 分 · 最大方块 16` 结算文本；不再只依赖固定 timeout。
 - 页脚：`after-2048-playing-desktop.png` / `after-2048-gameover-desktop.png` 是 `fullPage` 截图，包含当前页脚「五款游戏已上线」。这两张按本次确定性接缝重新生成，所以与 t4 时（页脚仍为「四款游戏已上线」）的历史证据不同；ready 桌面图不在本次范围，保持历史产物，其对照口径见「历史 After 证据与当前构建不一致（Issue #137）」。
 
@@ -455,7 +455,7 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
 - main 没有 2048 页面，所以 Before 只能对比大厅（同一视口 / 主题）与真实未注册路由，不能与旧版 2048 页面逐像素对比。
 - 手机端为 Playwright 设备模拟（390×844、DPR 2、触摸、大厅整页截图），不是真实设备截图。
 - 截图来自生产构建；绘制行为另有 e2e 读取 canvas 像素验证，不依赖截图比对。
-- 桌面整页 After 图与当前构建的对照口径见「历史 After 证据与当前构建不一致（Issue #137）」：`after-2048-ready-desktop.png` 是历史页脚证据，逐字节比较只在同一构建、同一捕获环境下成立。
+- After 图与当前构建的对照口径见「历史 After 证据与当前构建不一致（Issue #137）」：`after-2048-ready-desktop.png`（历史页脚）与 `after-2048-ready-mobile.png`（棋盘面板边缘 15599 个像素不同）是历史产物，逐字节比较只在同一构建、同一捕获环境下成立。
 
 ## t3：贪食蛇（PR #14）
 
