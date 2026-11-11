@@ -3,10 +3,12 @@ import { expect } from './fixtures';
 import type { Game2048Snapshot } from '../../src/games/2048/engine';
 
 export interface Open2048Options {
-  /** Dev-only starting board, row-major from top to bottom; null is empty. */
+  /** Debug-only starting board, row-major from top to bottom; null is empty. */
   board?: readonly (readonly (number | null)[])[];
   /** Force Phaser's canvas renderer so canvas pixels can be read reliably. */
   renderer?: 'canvas';
+  /** Debug RNG seed; when omitted the seam falls back to seed 1. */
+  seed?: number;
 }
 
 /** Fixed 2x2 block of equal tiles: moving left merges twice, scoring 8. */
@@ -42,6 +44,9 @@ export async function open2048(page: Page, options: Open2048Options = {}): Promi
   }
   if (options.renderer) {
     params.set('renderer', options.renderer);
+  }
+  if (options.seed !== undefined) {
+    params.set('seed', String(options.seed));
   }
 
   await page.goto(`/#/games/2048?${params.toString()}`);

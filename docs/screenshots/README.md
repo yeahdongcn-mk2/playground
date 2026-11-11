@@ -399,7 +399,7 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
 
 ### 确定性重截（playing / gameover）
 
-- 调试接缝：仅在 `?debug=1` 时启用。`seed` 是有限数字时按其播种，缺省或非法（空白、`abc`、`Infinity`、`NaN`）回退 `1`；不带 `debug` 时保持原有的随机初始局面与随机生成。
+- 调试接缝：生产构建在 URL 带 `debug` 参数时启用（例如 `?debug=1`），开发服务器默认启用（与 `README.md` 的说明一致）。`seed` 是有限数字时按其播种，缺省或非法（空白、`abc`、`Infinity`、`NaN`）回退 `1`。生产构建不带 `debug` 时保持原有的随机初始局面与随机生成；开发服务器即使不带 `debug` / `seed` 也会启用调试接缝并使用默认 seed `1`，因此初始局面是固定的。
 - 固定参数：`seed=135`，playing / gameover 都只按一次 `ArrowLeft`。
   - playing：`MERGE_BOARD` = `2,2,4,4/8,8,16,16/.,.,.,./.,.,.,.`，合并后得分 `60`，seed 135 在 `(0,3)` 生成 `2`。
   - gameover：`STUCK_BOARD` = `2,2,16,8/8,4,2,16/4,8,16,2/16,2,4,8`，左移后只剩 `(0,3)` 空格，seed 135 生成 `2`，结算文本为 `本局 4 分 · 最大方块 16`。
