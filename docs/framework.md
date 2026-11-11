@@ -288,7 +288,7 @@ npm run test:e2e     # 先 build，再用 vite preview 跑 Chromium 桌面 / Pix
 npm run test:e2e:webkit # 先 build，只跑 mobile-webkit（iPhone SE (3rd gen)）
 ```
 
-当前提交本地通过：`typecheck`、`lint`、`build`、`check:budget` 通过；`npm run test:unit` 650 passed；`npm run test:e2e` 153 passed（桌面 86 + 手机 36 + WebKit 31）。
+当前提交本地通过：`typecheck`、`lint`、`build`、`check:budget` 通过；`npm run test:unit` 651 passed；`npm run test:e2e` 153 passed（桌面 86 + 手机 36 + WebKit 31）。
 
 - 单测只覆盖引擎无关逻辑；不要在 Node 里启动 Phaser。
 - 端到端使用 `data-testid`，覆盖进入 / 返回、最近游玩时间、键盘 / 鼠标 / 触屏、修饰键、重置、容器级缩放、未知路由、快速切换的晚到 mount、休眠时销毁和监听器清理；贪食蛇、俄罗斯方块、2048、打砖块与扫雷另有完整玩法用例（暂停 / 重开、计分 / 结束、窗口失焦暂停与恢复、手机端触屏按钮或拖动、像素绘制与监听器清理，扫雷另有左右键、固定雷盘、难度预设与自定义切换、非法自定义错误、格子可见文本、焦点迁移、畸形调试雷盘回退、胜利 / 踩雷与计时器 / 调试接缝清理）。
@@ -341,7 +341,7 @@ npm run build
 npm run preview
 ```
 
-Node.js `^22.12.0 || ^24.0.0 || >=26.0.0`（Vite 8 的要求）。CI（`.github/workflows/ci.yml`）按 `npm ci` → `pre-commit` → `typecheck` → `lint` → `test:unit` → `build` → `check:budget` → `test:e2e` 的顺序执行，并在 e2e 前安装 Chromium 与 WebKit。
+Node.js `^22.12.0 || ^24.0.0 || >=26.0.0`（Vite 8 的要求）。CI（`.github/workflows/ci.yml`）按 `npm ci` → `pre-commit` → `typecheck` → `lint` → `test:unit` → `verify:doc-counts` → `build` → `check:budget` → `test:e2e` 的顺序执行；计数检查复用 Unit tests 产出的 Vitest JSON 报告，不重跑单测，并在 e2e 前安装 Chromium 与 WebKit。
 
 ## 14. 性能与已知限制
 
