@@ -27,7 +27,7 @@ const VIEW_HTML = `
         </div>
         <div class="blank-hud" aria-hidden="true">
           <p class="hud-label">POSITION</p>
-          <p class="hud-readout" data-testid="readout" data-x="0" data-y="0">x 0 · y 0</p>
+          <p class="hud-readout" data-testid="readout" data-x="0" data-y="0" data-trail="0">x 0 · y 0</p>
           <p class="hud-meta">
             输入 <strong data-testid="input-mode">待机</strong>
             <span aria-hidden="true">·</span>
@@ -130,6 +130,9 @@ export async function mountBlankGame(
   function renderState(state: BlankState): void {
     readout.dataset.x = String(state.x);
     readout.dataset.y = String(state.y);
+    // Expose the live trail count so the screenshot script can wait until the
+    // trail has fully faded instead of relying on a wall-clock delay.
+    readout.dataset.trail = String(state.trail);
     setText(readout, `x ${state.x} · y ${state.y}`);
     setText(
       inputMode,

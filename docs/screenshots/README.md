@@ -84,7 +84,7 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
 | 文件 | 场景 | 引擎 / 视口 / 主题 | 生成命令 |
 | --- | --- | --- | --- |
 | `after-hub-webkit.png` | 大厅 | WebKit / 375×667 / 深色 | `npm run screenshots:webkit` |
-| `after-blank-webkit.png` | 空白画布（触屏移动后） | WebKit / 375×667 / 深色 | `npm run screenshots:webkit` |
+| `after-blank-webkit.png` | 空白画布（触屏移动并停稳后） | WebKit / 375×667 / 深色 | `npm run screenshots:webkit` |
 | `after-snake-webkit.png` | 贪食蛇 READY（手机） | WebKit / 375×667 / 深色 | `npm run screenshots:snake:webkit` |
 | `after-2048-ready-webkit.png` | 2048 READY（手机） | WebKit / 375×667 / 深色 | `npm run screenshots:2048:webkit` |
 | `after-2048-playing-webkit.png` | 2048 合并计分中（手机） | WebKit / 375×667 / 深色 | `npm run screenshots:2048:webkit` |
@@ -492,8 +492,8 @@ npm run screenshots:baseline
 
 | 文件 | 场景 | 视口 / 主题 | 说明 |
 | --- | --- | --- | --- |
-| `after-blank-desktop.png` | 空白画布游戏（指针移动后） | 1440×1000 / 深色 | 可交互画布、HUD、操作面板与重置入口。 |
-| `after-blank-mobile.png` | 空白画布游戏（触屏移动后） | 390×844（DPR 2）/ 深色 | 自适应画布、触屏操作与面板堆叠。 |
+| `after-blank-desktop.png` | 空白画布游戏（指针移动并停稳后） | 1440×1000 / 深色 | 可交互画布、HUD、操作面板与重置入口。 |
+| `after-blank-mobile.png` | 空白画布游戏（触屏移动并停稳后） | 390×844（DPR 2）/ 深色 | 自适应画布、触屏操作与面板堆叠。 |
 
 `after-hub-desktop.png` / `after-hub-mobile.png` 已由后续 t4 / t5 / t6 更新为含 2048、打砖块与扫雷的五游戏大厅；t2 表格里的「只有空白画布卡片」描述的是 t2 当时状态。
 
@@ -504,6 +504,24 @@ npm run screenshots
 ```
 
 截图使用 `reducedMotion: 'reduce'`，避免动效造成每张图不一致。
+
+### 空白画布截图确定性（plan-135 子任务 3）
+
+- 旧问题：点击后只 `waitForTimeout(700)`，orb 以 `POINTER_SPEED = 820` 朝目标移动，落点与 trail 残影取决于这 700 ms 内跑了多少帧；同一构建、端口 4174 空闲时连续两次执行 `npm run screenshots`，`after-blank-desktop.png` / `after-blank-mobile.png` 的 sha256 都会变化。
+- 等待条件：点击 / 轻触后不再固定等待，改为每 100 ms 读取 `[data-testid="readout"]` 的 `data-x` / `data-y` / `data-trail`（`trail` 是场景实际 trail 数组长度，由 `src/games/blank/view.ts` 写入），直到连续 5 个采样都落在点击目标 ±2 CSS px 且 `data-trail="0"` 才截图；15 s 内不满足则报错并带最后一次读数，不会静默写出中间帧。
+- 固定参数：桌面在 canvas 的 (0.66, 0.40) 处点击；手机与 WebKit 在 (0.36, 0.62) 处轻触；`colorScheme: dark`、`reducedMotion: reduce`。桌面 1440×1000（DPR 1，视口截图，不是整页图、不含页脚），手机 390×844（DPR 2），WebKit 375×667（DPR 2）。
+- 确定性条件：`reducedMotion: reduce` 下目标圆环不脉冲、orb 缩放固定为 1；orb 到达目标后场景把 `target` 置空并精确落到点击点，trail 按 1.15 s 生命衰减并从数组移除。等 `data-trail="0"` 后画面只剩固定 backdrop / 网格 / 静态 orb，不再随时间变化，因此同一构建的截图逐字节一致；正常交互没有变化，也不需要新增调试接缝。
+- 复现（同一构建、预览端口 4174 空闲；Chromium 与 WebKit 各跑两次）：
+
+  ```sh
+  npm run screenshots
+  npm run screenshots:webkit
+  sha256sum docs/screenshots/after-blank-{desktop,mobile,webkit}.png
+  ```
+
+  两次运行的 3 个 sha256 应完全一致，并等于已提交产物：`after-blank-desktop.png` `24c34e278b7272834077ea6696cc0b5087d87dfb20323ec796ba97c719f3fb47`、`after-blank-mobile.png` `a097836e00acfe0c9965ecde6e72b7f40b366e4bdd82b1d6af705bcbefa685ff`、`after-blank-webkit.png` `cd4ed3fea1e0a068661c8102ee0b58b0601b3a249e480d76224d22782a0e088f`。WebKit 产物在官方 Playwright 容器（`mcr.microsoft.com/playwright:v1.64.1-noble`，与仓库的 Playwright 1.64.1 对应）内捕获，避免宿主 EGL / 字体环境差异（本机直接运行会因 `Could not create surfaceless EGL display` 失败）。
+- Before / After：旧产物 sha256 分别为 `0aa5b5d35c5c4894423f8a37fb97bddf0731206a1435a786ae3a4be01a14f0c6`、`155681ac86f01f8d7b728e2e0569b30a9fbc519565744087f7524dc54b1fb5d3`、`5274dcadc087a17f0e03e243edc4be83ab2f743d8a908e9d64943ced384230b8`；本轮 3 张图都按上述等待重新生成。旧 desktop / mobile 产物来自 t2 时期，后续任务改过页面文案与布局，因此新旧图的差异不只在 orb / trail 位置；本子任务只对当前 head 的逐字节可复现性负责，不把旧图当作像素级回归基准。`after-blank-desktop.png` 是 1440×1000 视口截图（`fullPage: false`），不是整页图，不包含页脚；脚本仍会写出 hub 图，提交前用 `git checkout -- docs/screenshots/after-hub-*.png` 还原，保持未受影响的已提交产物不变。
+- 回归护栏：`tests/unit/capture-blank-determinism.test.ts` 运行时覆盖 `nextBlankStableStreak`（移动中、target 未到、trail 未清零都会把连续计数归零），并静态钉住脚本不再含 `waitForTimeout(700)`、3 个场景都走同一等待、`view.ts` 暴露 `data-trail`。
 
 ### 证据限制
 

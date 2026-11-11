@@ -10,6 +10,10 @@ import {
   startPreviewServer,
   stopPreviewServer,
 } from './lib/capture-runtime.mjs';
+import {
+  BLANK_STABLE_SAMPLES,
+  nextBlankStableStreak,
+} from './lib/blank-settle.mjs';
 import { assertPortAvailable, parsePreviewPort } from './lib/preview-port.mjs';
 import { waitForPreviewServer } from './lib/preview-server.mjs';
 
@@ -25,6 +29,12 @@ import { waitForPreviewServer } from './lib/preview-server.mjs';
  *
  * Setting `BASE_URL` skips the local preview entirely: no port probe, no spawn.
  * The WebKit mode (`--webkit`) reuses the same startup path and port.
+ *
+ * The blank scenes poll the HUD readout after the pointer input instead of
+ * sleeping for 700 ms: a frame is captured only once the orb has snapped to
+ * the click target and the trail array is empty for several consecutive
+ * samples. With `reducedMotion: reduce` the target ring does not pulse and the
+ * orb scale is fixed, so that settled frame is reproducible byte-for-byte.
  */
 
 const HOST = '127.0.0.1';
@@ -37,6 +47,50 @@ const ENGINE = parseCaptureEngine(ARGS);
 const IS_WEBKIT = ENGINE === WEBKIT_ENGINE;
 
 let server = null;
+
+const BLANK_SETTLE_INTERVAL_MS = 100;
+const BLANK_SETTLE_TIMEOUT_MS = 15_000;
+
+async function readBlankReadout(page) {
+  return page.locator('[data-testid="readout"]').evaluate((element) => ({
+    x: Number(element.dataset.x),
+    y: Number(element.dataset.y),
+    trail: Number(element.dataset.trail),
+  }));
+}
+
+async function waitForBlankSettled(page, target) {
+  const deadline = Date.now() + BLANK_SETTLE_TIMEOUT_MS;
+  let streak = 0;
+  let last = null;
+  while (Date.now() < deadline) {
+    last = await readBlankReadout(page);
+    streak = nextBlankStableStreak(streak, last, target);
+    if (streak >= BLANK_STABLE_SAMPLES) {
+      return last;
+    }
+    await page.waitForTimeout(BLANK_SETTLE_INTERVAL_MS);
+  }
+  throw new Error(
+    `Blank canvas did not settle at (${target.x}, ${target.y}) within ` +
+      `${BLANK_SETTLE_TIMEOUT_MS} ms (last readout x=${last?.x}, ` +
+      `y=${last?.y}, trail=${last?.trail})`,
+  );
+}
+
+/**
+ * Click or tap a canvas fraction, then wait until the orb has snapped to that
+ * target and its trail has completely faded before the caller screenshots.
+ */
+async function tapBlankCanvas(page, box, xRatio, yRatio, { touch = false } = {}) {
+  const target = { x: box.width * xRatio, y: box.height * yRatio };
+  if (touch) {
+    await page.touchscreen.tap(box.x + target.x, box.y + target.y);
+  } else {
+    await page.mouse.click(box.x + target.x, box.y + target.y);
+  }
+  await waitForBlankSettled(page, target);
+}
 
 async function captureDesktop(browser) {
   const context = await browser.newContext({
@@ -67,8 +121,7 @@ async function captureDesktop(browser) {
   if (!box) {
     throw new Error('Canvas has no bounding box');
   }
-  await page.mouse.click(box.x + box.width * 0.66, box.y + box.height * 0.4);
-  await page.waitForTimeout(700);
+  await tapBlankCanvas(page, box, 0.66, 0.4);
   await captureScreenshot(page, 'after-blank-desktop.png', {
     engine: ENGINE,
     animations: 'allow',
@@ -108,8 +161,7 @@ async function captureMobile(browser) {
   if (!box) {
     throw new Error('Canvas has no bounding box');
   }
-  await page.touchscreen.tap(box.x + box.width * 0.36, box.y + box.height * 0.62);
-  await page.waitForTimeout(700);
+  await tapBlankCanvas(page, box, 0.36, 0.62, { touch: true });
   await captureScreenshot(page, 'after-blank-mobile.png', {
     engine: ENGINE,
     animations: 'allow',
@@ -143,8 +195,7 @@ async function captureWebkitMobile(browser) {
   if (!box) {
     throw new Error('Canvas has no bounding box');
   }
-  await page.touchscreen.tap(box.x + box.width * 0.36, box.y + box.height * 0.62);
-  await page.waitForTimeout(700);
+  await tapBlankCanvas(page, box, 0.36, 0.62, { touch: true });
   await captureScreenshot(page, 'after-blank-webkit.png', {
     engine: ENGINE,
     animations: 'allow',
