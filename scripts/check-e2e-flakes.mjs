@@ -17,9 +17,9 @@ Options:
   --report <path>    Playwright JSON report (default: ${DEFAULT_E2E_REPORT_PATH})
   -h, --help         show this help
 
-Exit codes: 0 target passed on its first attempt (or the e2e step already
-failed it), 1 flaky/skipped/missing target or an unreadable report, 2 usage
-error.`;
+Exit codes: 0 no target flakiness (first-run pass or the e2e step already
+failed it), 1 target flaky/skipped/unrecognized or a report without the target
+case, 2 usage error or a missing/unreadable report.`;
 
 function parseArgs(argv) {
   const options = { report: DEFAULT_E2E_REPORT_PATH };
@@ -66,8 +66,10 @@ function main(argv) {
     report = readE2eReport(options.report);
   } catch (error) {
     if (error instanceof E2eFlakesError) {
+      // A missing or unparsable report is an input error, like the sibling
+      // check CLIs; it still fails CI but is not a target-flake verdict.
       console.error(`[e2e-flakes] ${error.message}`);
-      return 1;
+      return 2;
     }
     throw error;
   }

@@ -15,6 +15,7 @@ export interface PlaywrightJsonTestResult {
 export interface PlaywrightJsonTest {
   projectName?: string;
   status?: string;
+  expectedStatus?: string;
   results?: PlaywrightJsonTestResult[];
   [key: string]: unknown;
 }

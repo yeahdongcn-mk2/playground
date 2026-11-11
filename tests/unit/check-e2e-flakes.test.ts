@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -48,6 +48,7 @@ interface FixtureCase {
   title: string;
   attempts: Array<'passed' | 'failed' | 'skipped'>;
   firstError?: string;
+  expectedStatus?: string;
 }
 
 function testStatus(attempts: FixtureCase['attempts']): string {
@@ -75,6 +76,9 @@ function makeReport(cases: FixtureCase[]): PlaywrightJsonReport {
       const test: PlaywrightJsonTest = {
         projectName: entry.projectName,
         status: testStatus(entry.attempts),
+        ...(entry.expectedStatus === undefined
+          ? {}
+          : { expectedStatus: entry.expectedStatus }),
         results: entry.attempts.map((status, retry) =>
           result(status, retry, entry.firstError ?? `attempt ${retry} failed`),
         ),
@@ -188,12 +192,27 @@ describe('analyzeE2eFlakes', () => {
     expect(output).not.toContain('重试次数');
   });
 
-  it('fails when the target case was skipped instead of passing', () => {
-    const analysis = analyzeE2eFlakes(makeReport([target(['skipped'])]));
+  it('fails when the target case was skipped or marked as an expected failure', () => {
+    const skipped = analyzeE2eFlakes(makeReport([target(['skipped'])]));
 
-    expect(analysis.status).toBe('skipped');
-    expect(exitCodeForAnalysis(analysis)).toBe(1);
-    expect(describeE2eFlakes(analysis).join('\n')).toContain('目标用例被跳过');
+    expect(skipped.status).toBe('skipped');
+    expect(exitCodeForAnalysis(skipped)).toBe(1);
+    expect(describeE2eFlakes(skipped).join('\n')).toContain('目标用例被跳过');
+
+    // `test.fail()` is green in the e2e step, but it is not a stable first run.
+    const expectedFailure = analyzeE2eFlakes(
+      makeReport([
+        {
+          projectName: TARGET_PROJECT_NAME,
+          title: TARGET_TITLE,
+          attempts: ['failed'],
+          expectedStatus: 'failed',
+        },
+      ]),
+    );
+    expect(expectedFailure.status).toBe('skipped');
+    expect(exitCodeForAnalysis(expectedFailure)).toBe(1);
+    expect(describeE2eFlakes(expectedFailure).join('\n')).toContain('预期失败');
   });
 
   it('ignores flaky cases from another project', () => {
@@ -236,6 +255,7 @@ describe('analyzeE2eFlakes', () => {
     const output = describeE2eFlakes(analysis, 'reports/run.json').join('\n');
     expect(output).toContain(TARGET_TITLE_FRAGMENT);
     expect(output).toContain('reports/run.json');
+    expect(output).toContain('门禁无法确认');
   });
 
   it('collects a target case nested inside describe suites', () => {
@@ -273,6 +293,26 @@ describe('analyzeE2eFlakes', () => {
     expect(analysis.cases).toHaveLength(1);
     expect(analysis.cases[0]?.projectName).toBe(TARGET_PROJECT_NAME);
     expect(analysis.cases[0]?.retryCount).toBe(1);
+  });
+});
+
+describe('gate wiring', () => {
+  it('keeps the constants wired to the real mobile-webkit case', () => {
+    const sharedCases = readFileSync(
+      join(ROOT, 'tests', 'e2e', 'framework-mobile-cases.ts'),
+      'utf8',
+    );
+    const webkitEntry = readFileSync(
+      join(ROOT, 'tests', 'e2e', 'framework.mobile.webkit.spec.ts'),
+      'utf8',
+    );
+    const config = readFileSync(join(ROOT, 'playwright.config.ts'), 'utf8');
+
+    // If the case is renamed or the WebKit entry point stops using the shared
+    // module, the gate would silently have nothing to check.
+    expect(sharedCases).toContain(TARGET_TITLE_FRAGMENT);
+    expect(webkitEntry).toContain('defineFrameworkMobileCases');
+    expect(config).toContain(`name: '${TARGET_PROJECT_NAME}'`);
   });
 });
 
@@ -321,10 +361,17 @@ describe('summarizeResultError', () => {
   it('falls back to the formatted errors array', () => {
     const summary = summarizeResultError({
       status: 'timedOut',
-      errors: ['', 'Test timeout of 30000ms exceeded.\nCall log follows'],
+      errors: ['', { message: 'Test timeout of 30000ms exceeded.\nCall log follows' }],
     });
 
     expect(summary).toBe('Test timeout of 30000ms exceeded.');
+
+    expect(
+      summarizeResultError({
+        status: 'timedOut',
+        errors: ['', 'Interrupted by the test runner'],
+      }),
+    ).toBe('Interrupted by the test runner');
   });
 
   it('returns null when the result carries no error', () => {
@@ -378,23 +425,24 @@ describe('check-e2e-flakes CLI', () => {
     expect(stdout).toContain('目标用例首跑通过');
   });
 
-  it('exits 1 when the report is missing', () => {
+  it('exits 2 when the report is missing', () => {
     const dir = makeTempDir();
 
     const { status, stderr } = runCli(['--report', join(dir, 'missing.json')]);
 
-    expect(status).toBe(1);
+    expect(status).toBe(2);
     expect(stderr).toContain('报告缺失或不可读');
+    expect(stderr).toContain('CI=true npm run test:e2e');
   });
 
-  it('exits 1 when the report cannot be parsed', () => {
+  it('exits 2 when the report cannot be parsed', () => {
     const dir = makeTempDir();
     const file = join(dir, 'broken.json');
     writeFileSync(file, '{"suites": [');
 
     const { status, stderr } = runCli(['--report', file]);
 
-    expect(status).toBe(1);
+    expect(status).toBe(2);
     expect(stderr).toContain('无法解析 Playwright JSON 报告');
   });
 

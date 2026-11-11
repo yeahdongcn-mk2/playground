@@ -65,7 +65,13 @@ export function parseE2eReport(text) {
   return report;
 }
 
-/** Read and parse the Playwright JSON report at `filePath`. */
+/**
+ * Read and parse the Playwright JSON report at `filePath`.
+ *
+ * `filePath` is resolved from the command's working directory. CI runs the
+ * check from the repository root, the same base Playwright uses to resolve the
+ * reporter `outputFile` (its config directory), so the two paths agree.
+ */
 export function readE2eReport(filePath) {
   let text;
   try {
@@ -73,7 +79,7 @@ export function readE2eReport(filePath) {
   } catch (error) {
     const code = isRecord(error) && typeof error.code === 'string' ? `，${error.code}` : '';
     throw new E2eFlakesError(
-      `报告缺失或不可读：${filePath}${code}；请先在本 job 运行 npm run test:e2e`,
+      `报告缺失或不可读：${filePath}${code}；JSON 报告仅在 CI 下生成，请先运行 CI=true npm run test:e2e`,
     );
   }
 
@@ -144,6 +150,11 @@ function classifyOutcome(test) {
   const firstStatus = statuses[0];
   const passedIndex = statuses.indexOf('passed');
 
+  // `test.skip()` / `test.fail()` cases are not expected to pass, so a green
+  // e2e step must not let them satisfy the first-run gate.
+  if (typeof test.expectedStatus === 'string' && test.expectedStatus !== 'passed') {
+    return 'skipped';
+  }
   if (test.status === 'flaky' || (passedIndex > 0 && firstStatus !== 'passed')) {
     return 'flaky';
   }
@@ -204,10 +215,11 @@ export function collectTargetCases(report) {
  * - `flaky`: a target case failed first and only passed after a retry.
  * - `failed`: the target case failed; the e2e step already failed the job, so
  *   this check stays quiet instead of reporting the same failure twice.
- * - `skipped`: the target case was skipped, so first-run stability is not
- *   proven.
- * - `missing`: the report has no target case (renamed/removed test or a
- *   filtered run), which must not silently disable the gate.
+ * - `skipped`: the target case was skipped (or marked as an expected failure),
+ *   so first-run stability is not proven.
+ * - `missing`: the report has no target case (renamed test, changed project or
+ *   a filtered run), so the gate cannot confirm first-run stability and must
+ *   not silently pass.
  * - `unknown`: the report has target cases but their state is not one of the
  *   states Playwright documents; do not silently pass.
  */
@@ -222,7 +234,11 @@ export function analyzeE2eFlakes(report) {
   return { status: 'passed', cases };
 }
 
-/** Exit code for an analysis: only a first-run pass (or an already failed e2e) is 0. */
+/**
+ * Exit code for an analysis: 0 when there is nothing to fail (target passed on
+ * its first attempt, or the e2e step already failed it); 1 for target
+ * flakiness, a skipped/unrecognized target or a report without the target case.
+ */
 export function exitCodeForAnalysis(analysis) {
   return analysis.status === 'passed' || analysis.status === 'failed' ? 0 : 1;
 }
@@ -264,7 +280,7 @@ export function describeE2eFlakes(analysis, reportPath = DEFAULT_E2E_REPORT_PATH
 
   if (analysis.status === 'skipped') {
     return [
-      `${prefix} 目标用例被跳过，门禁无法确认首跑通过：`,
+      `${prefix} 目标用例被跳过或标记为预期失败，门禁无法确认首跑通过：`,
       ...analysis.cases
         .filter((entry) => entry.outcome === 'skipped')
         .map((entry) => `  ${location(entry)}`),
@@ -285,6 +301,6 @@ export function describeE2eFlakes(analysis, reportPath = DEFAULT_E2E_REPORT_PATH
   return [
     `${prefix} 报告中没有找到 ${target} 的用例，门禁无法确认首跑稳定性：`,
     `  报告：${reportPath}`,
-    '  请确认用例仍在 mobile-webkit project 中运行，且报告来自本次完整 e2e。',
+    '  若用例改名或换了 project，请同步 scripts/lib/e2e-flakes.mjs 中的常量。',
   ];
 }
