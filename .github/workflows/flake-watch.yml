@@ -1,0 +1,94 @@
+name: Flake watch
+
+# Watch the guarded mobile-webkit framework case for first-run flakiness.
+# Keeping this workflow on `schedule` / `workflow_dispatch` only means the
+# repeats never lengthen regular push or pull request CI.
+on:
+  schedule:
+    # Daily at 03:17 UTC; off the top of the hour to avoid GitHub's peak.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mobile-webkit-first-run:
+    name: mobile-webkit first-run stability
+    runs-on: ubuntu-latest
+    # Five cold runs of the hub case plus dependency and browser installs.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright WebKit
+        run: npx playwright install --with-deps webkit
+
+      - name: Production build
+        run: npm run build
+
+      - name: Repeat the mobile-webkit hub case five times
+        id: flake-watch
+        env:
+          CI: 'true'
+        # --retries=0 keeps every repeat a first run, so a cold-start failure
+        # cannot be hidden by a retry. --trace=retain-on-failure keeps the
+        # trace even though retries are disabled.
+        run: |
+          npx playwright test \
+            --project=mobile-webkit \
+            -g "hub and blank canvas" \
+            --repeat-each=5 \
+            --retries=0 \
+            --trace=retain-on-failure
+
+      - name: Summarize first-run results
+        if: always()
+        env:
+          FLAKE_WATCH_OUTCOME: ${{ steps.flake-watch.outcome }}
+        run: |
+          node --input-type=module >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          import { readFileSync } from 'node:fs';
+
+          const outcome = process.env.FLAKE_WATCH_OUTCOME ?? 'unknown';
+          const lines = [
+            '## mobile-webkit 首跑稳定性',
+            '',
+            '- 重复次数：5',
+            '- 重试次数：0',
+            `- 结果：${outcome}`,
+          ];
+
+          try {
+            const report = JSON.parse(readFileSync('test-results/e2e-report.json', 'utf8'));
+            const stats = report.stats ?? {};
+            lines.push(
+              `- 首跑通过：${stats.expected ?? 0}`,
+              `- 失败：${stats.unexpected ?? 0}`,
+              `- 重试后通过：${stats.flaky ?? 0}`,
+              `- 跳过：${stats.skipped ?? 0}`,
+            );
+          } catch (error) {
+            lines.push(`- 无法读取 Playwright JSON 报告：${error.message}`);
+          }
+
+          console.log(lines.join('\n'));
+          EOF
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flake-watch-playwright-report
+          # JSON report, failure screenshots and retained traces all live here.
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 14
