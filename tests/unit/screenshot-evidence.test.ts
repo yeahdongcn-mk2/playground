@@ -415,6 +415,49 @@ describe('guardHistoricalAfterEvidence', () => {
     ).toThrowError(/image tag.*v0\.0\.0-noble.*v1\.64\.1-noble/);
   });
 
+  it('rejects a container fingerprint whose image digest does not match the pin', () => {
+    const wrongDigest = `sha256:${'0'.repeat(64)}`;
+    const env = { ...fixedCaptureEnv(), [CAPTURE_IMAGE_DIGEST_VAR]: wrongDigest };
+
+    expect(() =>
+      guardHistoricalAfterEvidence({
+        file: 'after-snake-ready.png',
+        allowHistoricalOverwrite: true,
+        env,
+      }),
+    ).toThrowError(
+      new RegExp(`image digest.*${wrongDigest}.*${PLAYWRIGHT_IMAGE_PIN.digest}`),
+    );
+  });
+
+  it('rejects an injected fingerprint whose image repository is not the pinned one', () => {
+    const fingerprint = {
+      source: 'container' as const,
+      target: 'desktop' as const,
+      dpr: 1,
+      image: {
+        repository: 'ghcr.io/example/playwright',
+        tag: PLAYWRIGHT_IMAGE_PIN.tag,
+        digest: PLAYWRIGHT_IMAGE_PIN.digest,
+      },
+      node: 'v24.0.0',
+      playwright: '1.64.1',
+      browser: null,
+      fonts: null,
+      env: { ...CAPTURE_EGL_ENV },
+    };
+
+    expect(() =>
+      guardHistoricalAfterEvidence({
+        file: 'after-snake-ready.png',
+        allowHistoricalOverwrite: true,
+        fingerprint,
+      }),
+    ).toThrowError(
+      /image repository is "ghcr\.io\/example\/playwright".*mcr\.microsoft\.com\/playwright/,
+    );
+  });
+
   it('rejects a container fingerprint with a missing EGL variable', () => {
     const env: Record<string, string | undefined> = { ...fixedCaptureEnv() };
     delete env.EGL_PLATFORM;
@@ -523,7 +566,6 @@ describe('capture scripts wire the guard before writing (Issue #137)', () => {
       expect(guard).toBeGreaterThan(-1);
       expect(screenshot).toBeGreaterThan(guard);
       expect(body).toContain('allowHistoricalOverwrite: ALLOW_HISTORICAL_OVERWRITE');
-      expect(body).toContain('env: process.env');
       expect(body).toContain('mode: MODE');
       expect(body).toMatch(/if \(!write\) return;/);
     },

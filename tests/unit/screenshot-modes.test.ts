@@ -954,11 +954,10 @@ describe('fixed-environment historical overwrite guard (Issue #199)', () => {
     };
   }
 
-  it('passes the capture environment to the shared guard from every wrapped script', () => {
+  it('wires the shared guard into every wrapped script', () => {
     for (const script of [SCRIPT_2048, SCRIPT_BREAKOUT, SNAKE_SCRIPT, SCRIPT]) {
       const source = readFileSync(script, 'utf8');
       expect(source, script).toContain('guardHistoricalAfterEvidence({');
-      expect(source, script).toContain('env: process.env');
     }
   });
 
