@@ -87,6 +87,8 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(WEBKIT_HISTORICAL).toContain(
       'https://github.com/yeahdongcn-mk2/playground/commit/498a14fb2c7faf426ae79381f433b64f2a18586e',
     );
+    expect(WEBKIT_HISTORICAL).toContain('9c39e68');
+    expect(WEBKIT_HISTORICAL).toContain('重新捕获');
     expect(WEBKIT_HISTORICAL).toContain('不重拍');
     expect(WEBKIT_HISTORICAL).toContain('不改动任何已提交 PNG');
   });
@@ -96,6 +98,8 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
       expect(WEBKIT_HISTORICAL).toContain(file);
       expect(driftBullets(WEBKIT_HISTORICAL)).toContain(file);
     }
+    expect(WEBKIT_HISTORICAL).toContain('044a02a');
+    expect(WEBKIT_HISTORICAL).toContain('单次测量值');
   });
 
   it('keeps the same-environment deterministic WebKit captures out of the drift list', () => {
@@ -109,12 +113,13 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(WEBKIT_HISTORICAL).toContain('bf7548b7');
   });
 
-  it('marks after-2048-ready-webkit.png as rechecked from the same capture commit and drifted', () => {
+  it('records the 2048 ready cross-run difference without fixing a sample hash', () => {
     expect(WEBKIT_HISTORICAL).toContain('after-2048-ready-webkit.png');
     expect(WEBKIT_HISTORICAL).toContain('同一捕获提交');
     expect(WEBKIT_HISTORICAL).toContain('4f488a3e');
-    expect(WEBKIT_HISTORICAL).toContain('672285de');
-    expect(WEBKIT_HISTORICAL).toContain('0.22%');
+    expect(WEBKIT_HISTORICAL).toContain('两次 sha256 不同');
+    expect(WEBKIT_HISTORICAL).toContain('0.037%');
+    expect(WEBKIT_HISTORICAL).toContain('1833');
     expect(driftBullets(WEBKIT_HISTORICAL)).toContain('after-2048-ready-webkit.png');
   });
 
@@ -123,11 +128,12 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(WEBKIT_HISTORICAL).toContain('EGL_PLATFORM=surfaceless');
     expect(WEBKIT_HISTORICAL).toContain('LIBGL_ALWAYS_SOFTWARE=1');
     expect(WEBKIT_HISTORICAL).toContain(CONTAINER_IMAGE);
-    expect(WEBKIT_HISTORICAL).toContain('ready 1.13%');
+    expect(WEBKIT_HISTORICAL).toContain('ready 0.011%');
+    expect(WEBKIT_HISTORICAL).toContain('113 px');
     expect(WEBKIT_HISTORICAL).toContain('playing 0.06%');
     expect(WEBKIT_HISTORICAL).toContain('lost 0.02%');
     expect(WEBKIT_HISTORICAL).toContain('won 0.02%');
-    expect(WEBKIT_HISTORICAL).toContain('10–14');
+    expect(WEBKIT_HISTORICAL).toContain('10 / 14 / 12 / 12');
     expect(WEBKIT_HISTORICAL).toContain('同一捕获环境连续两跑');
   });
 
@@ -136,6 +142,8 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(WEBKIT_HISTORICAL).toContain('ci-webkit-narrow-manifest.json');
     expect(WEBKIT_HISTORICAL).toContain('WebKit narrow screenshot smoke test');
     expect(WEBKIT_HISTORICAL).toContain('npm run verify:screenshots:webkit');
+    expect(WEBKIT_HISTORICAL).toContain('内置的 23 个');
+    expect(WEBKIT_HISTORICAL).toContain('--log');
     expect(WEBKIT_HISTORICAL).toContain('engine=webkit');
     expect(WEBKIT_HISTORICAL).toContain('视口');
     expect(WEBKIT_HISTORICAL).toContain('不作为「重跑必须等于已提交 PNG」的验收基准');
