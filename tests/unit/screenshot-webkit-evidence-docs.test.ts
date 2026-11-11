@@ -129,8 +129,8 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(WEBKIT_HISTORICAL).toContain('EGL_PLATFORM=surfaceless');
     expect(WEBKIT_HISTORICAL).toContain('LIBGL_ALWAYS_SOFTWARE=1');
     expect(WEBKIT_HISTORICAL).toContain(CONTAINER_IMAGE);
-    expect(WEBKIT_HISTORICAL).toContain('ready 0.011%');
-    expect(WEBKIT_HISTORICAL).toContain('113 px');
+    expect(WEBKIT_HISTORICAL).toContain('ready 0.0113%（113 px）');
+    expect(WEBKIT_HISTORICAL).toContain('ready 还会出现 1.1264%（11270 px）');
     expect(WEBKIT_HISTORICAL).toContain('574 px');
     expect(WEBKIT_HISTORICAL).toContain('210 px');
     expect(WEBKIT_HISTORICAL).toContain('236 px');
@@ -138,7 +138,11 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(WEBKIT_HISTORICAL).toContain('lost 0.02%');
     expect(WEBKIT_HISTORICAL).toContain('won 0.02%');
     expect(WEBKIT_HISTORICAL).toContain('10 / 14 / 12 / 12');
+    expect(WEBKIT_HISTORICAL).toContain('两种结果互差 11157 px（每通道最大 1）');
     expect(WEBKIT_HISTORICAL).toContain('也只在部分状态逐字节一致');
+    expect(WEBKIT_HISTORICAL).toContain('playing / lost / won 在容器内两跑 sha256 相同');
+    expect(WEBKIT_HISTORICAL).toContain('ready 的相邻两跑则可能不同');
+    expect(WEBKIT_HISTORICAL).not.toContain('扫雷这 4 张在容器内两跑 sha256 相同');
     expect(WEBKIT_HISTORICAL).toContain('2048 ready 在同一容器两跑不同');
   });
 
