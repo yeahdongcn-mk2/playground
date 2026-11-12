@@ -28,6 +28,21 @@
 - 容器命令：`npm run screenshots:container -- <target> [passthrough...]`，其中 `<target>` 是现有的截图 npm script（例如 `screenshots:webkit`、`screenshots`、`screenshots:snake`）；透传参数直接跟在 target 后，例如 `npm run screenshots:container -- screenshots:snake --allow-historical-overwrite`（`screenshots:snake` 会读取该开关；`screenshots:webkit` 不支持它，会静默忽略）。历史 After 图的覆盖开关只在固定容器内生效：未注入容器指纹时宿主直接带 `--allow-historical-overwrite` 会被共享守卫拒绝并给出可读错误，必须通过本命令重拍。入口会预检 Docker CLI / daemon、镜像 tag 与锁文件版本、target 白名单和该 target 的预览端口，再挂载仓库、按需在容器内 `npm ci`、构建并执行原截图命令；容器入口按脚本的捕获模式注入 `CAPTURE_TARGET` / `CAPTURE_TARGET_DPR`（Chromium 截图脚本为 `desktop,mobile` / `1,2`，WebKit 脚本为 `webkit` / `2`，只截手机的窄屏 / 触屏模式为 `mobile` / `2`），并在容器内校验列表中的每个目标与固定 DPR 一致；运行时再按实际创建的上下文逐目标打印指纹。产物经挂载写回宿主 `docs/screenshots/`，日志写到 `test-results/capture-container/<target>-<timestamp>.log`（已被 `.gitignore` 忽略）。捕获只依赖容器内浏览器，宿主不需要安装 Playwright 浏览器。
 - 验收口径：2026-11-12 在临时工作副本中以 `npm run screenshots:container -- screenshots:webkit` 连跑两次，`after-blank-webkit.png` 的 sha256 两次相同且等于已提交的 `cd4ed3fea1e0a068661c8102ee0b58b0601b3a249e480d76224d22782a0e088f`；顺带写出的 `after-hub-webkit.png` 不纳入本子任务验收。容器内日志中的指纹与本节记录的镜像 tag / digest、EGL 变量与 DPR 一致。
 
+## 通用大厅整页证据（Issue #161 / 子任务 1）
+
+- 目的：`scripts/capture-screenshots.mjs` 已为 Chromium 大厅显式补上 `fullPage: true`；本节记录重拍后的两张共享整页证据，并让 `npm run verify:screenshots:doc-dims` 逐张校验它们。
+- 捕获环境 / 命令：固定 Playwright 容器（镜像 tag / digest、字体与 EGL 变量见「固定捕获环境」）内执行 `npm run screenshots:container -- screenshots`（生产构建 + `vite preview`，端口 4174）。同一构建、端口空闲时连跑两次。
+- 捕获提交：`6217a208f55ca7ed2f4d8eb4f5a1c383c60f6d26`（分支 `agent/plan-161-t1`，该提交只含这两张 PNG；文档与测试在后续提交）。
+- 确定性口径：两次运行写出的两张图 sha256 完全一致，并与该提交的 PNG 一致：桌面 `7232a8977654561531fd1a1acf507d62ebf9486e78fb16b1714f5b732e7fc168`、手机 `d2fa7877424f0552010f63bb3731d4b82b0771c7ce70e7f72c233b467419f448`。这是同一构建、同一捕获环境的确定性结果，不是跨构建的像素基准。
+- 页脚漂移：桌面整页图会截入共享页脚，旧提交捕获的桌面 After 图带旧页脚，用当前构建重跑必然不同；按「历史 After 证据与当前构建不一致（Issue #137）」的口径，不要求新图等于历史 PNG，本节 sha256 只对上述两次同构建运行有效。
+- 视口 / 主题：桌面 1440×1000 CSS px、DPR 1；手机 390×844 CSS px、DPR 2、`isMobile: true`、`hasTouch: true`；深色主题、`reducedMotion: reduce`。两张均为整页截图（`fullPage: true`），手机整页高度按同一次捕获实测记录。
+- WebKit 口径不变：`after-hub-webkit.png` 仍由 `npm run screenshots:webkit` 生成，保持 WebKit `iPhone SE (3rd gen)` 375×667 / DPR 2 的视口截图（`fullPage: false`，750×1334），本次未重拍。
+
+| 文件 | 场景 | 视口 / 主题 | 整页尺寸 | 捕获命令 / sha256 |
+| --- | --- | --- | --- | --- |
+| `after-hub-desktop.png` | 大厅（Chromium 桌面，含页脚） | 1440×1000 / 深色 / DPR 1，fullPage: true | 整页 1440×3468 | `npm run screenshots:container -- screenshots` / `7232a897…` |
+| `after-hub-mobile.png` | 大厅（Chromium 手机） | 390×844（DPR 2）/ 深色，fullPage: true | 整页 780×13194 | `npm run screenshots:container -- screenshots` / `d2fa7877…` |
+
 ## 历史 After 证据与当前构建不一致（Issue #137）
 
 - 权威对照口径：逐字节比较只在同一构建、同一捕获环境下的确定性产物之间成立。需要与历史提交对照时，用同一脚本在父提交（或该图的历史捕获 commit）的干净 worktree 里重拍，再与同一次重拍的另一次运行比较；不要求重跑结果等于已提交的历史 `fullPage` PNG。历史 After 图只代表各自 PR 时点的 UI 快照，不是当前构建的确定性基准。
@@ -46,15 +61,15 @@
 
 ## CI：截图文档整页尺寸校验（Issue #134）
 
-- 覆盖范围：`docs/screenshots/README.md` 表格里带 `整页 W×H` 的单元格与 `docs/screenshots/<file>.png` 的 PNG 签名 / IHDR 宽高逐项比对；只读 README 与已提交 PNG，不执行截图脚本、不写文件，也不需要浏览器或生产构建。
+- 覆盖范围：`docs/screenshots/README.md` 表格里带 `整页 W×H` 的单元格与 `docs/screenshots/<file>.png` 的 PNG 签名 / IHDR 宽高逐项比对，其中包括「通用大厅整页证据」收录的 `after-hub-desktop.png` / `after-hub-mobile.png`；只读 README 与已提交 PNG，不执行截图脚本、不写文件，也不需要浏览器或生产构建。
 - CI 位置：`.github/workflows/ci.yml` 的 `verify` job，在 `Unit tests`（`npm run test:unit`）之后、`Production build`（`npm run build`）之前新增名为 `Screenshot doc dimensions` 的步骤；`verify` 的 `timeout-minutes` 保持 20。放在构建前，尺寸漂移会尽早失败。
 - 步骤命令：`npm run verify:screenshots:doc-dims`（即 `node scripts/check-screenshot-doc-dims.mjs`）。
-- 复现命令：`npm run verify:screenshots:doc-dims`。通过时输出 `OK: 检查了 14 个文件 / 14 行 README，整页尺寸全部一致。` 并以 0 退出；该计数与 `tests/unit/screenshot-doc-dims.test.ts` 的 CLI 契约断言一致。
+- 复现命令：`npm run verify:screenshots:doc-dims`。通过时输出 `OK: 检查了 16 个文件 / 16 行 README，整页尺寸全部一致。` 并以 0 退出；该计数与 `tests/unit/screenshot-doc-dims.test.ts` 的 CLI 契约断言一致。
 - 失败表现：把 `after-minesweeper-scores-desktop.png` 行的 `整页 1440×1606` 改成 `1440×1607` 后，本地实测输出：
 
 ```text
-FAIL: 发现 1 处整页尺寸问题（检查了 14 个文件 / 14 行 README）：
-  README 217: after-minesweeper-scores-desktop.png: 整页 1440×1607 != PNG 1440×1606（尺寸不一致）
+FAIL: 发现 1 处整页尺寸问题（检查了 16 个文件 / 16 行 README）：
+  README 232: after-minesweeper-scores-desktop.png: 整页 1440×1607 != PNG 1440×1606（尺寸不一致）
 ```
 
   命令以 1 退出；恢复文档后重新通过。PNG 缺失、PNG 签名错误或 IHDR 截断时同样逐条给出 README 行号、文件名、文档值与实际 PNG 状态。

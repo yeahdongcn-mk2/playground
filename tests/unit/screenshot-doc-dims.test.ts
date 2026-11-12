@@ -11,6 +11,7 @@ import {
   ScreenshotDocDimsError,
   parseDocDimensions,
   parsePngDimensions,
+  readPngDimensions,
   verifyDocDimensions,
 } from '../../scripts/lib/screenshot-doc-dims.mjs';
 
@@ -114,16 +115,72 @@ describe('parseDocDimensions', () => {
     expect(parseDocDimensions('| `a.png` | 1440×1000 / 深色 |')).toEqual([]);
   });
 
-  it('lists the 14 documented full-page rows in the committed README', () => {
+  it('lists the 16 documented full-page rows in the committed README', () => {
     const rows = parseDocDimensions(readFileSync(README, 'utf8'));
     const files = rows.flatMap((row) => row.files);
 
-    expect(rows).toHaveLength(14);
-    expect(files).toHaveLength(14);
+    expect(rows).toHaveLength(16);
+    expect(files).toHaveLength(16);
     expect(
       files.filter((file) => file.includes('scores') && !file.includes('clear')),
     ).toHaveLength(4);
     expect(files.filter((file) => file.includes('clear-scores'))).toHaveLength(4);
+  });
+});
+
+describe('committed hub screenshot full-page docs (Issue #161)', () => {
+  const HUB_SCREENSHOTS = ['after-hub-desktop.png', 'after-hub-mobile.png'] as const;
+
+  function documentedSizes(text: string) {
+    const documented = new Map<string, { width: number; height: number }>();
+    for (const row of parseDocDimensions(text)) {
+      for (const file of row.files) {
+        documented.set(file, { width: row.width, height: row.height });
+      }
+    }
+    return documented;
+  }
+
+  it('documents 整页 W×H for each committed hub screenshot and matches the PNG', () => {
+    const documented = documentedSizes(readFileSync(README, 'utf8'));
+
+    for (const file of HUB_SCREENSHOTS) {
+      const size = documented.get(file);
+      expect(size, `${file} 缺少「整页 W×H」文档行`).toBeDefined();
+      expect(size, `${file} 文档尺寸与 PNG 不一致`).toEqual(
+        readPngDimensions(join(SCREENSHOT_DIR, file)),
+      );
+    }
+  });
+
+  it('fails when a hub documentation row is removed or its size is mistyped', () => {
+    const source = readFileSync(README, 'utf8');
+
+    const withoutDesktop = source
+      .split('\n')
+      .filter(
+        (line) =>
+          !(
+            line.startsWith('|') &&
+            line.includes('`after-hub-desktop.png`') &&
+            line.includes('整页')
+          ),
+      )
+      .join('\n');
+    expect(parseDocDimensions(withoutDesktop).flatMap((row) => row.files)).not.toContain(
+      'after-hub-desktop.png',
+    );
+
+    const mistyped = source.replace('| 整页 1440×3468 |', '| 整页 1440×3469 |');
+    const desktop = parseDocDimensions(mistyped).find((row) =>
+      row.files.includes('after-hub-desktop.png'),
+    );
+    if (desktop === undefined) {
+      throw new Error('README 缺少 after-hub-desktop.png 的整页尺寸行');
+    }
+    expect({ width: desktop.width, height: desktop.height }).not.toEqual(
+      readPngDimensions(join(SCREENSHOT_DIR, 'after-hub-desktop.png')),
+    );
   });
 });
 
@@ -256,8 +313,8 @@ describe('check-screenshot-doc-dims CLI', () => {
 
     expect(stderr).toBe('');
     expect(status).toBe(0);
-    expect(stdout).toContain('14 个文件');
-    expect(stdout).toContain('14 行');
+    expect(stdout).toContain('16 个文件');
+    expect(stdout).toContain('16 行');
     expect(stdout).toContain('整页尺寸全部一致');
   });
 
