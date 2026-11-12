@@ -15,10 +15,15 @@ const FLAKE_WATCH_WORKFLOW_PATH = '.github/workflows/flake-watch.yml';
 
 interface WorkflowStep {
   name?: string;
+  uses?: string;
   run?: string;
+  with?: Record<string, string>;
+  'timeout-minutes'?: number;
+  'continue-on-error'?: boolean;
 }
 
 interface WorkflowJob {
+  'timeout-minutes'?: number;
   steps?: WorkflowStep[];
 }
 
@@ -34,6 +39,25 @@ const watchSteps = flakeWatch.jobs?.['mobile-webkit-first-run']?.steps ?? [];
 
 function stepNamed(steps: WorkflowStep[], name: string): WorkflowStep | undefined {
   return steps.find((step) => step.name === name);
+}
+
+function requireStep(steps: WorkflowStep[], name: string): WorkflowStep {
+  const step = stepNamed(steps, name);
+  if (step === undefined) {
+    throw new Error(`the ci.yml verify job is missing the "${name}" step`);
+  }
+  return step;
+}
+
+/** One numbered `## <n>. <title>` section of the policy document. */
+function policySection(title: string): string {
+  const heading = new RegExp(`^## \\d+\\. ${title}$`, 'm').exec(POLICY);
+  if (heading?.index === undefined) return '';
+
+  const afterHeading = heading.index + heading[0].length;
+  const next = POLICY.slice(afterHeading).search(/^## \d+\. /m);
+  const end = next === -1 ? POLICY.length : afterHeading + next;
+  return POLICY.slice(heading.index, end);
 }
 
 describe('flaky policy docs', () => {
@@ -98,6 +122,80 @@ describe('flaky policy docs', () => {
     expect(POLICY).toContain('其他用例的 flaky 仍可能以 success 放行');
   });
 
+  it('documents the browser install cache and bounded failure boundary', () => {
+    const section = policySection('浏览器安装的缓存与失败边界');
+    expect(section, 'the policy should define the browser install cache/failure section').not.toBe(
+      '',
+    );
+
+    expect(section).toContain('~/.cache/ms-playwright');
+    expect(section).toContain('scripts/install-playwright-ci.mjs');
+    expect(section).toContain('timeout-minutes: 8');
+    expect(section).toContain('最多尝试 2 次');
+    expect(section).toContain('180 秒');
+    expect(section).toContain('10 秒退避');
+    expect(section).toContain('Acquire::Retries "1"');
+    expect(section).toContain('Acquire::http::Timeout "15"');
+    expect(section).toContain('Acquire::https::Timeout "15"');
+    expect(section).toContain('Temporary failure resolving');
+    expect(section).toContain('404 Not Found');
+    expect(section).toMatch(/非零状态/);
+    expect(section).toMatch(/步骤自身的 `timeout-minutes` 内/);
+    expect(section).toMatch(/不会耗尽 job 的 20 分钟/);
+    expect(section).toContain('Issue #202');
+    expect(section).toContain('43129697008');
+    expect(section).toContain('冷缓存');
+    expect(section).toContain('热缓存');
+  });
+
+  it('keeps the browser install section aligned with ci.yml and the install wrapper', () => {
+    const section = policySection('浏览器安装的缓存与失败边界');
+    const jobTimeout = ci.jobs?.verify?.['timeout-minutes'];
+    const cache = requireStep(verifySteps, 'Cache Playwright browsers');
+    const apt = requireStep(verifySteps, 'Configure apt Acquire retries and timeouts');
+    const install = requireStep(verifySteps, 'Install Playwright Chromium and WebKit');
+
+    expect(jobTimeout).toBe(20);
+    expect(cache.uses).toBe('actions/cache@v4');
+    expect(cache.with?.path).toBe('~/.cache/ms-playwright');
+    expect(cache.with?.key).toContain("hashFiles('package-lock.json')");
+    expect(install.run?.trim()).toBe('node scripts/install-playwright-ci.mjs');
+    expect(install['timeout-minutes']).toBe(8);
+    expect(install['continue-on-error']).toBeUndefined();
+    expect(install['timeout-minutes'] ?? 0).toBeLessThan(jobTimeout ?? 0);
+
+    // The doc repeats the workflow's actual cache path/key, step timeout and
+    // job budget, so changing ci.yml without this section fails here.
+    expect(section).toContain(cache.with?.path ?? '');
+    expect(section).toContain(cache.with?.key ?? '');
+    expect(section).toContain((cache.with?.['restore-keys'] ?? '').trim());
+    expect(section).toContain(`timeout-minutes: ${install['timeout-minutes']}`);
+    expect(section).toContain(`${jobTimeout} 分钟`);
+
+    const aptRun = apt.run ?? '';
+    const acquire = {
+      retries: /Acquire::Retries "(\d+)";/.exec(aptRun)?.[1],
+      http: /Acquire::http::Timeout "(\d+)";/.exec(aptRun)?.[1],
+      https: /Acquire::https::Timeout "(\d+)";/.exec(aptRun)?.[1],
+    };
+    expect(acquire).toEqual({ retries: '1', http: '15', https: '15' });
+    expect(section).toContain(`Acquire::Retries "${acquire.retries}"`);
+    expect(section).toContain(`Acquire::http::Timeout "${acquire.http}"`);
+    expect(section).toContain(`Acquire::https::Timeout "${acquire.https}"`);
+
+    // Retry count, per-attempt timeout and backoff come from the wrapper.
+    const wrapper = read('scripts/install-playwright-ci.mjs');
+    const maxAttempts = /const MAX_ATTEMPTS = (\d+);/.exec(wrapper)?.[1];
+    const attemptTimeoutMs = /const DEFAULT_TIMEOUT_MS = ([\d_]+);/.exec(wrapper)?.[1];
+    const retryDelayMs = /const DEFAULT_RETRY_DELAY_MS = ([\d_]+);/.exec(wrapper)?.[1];
+    expect(maxAttempts).toBe('2');
+    expect(attemptTimeoutMs).toBe('180_000');
+    expect(retryDelayMs).toBe('10_000');
+    expect(section).toContain(`最多尝试 ${maxAttempts} 次`);
+    expect(section).toContain(`${Number((attemptTimeoutMs ?? '').replaceAll('_', '')) / 1000} 秒`);
+    expect(section).toContain(`${Number((retryDelayMs ?? '').replaceAll('_', '')) / 1000} 秒退避`);
+  });
+
   it('sets triage expectations that do not hide flakiness', () => {
     expect(POLICY).toMatch(/先看[^\n]*flaky[^\n]*首跑错误/);
     expect(POLICY).toMatch(/不要通过放宽断言、跳过用例或加大超时/);
@@ -112,6 +210,7 @@ describe('flaky policy docs', () => {
       FLAKE_WATCH_WORKFLOW_PATH,
       'scripts/check-e2e-flakes.mjs',
       'scripts/flake-watch-summary.mjs',
+      'scripts/install-playwright-ci.mjs',
     ];
     for (const relativePath of referenced) {
       expect(POLICY).toContain(relativePath);
