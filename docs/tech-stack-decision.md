@@ -135,7 +135,7 @@ games/<game>/scene → 对应引擎（scene 模块在 mount 内动态加载）
 
 - `core/` 不得导入任何游戏或引擎。
 - `games/<game>/index.ts` 只允许 `import type` 与静态元数据；场景必须在 `mount()` 内 `await import()`，纯逻辑 `logic/` 可直接导入，禁止值导入 `scene.ts`。
-- registry 用显式 map 或 `import.meta.glob('./*/index.ts')`，保证 Vite 为每个游戏生成独立 chunk；ESLint 边界规则 + CI 断言入口 chunk 不含 phaser/three 且 gzip < 50 KB。
+- registry 用显式 map 或 `import.meta.glob('./*/index.ts')`，保证 Vite 为每个游戏生成独立 chunk；模块依赖方向由 `scripts/check-boundaries.mjs` 检查、TS 语法与常见规则由 oxlint（`src`、`tests` 与 `scripts`）覆盖，入口 chunk 不含 phaser/three 且 gzip < 50 KB 由 `npm run check:budget` 断言。
 - `GameModule.mount(root, services, signal: AbortSignal)` 返回 `Promise<GameHandle>`；路由持有 `AbortController`，切换时 abort，晚到的 mount 必须立即 `destroy()` 并丢弃。
 - `destroy()` 必须清除监听器、动画帧、WebGL 上下文与音频节点；路由使用 hash（`#/games/<game>`），静态托管无需 SPA fallback，资源路径一律由 `import.meta.env.BASE_URL` 拼接，禁止硬编码 `/games/...`。
 - 契约：`GameMeta{id,title,engine,genre}`、`GameServices{storage.get/set,audio.play}`、`GameHandle{destroy}`；存档/音效统一走 `GameServices`，key 前缀用游戏 id（如 `snake.highscore`）。
@@ -171,7 +171,7 @@ npx playwright install --with-deps chromium   # 首次安装浏览器（Linux �
 
 npm run dev                         # 开发服务器，默认 http://localhost:5173
 npm run typecheck                   # tsc --noEmit
-npm run lint                        # ESLint 依赖边界规则
+npm run lint                        # oxlint（src / tests / scripts）+ scripts/check-boundaries.mjs 依赖方向检查
 npm run test:unit                   # Vitest 单测（规则/状态机/存储）
 npm run build                       # typecheck + vite build → dist/
 npm run check:budget                # 入口 chunk 无引擎 + gzip 预算

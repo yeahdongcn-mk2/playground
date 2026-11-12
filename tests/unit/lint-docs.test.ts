@@ -8,6 +8,7 @@ const read = (path: string): string => readFileSync(join(ROOT, path), 'utf8');
 
 const README = read('README.md');
 const FRAMEWORK = read('docs/framework.md');
+const ADR = read('docs/tech-stack-decision.md');
 const BOUNDARY_CHECK = 'scripts/check-boundaries.mjs';
 
 interface PackageJson {
@@ -124,6 +125,22 @@ describe('lint coverage docs', () => {
 
   it('framework test command documents the lint coverage', () => {
     expectLintCoverage(lineWith(section(FRAMEWORK, '## 12. 测试'), 'npm run lint'));
+  });
+
+  it('ADR module boundary section names oxlint, the boundary script and the budget check', () => {
+    const line = lineWith(
+      section(ADR, '## 5. 模块分层与边界'),
+      'oxlint',
+      BOUNDARY_CHECK,
+      'check:budget',
+    );
+    expectLintCoverage(line);
+  });
+
+  it('ADR local command list describes npm run lint as oxlint plus the boundary script', () => {
+    const line = lineWith(section(ADR, '## 7. 本地开发 / 构建 / 测试命令'), 'npm run lint');
+    expectLintCoverage(line);
+    expect(line).not.toContain('ESLint');
   });
 
   it('does not describe lint as limited to src and tests', () => {
