@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -38,14 +39,36 @@ describe('lint coverage contract', () => {
     expect(boundaryIndex).toBeGreaterThan(oxlintIndex);
   });
 
-  it('does not adopt --deny-warnings, which #223 tracks separately', () => {
-    // `--deny-warnings` changes the warning policy for the whole repository;
-    // this change only silences the single intentional regex.
-    expect(lintCommand).not.toContain('--deny-warnings');
+  it('enables --deny-warnings so oxlint warnings fail npm run lint', () => {
+    // Issue #223: a warning used to leave `npm run lint` at exit code 0, so the
+    // gate only caught errors. The flag makes warnings blocking too.
+    expect(oxlintArgs()).toContain('--deny-warnings');
   });
 
-  it('reports no warnings or errors for scripts', () => {
-    const result = spawnSync(process.execPath, [OXLINT_BIN, '--format=json', 'scripts'], {
+  it('exits non-zero for a warning-producing fixture under the real oxlint flags', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lint-deny-warnings-'));
+    try {
+      const fixture = join(dir, 'control-regex.mjs');
+      // `no-control-regex` warns by default; the repository only suppresses
+      // the rule at its one intentional use (scripts/lib/e2e-flakes.mjs).
+      writeFileSync(fixture, 'export const range = /[\\x00-\\x08]/;\n');
+      const flags = oxlintArgs().filter((argument) => argument.startsWith('-'));
+      const result = spawnSync(process.execPath, [OXLINT_BIN, ...flags, fixture], {
+        cwd: ROOT,
+        encoding: 'utf8',
+      });
+      const output = `${result.stdout}${result.stderr}`;
+
+      expect(result.error, output).toBeUndefined();
+      expect(output).toContain('warning');
+      expect(result.status, output).toBeGreaterThan(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reports no warnings or errors for src, tests and scripts', () => {
+    const result = spawnSync(process.execPath, [OXLINT_BIN, '--format=json', ...oxlintArgs()], {
       cwd: ROOT,
       encoding: 'utf8',
     });
