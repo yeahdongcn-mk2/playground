@@ -620,7 +620,7 @@ describe('browser coverage documentation', () => {
       );
     }
 
-    expect(ciCommands).toContain('npx playwright install --with-deps chromium webkit');
+    expect(ciCommands).toContain('node scripts/install-playwright-ci.mjs');
     expect(ciCommands).toContain('npm run test:e2e');
   });
 

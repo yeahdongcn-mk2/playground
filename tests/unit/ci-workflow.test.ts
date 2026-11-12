@@ -22,6 +22,7 @@ interface WorkflowStep {
   with?: Record<string, string>;
   env?: Record<string, string>;
   'continue-on-error'?: boolean;
+  'timeout-minutes'?: number;
 }
 
 interface WorkflowJob {
@@ -83,9 +84,19 @@ function pinnedPreCommitVersion(command: string): string | null {
 const isPreCommitRun = (step: WorkflowStep): boolean =>
   commandsOf(step).some((command) => /^pre-commit run --all-files(?:\s|$)/.test(command));
 const isTypecheck = (step: WorkflowStep): boolean => (step.run ?? '').trim() === 'npm run typecheck';
-const PLAYWRIGHT_INSTALL_COMMAND = 'npx playwright install --with-deps chromium webkit';
+const PLAYWRIGHT_INSTALL_COMMAND = 'node scripts/install-playwright-ci.mjs';
+const PLAYWRIGHT_INSTALL_TIMEOUT_MINUTES = 8;
+const PLAYWRIGHT_CACHE_PATH = '~/.cache/ms-playwright';
+const APT_ACQUIRE_CONFIG_PATH = '/etc/apt/apt.conf.d/99-ci-acquire';
 const isPlaywrightInstall = (step: WorkflowStep): boolean =>
   (step.run ?? '').trim() === PLAYWRIGHT_INSTALL_COMMAND;
+const isPlaywrightCache = (step: WorkflowStep): boolean =>
+  (step.with?.path ?? '').trim() === PLAYWRIGHT_CACHE_PATH;
+const isPreCommitCache = (step: WorkflowStep): boolean =>
+  (step.uses ?? '').startsWith('actions/cache@') &&
+  (step.with?.path ?? '').includes('~/.cache/pre-commit');
+const isAptAcquireConfig = (step: WorkflowStep): boolean =>
+  (step.run ?? '').includes(APT_ACQUIRE_CONFIG_PATH);
 const isE2e = (step: WorkflowStep): boolean => (step.run ?? '').trim() === 'npm run test:e2e';
 const SCREENSHOT_DOC_DIMS_COMMAND = 'npm run verify:screenshots:doc-dims';
 /** Unit-test report reused by the doc count check instead of rerunning the suite. */
@@ -118,7 +129,7 @@ describe('CI workflow', () => {
 
     const requiredCommands = [
       'npm ci',
-      'npx playwright install --with-deps chromium webkit',
+      PLAYWRIGHT_INSTALL_COMMAND,
       'npm run typecheck',
       'npm run lint',
       UNIT_TEST_COMMAND,
@@ -146,6 +157,55 @@ describe('CI workflow', () => {
     const e2eIndex = stepIndex(isE2e);
     expect(e2eIndex, 'verify job should still run "npm run test:e2e"').toBeGreaterThanOrEqual(0);
     expect(installIndex).toBeLessThan(e2eIndex);
+  });
+
+  it('runs the Playwright install through the retry wrapper with an 8-minute step timeout', () => {
+    const install = requireStep(isPlaywrightInstall, 'a Playwright install step');
+    expect(install.name).toBe('Install Playwright Chromium and WebKit');
+    expect((install.run ?? '').trim()).toBe(PLAYWRIGHT_INSTALL_COMMAND);
+    expect(install['timeout-minutes']).toBe(PLAYWRIGHT_INSTALL_TIMEOUT_MINUTES);
+    expect(install['continue-on-error']).toBeUndefined();
+
+    const jobTimeout = verify?.['timeout-minutes'];
+    expect(jobTimeout).toBe(20);
+    expect(install['timeout-minutes']).toBeLessThan(jobTimeout ?? 0);
+
+    const installIndex = stepIndex(isPlaywrightInstall);
+    expect(stepIndex(isNpmCi)).toBeLessThan(installIndex);
+    expect(installIndex).toBeLessThan(stepIndex(isE2e));
+  });
+
+  it('caches Playwright browsers under ~/.cache/ms-playwright keyed by package-lock.json', () => {
+    const cache = requireStep(isPlaywrightCache, 'a Playwright browser cache step');
+    expect(cache.uses).toBe('actions/cache@v4');
+    expect(cache.with?.path).toBe(PLAYWRIGHT_CACHE_PATH);
+    expect(cache.with?.key).toContain("hashFiles('package-lock.json')");
+    expect(cache.with?.key).toContain('playwright-');
+    expect(cache.with?.['restore-keys']).toContain('playwright-');
+    expect(cache['continue-on-error']).toBeUndefined();
+
+    const cacheIndex = stepIndex(isPlaywrightCache);
+    const installIndex = stepIndex(isPlaywrightInstall);
+    expect(installIndex).toBeGreaterThanOrEqual(0);
+    expect(cacheIndex).toBeLessThan(installIndex);
+  });
+
+  it('configures apt Acquire retries and timeouts before installing browsers', () => {
+    const apt = requireStep(isAptAcquireConfig, 'an apt Acquire config step');
+    expect(apt.name).toBe('Configure apt Acquire retries and timeouts');
+    expect(apt['continue-on-error']).toBeUndefined();
+
+    const run = apt.run ?? '';
+    expect(run).toContain('sudo');
+    expect(run).toContain(APT_ACQUIRE_CONFIG_PATH);
+    expect(run).toMatch(/Acquire::Retries\s+"1";/);
+    expect(run).toMatch(/Acquire::http::Timeout\s+"15";/);
+    expect(run).toMatch(/Acquire::https::Timeout\s+"15";/);
+
+    const aptIndex = stepIndex(isAptAcquireConfig);
+    const installIndex = stepIndex(isPlaywrightInstall);
+    expect(installIndex).toBeGreaterThanOrEqual(0);
+    expect(aptIndex).toBeLessThan(installIndex);
   });
 
   it('runs the screenshot doc dimension check between the unit tests and the build', () => {
@@ -310,7 +370,7 @@ describe('CI workflow', () => {
     const version = pinnedPreCommitVersion(installCommand ?? '');
     expect(version).toMatch(/^\d+\.\d+\.\d+$/);
 
-    const cache = steps.find((step) => (step.uses ?? '').startsWith('actions/cache@'));
+    const cache = steps.find(isPreCommitCache);
     expect(cache, 'verify job should cache pre-commit environments with actions/cache').toBeDefined();
     const cacheKeyPrefix = 'pre-commit-${{ runner.os }}-';
     expect(cache?.with?.key).toContain(`${cacheKeyPrefix}${version}-`);
@@ -336,7 +396,7 @@ describe('CI workflow', () => {
   });
 
   it('caches the pre-commit environments to keep the job fast', () => {
-    const cache = steps.find((step) => (step.uses ?? '').startsWith('actions/cache@'));
+    const cache = steps.find(isPreCommitCache);
     expect(cache, 'verify job should cache pre-commit environments with actions/cache').toBeDefined();
     expect(cache?.with?.path).toContain('~/.cache/pre-commit');
     expect(cache?.with?.key).toContain('pre-commit');
