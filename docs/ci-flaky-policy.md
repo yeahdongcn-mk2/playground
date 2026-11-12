@@ -59,7 +59,20 @@ npx playwright test \
 - **定时巡检**：`flake-watch.yml` 是独立 job（30 分钟超时），5 次重复只占用定时任务的 runner 时间，不拉长任何 PR。
 - **误报成本**：目标用例偶发失败时，门禁会判红并要求人工 triage（这是有意的稳定性信号）；其他用例的 flaky 仍可能以 success 放行，属于本次门禁覆盖范围之外的成本。
 
-## 5. Triage
+## 5. 浏览器安装的缓存与失败边界
+
+Playwright 的 `--with-deps` 安装会在 apt 阶段受 runner 的 DNS 抖动和 Ubuntu 镜像 404 影响。为避免一次安装耗尽 job 的 20 分钟超时，`ci.yml` 的 `verify` job 把浏览器安装收敛为有界步骤（背景见 Issue #202）：
+
+- **缓存路径与 key**：`Cache Playwright browsers` 用 `actions/cache@v4` 缓存 `~/.cache/ms-playwright`，key 为 `playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}`，restore key 为 `playwright-${{ runner.os }}-`。key 绑定 `package-lock.json`，因此依赖或 Playwright 版本变化时冷缓存重新下载，命中时直接复用已安装的 Chromium 与 WebKit。
+- **安装步骤与超时**：`Install Playwright Chromium and WebKit` 只执行 `node scripts/install-playwright-ci.mjs`，步骤级 `timeout-minutes: 8`。包装脚本最多尝试 2 次，每次尝试独立 180 秒超时，失败后按 10 秒退避重试。
+- **apt Acquire 配置**：安装前由 `Configure apt Acquire retries and timeouts` 把 `Acquire::Retries "1"`、`Acquire::http::Timeout "15"` 与 `Acquire::https::Timeout "15"` 写入 `/etc/apt/apt.conf.d/99-ci-acquire`，让单次 apt 请求快速失败，而不是长时间挂起。
+- **两种失败形态**：DNS 抖动表现为 `Temporary failure resolving` / `Could not resolve`；apt 镜像 404 表现为 `Failed to fetch ... 404 Not Found`，通常以 exit 100 结束。两者都按 runner 的瞬时基础设施故障处理：包装脚本重试并打印 apt/DNS 提示，重试用尽后仍失败就返回非零状态。
+- **失败边界**：最坏情况由 2 × 180 秒尝试、退避和进程组 SIGTERM/SIGKILL 收敛组成，仍小于步骤级 8 分钟；因此失败会在步骤自身的 `timeout-minutes` 内以非零状态和可操作诊断（尝试次数、耗时、node/npm/Playwright 版本、`~/.cache/ms-playwright` 内容与 apt 提示）退出，不会耗尽 job 的 20 分钟。
+- **验收 run**：Issue #202 使用 [run 43129697008](https://github.com/yeahdongcn-mk2/playground/actions/runs/43129697008) 的两个 attempt 验收：attempt 1 冷缓存（`Cache not found`，job 4m37s），attempt 2 热缓存重跑（`Cache restored from key: playwright-Linux-...`，job 6m50s），两次 `verify` 均通过。
+
+本小节的契约由 `tests/unit/flaky-policy-docs.test.ts` 对照 `.github/workflows/ci.yml` 与 `scripts/install-playwright-ci.mjs` 校验，workflow 或包装脚本改值后文档未同步会让单测失败。
+
+## 6. Triage
 
 出现 flaky / failed 时先看证据，再决定修复：
 
