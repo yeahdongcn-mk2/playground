@@ -1,10 +1,26 @@
-import { existsSync, readFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  CAPTURE_CONTAINER_FLAG,
+  CAPTURE_EGL_ENV,
+  CAPTURE_IMAGE_DIGEST_VAR,
+  CAPTURE_IMAGE_TAG_VAR,
+  PLAYWRIGHT_IMAGE_PIN,
+} from '../../scripts/lib/capture-env.mjs';
+import {
   HISTORICAL_AFTER_EVIDENCE,
+  HISTORICAL_OVERWRITE_CONTAINER_COMMAND,
   HISTORICAL_OVERWRITE_FLAG,
+  HISTORICAL_SHA256_MANIFEST,
   decideAfterCaptureWrite,
   findHistoricalAfterEvidence,
   guardHistoricalAfterEvidence,
@@ -228,6 +244,16 @@ function recordingLogger(): { messages: string[]; warn: (message: string) => voi
   return { messages, warn: (message: string) => messages.push(message) };
 }
 
+/** The environment the container entry injects for a fixed capture run. */
+function fixedCaptureEnv(): Record<string, string> {
+  return {
+    [CAPTURE_CONTAINER_FLAG]: '1',
+    [CAPTURE_IMAGE_TAG_VAR]: PLAYWRIGHT_IMAGE_PIN.tag,
+    [CAPTURE_IMAGE_DIGEST_VAR]: PLAYWRIGHT_IMAGE_PIN.digest,
+    ...CAPTURE_EGL_ENV,
+  };
+}
+
 describe('historical After evidence list (Issue #137)', () => {
   it('covers exactly the files frozen in the t1–t3 docs with issue, game and capture commit', () => {
     const files = HISTORICAL_AFTER_EVIDENCE.map((entry) => entry.file);
@@ -313,7 +339,7 @@ describe('decideAfterCaptureWrite', () => {
 });
 
 describe('guardHistoricalAfterEvidence', () => {
-  it('warns with the tracking issue, file and flag when it skips', () => {
+  it('warns with the tracking issue, file and container command when it skips', () => {
     const file = 'after-2048-ready-desktop.png';
     const logger = recordingLogger();
 
@@ -326,17 +352,20 @@ describe('guardHistoricalAfterEvidence', () => {
     expect(warning).toContain('#137');
     expect(warning).toContain(file);
     expect(warning).toContain(HISTORICAL_OVERWRITE_FLAG);
+    expect(warning).toContain(HISTORICAL_OVERWRITE_CONTAINER_COMMAND);
     expect(warning).toContain('8ec4adc');
     expect(warning).toContain('docs/screenshots/README.md');
   });
 
-  it('allows the explicit overwrite and reminds to sync docs and capture commit', () => {
+  it('allows the explicit overwrite only inside the fixed capture environment', () => {
     const file = 'after-breakout-ready-webkit.png';
     const logger = recordingLogger();
 
     const write = guardHistoricalAfterEvidence({
       file,
       allowHistoricalOverwrite: true,
+      env: fixedCaptureEnv(),
+      manifest: { captures: [{ file }] },
       log: logger,
     });
 
@@ -349,6 +378,132 @@ describe('guardHistoricalAfterEvidence', () => {
     expect(warning).toContain(HISTORICAL_OVERWRITE_FLAG);
     expect(warning).toContain('498a14f');
     expect(warning).toContain('docs/screenshots/README.md');
+    expect(warning).toContain(HISTORICAL_SHA256_MANIFEST);
+    expect(warning).toContain('Update all of the following');
+  });
+
+  it('rejects the overwrite flag on the host and names the file and container entry', () => {
+    const file = 'after-2048-ready-desktop.png';
+    const logger = recordingLogger();
+
+    expect(() =>
+      guardHistoricalAfterEvidence({
+        file,
+        allowHistoricalOverwrite: true,
+        env: {},
+        log: logger,
+      }),
+    ).toThrowError(
+      new RegExp(
+        `Refusing to overwrite historical After evidence ${file}.*` +
+          `${CAPTURE_CONTAINER_FLAG}.*${HISTORICAL_OVERWRITE_CONTAINER_COMMAND}`,
+        's',
+      ),
+    );
+    expect(logger.messages).toHaveLength(0);
+  });
+
+  it('rejects a container fingerprint that does not match the pinned image', () => {
+    const env = { ...fixedCaptureEnv(), [CAPTURE_IMAGE_TAG_VAR]: 'v0.0.0-noble' };
+
+    expect(() =>
+      guardHistoricalAfterEvidence({
+        file: 'after-snake-ready.png',
+        allowHistoricalOverwrite: true,
+        env,
+      }),
+    ).toThrowError(/image tag.*v0\.0\.0-noble.*v1\.64\.1-noble/);
+  });
+
+  it('rejects a container fingerprint whose image digest does not match the pin', () => {
+    const wrongDigest = `sha256:${'0'.repeat(64)}`;
+    const env = { ...fixedCaptureEnv(), [CAPTURE_IMAGE_DIGEST_VAR]: wrongDigest };
+
+    expect(() =>
+      guardHistoricalAfterEvidence({
+        file: 'after-snake-ready.png',
+        allowHistoricalOverwrite: true,
+        env,
+      }),
+    ).toThrowError(
+      new RegExp(`image digest.*${wrongDigest}.*${PLAYWRIGHT_IMAGE_PIN.digest}`),
+    );
+  });
+
+  it('rejects an injected fingerprint whose image repository is not the pinned one', () => {
+    const fingerprint = {
+      source: 'container' as const,
+      target: 'desktop' as const,
+      dpr: 1,
+      image: {
+        repository: 'ghcr.io/example/playwright',
+        tag: PLAYWRIGHT_IMAGE_PIN.tag,
+        digest: PLAYWRIGHT_IMAGE_PIN.digest,
+      },
+      node: 'v24.0.0',
+      playwright: '1.64.1',
+      browser: null,
+      fonts: null,
+      env: { ...CAPTURE_EGL_ENV },
+    };
+
+    expect(() =>
+      guardHistoricalAfterEvidence({
+        file: 'after-snake-ready.png',
+        allowHistoricalOverwrite: true,
+        fingerprint,
+      }),
+    ).toThrowError(
+      /image repository is "ghcr\.io\/example\/playwright".*mcr\.microsoft\.com\/playwright/,
+    );
+  });
+
+  it('rejects a container fingerprint with a missing EGL variable', () => {
+    const env: Record<string, string | undefined> = { ...fixedCaptureEnv() };
+    delete env.EGL_PLATFORM;
+
+    expect(() =>
+      guardHistoricalAfterEvidence({
+        file: 'after-snake-ready.png',
+        allowHistoricalOverwrite: true,
+        env,
+      }),
+    ).toThrowError(/EGL_PLATFORM is missing/);
+  });
+
+  it('reads the sha256 manifest and only lists it when the file is tracked', () => {
+    const file = 'after-2048-ready-desktop.png';
+    const dir = mkdtempSync(join(tmpdir(), 'screenshot-evidence-manifest-'));
+    const manifestPath = join(dir, 'capture-sha256-manifest.json');
+    writeFileSync(manifestPath, JSON.stringify({ captures: [{ file }] }));
+
+    try {
+      const logger = recordingLogger();
+      expect(
+        guardHistoricalAfterEvidence({
+          file,
+          allowHistoricalOverwrite: true,
+          env: fixedCaptureEnv(),
+          manifestPath,
+          log: logger,
+        }),
+      ).toBe(true);
+      expect(logger.messages[0]).toContain(HISTORICAL_SHA256_MANIFEST);
+
+      const otherLogger = recordingLogger();
+      expect(
+        guardHistoricalAfterEvidence({
+          file: 'after-snake-mobile.png',
+          allowHistoricalOverwrite: true,
+          env: fixedCaptureEnv(),
+          manifestPath,
+          log: otherLogger,
+        }),
+      ).toBe(true);
+      expect(otherLogger.messages[0]).not.toContain(HISTORICAL_SHA256_MANIFEST);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('stays silent for unprotected files and for Before mode', () => {
@@ -364,6 +519,29 @@ describe('guardHistoricalAfterEvidence', () => {
       guardHistoricalAfterEvidence({
         file: 'after-2048-ready-desktop.png',
         mode: 'before',
+        log: logger,
+      }),
+    ).toBe(true);
+    expect(logger.messages).toHaveLength(0);
+  });
+
+  it('does not validate the fixed environment for ordinary captures', () => {
+    const logger = recordingLogger();
+
+    expect(
+      guardHistoricalAfterEvidence({
+        file: 'after-breakout-playing-desktop.png',
+        allowHistoricalOverwrite: true,
+        env: {},
+        log: logger,
+      }),
+    ).toBe(true);
+    expect(
+      guardHistoricalAfterEvidence({
+        file: 'after-2048-ready-desktop.png',
+        mode: 'before',
+        allowHistoricalOverwrite: true,
+        env: {},
         log: logger,
       }),
     ).toBe(true);
@@ -413,31 +591,37 @@ describe('historical evidence command docs', () => {
     'npm run screenshots:minesweeper',
   ];
 
-  it.each(COMMANDS)('documents the overwrite flag for %s', (command) => {
+  /** The container form of one npm script, as the docs must show it. */
+  function containerCommand(command: string): string {
+    return `${HISTORICAL_OVERWRITE_CONTAINER_COMMAND} -- ${command.replace('npm run ', '')} ${HISTORICAL_OVERWRITE_FLAG}`;
+  }
+
+  it.each(COMMANDS)('documents the container-only overwrite for %s', (command) => {
     const row = ROOT_README.split('\n').find((line) =>
       line.startsWith(`| \`${command}\` |`),
     );
     expect(row).toBeDefined();
     expect(row).toContain('历史证据');
     expect(row).toContain(HISTORICAL_OVERWRITE_FLAG);
-    expect(row).toContain(`${command} -- ${HISTORICAL_OVERWRITE_FLAG}`);
+    expect(row).toContain(HISTORICAL_OVERWRITE_CONTAINER_COMMAND);
+    expect(row).toContain(containerCommand(command));
   });
 
-  it.each(COMMANDS)('documents the overwrite flag in the screenshots guide for %s', (command) => {
-    expect(SCREENSHOTS_README).toContain(`${command} -- ${HISTORICAL_OVERWRITE_FLAG}`);
+  it.each(COMMANDS)('documents the container-only overwrite in the screenshots guide for %s', (command) => {
+    expect(SCREENSHOTS_README).toContain(containerCommand(command));
   });
 
-  it('documents the flag for the WebKit commands that write protected files', () => {
+  it('documents the container-only overwrite for the WebKit commands that write protected files', () => {
     for (const command of [
       'npm run screenshots:2048:webkit',
       'npm run screenshots:breakout:webkit',
       'npm run screenshots:minesweeper:webkit',
     ]) {
-      expect(SCREENSHOTS_README).toContain(`${command} -- ${HISTORICAL_OVERWRITE_FLAG}`);
+      expect(SCREENSHOTS_README).toContain(containerCommand(command));
     }
   });
 
-  it('explains the default skip, the warning and the explicit opt-in', () => {
+  it('explains the default skip, the fixed environment and the update checklist', () => {
     const section = SCREENSHOTS_README.slice(
       SCREENSHOTS_README.indexOf('## 历史 After 证据与当前构建不一致（Issue #137）'),
       SCREENSHOTS_README.indexOf('## CI：截图文档整页尺寸校验（Issue #134）'),
@@ -446,5 +630,8 @@ describe('historical evidence command docs', () => {
     expect(section).toContain(HISTORICAL_OVERWRITE_FLAG);
     expect(section).toContain('默认');
     expect(section).toContain('#137');
+    expect(section).toContain(HISTORICAL_OVERWRITE_CONTAINER_COMMAND);
+    expect(section).toContain(HISTORICAL_SHA256_MANIFEST);
+    expect(section).toContain('捕获 commit');
   });
 });

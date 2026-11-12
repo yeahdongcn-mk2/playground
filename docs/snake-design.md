@@ -93,7 +93,7 @@ src/games/snake/
 - 截图场景的确定性：固定首果 + seed 7 + 3 个 tick 后的蛇身、下一颗果实、得分与速度；不同 seed 会改变下一颗果实。
 - `state` 返回防御性副本，外部修改不影响引擎。
 
-运行：`npm run test:unit`（全仓 755 个用例）。
+运行：`npm run test:unit`（全仓 769 个用例）。
 
 `src/games/snake/debug.test.ts` 另行覆盖 seed / ticks 参数解析；截图确定性护栏（脚本常量、view / scene 接线与固定 tick 循环）在 `tests/unit/capture-snake-determinism.test.ts`。
 
@@ -118,11 +118,11 @@ src/games/snake/
 `scripts/capture-snake-screenshots.mjs` 用开发服务器抓取：
 
 - `--before`：在 t2 基线（`60c0206`，即 t2 分支 head `c9e8dec` 的同一棵树）的干净 worktree 运行，抓取框架大厅、手机大厅、空白画布，以及 `#/games/snake` 在 t2 的真实「没有找到这个游戏」错误页。`--before` 读取当前工作树，必须先 checkout / worktree 到基线，不能在本分支直接跑。
-- 默认：贪食蛇大厅、游玩中与手机大厅（After，当前分支）；READY / GAME OVER / 手机游戏是 #14 历史证据，默认被共享守卫跳过并警告，确需重建时加 `--allow-historical-overwrite`。
+- 默认：贪食蛇大厅、游玩中与手机大厅（After，当前分支）；READY / GAME OVER / 手机游戏是 #14 历史证据，默认被共享守卫跳过并警告，确需重建时只能在固定捕获容器内加 `--allow-historical-overwrite`（未注入容器指纹时宿主直接加会被拒绝）。
 - 固定首果 `?food=11,10` 固定第一颗果实；游玩图再固定 `?seed=7&ticks=3`，吃下首果后推进 3 个引擎 tick 并冻结运行，使蛇身、下一颗果实、得分、长度与速度可逐字节复现。冻结期间保留 Phaser 循环重绘已冻结的 Graphics，不 sleep WebGL 循环（否则截图会捕获到黑屏画布）。
 - 桌面 1440×1000、手机 390×844（DPR 2），深色主题，`reducedMotion: reduce`；同一工作树、开发端口 5188 空闲时连续两次 `npm run screenshots:snake` 生成的 `after-snake-playing.png` sha256 完全一致。复现命令与哈希对照见 [docs/screenshots/README.md](screenshots/README.md) 的「游玩截图确定性」小节。
 
-运行：`npm run screenshots:snake`；WebKit 手机 READY 图用 `npm run screenshots:snake:webkit`。重建历史 After 图时用 `npm run screenshots:snake -- --allow-historical-overwrite` 并同步文档与捕获 commit。
+运行：`npm run screenshots:snake`；WebKit 手机 READY 图用 `npm run screenshots:snake:webkit`。重建历史 After 图时只能在固定容器内用 `npm run screenshots:container -- screenshots:snake --allow-historical-overwrite`，并在同一改动中同步文档、捕获 commit 与 `docs/screenshots/capture-sha256-manifest.json` 条目（若收录）。
 
 ## 已知限制
 
