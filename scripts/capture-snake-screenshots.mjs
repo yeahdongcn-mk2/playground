@@ -227,7 +227,7 @@ try {
       const mobileHub = await mobile.newPage();
       await mobileHub.goto(ORIGIN, { waitUntil: 'networkidle' });
       await settle(mobileHub);
-      await capture(mobileHub, 'after-hub-mobile.png', false);
+      await capture(mobileHub, 'after-hub-mobile.png', true);
 
       const mobileGame = await mobile.newPage();
       await mobileGame.goto(`${ORIGIN}/#/games/snake?debug=1&food=11,10`, { waitUntil: 'networkidle' });

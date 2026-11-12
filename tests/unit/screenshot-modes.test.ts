@@ -429,9 +429,21 @@ function blockBody(source: string, marker: string): string {
   if (open === -1) {
     throw new Error(`Missing block after ${marker}`);
   }
+  try {
+    return braceBodyAt(source, open);
+  } catch {
+    throw new Error(`Unbalanced block after ${marker}`);
+  }
+}
+
+/** Contents of the brace block opening at `openIndex`, skipping strings/comments. */
+function braceBodyAt(source: string, openIndex: number): string {
+  if (source[openIndex] !== '{') {
+    throw new Error(`Expected a brace block at index ${openIndex}`);
+  }
 
   let depth = 0;
-  for (let i = open; i < source.length; i += 1) {
+  for (let i = openIndex; i < source.length; i += 1) {
     const char = source[i];
     if (char === "'" || char === '"' || char === '`') {
       for (i += 1; i < source.length; i += 1) {
@@ -453,7 +465,7 @@ function blockBody(source: string, marker: string): string {
     if (char === '/' && source[i + 1] === '*') {
       const end = source.indexOf('*/', i + 2);
       if (end === -1) {
-        throw new Error(`Unterminated comment after ${marker}`);
+        throw new Error('Unterminated comment');
       }
       i = end + 1;
       continue;
@@ -464,11 +476,11 @@ function blockBody(source: string, marker: string): string {
     if (char === '}') {
       depth -= 1;
       if (depth === 0) {
-        return source.slice(open + 1, i);
+        return source.slice(openIndex + 1, i);
       }
     }
   }
-  throw new Error(`Unbalanced block after ${marker}`);
+  throw new Error(`Unbalanced block starting at index ${openIndex}`);
 }
 
 describe('minesweeper screenshot modes', () => {
@@ -777,35 +789,187 @@ describe('WebKit screenshot static guards', () => {
   });
 });
 
-describe('generic hub screenshot full-page guard (Issue #161)', () => {
-  const HUB_FULL_PAGE = ['after-hub-desktop.png', 'after-hub-mobile.png'] as const;
-  const VIEWPORT_SHOTS = [
+/**
+ * The five capture scripts that write the shared hub screenshots. The generic
+ * script passes `fullPage` inside an options object; the four game scripts
+ * forward it as the third positional argument to their local `capture()`
+ * helper, so the extractor below has to understand both call shapes.
+ */
+const HUB_SCRIPTS = [
+  'capture-2048-screenshots.mjs',
+  'capture-breakout-screenshots.mjs',
+  'capture-minesweeper-screenshots.mjs',
+  'capture-screenshots.mjs',
+  'capture-snake-screenshots.mjs',
+] as const;
+
+const HUB_FILES = ['after-hub-desktop.png', 'after-hub-mobile.png'] as const;
+
+/**
+ * Screenshots that must stay viewport-sized even though their script also
+ * writes the full-page shared hub. The WebKit hub and every game's own phone
+ * frame keep their historical viewport framing; only the shared Chromium hub
+ * becomes a full-page capture.
+ */
+const HUB_VIEWPORT_SHOTS: Record<string, readonly string[]> = {
+  'capture-screenshots.mjs': [
     'after-blank-desktop.png',
     'after-blank-mobile.png',
     'after-blank-webkit.png',
     'after-hub-webkit.png',
-  ] as const;
+  ],
+  'capture-2048-screenshots.mjs': [
+    'after-2048-ready-mobile.png',
+    'after-2048-playing-mobile.png',
+    'after-2048-gameover-mobile.png',
+  ],
+  'capture-breakout-screenshots.mjs': [
+    'after-breakout-ready-mobile.png',
+    'after-breakout-playing-mobile.png',
+    'after-breakout-gameover-mobile.png',
+  ],
+  'capture-minesweeper-screenshots.mjs': [],
+  'capture-snake-screenshots.mjs': [
+    'before-framework-hub-mobile.png',
+    'after-snake-mobile.png',
+    'after-snake-webkit.png',
+  ],
+};
 
-  const source = readFileSync(GENERIC_SCRIPT, 'utf8');
+interface CaptureCall {
+  /** Which call shape wrote the PNG. */
+  form: 'options' | 'positional';
+  /** Parsed `fullPage`; null when the call omits it and the helper default decides. */
+  fullPage: boolean | null;
+}
 
-  /** The options object passed to one `captureScreenshot` call. */
-  function captureOptions(name: string): string {
-    return blockBody(source, `captureScreenshot(page, '${name}'`);
+/** Map every literal PNG a script captures to its fullPage argument. */
+function captureCalls(source: string): Map<string, CaptureCall> {
+  const calls = new Map<string, CaptureCall>();
+
+  // `captureScreenshot(page, 'name.png', { ..., fullPage: true })`
+  for (const match of source.matchAll(
+    /captureScreenshot\(\s*[^,]+,\s*'([^']+\.png)'\s*,\s*\{/g,
+  )) {
+    const openIndex = (match.index ?? 0) + match[0].length - 1;
+    const options = braceBodyAt(source, openIndex);
+    calls.set(match[1]!, {
+      form: 'options',
+      fullPage: /\bfullPage:\s*true\b/.test(options)
+        ? true
+        : /\bfullPage:\s*false\b/.test(options)
+          ? false
+          : null,
+    });
   }
 
-  it('pins fullPage: true for the Chromium hub and keeps the other captures at the viewport', () => {
-    // The hub is taller than the 1440x1000 / 390x844 viewports, so dropping
-    // fullPage silently regresses the committed full-page evidence.
-    for (const name of HUB_FULL_PAGE) {
-      expect(captureOptions(name), name).toMatch(/\bfullPage:\s*true\b/);
-    }
+  // Game scripts: `capture(page, 'name.png', true)` with a positional value.
+  for (const match of source.matchAll(
+    /(?<![A-Za-z])capture\(\s*[^,]+,\s*'([^']+\.png)'\s*(?:,\s*(true|false))?\s*\)/g,
+  )) {
+    calls.set(match[1]!, {
+      form: 'positional',
+      fullPage: match[2] === undefined ? null : match[2] === 'true',
+    });
+  }
 
-    // Blank scenes and the WebKit hub are viewport captures; `fullPage` may be
-    // omitted (the runtime default is false) but must never turn true.
-    for (const name of VIEWPORT_SHOTS) {
-      expect(captureOptions(name), name).not.toMatch(/\bfullPage:\s*true\b/);
+  return calls;
+}
+
+/** Every problem with the shared hub captures in one script source. */
+function hubFullPageProblems(source: string): string[] {
+  const calls = captureCalls(source);
+  const problems: string[] = [];
+
+  for (const name of HUB_FILES) {
+    const call = calls.get(name);
+    if (call === undefined) {
+      problems.push(`${name} is not captured`);
+    } else if (call.fullPage !== true) {
+      problems.push(
+        `${name} must use fullPage true (${call.form} form, got ${String(call.fullPage)})`,
+      );
+    }
+  }
+
+  return problems;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+describe('shared hub screenshot full-page guard (Issues #161, #218)', () => {
+  it('covers every capture script that writes the shared hub', () => {
+    const writers = CAPTURE_SCRIPTS.filter((file) =>
+      HUB_FILES.some((name) => captureCalls(captureSource(file)).has(name)),
+    );
+
+    expect(writers).toEqual([...HUB_SCRIPTS]);
+  });
+
+  it.each(HUB_SCRIPTS)(
+    'pins fullPage true for both shared hub captures in %s',
+    (file) => {
+      // The hub is taller than the 1440x1000 / 390x844 viewports, so dropping
+      // fullPage silently regresses the committed full-page evidence.
+      expect(hubFullPageProblems(captureSource(file)), file).toEqual([]);
+    },
+  );
+
+  it.each(HUB_SCRIPTS)(
+    'keeps the WebKit hub and game phone frames at the viewport in %s',
+    (file) => {
+      const calls = captureCalls(captureSource(file));
+      for (const name of HUB_VIEWPORT_SHOTS[file] ?? []) {
+        const call = calls.get(name);
+        expect(call, `${file}: ${name}`).toBeDefined();
+        // `fullPage` may be omitted (the runtime default is false) but the
+        // historical viewport framing must never turn into a full-page capture.
+        expect(call!.fullPage, `${file}: ${name}`).not.toBe(true);
+      }
+    },
+  );
+
+  it('keeps the minesweeper touch phone states at the viewport', () => {
+    const source = captureSource('capture-minesweeper-screenshots.mjs');
+    const states = [
+      ...source.matchAll(
+        /capture\(\w+, touchMobileName\(prefix, '([a-z]+)'\), (true|false)\)/g,
+      ),
+    ];
+
+    expect(states.map((match) => match[1])).toEqual(['ready', 'playing', 'lost', 'won']);
+    for (const match of states) {
+      expect(match[2], match[1]).toBe('false');
     }
   });
+
+  it.each(HUB_SCRIPTS)(
+    'fails when a hub capture in %s falls back to the viewport',
+    (file) => {
+      const source = captureSource(file);
+      for (const name of HUB_FILES) {
+        const pattern = escapeRegExp(name);
+        const mutated = source
+          .replace(
+            new RegExp(
+              `(captureScreenshot\\([^,]+, '${pattern}', \\{[\\s\\S]*?fullPage:\\s*)true`,
+            ),
+            '$1false',
+          )
+          .replace(new RegExp(`(capture\\([^,]+, '${pattern}', )true`), '$1false');
+
+        expect(
+          mutated,
+          `${file}: ${name} should have a fullPage true call to mutate`,
+        ).not.toBe(source);
+        expect(hubFullPageProblems(mutated), `${file}: ${name}`).toContainEqual(
+          expect.stringContaining(name),
+        );
+      }
+    },
+  );
 });
 
 describe('captureScreenshot evidence logging', () => {
