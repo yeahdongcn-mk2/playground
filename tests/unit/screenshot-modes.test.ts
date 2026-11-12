@@ -777,6 +777,37 @@ describe('WebKit screenshot static guards', () => {
   });
 });
 
+describe('generic hub screenshot full-page guard (Issue #161)', () => {
+  const HUB_FULL_PAGE = ['after-hub-desktop.png', 'after-hub-mobile.png'] as const;
+  const VIEWPORT_SHOTS = [
+    'after-blank-desktop.png',
+    'after-blank-mobile.png',
+    'after-blank-webkit.png',
+    'after-hub-webkit.png',
+  ] as const;
+
+  const source = readFileSync(GENERIC_SCRIPT, 'utf8');
+
+  /** The options object passed to one `captureScreenshot` call. */
+  function captureOptions(name: string): string {
+    return blockBody(source, `captureScreenshot(page, '${name}'`);
+  }
+
+  it('pins fullPage: true for the Chromium hub and keeps the other captures at the viewport', () => {
+    // The hub is taller than the 1440x1000 / 390x844 viewports, so dropping
+    // fullPage silently regresses the committed full-page evidence.
+    for (const name of HUB_FULL_PAGE) {
+      expect(captureOptions(name), name).toMatch(/\bfullPage:\s*true\b/);
+    }
+
+    // Blank scenes and the WebKit hub are viewport captures; `fullPage` may be
+    // omitted (the runtime default is false) but must never turn true.
+    for (const name of VIEWPORT_SHOTS) {
+      expect(captureOptions(name), name).not.toMatch(/\bfullPage:\s*true\b/);
+    }
+  });
+});
+
 describe('captureScreenshot evidence logging', () => {
   it('logs the engine, viewport and theme passed for every image a fake page writes', async () => {
     const writes: Array<{ path: string; fullPage?: boolean }> = [];

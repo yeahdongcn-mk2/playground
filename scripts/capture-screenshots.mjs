@@ -75,6 +75,7 @@ async function captureDesktop(browser) {
   await page.waitForTimeout(400);
   await captureScreenshot(page, 'after-hub-desktop.png', {
     engine: ENGINE,
+    fullPage: true,
     animations: 'allow',
   });
 
@@ -115,6 +116,7 @@ async function captureMobile(browser) {
   await page.waitForTimeout(400);
   await captureScreenshot(page, 'after-hub-mobile.png', {
     engine: ENGINE,
+    fullPage: true,
     animations: 'allow',
   });
 
