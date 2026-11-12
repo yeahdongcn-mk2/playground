@@ -10,8 +10,8 @@
  * GitHub's ubuntu runners intermittently fail inside
  * `npx playwright install --with-deps ...` while apt resolves or fetches from
  * the Ubuntu mirrors. Before this wrapper existed such an attempt could spend
- * the whole 20-minute job timeout without installing a single browser. The
- * wrapper now:
+ * the whole job timeout (20 minutes in `ci.yml`, 30 in `flake-watch.yml`)
+ * without installing a single browser. The wrapper now:
  *
  * 1. runs the install at most MAX_ATTEMPTS times,
  * 2. gives every attempt its own per-attempt timeout,
