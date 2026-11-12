@@ -42,8 +42,15 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          # This job installs only WebKit. Giving it ci.yml's exact key would
+          # let a flake-watch run be the first to save a WebKit-only entry
+          # under that shared key; caches are immutable, so ci.yml would then
+          # keep restoring it and re-download Chromium for that lockfile hash.
+          # A distinct write key avoids that while the second restore key still
+          # reuses ci.yml's full Chromium + WebKit cache.
+          key: playwright-webkit-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
           restore-keys: |
+            playwright-webkit-${{ runner.os }}-
             playwright-${{ runner.os }}-
 
       - name: Install Playwright WebKit

@@ -9,6 +9,7 @@ import { DEFAULT_E2E_REPORT_PATH } from '../../scripts/lib/e2e-flakes.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const WORKFLOW_PATH = join(ROOT, '.github', 'workflows', 'flake-watch.yml');
+const CI_WORKFLOW_PATH = join(ROOT, '.github', 'workflows', 'ci.yml');
 const WORKFLOW_SOURCE = readFileSync(WORKFLOW_PATH, 'utf8');
 const SUMMARY_SCRIPT = join(ROOT, 'scripts', 'flake-watch-summary.mjs');
 const REPEAT_COUNT = 5;
@@ -139,15 +140,31 @@ describe('flake-watch workflow', () => {
     expect(installIndex).toBeLessThan(stepIndex((step) => (step.run ?? '').trim() === 'npm run build'));
   });
 
-  it('caches Playwright browsers under ~/.cache/ms-playwright with the CI key convention', () => {
+  it('caches WebKit under a distinct key but still restores the shared CI cache', () => {
     const cache = requireStep(isPlaywrightCache, 'a Playwright browser cache step');
     expect(cache.uses).toBe('actions/cache@v4');
     expect(cache.with?.path).toBe(PLAYWRIGHT_CACHE_PATH);
     expect(cache.with?.key).toBe(
-      "playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}",
+      "playwright-webkit-${{ runner.os }}-${{ hashFiles('package-lock.json') }}",
     );
-    expect(cache.with?.['restore-keys']).toContain('playwright-${{ runner.os }}-');
+    const restoreKeys = String(cache.with?.['restore-keys'] ?? '');
+    // Own prefix first, then the prefix ci.yml writes its full cache under.
+    expect(restoreKeys).toContain('playwright-webkit-${{ runner.os }}-');
+    expect(restoreKeys).toContain('playwright-${{ runner.os }}-');
     expect(cache['continue-on-error']).toBeUndefined();
+
+    // This job installs only WebKit. Saving that under ci.yml's exact key
+    // would make the immutable cache permanently miss Chromium, so the two
+    // write keys must differ while the shared prefix stays restorable.
+    const ciWorkflow = parse(readFileSync(CI_WORKFLOW_PATH, 'utf8')) as Workflow;
+    const ciCache = (ciWorkflow.jobs?.verify?.steps ?? []).find(
+      (step) =>
+        (step.uses ?? '').startsWith('actions/cache@') &&
+        (step.with?.path ?? '') === PLAYWRIGHT_CACHE_PATH,
+    );
+    expect(ciCache, 'ci.yml should still cache Playwright browsers').toBeDefined();
+    expect(cache.with?.key).not.toBe(ciCache?.with?.key);
+    expect(String(ciCache?.with?.key ?? '')).toContain('playwright-${{ runner.os }}-');
 
     const cacheIndex = stepIndex(isPlaywrightCache);
     const installIndex = stepIndex(isPlaywrightInstall);
@@ -182,6 +199,9 @@ describe('flake-watch workflow', () => {
     for (const token of TEST_COMMAND_TOKENS) {
       expect(check.run, `the check command should contain "${token}"`).toContain(token);
     }
+    // A plain substring would also accept --repeat-each=50 or 500, which could
+    // outgrow the 30-minute job while this test still passed.
+    expect(check.run).toMatch(/--repeat-each=5(?:\s|$)/);
 
     // A retry can no longer turn a cold-start failure into a pass, and a trace
     // must still be retained when the single attempt fails.
