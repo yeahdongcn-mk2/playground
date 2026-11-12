@@ -29,8 +29,29 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Configure apt Acquire retries and timeouts
+        run: |
+          set -euo pipefail
+          sudo tee /etc/apt/apt.conf.d/99-ci-acquire >/dev/null <<'EOF'
+          Acquire::Retries "1";
+          Acquire::http::Timeout "15";
+          Acquire::https::Timeout "15";
+          EOF
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
       - name: Install Playwright WebKit
-        run: npx playwright install --with-deps webkit
+        # The bounded wrapper retries transient apt/DNS failures, kills a hung
+        # install and exits non-zero within this step timeout, so the 30-minute
+        # job keeps enough time for the five repeats.
+        run: node scripts/install-playwright-ci.mjs webkit
+        timeout-minutes: 8
 
       - name: Production build
         run: npm run build

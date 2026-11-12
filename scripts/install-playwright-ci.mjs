@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 /**
- * Install Chromium and WebKit for CI with bounded retries and diagnostics.
+ * Install Playwright browsers for CI with bounded retries and diagnostics.
+ *
+ * The browsers to install are the CLI arguments (for example `webkit`), so a
+ * job that only needs one engine can reuse the same bounded install. With no
+ * arguments it installs Chromium and WebKit, which is what the `verify` job
+ * needs.
  *
  * GitHub's ubuntu runners intermittently fail inside
  * `npx playwright install --with-deps ...` while apt resolves or fetches from
@@ -15,9 +20,10 @@
  * 5. prints node/npm/Playwright versions, the ~/.cache/ms-playwright
  *    contents and apt DNS/404 hints when an attempt fails.
  *
- * `.github/workflows/ci.yml` adds `timeout-minutes: 8` to the install step, so
- * the worst case here (2 * 180s + backoff + kill grace) still exits before the
- * step timeout and long before the 20-minute job timeout.
+ * `.github/workflows/ci.yml` and `.github/workflows/flake-watch.yml` add
+ * `timeout-minutes: 8` to the install step, so the worst case here
+ * (2 * 180s + backoff + kill grace) still exits before the step timeout and
+ * long before the job timeout.
  *
  * The timeout, retry delay, SIGTERM grace, post-SIGKILL group-settle wait and
  * root-kill escalation can be tuned through PLAYWRIGHT_INSTALL_TIMEOUT_MS,
@@ -35,7 +41,12 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 const INSTALL_COMMAND = 'npx';
-const INSTALL_ARGS = ['playwright', 'install', '--with-deps', 'chromium', 'webkit'];
+const DEFAULT_BROWSERS = ['chromium', 'webkit'];
+/** Browsers named on the command line, or both engines when none are named. */
+const BROWSERS = process.argv.slice(2).filter((arg) => arg.trim() !== '');
+const INSTALL_BROWSERS = BROWSERS.length > 0 ? BROWSERS : DEFAULT_BROWSERS;
+const INSTALL_ARGS = ['playwright', 'install', '--with-deps', ...INSTALL_BROWSERS];
+const BROWSER_LABEL = INSTALL_BROWSERS.join(' + ');
 const MAX_ATTEMPTS = 2;
 const DEFAULT_TIMEOUT_MS = 180_000;
 const DEFAULT_RETRY_DELAY_MS = 10_000;
@@ -375,7 +386,7 @@ async function main() {
   const programStartedAt = Date.now();
 
   console.log(
-    `[install-playwright-ci] installing Chromium and WebKit with ` +
+    `[install-playwright-ci] installing ${BROWSER_LABEL} with ` +
       `"${INSTALL_COMMAND} ${INSTALL_ARGS.join(' ')}" ` +
       `(attempts: ${attempts}, per-attempt timeout: ${formatDuration(timeoutMs)})`,
   );
@@ -391,7 +402,7 @@ async function main() {
 
     if (result.status === 0 && !result.timedOut && result.error === undefined) {
       console.log(
-        `[install-playwright-ci] Chromium and WebKit installed successfully in ` +
+        `[install-playwright-ci] ${BROWSER_LABEL} installed successfully in ` +
           `${formatDuration(result.elapsedMs)}`,
       );
       return 0;

@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const WRAPPER = join(ROOT, 'scripts', 'install-playwright-ci.mjs');
 const INSTALL_ARGS = 'playwright install --with-deps chromium webkit';
+const WEBKIT_ONLY_ARGS = 'playwright install --with-deps webkit';
 
 const tempDirs: string[] = [];
 
@@ -99,10 +100,14 @@ function wrapperEnv(fake: FakeNpx, extra: NodeJS.ProcessEnv = {}): NodeJS.Proces
   };
 }
 
-function runWrapper(env: NodeJS.ProcessEnv, timeoutMs = 15_000): Promise<WrapperResult> {
+function runWrapper(
+  env: NodeJS.ProcessEnv,
+  timeoutMs = 15_000,
+  args: string[] = [],
+): Promise<WrapperResult> {
   return new Promise((resolveRun, rejectRun) => {
     const startedAt = Date.now();
-    const child = spawn(process.execPath, [WRAPPER], {
+    const child = spawn(process.execPath, [WRAPPER, ...args], {
       cwd: ROOT,
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -169,6 +174,19 @@ async function waitForExit(pids: number[], timeoutMs = 5_000): Promise<void> {
 }
 
 describe.skipIf(process.platform === 'win32')('install-playwright-ci wrapper', () => {
+  it('installs only the browsers named as command-line arguments', async () => {
+    const fake = createFakeNpx('echo "browser installed"');
+
+    const result = await runWrapper(wrapperEnv(fake), 15_000, ['webkit']);
+
+    expect(result.status).toBe(0);
+    // flake-watch only needs WebKit; forwarding the argument avoids the
+    // Chromium download and its extra apt work.
+    expect(readLines(fake.argsPath)).toEqual([WEBKIT_ONLY_ARGS]);
+    expect(result.output).toContain('installing webkit with');
+    expect(result.output).toContain('webkit installed successfully');
+  });
+
   it('retries once after a transient apt failure and then succeeds', async () => {
     const fake = createFakeNpx(
       [
