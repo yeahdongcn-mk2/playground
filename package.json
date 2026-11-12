@@ -50,7 +50,7 @@
     "screenshots:minesweeper:scores-clear": "npm run build && node scripts/capture-minesweeper-scores-screenshots.mjs --clear",
     "screenshots:minesweeper:scores-clear-before": "node scripts/capture-minesweeper-scores-screenshots.mjs --before --clear",
     "screenshots:baseline": "node scripts/capture-baseline.mjs",
-    "lint": "oxlint src tests scripts && node scripts/check-boundaries.mjs",
+    "lint": "oxlint --deny-warnings src tests scripts && node scripts/check-boundaries.mjs",
     "check:budget": "node scripts/check-budget.mjs",
     "verify:screenshots:webkit": "node scripts/verify-screenshot-artifacts.mjs",
     "verify:screenshots:doc-dims": "node scripts/check-screenshot-doc-dims.mjs",
