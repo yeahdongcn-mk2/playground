@@ -136,6 +136,19 @@ function documentedLintGateLines(): Array<{ document: string; line: string }> {
 }
 
 /**
+ * The clause that follows "error 与 warning", ending at the next clause
+ * separator. Failure wording may only come from here: the same line usually
+ * also says the boundary check returns non-zero, and that wording must not
+ * make a "warnings are let through" sentence pass.
+ */
+const WARNING_CLAUSE = /error\s*与\s*warning([^，。；]*)/;
+
+/** The error/warning clause of a lint description, or an empty string. */
+function warningClause(line: string): string {
+  return line.match(WARNING_CLAUSE)?.[1] ?? '';
+}
+
+/**
  * Issue #223: oxlint used to exit 0 for warnings, so the old wording only
  * mentioned errors. Each description must now say that errors and warnings
  * both fail, using the same flag as the package.json lint command.
@@ -144,7 +157,10 @@ function expectWarningGate(document: string, line: string): void {
   const label = `${document}: ${line}`;
   expect(line, label).toContain('error');
   expect(line, label).toContain('warning');
-  expect(line, label).toMatch(/失败|非 0|阻断/);
+  const clause = warningClause(line);
+  expect(clause, label).not.toBe('');
+  expect(clause, label).toMatch(/失败|非 0|阻断/);
+  expect(clause, label).not.toMatch(/放行/);
   for (const flag of WARNING_FLAGS) {
     expect(line, label).toContain(flag);
   }
@@ -247,5 +263,11 @@ describe('lint coverage guard', () => {
     const current =
       'oxlint（覆盖 `src`、`tests` 与 `scripts`）+ `scripts/check-boundaries.mjs` 模块边界检查';
     expect(() => expectLintCoverage(current)).not.toThrow();
+  });
+
+  it('rejects a line whose only failure wording belongs to the boundary clause', () => {
+    const regression =
+      'oxlint（覆盖 `src`、`tests` 与 `scripts`；error 与 warning 都会被放行，warning 经 `--deny-warnings` 升级）+ `scripts/check-boundaries.mjs` 模块边界检查（失败同样返回非 0）';
+    expect(() => expectWarningGate('README.md', regression)).toThrow();
   });
 });
