@@ -29,7 +29,9 @@ function oxlintTargets(command: string): string[] {
 /**
  * The oxlint targets are read from package.json instead of hard-coded here, so
  * the docs have to follow the real command when a directory joins or leaves
- * the lint gate.
+ * the lint gate. `scripts` is the deliberate exception: Issue #192 requires it
+ * to stay in the gate, so removing it means changing package.json, the docs and
+ * the dedicated guard below together, not only package.json.
  */
 const TARGETS = oxlintTargets(lintCommand);
 
@@ -54,13 +56,19 @@ function section(text: string, heading: string): string {
   return text.slice(start, end === -1 ? undefined : end);
 }
 
-/** A lint description is complete only when it lists every target and the boundary script. */
+/**
+ * A lint description is complete only when it lists every target and the
+ * boundary script. The boundary script path itself contains the `scripts`
+ * target name, so drop it before checking the targets; otherwise a line that
+ * no longer claims `scripts` coverage still passes via the path.
+ */
 function expectLintCoverage(line: string): void {
   expect(line).toContain('oxlint');
-  for (const target of TARGETS) {
-    expect(line).toContain(target);
-  }
   expect(line).toContain(BOUNDARY_CHECK);
+  const coverage = line.split(BOUNDARY_CHECK).join('');
+  for (const target of TARGETS) {
+    expect(coverage).toContain(target);
+  }
 }
 
 /** Lines that describe the lint gate in a document. */
@@ -76,13 +84,22 @@ function lintDescriptionLines(text: string): string[] {
  * counts as stale when it claims a limitation and never names scripts.
  */
 function limitsLintToSrcAndTests(line: string): boolean {
-  return /(?:仅|只)/.test(line) && /(?:src|tests)/.test(line) && !line.includes('scripts');
+  const coverage = line.split(BOUNDARY_CHECK).join('');
+  return (
+    /(?:仅|只)/.test(coverage) &&
+    /(?:src|tests)/.test(coverage) &&
+    !coverage.includes('scripts')
+  );
 }
 
 describe('lint coverage docs', () => {
   it('derives the oxlint targets from package.json so the docs follow the real command', () => {
-    expect(TARGETS).toEqual(expect.arrayContaining(['src', 'tests', 'scripts']));
+    expect(TARGETS.length).toBeGreaterThan(0);
     expect(lintCommand).toContain(`node ${BOUNDARY_CHECK}`);
+  });
+
+  it('keeps scripts inside the lint gate as Issue #192 requires', () => {
+    expect(TARGETS).toContain('scripts');
   });
 
   it('README engineering overview lists every lint target and the boundary check', () => {
@@ -115,5 +132,19 @@ describe('lint coverage docs', () => {
         expect(limitsLintToSrcAndTests(line), line).toBe(false);
       }
     }
+  });
+});
+
+describe('lint coverage guard', () => {
+  it('rejects a line that only names scripts through the boundary script path', () => {
+    const regression =
+      'oxlint（覆盖 `src`、`tests`）+ `scripts/check-boundaries.mjs` 模块边界检查';
+    expect(() => expectLintCoverage(regression)).toThrow();
+  });
+
+  it('accepts the current wording that lists scripts as an oxlint target', () => {
+    const current =
+      'oxlint（覆盖 `src`、`tests` 与 `scripts`）+ `scripts/check-boundaries.mjs` 模块边界检查';
+    expect(() => expectLintCoverage(current)).not.toThrow();
   });
 });
