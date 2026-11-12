@@ -9,10 +9,15 @@ import { DEFAULT_E2E_REPORT_PATH } from '../../scripts/lib/e2e-flakes.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const WORKFLOW_PATH = join(ROOT, '.github', 'workflows', 'flake-watch.yml');
+const CI_WORKFLOW_PATH = join(ROOT, '.github', 'workflows', 'ci.yml');
 const WORKFLOW_SOURCE = readFileSync(WORKFLOW_PATH, 'utf8');
 const SUMMARY_SCRIPT = join(ROOT, 'scripts', 'flake-watch-summary.mjs');
 const REPEAT_COUNT = 5;
 const TEST_STEP_ID = 'flake-watch';
+const PLAYWRIGHT_INSTALL_COMMAND = 'node scripts/install-playwright-ci.mjs webkit';
+const PLAYWRIGHT_INSTALL_TIMEOUT_MINUTES = 8;
+const PLAYWRIGHT_CACHE_PATH = '~/.cache/ms-playwright';
+const APT_ACQUIRE_CONFIG_PATH = '/etc/apt/apt.conf.d/99-ci-acquire';
 const TEST_COMMAND_TOKENS = [
   'npx playwright test',
   '--project=mobile-webkit',
@@ -30,6 +35,7 @@ interface WorkflowStep {
   with?: Record<string, unknown>;
   env?: Record<string, string>;
   'continue-on-error'?: boolean;
+  'timeout-minutes'?: number;
 }
 
 interface WorkflowJob {
@@ -50,6 +56,12 @@ const steps = job?.steps ?? [];
 
 const isFlakeCheck = (step: WorkflowStep): boolean =>
   (step.run ?? '').includes('npx playwright test');
+const isPlaywrightInstall = (step: WorkflowStep): boolean =>
+  (step.run ?? '').trim() === PLAYWRIGHT_INSTALL_COMMAND;
+const isPlaywrightCache = (step: WorkflowStep): boolean =>
+  (step.with?.path ?? '') === PLAYWRIGHT_CACHE_PATH;
+const isAptAcquireConfig = (step: WorkflowStep): boolean =>
+  (step.run ?? '').includes(APT_ACQUIRE_CONFIG_PATH);
 
 function stepIndex(predicate: (step: WorkflowStep) => boolean): number {
   return steps.findIndex(predicate);
@@ -96,7 +108,7 @@ describe('flake-watch workflow', () => {
 
     const commands = steps.map((step) => (step.run ?? '').trim());
     const installIndex = commands.indexOf('npm ci');
-    const playwrightIndex = commands.indexOf('npx playwright install --with-deps webkit');
+    const playwrightIndex = commands.indexOf(PLAYWRIGHT_INSTALL_COMMAND);
     const buildIndex = commands.indexOf('npm run build');
     const checkIndex = stepIndex(isFlakeCheck);
 
@@ -104,6 +116,80 @@ describe('flake-watch workflow', () => {
     expect(playwrightIndex).toBeGreaterThan(installIndex);
     expect(buildIndex).toBeGreaterThan(playwrightIndex);
     expect(checkIndex).toBeGreaterThan(buildIndex);
+
+    // The raw install command must not come back: it has no retries, no
+    // step-level timeout and no diagnostic output for apt/DNS failures.
+    expect(WORKFLOW_SOURCE).not.toContain('npx playwright install');
+  });
+
+  it('installs WebKit through the bounded wrapper with an explicit step timeout', () => {
+    const install = requireStep(isPlaywrightInstall, 'a Playwright install step');
+    expect(install.name).toBe('Install Playwright WebKit');
+    expect((install.run ?? '').trim()).toBe(PLAYWRIGHT_INSTALL_COMMAND);
+    expect(install['timeout-minutes']).toBe(PLAYWRIGHT_INSTALL_TIMEOUT_MINUTES);
+    expect(install['continue-on-error']).toBeUndefined();
+
+    // The step timeout must leave the five repeats room inside the 30-minute
+    // job timeout and must still be shorter than the job itself.
+    const jobTimeout = job?.['timeout-minutes'];
+    expect(jobTimeout).toBe(30);
+    expect(install['timeout-minutes']).toBeLessThan(jobTimeout ?? 0);
+
+    const installIndex = stepIndex(isPlaywrightInstall);
+    expect(stepIndex((step) => (step.run ?? '').trim() === 'npm ci')).toBeLessThan(installIndex);
+    expect(installIndex).toBeLessThan(stepIndex((step) => (step.run ?? '').trim() === 'npm run build'));
+  });
+
+  it('caches WebKit under a distinct key but still restores the shared CI cache', () => {
+    const cache = requireStep(isPlaywrightCache, 'a Playwright browser cache step');
+    expect(cache.uses).toBe('actions/cache@v4');
+    expect(cache.with?.path).toBe(PLAYWRIGHT_CACHE_PATH);
+    expect(cache.with?.key).toBe(
+      "playwright-webkit-${{ runner.os }}-${{ hashFiles('package-lock.json') }}",
+    );
+    const restoreKeys = String(cache.with?.['restore-keys'] ?? '');
+    // Own prefix first, then the prefix ci.yml writes its full cache under.
+    expect(restoreKeys).toContain('playwright-webkit-${{ runner.os }}-');
+    expect(restoreKeys).toContain('playwright-${{ runner.os }}-');
+    expect(cache['continue-on-error']).toBeUndefined();
+
+    // This job installs only WebKit. Saving that under ci.yml's exact key
+    // would make the immutable cache permanently miss Chromium, so the two
+    // write keys must differ while the shared prefix stays restorable.
+    const ciWorkflow = parse(readFileSync(CI_WORKFLOW_PATH, 'utf8')) as Workflow;
+    const ciCache = (ciWorkflow.jobs?.verify?.steps ?? []).find(
+      (step) =>
+        (step.uses ?? '').startsWith('actions/cache@') &&
+        (step.with?.path ?? '') === PLAYWRIGHT_CACHE_PATH,
+    );
+    expect(ciCache, 'ci.yml should still cache Playwright browsers').toBeDefined();
+    expect(cache.with?.key).not.toBe(ciCache?.with?.key);
+    expect(String(ciCache?.with?.key ?? '')).toContain('playwright-${{ runner.os }}-');
+
+    const cacheIndex = stepIndex(isPlaywrightCache);
+    const installIndex = stepIndex(isPlaywrightInstall);
+    expect(installIndex).toBeGreaterThanOrEqual(0);
+    expect(cacheIndex).toBeLessThan(installIndex);
+    expect(stepIndex((step) => (step.run ?? '').trim() === 'npm ci')).toBeLessThan(cacheIndex);
+  });
+
+  it('configures apt Acquire retries and timeouts before installing WebKit', () => {
+    const apt = requireStep(isAptAcquireConfig, 'an apt Acquire config step');
+    expect(apt.name).toBe('Configure apt Acquire retries and timeouts');
+    expect(apt['continue-on-error']).toBeUndefined();
+
+    const run = apt.run ?? '';
+    expect(run).toContain('sudo');
+    expect(run).toContain(APT_ACQUIRE_CONFIG_PATH);
+    expect(run).toMatch(/Acquire::Retries\s+"1";/);
+    expect(run).toMatch(/Acquire::http::Timeout\s+"15";/);
+    expect(run).toMatch(/Acquire::https::Timeout\s+"15";/);
+
+    const aptIndex = stepIndex(isAptAcquireConfig);
+    const installIndex = stepIndex(isPlaywrightInstall);
+    expect(installIndex).toBeGreaterThanOrEqual(0);
+    expect(aptIndex).toBeLessThan(installIndex);
+    expect(stepIndex((step) => (step.run ?? '').trim() === 'npm ci')).toBeLessThan(aptIndex);
   });
 
   it('repeats the mobile-webkit hub case five times without retries', () => {
@@ -113,6 +199,9 @@ describe('flake-watch workflow', () => {
     for (const token of TEST_COMMAND_TOKENS) {
       expect(check.run, `the check command should contain "${token}"`).toContain(token);
     }
+    // A plain substring would also accept --repeat-each=50 or 500, which could
+    // outgrow the 30-minute job while this test still passed.
+    expect(check.run).toMatch(/--repeat-each=5(?:\s|$)/);
 
     // A retry can no longer turn a cold-start failure into a pass, and a trace
     // must still be retained when the single attempt fails.
