@@ -27,6 +27,25 @@ function oxlintTargets(command: string): string[] {
     .filter((argument) => !argument.startsWith('-'));
 }
 
+/** Flags that make oxlint warnings fail the `npm run lint` command. */
+function warningFlags(command: string): string[] {
+  const oxlintStep = command.split(/\s*&&\s*/).find((step) => step.startsWith('oxlint '));
+  if (oxlintStep === undefined) return [];
+  return oxlintStep
+    .split(/\s+/)
+    .slice(1)
+    .filter(
+      (argument) => argument === '--deny-warnings' || argument.startsWith('--max-warnings='),
+    );
+}
+
+/**
+ * The docs are checked against the real command instead of a hard-coded flag,
+ * so switching package.json to `--max-warnings=0` (or dropping the flag while
+ * keeping another equivalent one) forces the documents to follow.
+ */
+const WARNING_FLAGS = warningFlags(lintCommand);
+
 /**
  * The oxlint targets are read from package.json instead of hard-coded here, so
  * the docs have to follow the real command when a directory joins or leaves
@@ -93,6 +112,68 @@ function limitsLintToSrcAndTests(line: string): boolean {
   );
 }
 
+/**
+ * Every line that documents the lint gate. These are exactly the places the
+ * docs use to explain what `npm run lint` rejects, so each one has to describe
+ * the whole gate rather than only the oxlint target list.
+ */
+function documentedLintGateLines(): Array<{ document: string; line: string }> {
+  return [
+    { document: 'README.md', line: lineWith(README, '**工程化**') },
+    { document: 'README.md', line: lineWith(README, '| `npm run lint` |') },
+    { document: 'README.md', line: lineWith(section(README, '## 验证'), 'npm run lint') },
+    { document: 'docs/framework.md', line: lineWith(FRAMEWORK, '| Lint |') },
+    {
+      document: 'docs/framework.md',
+      line: lineWith(FRAMEWORK, '`npm run lint`', '`scripts/check-boundaries.mjs`'),
+    },
+    {
+      document: 'docs/framework.md',
+      line: lineWith(section(FRAMEWORK, '## 12. 测试'), 'npm run lint'),
+    },
+    { document: 'docs/framework.md', line: lineWith(FRAMEWORK, 'Lint 使用 oxlint') },
+  ];
+}
+
+/**
+ * The clause that follows "error 与 warning", ending at the next clause
+ * separator. Failure wording may only come from here: the same line usually
+ * also says the boundary check returns non-zero, and that wording must not
+ * make a "warnings are let through" sentence pass.
+ */
+const WARNING_CLAUSE = /error\s*与\s*warning([^，。；]*)/;
+
+/** The error/warning clause of a lint description, or an empty string. */
+function warningClause(line: string): string {
+  return line.match(WARNING_CLAUSE)?.[1] ?? '';
+}
+
+/**
+ * Issue #223: oxlint used to exit 0 for warnings, so the old wording only
+ * mentioned errors. Each description must now say that errors and warnings
+ * both fail, using the same flag as the package.json lint command.
+ */
+function expectWarningGate(document: string, line: string): void {
+  const label = `${document}: ${line}`;
+  expect(line, label).toContain('error');
+  expect(line, label).toContain('warning');
+  const clause = warningClause(line);
+  expect(clause, label).not.toBe('');
+  expect(clause, label).toMatch(/失败|非 0|阻断/);
+  expect(clause, label).not.toMatch(/放行/);
+  for (const flag of WARNING_FLAGS) {
+    expect(line, label).toContain(flag);
+  }
+}
+
+/** The boundary step is part of the gate, so its failure must be described as non-zero. */
+function expectBoundaryFailure(document: string, line: string): void {
+  const label = `${document}: ${line}`;
+  const index = line.indexOf(BOUNDARY_CHECK);
+  expect(index, label).toBeGreaterThanOrEqual(0);
+  expect(line.slice(index), label).toMatch(/失败|非 0|阻断/);
+}
+
 describe('lint coverage docs', () => {
   it('derives the oxlint targets from package.json so the docs follow the real command', () => {
     expect(TARGETS.length).toBeGreaterThan(0);
@@ -150,6 +231,25 @@ describe('lint coverage docs', () => {
       }
     }
   });
+
+  it('finds a warning-blocking flag in package.json for the docs to mirror', () => {
+    expect(WARNING_FLAGS.length, lintCommand).toBeGreaterThan(0);
+  });
+
+  it('says in every documented lint line that errors and warnings both fail', () => {
+    expect(WARNING_FLAGS.length, lintCommand).toBeGreaterThan(0);
+    for (const { document, line } of documentedLintGateLines()) {
+      expectWarningGate(document, line);
+      expectLintCoverage(line);
+    }
+  });
+
+  it('says in every documented lint line that a failing boundary check returns non-zero', () => {
+    for (const { document, line } of documentedLintGateLines()) {
+      expectBoundaryFailure(document, line);
+      expect(line, `${document}: ${line}`).toContain('oxlint');
+    }
+  });
 });
 
 describe('lint coverage guard', () => {
@@ -163,5 +263,11 @@ describe('lint coverage guard', () => {
     const current =
       'oxlint（覆盖 `src`、`tests` 与 `scripts`）+ `scripts/check-boundaries.mjs` 模块边界检查';
     expect(() => expectLintCoverage(current)).not.toThrow();
+  });
+
+  it('rejects a line whose only failure wording belongs to the boundary clause', () => {
+    const regression =
+      'oxlint（覆盖 `src`、`tests` 与 `scripts`；error 与 warning 都会被放行，warning 经 `--deny-warnings` 升级）+ `scripts/check-boundaries.mjs` 模块边界检查（失败同样返回非 0）';
+    expect(() => expectWarningGate('README.md', regression)).toThrow();
   });
 });
