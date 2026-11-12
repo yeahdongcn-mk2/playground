@@ -54,7 +54,7 @@
 
 ```text
 FAIL: 发现 1 处整页尺寸问题（检查了 14 个文件 / 14 行 README）：
-  README 193: after-minesweeper-scores-desktop.png: 整页 1440×1607 != PNG 1440×1606（尺寸不一致）
+  README 217: after-minesweeper-scores-desktop.png: 整页 1440×1607 != PNG 1440×1606（尺寸不一致）
 ```
 
   命令以 1 退出；恢复文档后重新通过。PNG 缺失、PNG 签名错误或 IHDR 截断时同样逐条给出 README 行号、文件名、文档值与实际 PNG 状态。
