@@ -88,7 +88,10 @@ export function readE2eReport(filePath) {
 
 function normalizeErrorMessage(value) {
   const text = String(value)
-    // Playwright error strings can carry ANSI colour codes.
+    // Playwright error strings can carry ANSI colour codes. The control
+    // character is intentional here (it is the start of an SGR escape), so
+    // silence only this expression instead of changing the regex.
+    // eslint-disable-next-line no-control-regex
     .replace(/\u001b\[[0-9;]*m/g, '')
     .split(/\r?\n/)
     .map((line) => line.trim())
