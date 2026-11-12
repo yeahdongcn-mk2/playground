@@ -25,7 +25,7 @@
 - **完整可玩打砖块**：480×720 逻辑球场，10 列砖块按 4 档配色，移动挡板接球、击碎砖块计分；漏球扣命，三条命用完结束；每过一关砖块更多、球速更快；键盘、鼠标与触屏都能玩。
 - **完整可玩扫雷**：初级 / 中级 / 高级三档预设，也可自定义行、列与雷数；左键翻开、右键插旗，触屏轻点翻开、长按插旗；第一次翻开总是安全的，踩雷结束，翻开全部安全格获胜；剩余雷数与用时实时显示；获胜后记录本机最高用时并按难度分桶展示（不跨设备），支持一键清空本机记录、重开与返回大厅。
 - **可交互空白游戏**：方向键 / WASD、鼠标点击拖动、触屏点击拖动都能移动光标；重置位置、返回大厅、页面隐藏自动休眠。
-- **工程化**：TypeScript strict、oxlint（覆盖 `src`、`tests` 与 `scripts`）+ `scripts/check-boundaries.mjs` 模块边界检查、Vitest 单元测试、Playwright 桌面与手机端端到端测试，以及按同样顺序执行检查的 GitHub Actions CI。
+- **工程化**：TypeScript strict、oxlint（覆盖 `src`、`tests` 与 `scripts`；error 与 warning 都会失败，warning 经 `--deny-warnings` 升级）+ `scripts/check-boundaries.mjs` 模块边界检查（失败同样返回非 0）、Vitest 单元测试、Playwright 桌面与手机端端到端测试，以及按同样顺序执行检查的 GitHub Actions CI。
 
 框架的契约、生命周期、输入 / 资源 / 渲染约定与 2D/3D 扩展方式见 **[docs/framework.md](docs/framework.md)**。
 技术栈选型与候选对比见 **[docs/tech-stack-decision.md](docs/tech-stack-decision.md)**（t1 交付）。
@@ -231,7 +231,7 @@ pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和
 | `npm run verify:doc-counts` | 校验三份文档记录的单测计数与 Vitest 实测 `numTotalTests` 一致 |
 | `npm run test:e2e` | 先构建，再用 `vite preview` 跑全部 Playwright 项目（Chromium 桌面 / Pixel 7 + `mobile-webkit`） |
 | `npm run test:e2e:webkit` | 先构建，再只跑 `mobile-webkit` 项目（iPhone SE (3rd gen)）：framework 手机端、扫雷 WebKit 冒烟、触屏手势 / 触屏难度表单、贪食蛇 / 俄罗斯方块 / 2048 / 打砖块的手机端用例，以及 320×640 / 360×640 / 375×667 / 412×839 窄屏契约 |
-| `npm run lint` | oxlint（覆盖 `src`、`tests` 与 `scripts`）+ `scripts/check-boundaries.mjs` 模块依赖方向检查 |
+| `npm run lint` | oxlint（覆盖 `src`、`tests` 与 `scripts`；error 与 warning 都会失败，warning 经 `--deny-warnings` 升级）+ `scripts/check-boundaries.mjs` 模块依赖方向检查（失败同样返回非 0） |
 | `npm run check:budget` | 检查入口无引擎、gzip 体积预算 |
 | `npm run screenshots` | 构建后生成 `docs/screenshots/` 中的界面截图 |
 | `npm run screenshots:webkit` | 构建后用 WebKit 生成大厅与空白画布的 375×667 手机截图 |
@@ -392,8 +392,8 @@ games/<game>/scene → 对应引擎（动态 import）
 
 ```bash
 npm run typecheck    # 通过
-npm run lint         # 通过（oxlint 覆盖 src、tests 与 scripts，另跑 scripts/check-boundaries.mjs）
-npm run test:unit    # 820 passed（含贪食蛇 27（引擎 23 + 调试 4）、俄罗斯方块 38、2048 41、打砖块 41、扫雷 150 个规则 / 难度 / 成绩 / 视图 / 调试用例，以及 2048 截图确定性 4 例、贪食蛇截图确定性 8 例、打砖块截图确定性 7 例、截图脚本端口 11 例、截图模式 81 例、截图历史证据文档契约 21 例（scores 10 + 2048 / 打砖块 / 贪食蛇 / 打砖块手机 / 扫雷 11）、WebKit 证据口径文档契约 9 例、截图历史证据保护契约 33 例、预览服务启动 7 例、framework 手机端 tap 诊断 10 例、framework 手机端停稳等待 3 例、e2e flaky 门禁 26 例、ci-workflow 3 例断言（含计数检查）、flake-watch workflow 12 例、flaky 口径文档 10 例、新增触摸注入单一来源与 release click 6 例、文档计数真值校验 22 例、固定捕获环境契约 21 例、容器捕获入口 23 例、捕获环境指纹 5 例、Playwright 安装包装脚本 6 例、CI 安装缓存 / apt / 超时断言 3 例、lint 覆盖契约 5 例（含 warning 失败行为与 src / tests / scripts 零告警）、lint 文档契约 13 例）
+npm run lint         # 通过（oxlint 覆盖 src、tests 与 scripts；error 与 warning 都会失败，warning 经 --deny-warnings 升级；另跑 scripts/check-boundaries.mjs，失败返回非 0）
+npm run test:unit    # 823 passed（含贪食蛇 27（引擎 23 + 调试 4）、俄罗斯方块 38、2048 41、打砖块 41、扫雷 150 个规则 / 难度 / 成绩 / 视图 / 调试用例，以及 2048 截图确定性 4 例、贪食蛇截图确定性 8 例、打砖块截图确定性 7 例、截图脚本端口 11 例、截图模式 81 例、截图历史证据文档契约 21 例（scores 10 + 2048 / 打砖块 / 贪食蛇 / 打砖块手机 / 扫雷 11）、WebKit 证据口径文档契约 9 例、截图历史证据保护契约 33 例、预览服务启动 7 例、framework 手机端 tap 诊断 10 例、framework 手机端停稳等待 3 例、e2e flaky 门禁 26 例、ci-workflow 3 例断言（含计数检查）、flake-watch workflow 12 例、flaky 口径文档 10 例、新增触摸注入单一来源与 release click 6 例、文档计数真值校验 22 例、固定捕获环境契约 21 例、容器捕获入口 23 例、捕获环境指纹 5 例、Playwright 安装包装脚本 6 例、CI 安装缓存 / apt / 超时断言 3 例、lint 覆盖契约 5 例（含 warning 失败行为与 src / tests / scripts 零告警）、lint 文档契约 16 例）
 npm run build        # 通过
 npm run check:budget # 通过（入口 10.91 KB gzip，全部 JS 405.11 KB gzip）
 npm run test:e2e     # 153 passed（桌面 86 + 手机 36 + WebKit 31）
