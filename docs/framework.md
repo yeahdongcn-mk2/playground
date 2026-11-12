@@ -26,7 +26,7 @@
 | 3D 引擎 | Three.js（首个 3D 游戏接入） | 0.187.0 |
 | 单元测试 | Vitest | 5.1.0 |
 | 端到端测试 | Playwright（Chromium + WebKit） | 1.64.1 |
-| Lint | oxlint + 模块边界脚本 | 1.91.0 / 本地脚本 |
+| Lint | oxlint（`src` / `tests` / `scripts`）+ `scripts/check-boundaries.mjs` | 1.91.0 / 本地脚本 |
 
 Phaser 与 Three.js **只能**出现在某个游戏的懒加载 chunk 中。共享外壳和 `core/` 保持引擎无关；这样替换引擎或升级大版本时不会波及大厅。扫雷是纯 DOM 游戏（`engine: 'dom'`），视图直接操作 DOM，完全不加载 Phaser。
 
@@ -73,7 +73,7 @@ games/<game>/view → 对应引擎（在 mount 内动态 import）
 - `games/<game>/index.ts` 的静态部分只能导入类型和元数据；视图与引擎必须在 `mount()` 内部的 `await import()` 之后。
 - 每个游戏返回 `GameHandle`，`destroy()` 必须移除监听器、停止循环并释放引擎资源。
 - `view` 负责 DOM 外壳与引擎适配；`scene` 只负责引擎内的绘制和输入，不能反向依赖 `app/`。
-- `npm run lint` 同时运行 oxlint 与 `scripts/check-boundaries.mjs`，违反上述方向会直接失败。
+- `npm run lint` 用 oxlint 检查 `src`、`tests` 与 `scripts`，再运行 `scripts/check-boundaries.mjs` 检查模块依赖方向；违反上述方向会直接失败。
 
 ## 4. 游戏契约
 
@@ -280,7 +280,7 @@ const vector = directions.vector(); // 对角线已归一化
 
 ```bash
 npm run typecheck    # tsc --noEmit
-npm run lint         # oxlint + 模块边界检查
+npm run lint         # oxlint（src / tests / scripts）+ scripts/check-boundaries.mjs 模块边界检查
 npm run test:unit    # Vitest：storage / input / router / dom 与五个游戏的纯规则引擎
 npm run build        # 类型检查 + 生产构建
 npm run check:budget # 入口无引擎、体积预算
@@ -288,7 +288,7 @@ npm run test:e2e     # 先 build，再用 vite preview 跑 Chromium 桌面 / Pix
 npm run test:e2e:webkit # 先 build，只跑 mobile-webkit（iPhone SE (3rd gen)）
 ```
 
-当前提交本地通过：`typecheck`、`lint`、`build`、`check:budget` 通过；`npm run test:unit` 806 passed；`npm run test:e2e` 153 passed（桌面 86 + 手机 36 + WebKit 31）。
+当前提交本地通过：`typecheck`、`lint`、`build`、`check:budget` 通过；`npm run test:unit` 814 passed；`npm run test:e2e` 153 passed（桌面 86 + 手机 36 + WebKit 31）。
 
 - 单测只覆盖引擎无关逻辑；不要在 Node 里启动 Phaser。
 - 端到端使用 `data-testid`，覆盖进入 / 返回、最近游玩时间、键盘 / 鼠标 / 触屏、修饰键、重置、容器级缩放、未知路由、快速切换的晚到 mount、休眠时销毁和监听器清理；贪食蛇、俄罗斯方块、2048、打砖块与扫雷另有完整玩法用例（暂停 / 重开、计分 / 结束、窗口失焦暂停与恢复、手机端触屏按钮或拖动、像素绘制与监听器清理，扫雷另有左右键、固定雷盘、难度预设与自定义切换、非法自定义错误、格子可见文本、焦点迁移、畸形调试雷盘回退、胜利 / 踩雷与计时器 / 调试接缝清理）。
@@ -351,5 +351,5 @@ Node.js `^22.12.0 || ^24.0.0 || >=26.0.0`（Vite 8 的要求）。CI（`.github/
 - 空白示例只演示框架能力；`src/games/snake/`、`src/games/tetris/`、`src/games/2048/`、`src/games/breakout/` 与 `src/games/minesweeper/` 是完整玩法参考（规则引擎、渲染器、响应式视图、测试）。扫雷是纯 DOM 参考，其余四款使用 Phaser 场景。
 - 打砖块固定 480×720 逻辑球场与 10 列砖块，没有道具、多球或在线排行榜；难度曲线由砖块行数与球速控制。
 - 扫雷提供初级 / 中级 / 高级三档预设与 5–30 行、5–30 列的自定义棋盘；没有撤销、问号标记、道具或在线排行榜。
-- Lint 使用 oxlint 而不是 ESLint：TypeScript 7 暂无 JS Compiler API，`typescript-eslint` 的 peer 范围也尚未覆盖 TS 7；oxlint 负责 TS 语法与常见规则，目录边界由本地脚本补足。
+- Lint 使用 oxlint 而不是 ESLint：TypeScript 7 暂无 JS Compiler API，`typescript-eslint` 的 peer 范围也尚未覆盖 TS 7；oxlint 负责 `src` / `tests` / `scripts` 的 TS 语法与常见规则，目录边界由本地脚本补足。
 - 手机端使用 Playwright 的 Chromium / WebKit 设备模拟：扫雷窄屏首屏契约已在 Chromium 8 视口与 WebKit 4 视口验证，framework 手机端、扫雷触屏手势 / 触屏难度表单以及贪食蛇、俄罗斯方块、2048 与打砖块的手机端 spec 也已在两引擎运行，四个 WebKit 视口都断言重开入口在首屏内，但 WebKit 不等于 iOS Safari（不模拟动态地址栏与安全区），真实触屏手感与 iOS 渲染仍需人工验收。2048 与 breakout 的手机端 spec 也已在两引擎运行。截图脚本的 WebKit 模式覆盖大厅、空白画布、扫雷（含窄屏矩阵与成绩榜）、贪食蛇、2048 与打砖块的稳定场景；俄罗斯方块只有 e2e 覆盖、没有截图脚本。扫雷窄屏契约的边界是最低支持视口 320×640（高度 <640 不保证）；宽度 ≥340px 且高度 ≥640px 时 81 格 ≥36×36px，320–339px 为几何降级区间（每格 ≥34×34px），因为 9×36px 加边框与 gap 无法放进 320px；矩阵外组合（例如 375×640、400×667）不承诺重开入口在首屏内，列数 >9 的大棋盘只按比例缩小并显示中文降级提示（#86）、不再保证 36px。
