@@ -196,6 +196,75 @@ function restoreProperty(
   }
 }
 
+interface ListenerRegistration {
+  readonly target: EventTarget;
+  readonly type: string;
+  readonly handler: EventListenerOrEventListenerObject | null;
+}
+
+interface ListenerLog {
+  readonly added: ListenerRegistration[];
+  readonly removed: ListenerRegistration[];
+}
+
+/**
+ * Record every add/removeEventListener call so cleanup can be checked against
+ * the exact handler reference the view registered, not just `any Function`.
+ * Must be installed before mountView().
+ */
+function recordListenerCalls(): ListenerLog {
+  const added: ListenerRegistration[] = [];
+  const removed: ListenerRegistration[] = [];
+  const add = EventTarget.prototype.addEventListener;
+  const remove = EventTarget.prototype.removeEventListener;
+
+  vi.spyOn(EventTarget.prototype, 'addEventListener').mockImplementation(function (
+    this: EventTarget,
+    type: string,
+    handler: EventListenerOrEventListenerObject | null,
+    options?: boolean | AddEventListenerOptions,
+  ): void {
+    added.push({ target: this, type, handler });
+    add.call(this, type, handler, options);
+  });
+  vi.spyOn(EventTarget.prototype, 'removeEventListener').mockImplementation(function (
+    this: EventTarget,
+    type: string,
+    handler: EventListenerOrEventListenerObject | null,
+    options?: boolean | EventListenerOptions,
+  ): void {
+    removed.push({ target: this, type, handler });
+    remove.call(this, type, handler, options);
+  });
+
+  return { added, removed };
+}
+
+function listenerRegistrations(
+  log: ListenerLog,
+  kind: keyof ListenerLog,
+  target: EventTarget,
+  type: string,
+): ListenerRegistration[] {
+  return log[kind].filter((entry) => entry.target === target && entry.type === type);
+}
+
+/** Assert every tracked listener is removed with the same function reference. */
+function expectTrackedListenersRemoved(
+  log: ListenerLog,
+  expected: readonly (readonly [EventTarget, string])[],
+): void {
+  for (const [target, type] of expected) {
+    const added = listenerRegistrations(log, 'added', target, type);
+    expect(added, `${type} listener should be registered once`).toHaveLength(1);
+    const removed = listenerRegistrations(log, 'removed', target, type);
+    expect(
+      removed.map((entry) => entry.handler),
+      `${type} listener should be removed by reference`,
+    ).toContain(added[0]?.handler);
+  }
+}
+
 interface MountedView {
   readonly root: HTMLElement;
   readonly stage: HTMLElement;
@@ -214,13 +283,13 @@ function required<T extends Element>(root: ParentNode, selector: string): T {
   return element;
 }
 
-function mountView(): MountedView {
+function mountView(signal: AbortSignal = new AbortController().signal): MountedView {
   if (!activeContext) {
     throw new Error('the canvas stub was not installed');
   }
   const root = document.createElement('div');
   document.body.append(root);
-  const handle = mountZhenSha(root, createServices(), new AbortController().signal);
+  const handle = mountZhenSha(root, createServices(), signal);
   const view: MountedView = {
     root,
     stage: required<HTMLElement>(root, '[data-testid="zhen-sha-stage"]'),
@@ -437,14 +506,85 @@ describe('zhen-sha view', () => {
     expect(required<HTMLElement>(mounted!.root, '[data-testid="overlay"]').hidden).toBe(true);
   });
 
-  it('cancels rAF and removes pointer / visibility listeners on destroy', () => {
+  it('loses after three unblocked strikes and restarts from the overlay', () => {
+    mountView();
+    primeLoop();
+
+    // First wind-up is 180 ticks, later ones 108 with a 72-tick recovery: the
+    // third unblocked impact lands well inside 600 ticks.
+    advanceTicks(600);
+
+    expect(text('status')).toBe('失败');
+    expect(text('hits')).toBe(`3 / ${MAX_HITS}`);
+    const overlay = required<HTMLElement>(mounted!.root, '[data-testid="overlay"]');
+    expect(overlay.hidden).toBe(false);
+    expect(text('overlay-kicker')).toBe('DEFEAT');
+    expect(text('overlay-title')).toBe('被黑煞击倒');
+
+    required<HTMLButtonElement>(mounted!.root, '[data-testid="overlay-restart"]').click();
+
+    expect(text('status')).toBe('进行中');
+    expect(text('hits')).toBe(`0 / ${MAX_HITS}`);
+    expect(text('perfects')).toBe('0');
+    expect(overlay.hidden).toBe(true);
+    expect(pendingFrames.size).toBe(1);
+  });
+
+  it('releases a held press when pointer capture is lost', () => {
     const view = mountView();
+    primeLoop();
+    advanceTicks(FIRST_TELEGRAPH_TICKS);
+    view.stage.dispatchEvent(pointerEvent('pointerdown'));
+    expect(view.stage.classList.contains('is-pressed')).toBe(true);
+
+    const drawCalls = view.context.calls.length;
+    view.stage.dispatchEvent(pointerEvent('lostpointercapture'));
+
+    expect(view.stage.classList.contains('is-pressed')).toBe(false);
+    expect(view.context.calls.length).toBeGreaterThan(drawCalls);
+
+    // Without the reset the stale pointerDown flag would swallow this press.
+    view.stage.dispatchEvent(pointerEvent('pointerdown'));
+    expect(view.stage.classList.contains('is-pressed')).toBe(true);
+    view.stage.dispatchEvent(pointerEvent('pointerup'));
+  });
+
+  it('removes the exact registered handlers and cancels rAF on destroy', () => {
+    const log = recordListenerCalls();
+    const controller = new AbortController();
+    const signalAdd = vi.spyOn(controller.signal, 'addEventListener');
+    const signalRemove = vi.spyOn(controller.signal, 'removeEventListener');
+    const view = mountView(controller.signal);
     primeLoop();
     advanceTicks(3);
 
+    const restartButton = required<HTMLButtonElement>(
+      view.root,
+      '[data-testid="restart-button"]',
+    );
+    const overlayRestart = required<HTMLButtonElement>(
+      view.root,
+      '[data-testid="overlay-restart"]',
+    );
+    const expected: readonly (readonly [EventTarget, string])[] = [
+      [view.stage, 'pointerdown'],
+      [view.stage, 'pointerup'],
+      [view.stage, 'pointercancel'],
+      [view.stage, 'lostpointercapture'],
+      [document, 'visibilitychange'],
+      [restartButton, 'click'],
+      [overlayRestart, 'click'],
+    ];
+    for (const [target, type] of expected) {
+      expect(
+        listenerRegistrations(log, 'added', target, type),
+        `${type} listener should be registered`,
+      ).toHaveLength(1);
+    }
+    const abortHandler = signalAdd.mock.calls.find(([type]) => type === 'abort')?.[1];
+    expect(abortHandler).toBeTypeOf('function');
+
     const cancelAnimationFrame = vi.spyOn(window, 'cancelAnimationFrame');
-    const stageRemove = vi.spyOn(view.stage, 'removeEventListener');
-    const documentRemove = vi.spyOn(document, 'removeEventListener');
 
     expect(pendingFrames.size).toBeGreaterThan(0);
     view.handle.destroy();
@@ -452,10 +592,8 @@ describe('zhen-sha view', () => {
 
     expect(cancelAnimationFrame).toHaveBeenCalled();
     expect(pendingFrames.size).toBe(0);
-    expect(stageRemove).toHaveBeenCalledWith('pointerdown', expect.any(Function));
-    expect(stageRemove).toHaveBeenCalledWith('pointerup', expect.any(Function));
-    expect(stageRemove).toHaveBeenCalledWith('pointercancel', expect.any(Function));
-    expect(documentRemove).toHaveBeenCalledWith('visibilitychange', expect.any(Function));
+    expectTrackedListenersRemoved(log, expected);
+    expect(signalRemove).toHaveBeenCalledWith('abort', abortHandler);
 
     const drawCalls = view.context.calls.length;
     const judgementBefore = text('judgement');
@@ -465,6 +603,39 @@ describe('zhen-sha view', () => {
     expect(view.context.calls.length).toBe(drawCalls);
     expect(pendingFrames.size).toBe(0);
     expect(text('judgement')).toBe(judgementBefore);
+  });
+
+  it('stops the loop and detaches listeners when the mount signal aborts', () => {
+    const log = recordListenerCalls();
+    const controller = new AbortController();
+    const signalAdd = vi.spyOn(controller.signal, 'addEventListener');
+    const signalRemove = vi.spyOn(controller.signal, 'removeEventListener');
+    const view = mountView(controller.signal);
+    primeLoop();
+    advanceTicks(2);
+    const abortHandler = signalAdd.mock.calls.find(([type]) => type === 'abort')?.[1];
+    expect(abortHandler).toBeTypeOf('function');
+
+    expect(pendingFrames.size).toBe(1);
+
+    controller.abort();
+
+    expect(pendingFrames.size).toBe(0);
+    expectTrackedListenersRemoved(log, [
+      [view.stage, 'pointerdown'],
+      [view.stage, 'pointerup'],
+      [view.stage, 'pointercancel'],
+      [view.stage, 'lostpointercapture'],
+      [document, 'visibilitychange'],
+    ]);
+    expect(signalRemove).toHaveBeenCalledWith('abort', abortHandler);
+
+    const drawCalls = view.context.calls.length;
+    advanceTicks(5);
+    view.stage.dispatchEvent(pointerEvent('pointerdown'));
+    view.stage.dispatchEvent(pointerEvent('pointerup'));
+    expect(view.context.calls.length).toBe(drawCalls);
+    expect(view.stage.classList.contains('is-pressed')).toBe(false);
   });
 
   it('pauses the frame loop while the page is hidden and resumes when visible', () => {

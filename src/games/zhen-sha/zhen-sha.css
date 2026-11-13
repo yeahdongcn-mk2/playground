@@ -232,6 +232,13 @@
     font-size: 1.1rem;
   }
 
+  /* On a short phone the stage can scroll, but the three gesture hints are the
+     entry point: move them above it so they stay in the first screen. */
+  .zhen-sha-hints {
+    order: -1;
+    margin: 0 auto 12px;
+  }
+
   .zhen-sha-stage {
     border-radius: 20px;
   }

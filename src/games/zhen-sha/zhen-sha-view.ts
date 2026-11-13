@@ -371,6 +371,16 @@ export function mountZhenSha(
     render();
   }
 
+  function onLostPointerCapture(): void {
+    // The browser can steal the capture without a pointerup/pointercancel. The
+    // held flag must not outlive the gesture, or every later press is ignored.
+    if (!running || !pointerDown) {
+      return;
+    }
+    resetPointer();
+    render();
+  }
+
   function restart(): void {
     audio.unlock();
     audio.play('reset');
@@ -396,11 +406,24 @@ export function mountZhenSha(
     running = false;
     resetPointer();
     stopLoop();
+    detachListeners();
+  }
+
+  function detachListeners(): void {
+    mountSignal.removeEventListener('abort', onAbort);
+    stage.removeEventListener('pointerdown', onPointerDown);
+    stage.removeEventListener('pointerup', onPointerUp);
+    stage.removeEventListener('pointercancel', onPointerCancel);
+    stage.removeEventListener('lostpointercapture', onLostPointerCapture);
+    document.removeEventListener('visibilitychange', onVisibilityChange);
+    restartButton.removeEventListener('click', restart);
+    overlayRestart.removeEventListener('click', restart);
   }
 
   stage.addEventListener('pointerdown', onPointerDown);
   stage.addEventListener('pointerup', onPointerUp);
   stage.addEventListener('pointercancel', onPointerCancel);
+  stage.addEventListener('lostpointercapture', onLostPointerCapture);
   document.addEventListener('visibilitychange', onVisibilityChange);
   restartButton.addEventListener('click', restart);
   overlayRestart.addEventListener('click', restart);
@@ -418,13 +441,7 @@ export function mountZhenSha(
       destroyed = true;
       running = false;
       stopLoop();
-      mountSignal.removeEventListener('abort', onAbort);
-      stage.removeEventListener('pointerdown', onPointerDown);
-      stage.removeEventListener('pointerup', onPointerUp);
-      stage.removeEventListener('pointercancel', onPointerCancel);
-      document.removeEventListener('visibilitychange', onVisibilityChange);
-      restartButton.removeEventListener('click', restart);
-      overlayRestart.removeEventListener('click', restart);
+      detachListeners();
     },
   };
 }
