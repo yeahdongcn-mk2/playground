@@ -712,4 +712,56 @@ describe('browser coverage documentation', () => {
     // the 2048 / breakout phone cases on top of the contract / smoke cases.
     expect(webkit).toBe(31);
   });
+
+  it('keeps the README unit-test line to one total and a qualitative summary', () => {
+    const lines = README.split('\n').filter(
+      (line) => line.includes('npm run test:unit') && line.includes('passed'),
+    );
+    expect(lines, 'README should document one test:unit count line').toHaveLength(1);
+    const line = lines[0] ?? '';
+
+    // Only the measured total may be a number. Per-item counts such as
+    // `ci-workflow 3 例` and `贪食蛇 27` drift with every new test file; the
+    // Vitest report is their source of truth, not this stable summary line.
+    const documented = /npm run test:unit[^\n]*?(\d+) passed(.*)$/.exec(line);
+    expect(
+      documented?.[1],
+      'README test:unit line should keep an "N passed" total',
+    ).toBeDefined();
+    const summary = documented?.[2] ?? '';
+    expect(
+      summary,
+      'README test:unit line should not list per-item case counts',
+    ).not.toMatch(/\d/);
+
+    for (const topic of [
+      '五个游戏',
+      '规则',
+      '视图',
+      '调试',
+      '截图',
+      '证据',
+      'CI 工作流',
+      'lint',
+      '文档契约',
+    ]) {
+      expect(line, `README test:unit line should mention ${topic}`).toContain(topic);
+    }
+
+    // The exact per-item counts this line used to carry must never come back.
+    for (const staleCount of [
+      'ci-workflow 3 例',
+      'lint 文档契约 17 例',
+      '贪食蛇 27',
+      '俄罗斯方块 38',
+      '2048 41',
+      '打砖块 41',
+      '扫雷 150',
+      'zhen-sha 76',
+    ]) {
+      expect(line, `README test:unit line should not restore ${staleCount}`).not.toContain(
+        staleCount,
+      );
+    }
+  });
 });
