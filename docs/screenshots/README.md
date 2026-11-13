@@ -30,7 +30,7 @@
 
 ### 已提交证据 sha256 清单与校验（Issue #199）
 
-- 清单文件：`docs/screenshots/capture-sha256-manifest.json`。它只收录文档已注明由官方 Playwright 容器捕获、且 sha256 等于已提交产物的 WebKit 确定性证据；不纳入 #137 标记的历史 After 证据，也不纳入宿主捕获的桌面 / 手机变体。扩大覆盖必须先按 #137 护栏显式刷新证据，属于后续独立工作。
+- 清单文件：`docs/screenshots/capture-sha256-manifest.json`。它只收录文档已注明由官方 Playwright 容器捕获、且 sha256 等于已提交产物的 WebKit 确定性证据；不纳入 #137 标记的历史 After 证据，也不纳入宿主捕获的桌面 / 手机变体。扩大覆盖时，可复现证据按固定容器重拍并在同一改动中显式更新清单；只有历史证据才需要额外走 #137 的显式刷新口径。
 - 清单覆盖（4 张，`sha256` 是已提交 PNG 的字节指纹；捕获 commit 是当前字节进入仓库的提交）：
 
 | 文件 | sha256 | 固定容器内重拍命令 | 捕获 commit |
@@ -40,12 +40,12 @@
 | `after-2048-gameover-webkit.png` | `bf7548b7c7fc696b89e9d1ed00c48f0d1bdb2274575c278240e6c801630ba837` | `npm run screenshots:container -- screenshots:2048:webkit` | `8dbe3e7e40e1a17ac84f5b715ce6383cbf039187`（#145） |
 | `after-breakout-playing-webkit.png` | `27297f5f79792511e1d2a56cc1a1c5565922ba10e7fda3de798c663769147704` | `npm run screenshots:container -- screenshots:breakout:webkit` | `bc7759432d66034141261a483a50454ee0631235`（#159） |
 
-- 每条记录还带 `provenance.container`（镜像 tag / digest）与期望环境指纹：镜像 `mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f`，`EGL_PLATFORM=surfaceless`、`LIBGL_ALWAYS_SOFTWARE=1`、`__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json`，目标 `webkit` / DPR 2，字体版本与上文容器日志记录一致（`fonts-freefont-ttf@20211204+svn4273-2`、`fonts-ipafont-gothic@00303-21ubuntu1`、`fonts-liberation@1:2.1.5-3`、`fonts-noto-color-emoji@2.047-0ubuntu0.24.04.1`、`fonts-tlwg-loma-otf@1:0.7.3-1`、`fonts-unifont@1:15.1.01-1build1`、`fonts-wqy-zenhei@0.9.45-8`）。
-- 命令与退出码：`npm run verify:screenshots:sha256`（即 `node scripts/verify-screenshot-sha256.mjs`）读取清单，逐个校验文件存在且 PNG sha256 与期望一致；传入 `--log <捕获日志>` 时再校验日志中的 `capture-env:` 指纹。全部一致退出 0；哈希不一致或环境指纹不一致退出 1，并把「环境指纹不一致」与「哈希不一致」分开报告（哈希失败会列出文件、期望 / 实际 sha256、实际环境指纹与固定容器内重拍命令）；清单非法（含重复文件、sha256 不是 64 位 hex、`environment` / `provenance.container` / 重拍命令与固定契约不一致）或捕获日志中的 `capture-env:` 行格式非法时退出 2。缺少已提交 PNG 按哈希失败处理（退出 1），因为它同样说明证据与清单不一致。
+- 清单顶层 `environment` 记录整份清单共用的固定环境指纹：镜像 `mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f`，`EGL_PLATFORM=surfaceless`、`LIBGL_ALWAYS_SOFTWARE=1`、`__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json`，目标 `webkit` / DPR 2，字体版本与上文容器日志记录一致（`fonts-freefont-ttf@20211204+svn4273-2`、`fonts-ipafont-gothic@00303-21ubuntu1`、`fonts-liberation@1:2.1.5-3`、`fonts-noto-color-emoji@2.047-0ubuntu0.24.04.1`、`fonts-tlwg-loma-otf@1:0.7.3-1`、`fonts-unifont@1:15.1.01-1build1`、`fonts-wqy-zenhei@0.9.45-8`）；每条 capture 记录还带 `provenance.container`（镜像 tag / digest）与捕获 commit。
+- 命令与退出码：`npm run verify:screenshots:sha256`（即 `node scripts/verify-screenshot-sha256.mjs`）读取清单，逐个校验文件存在且 PNG sha256 与期望一致；传入 `--log <捕获日志>` 时再校验日志中的 `capture-env:` 指纹。全部一致退出 0；哈希不一致或环境指纹不一致退出 1，并把「环境指纹不一致」与「哈希不一致」分开报告（哈希失败会列出文件、期望 / 实际 sha256、实际环境指纹与固定容器内重拍命令）。运行时写出的 `capture-env: unavailable (...)` 回退行按环境不可用处理（退出 1），不算非法日志。清单非法（含重复文件、sha256 不是 64 位 hex、`environment` / `provenance.container` 与固定契约不一致，或重拍命令不是该文件逐字对应的固定容器命令）或捕获日志中的 `capture-env:` 行格式非法（缺字段、重复 / 未知字段、非十进制 DPR）时退出 2。缺少已提交 PNG 按哈希失败处理（退出 1），因为它同样说明证据与清单不一致。
 - 本地带日志复核示例：`npm run verify:screenshots:sha256 -- --log test-results/capture-container/screenshots-webkit-<timestamp>.log`。
 - CI：`.github/workflows/ci.yml` 的 `verify` job 在 `Screenshot doc dimensions` 之后、`Production build` 之前运行 `Screenshot evidence sha256 manifest` 步骤（`npm run verify:screenshots:sha256`，不带日志），干净检出即校验已提交证据，防止静默替换；`tests/unit/ci-workflow.test.ts` 钉住该步骤的命令与位置。
-- 刷新流程（固定容器重拍后显式更新清单，不静默改写）：在临时工作副本（不要在准备提交的 worktree 里直接覆盖已提交 PNG）用上表的固定容器命令重拍所需目标，连续两次运行并对每份日志分别执行带 `--log` 的校验；只有两次 sha256 相同且环境指纹一致时，才在同一改动里显式更新清单的 `sha256` / `provenance` 与本节表格，并说明重拍原因。重拍、替换已提交 PNG 或修改历史证据都必须走 #137 的显式刷新口径（`--allow-historical-overwrite` 等护栏）；校验器本身只读清单和 PNG，不会改写文件。
-- 单测：`tests/unit/screenshot-sha256.test.ts` 用临时目录构造 PNG / 日志夹具，覆盖清单解析（非法条目、重复文件、非 64 位 hex）、全部一致时的退出 0、缺文件 / 哈希漂移 / 环境指纹漂移 / 非法日志的可读报错与退出码，以及清单环境 / `provenance.container` / 重拍命令与固定契约不一致时的退出 2；并断言清单的镜像 tag / EGL / 目标 DPR 与 `scripts/lib/capture-env.mjs` 常量一致、字体版本来自容器记录。不依赖真实浏览器或 Docker。
+- 刷新流程（固定容器重拍后显式更新清单，不静默改写）：在临时工作副本（不要在准备提交的 worktree 里直接覆盖已提交 PNG）用上表的固定容器命令重拍所需目标，连续两次运行并对每份日志分别执行带 `--log` 的校验；只有两次 sha256 相同且环境指纹一致时，才在同一改动里显式更新清单的 `sha256` / `provenance` 与本节表格，并说明重拍原因。若目标属于 #137 标记的历史 After 证据，替换已提交 PNG 还必须走 #137 的显式刷新口径（`--allow-historical-overwrite` 等护栏）；本清单收录的当前 WebKit 证据不在历史清单内，按上表命令重拍并显式更新清单即可。校验器本身只读清单和 PNG，不会改写文件。
+- 单测：`tests/unit/screenshot-sha256.test.ts` 用临时目录构造 PNG / 日志夹具，覆盖清单解析（非法条目、控制字符路径、大小写重复文件、非 64 位 hex）、全部一致时的退出 0、缺文件 / 哈希漂移 / 环境指纹漂移 / 非法日志（缺字段、重复或未知字段、非十进制 DPR）的可读报错与退出码、`capture-env: unavailable (...)` 回退行按环境不可用处理，以及清单环境 / `provenance.container` / 重拍命令与固定契约不一致时经 CLI 退出 2；并断言清单的镜像 tag / EGL / 目标 DPR 与 `scripts/lib/capture-env.mjs` 常量一致、字体版本与 README 的容器 `capture-env:` 示例一致。不依赖真实浏览器或 Docker。
 
 ## 通用大厅整页证据（Issue #161 / 子任务 1）
 

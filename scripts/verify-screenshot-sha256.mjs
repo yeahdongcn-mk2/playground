@@ -87,6 +87,22 @@ function printActualEnvironment(environment) {
   }
 }
 
+function printHashProblems(hashProblems, captureByFile, entries, dir) {
+  console.error(
+    `FAIL: ${hashProblems.length} screenshot sha256 problem(s) across ` +
+      `${entries} entries in ${dir}:`,
+  );
+  for (const problem of hashProblems) {
+    console.error(`  ${problem.file}: ${problem.message}`);
+    console.error(`    expected sha256: ${problem.expected}`);
+    console.error(`    actual sha256:   ${problem.actual ?? 'unavailable'}`);
+    const capture = captureByFile.get(problem.file);
+    if (capture !== undefined) {
+      console.error(`    recapture in fixed container: ${capture.command}`);
+    }
+  }
+}
+
 function main(argv) {
   let options;
   try {
@@ -149,6 +165,12 @@ function main(argv) {
   const result = verifyScreenshotSha256({ dir, manifest, logText });
   const { hashProblems, environment } = result;
 
+  // A malformed log is invalid input (exit 2), but it must not hide a changed
+  // committed PNG: report the hash problems before returning.
+  if (hashProblems.length > 0) {
+    printHashProblems(hashProblems, captureByFile, result.entries, dir);
+  }
+
   if (environment.invalid) {
     console.error(`error: invalid capture log ${logPath ?? ''}:`);
     for (const problem of environment.problems) {
@@ -166,22 +188,6 @@ function main(argv) {
       `OK: ${result.entries} screenshot sha256 entries verified in ${dir}${envNote}`,
     );
     return 0;
-  }
-
-  if (hashProblems.length > 0) {
-    console.error(
-      `FAIL: ${hashProblems.length} screenshot sha256 problem(s) across ` +
-        `${result.entries} entries in ${dir}:`,
-    );
-    for (const problem of hashProblems) {
-      console.error(`  ${problem.file}: ${problem.message}`);
-      console.error(`    expected sha256: ${problem.expected}`);
-      console.error(`    actual sha256:   ${problem.actual ?? 'unavailable'}`);
-      const capture = captureByFile.get(problem.file);
-      if (capture !== undefined) {
-        console.error(`    recapture in fixed container: ${capture.command}`);
-      }
-    }
   }
 
   if (!environment.ok) {

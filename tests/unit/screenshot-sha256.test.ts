@@ -17,7 +17,9 @@ import {
   DEFAULT_MANIFEST_PATH,
   DEFAULT_SCREENSHOT_DIR,
   ScreenshotSha256Error,
+  expectedRecaptureCommand,
   manifestEnvironmentMismatches,
+  parseCaptureEnvironmentFingerprintLine,
   parseCaptureLogFingerprints,
   parseSha256Manifest,
   verifyCaptureEnvironment,
@@ -106,6 +108,24 @@ const MANIFEST_ENVIRONMENT_DRIFT_CASES: Array<{
       manifest.environment.image.tag = 'v9.9.9-noble';
     },
     problem: `environment.image.tag is "v9.9.9-noble", expected "${PLAYWRIGHT_IMAGE_PIN.tag}"`,
+  },
+  {
+    label: 'a stale capture provenance container',
+    drift: (manifest) => {
+      const first = manifest.captures[0];
+      if (first) {
+        first.provenance.container = `mcr.microsoft.com/playwright:v9.9.9-noble@sha256:${'0'.repeat(64)}`;
+      }
+    },
+    problem: 'provenance.container is',
+  },
+  {
+    label: 'a non-container recapture command',
+    drift: (manifest) => {
+      const first = manifest.captures[0];
+      if (first) first.command = 'echo fake';
+    },
+    problem: 'command is "echo fake"',
   },
 ];
 
@@ -230,7 +250,6 @@ describe('capture sha256 manifest', () => {
   it('lists exactly the four fixed-environment WebKit captures with committed hashes', () => {
     const manifest = committedManifest();
     expect(manifest.captures.map((capture) => capture.file)).toEqual(EXPECTED_FILES);
-    expect(new Set(manifest.captures.map((capture) => capture.file)).size).toBe(4);
 
     for (const capture of manifest.captures) {
       const filePath = join(SCREENSHOT_DIR, capture.file);
@@ -271,6 +290,31 @@ describe('capture sha256 manifest', () => {
       ...CAPTURE_FONT_PACKAGES,
     ]);
     expect(manifest.environment.fonts).toEqual(EXPECTED_FONT_VERSIONS);
+  });
+
+  it('keeps the documented container fingerprint sample aligned with the manifest', () => {
+    const readme = readFileSync(
+      join(ROOT, 'docs', 'screenshots', 'README.md'),
+      'utf8',
+    );
+    const documentedLine = readme
+      .split(/\r?\n/)
+      .map((entry) => entry.trim())
+      .find(
+        (entry) => entry.startsWith('capture-env:') && entry.includes('source=container'),
+      );
+    expect(documentedLine, 'README lacks a container capture-env sample').toBeDefined();
+
+    const fingerprint = parseCaptureEnvironmentFingerprintLine(
+      documentedLine as string,
+    );
+    const manifest = committedManifest();
+    expect(fingerprint.source).toBe(manifest.environment.source);
+    expect(fingerprint.target).toBe(manifest.environment.target);
+    expect(fingerprint.dpr).toBe(manifest.environment.dpr);
+    expect(fingerprint.image).toEqual(manifest.environment.image);
+    expect(fingerprint.env).toEqual(manifest.environment.egl);
+    expect(fingerprint.fonts).toEqual(manifest.environment.fonts);
   });
 
   it('detects image, EGL, DPR and font drift against the fixed contract', () => {
@@ -317,18 +361,41 @@ describe('capture sha256 manifest', () => {
     },
   );
 
-  it('rejects stale provenance and non-container recapture commands', () => {
+  it('requires the exact per-file recapture command', () => {
     const manifest = committedManifest();
     if (manifest.captures[0]) {
       manifest.captures[0].provenance.container = `mcr.microsoft.com/playwright:v9.9.9-noble@sha256:${'0'.repeat(64)}`;
-      manifest.captures[0].command = 'echo fake';
     }
-
     const problems = manifestEnvironmentMismatches(manifest);
     expect(
       problems.some((problem) => problem.includes('provenance.container')),
     ).toBe(true);
-    expect(problems.some((problem) => problem.includes('command'))).toBe(true);
+
+    for (const command of [
+      'npm run screenshots:container -- screenshots',
+      'npm run screenshots:container -- screenshots:webkit; rm -rf /tmp/x',
+      'npm run screenshots:container -- screenshots:2048:webkit',
+    ]) {
+      const mutated = committedManifest();
+      const first = mutated.captures[0];
+      if (first) first.command = command;
+      expect(
+        manifestEnvironmentMismatches(mutated).some((problem) =>
+          problem.includes('command is'),
+        ),
+        command,
+      ).toBe(true);
+    }
+
+    expect(expectedRecaptureCommand('after-blank-webkit.png')).toBe(
+      'npm run screenshots:container -- screenshots:webkit',
+    );
+    expect(expectedRecaptureCommand('after-2048-ready-webkit.png')).toBe(
+      'npm run screenshots:container -- screenshots:2048:webkit',
+    );
+    expect(expectedRecaptureCommand('after-breakout-playing-webkit.png')).toBe(
+      'npm run screenshots:container -- screenshots:breakout:webkit',
+    );
   });
 
   it('rejects invalid entries, duplicate files and non-64-hex sha256', () => {
@@ -345,10 +412,28 @@ describe('capture sha256 manifest', () => {
     if (withPath.captures[0]) withPath.captures[0].file = 'nested/after-blank-webkit.png';
     expect(() => parseSha256Manifest(JSON.stringify(withPath))).toThrow(/plain file name/);
 
+    const withControlChar = clone();
+    if (withControlChar.captures[0]) {
+      withControlChar.captures[0].file = 'after-blank-webkit.png\u0000.png';
+    }
+    expect(() => parseSha256Manifest(JSON.stringify(withControlChar))).toThrow(
+      /plain file name/,
+    );
+
     const duplicate = clone();
     const first = duplicate.captures[0];
     if (first) duplicate.captures.push({ ...first });
     expect(() => parseSha256Manifest(JSON.stringify(duplicate))).toThrow(
+      /duplicate capture file/,
+    );
+
+    // Case aliases resolve to the same file on case-insensitive filesystems.
+    const caseAlias = clone();
+    const caseFirst = caseAlias.captures[0];
+    if (caseFirst) {
+      caseAlias.captures.push({ ...caseFirst, file: 'AFTER-BLANK-WEBKIT.png' });
+    }
+    expect(() => parseSha256Manifest(JSON.stringify(caseAlias))).toThrow(
       /duplicate capture file/,
     );
 
@@ -403,6 +488,54 @@ describe('capture environment fingerprint', () => {
     expect(verification.ok).toBe(true);
     expect(verification.fingerprints).toHaveLength(1);
     expect(verification.fingerprints[0]?.target).toBe('webkit');
+  });
+
+  it('verifies every webkit fingerprint line in a multi-run log', () => {
+    const manifest = committedManifest();
+    const driftedSecond = CONTAINER_LOG_LINE.replace('dpr=2', 'dpr=1');
+    const verification = verifyCaptureEnvironment({
+      logText: `${CONTAINER_LOG_LINE}\n${driftedSecond}\n`,
+      environment: manifest.environment,
+    });
+
+    expect(verification.fingerprints).toHaveLength(2);
+    expect(verification.ok).toBe(false);
+    expect(verification.problems.some((problem) => problem.includes('dpr'))).toBe(true);
+  });
+
+  it('treats the runtime unavailable fallback as an unavailable environment', () => {
+    const manifest = committedManifest();
+    const verification = verifyCaptureEnvironment({
+      logText: 'capture-env: unavailable (fonts probe failed)\n',
+      environment: manifest.environment,
+    });
+
+    expect(verification.checked).toBe(true);
+    expect(verification.invalid).toBe(false);
+    expect(verification.ok).toBe(false);
+    expect(verification.problems).toContain(
+      'capture environment fingerprint is unavailable (the capture runtime could not probe it)',
+    );
+  });
+
+  it('rejects malformed capture-env fields as invalid input', () => {
+    const manifest = committedManifest();
+    const malformed = [
+      `${CONTAINER_LOG_LINE} source=container`,
+      `${CONTAINER_LOG_LINE} extra=1`,
+      CONTAINER_LOG_LINE.replace('dpr=2', 'dpr=2.0'),
+      CONTAINER_LOG_LINE.replace('dpr=2', 'dpr=+2'),
+      CONTAINER_LOG_LINE.replace(' playwright=1.64.1', ''),
+    ];
+
+    for (const logText of malformed) {
+      const verification = verifyCaptureEnvironment({
+        logText: `${logText}\n`,
+        environment: manifest.environment,
+      });
+      expect(verification.invalid, logText).toBe(true);
+      expect(verification.problems.length, logText).toBeGreaterThan(0);
+    }
   });
 
   it('reports environment drift separately from the hash check', () => {
@@ -608,6 +741,32 @@ describe('verifyScreenshotSha256', () => {
     expect(result.stderr).toContain(CONTAINER_LOG_LINE.replace('dpr=2', 'dpr=1'));
   });
 
+  it('exits 1 and reports hash drift together with environment drift', () => {
+    const dir = makeTempDir();
+    const expected = makePng();
+    const actual = Buffer.concat([makePng(), Buffer.from('drift')]);
+    writePng(dir, EXPECTED_FILES[0] as string, actual);
+    const manifestPath = writeManifest(dir, fixtureManifest(expected));
+    const logPath = join(dir, 'capture.log');
+    writeFileSync(logPath, `${CONTAINER_LOG_LINE.replace('dpr=2', 'dpr=1')}\n`);
+
+    const result = runCli([
+      '--dir',
+      dir,
+      '--manifest',
+      manifestPath,
+      '--log',
+      logPath,
+    ]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('screenshot sha256 problem');
+    expect(result.stderr).toContain(`expected sha256: ${sha256(expected)}`);
+    expect(result.stderr).toContain(`actual sha256:   ${sha256(actual)}`);
+    expect(result.stderr).toContain('Environment fingerprint mismatch');
+    expect(result.stderr).toContain('dpr');
+    expect(result.stderr).not.toContain('committed PNG hashes still match');
+  });
+
   it('exits 1 when the log has no fingerprint for the manifest target', () => {
     const dir = makeTempDir();
     const bytes = makePng();
@@ -729,7 +888,7 @@ describe('verifyScreenshotSha256', () => {
       invalidJson,
     ]) {
       const result = runCli(['--dir', dir, '--manifest', manifestPath]);
-      expect(result.status).toBe(2);
+      expect(result.status, manifestPath).toBe(2);
     }
 
     const unknownOption = runCli(['--unknown']);
