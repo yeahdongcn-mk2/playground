@@ -78,6 +78,9 @@ jobs:
       - name: Screenshot doc dimensions
         run: npm run verify:screenshots:doc-dims
 
+      - name: Screenshot evidence sha256 manifest
+        run: npm run verify:screenshots:sha256
+
       - name: Production build
         run: npm run build
 

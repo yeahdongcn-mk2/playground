@@ -1,0 +1,85 @@
+{
+  "environment": {
+    "source": "container",
+    "target": "webkit",
+    "dpr": 2,
+    "image": {
+      "repository": "mcr.microsoft.com/playwright",
+      "tag": "v1.64.1-noble",
+      "digest": "sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f"
+    },
+    "egl": {
+      "EGL_PLATFORM": "surfaceless",
+      "LIBGL_ALWAYS_SOFTWARE": "1",
+      "__EGL_VENDOR_LIBRARY_FILENAMES": "/usr/share/glvnd/egl_vendor.d/50_mesa.json"
+    },
+    "fonts": [
+      {
+        "name": "fonts-freefont-ttf",
+        "version": "20211204+svn4273-2"
+      },
+      {
+        "name": "fonts-ipafont-gothic",
+        "version": "00303-21ubuntu1"
+      },
+      {
+        "name": "fonts-liberation",
+        "version": "1:2.1.5-3"
+      },
+      {
+        "name": "fonts-noto-color-emoji",
+        "version": "2.047-0ubuntu0.24.04.1"
+      },
+      {
+        "name": "fonts-tlwg-loma-otf",
+        "version": "1:0.7.3-1"
+      },
+      {
+        "name": "fonts-unifont",
+        "version": "1:15.1.01-1build1"
+      },
+      {
+        "name": "fonts-wqy-zenhei",
+        "version": "0.9.45-8"
+      }
+    ]
+  },
+  "captures": [
+    {
+      "file": "after-blank-webkit.png",
+      "sha256": "cd4ed3fea1e0a068661c8102ee0b58b0601b3a249e480d76224d22782a0e088f",
+      "command": "npm run screenshots:container -- screenshots:webkit",
+      "provenance": {
+        "container": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
+        "captureCommit": "f5b87c05b3c55694c3605530de4bcf8e20097a80"
+      }
+    },
+    {
+      "file": "after-2048-playing-webkit.png",
+      "sha256": "4173dce84c814f2573fa506360f95bab477c985b37a2dfe2d5b0d1c2c5992a91",
+      "command": "npm run screenshots:container -- screenshots:2048:webkit",
+      "provenance": {
+        "container": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
+        "captureCommit": "8dbe3e7e40e1a17ac84f5b715ce6383cbf039187"
+      }
+    },
+    {
+      "file": "after-2048-gameover-webkit.png",
+      "sha256": "bf7548b7c7fc696b89e9d1ed00c48f0d1bdb2274575c278240e6c801630ba837",
+      "command": "npm run screenshots:container -- screenshots:2048:webkit",
+      "provenance": {
+        "container": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
+        "captureCommit": "8dbe3e7e40e1a17ac84f5b715ce6383cbf039187"
+      }
+    },
+    {
+      "file": "after-breakout-playing-webkit.png",
+      "sha256": "27297f5f79792511e1d2a56cc1a1c5565922ba10e7fda3de798c663769147704",
+      "command": "npm run screenshots:container -- screenshots:breakout:webkit",
+      "provenance": {
+        "container": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
+        "captureCommit": "bc7759432d66034141261a483a50454ee0631235"
+      }
+    }
+  ]
+}
