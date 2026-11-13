@@ -86,21 +86,61 @@ export function captureTargets(scripts) {
 }
 
 /**
- * The capture targets (DPR contract) a screenshot npm script records.
+ * The capture targets (DPR contract) one container run records.
  *
- * WebKit scripts only capture the WebKit phone target. Chromium screenshot
- * scripts capture desktop and phone evidence in the same run, while the
- * dedicated minesweeper narrow / short / large modes and the Chromium
- * touch-before baseline only capture phone evidence.
+ * The npm script name alone is not enough: the container entry forwards extra
+ * arguments to the capture script, and some of them change the set of targets
+ * the script records. The rules mirror what each script actually reads:
+ *
+ * - every `capture-*.mjs` script resolves its engine with `parseCaptureEngine`,
+ *   which selects WebKit for `--webkit`, `--webkit-narrow` and
+ *   `--webkit-narrow-before`; a WebKit run records only the WebKit phone
+ *   target, even when a phone-only mode is also passed;
+ * - `--touch-before` and the `--narrow` / `--min` / `--restart` / `--short` /
+ *   `--large` (and `-before`) modes are only read by
+ *   `capture-minesweeper-screenshots.mjs`, so they switch the target to phone
+ *   only when the container target is `screenshots:minesweeper`; the other
+ *   scripts ignore them and must keep their script-name targets;
+ * - `--before`, `--clear` and `--allow-historical-overwrite` never change the
+ *   target set.
  */
+const WEBKIT_CAPTURE_FLAGS = [
+  '--webkit',
+  '--webkit-narrow',
+  '--webkit-narrow-before',
+];
+
+const MINESWEEPER_MOBILE_CAPTURE_FLAGS = [
+  '--touch-before',
+  '--narrow',
+  '--narrow-before',
+  '--min',
+  '--min-before',
+  '--restart',
+  '--restart-before',
+  '--short',
+  '--short-before',
+  '--large',
+  '--large-before',
+];
+
 const MOBILE_ONLY_CAPTURE_TARGETS = [
   /^screenshots:minesweeper:(narrow|min|restart|short|large)(-before)?$/,
   /^screenshots:minesweeper:touch-before$/,
 ];
 
-export function captureTargetsForScript(script) {
-  if (script.includes('webkit')) {
+export function captureTargetsForScript(script, passthrough = []) {
+  if (
+    script.includes('webkit') ||
+    WEBKIT_CAPTURE_FLAGS.some((flag) => passthrough.includes(flag))
+  ) {
     return ['webkit'];
+  }
+  if (
+    script === 'screenshots:minesweeper' &&
+    MINESWEEPER_MOBILE_CAPTURE_FLAGS.some((flag) => passthrough.includes(flag))
+  ) {
+    return ['mobile'];
   }
   if (MOBILE_ONLY_CAPTURE_TARGETS.some((pattern) => pattern.test(script))) {
     return ['mobile'];
@@ -222,7 +262,7 @@ export function buildDockerRunArgs({
   if (image === undefined || containerImage === undefined) {
     throw new Error('buildDockerRunArgs needs the resolved capture image.');
   }
-  const captureTargets = captureTargetsForScript(target);
+  const captureTargets = captureTargetsForScript(target, passthrough);
   const args = [
     'run',
     '--rm',
@@ -360,7 +400,7 @@ export async function runContainerCapture({
   if (env[CAPTURE_CONTAINER_FLAG] === '1') {
     assertContainerCaptureEnvironment({
       env,
-      targets: captureTargetsForScript(target),
+      targets: captureTargetsForScript(target, passthrough),
       version: image.version,
     });
     await ensureDependencies({ repoRoot, env, readFile, existsSync });

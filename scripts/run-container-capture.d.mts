@@ -85,8 +85,17 @@ export function readPackageScripts(options?: {
   readFile?: (path: string, encoding?: 'utf8') => string;
 }): Record<string, string>;
 export function captureTargets(scripts: Record<string, string>): string[];
-/** Capture targets (in DPR order) a screenshot npm script records. */
-export function captureTargetsForScript(script: string): string[];
+/**
+ * Capture targets (in DPR order) one container run records.
+ *
+ * `passthrough` is the extra argv the container entry forwards to the capture
+ * script; the flags that change the recorded target set are folded in on top of
+ * the target script name (see the implementation for the exact rules).
+ */
+export function captureTargetsForScript(
+  script: string,
+  passthrough?: readonly string[],
+): string[];
 export function previewPortForTarget(
   target: string,
   value?: string,
