@@ -5,6 +5,7 @@ import { breakoutGame } from './breakout';
 import { minesweeperGame } from './minesweeper';
 import { snakeGame } from './snake';
 import { tetrisGame } from './tetris';
+import { zhenShaGame } from './zhen-sha';
 
 /**
  * Static registry: it only imports metadata plus a lazy mount function for each
@@ -16,6 +17,7 @@ export const games: readonly GameModule[] = [
   game2048,
   breakoutGame,
   minesweeperGame,
+  zhenShaGame,
   blankGame,
 ];
 
