@@ -74,6 +74,13 @@ describe('zhen-sha kill gate engineering assessment', () => {
     expect(DOC).toMatch(/registry\.ts[^\n]*1 行/);
   });
 
+  it('includes the formal engineering assessment sections', () => {
+    expect(DOC).toContain('## 工程评估');
+    expect(DOC).toContain('### kill gate 原型生产规模（实测）');
+    expect(DOC).toContain('### 完整特性规模估算');
+    expect(DOC).toContain('### 结论');
+  });
+
   it('states an explicit M or L conclusion against the M review band', () => {
     expect(['M', 'L']).toContain(CONCLUSION);
     expect(DOC).toContain('7–9 个文件');
