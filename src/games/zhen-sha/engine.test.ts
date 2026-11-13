@@ -110,14 +110,20 @@ describe('ZhenShaEngine setup', () => {
     expect(engine.currentStatus).toBe('playing');
   });
 
-  it('pins the exported timing constants the view relies on', () => {
+  it('pins the exported timing and score constants the view relies on', () => {
     expect(TICKS_PER_SECOND).toBe(120);
     expect(FIXED_STEP_MS).toBeCloseTo(1000 / 120, 12);
     expect(PERFECT_BAND_HALF_TICKS).toBe(6);
     expect(NORMAL_BAND_HALF_TICKS).toBe(18);
+    expect(FIRST_TELEGRAPH_TICKS).toBe(180);
+    expect(TELEGRAPH_TICKS).toBe(108);
+    expect(RECOVERY_TICKS).toBe(72);
     expect(BREAK_TICKS).toBe(240);
     expect(MAX_HITS).toBe(3);
     expect(MOMENTUM_FOR_BREAK).toBe(3);
+    expect(SCORE_PERFECT).toBe(300);
+    expect(SCORE_NORMAL).toBe(100);
+    expect(SCORE_FINISHER).toBe(1000);
   });
 
   it('exposes the wind-up and active strike phases', () => {
@@ -280,6 +286,21 @@ describe('parry timing bands', () => {
     expect(engine.snapshot().charging).toBe(true);
   });
 
+  it('applies an out-of-order queue in tick order', () => {
+    const engine = new ZhenShaEngine();
+    // Queue the later action first, as a replay prefilling its schedule might.
+    engine.input('block', FIRST_IMPACT);
+    engine.input('charge', 10);
+
+    advance(engine, 11);
+    expect(engine.snapshot().step).toBe(11);
+    expect(engine.snapshot().charging).toBe(true);
+    expect(engine.snapshot().perfects).toBe(0);
+
+    advance(engine, FIRST_IMPACT - 10);
+    expect(engine.snapshot().perfects).toBe(1);
+  });
+
   it('rejects unknown actions', () => {
     const engine = new ZhenShaEngine();
 
@@ -293,6 +314,73 @@ describe('parry timing bands', () => {
     expect(snapshot.score).toBe(SCORE_NORMAL);
     expect(snapshot.momentum).toBe(0);
     expect(snapshot.perfects).toBe(0);
+  });
+});
+
+describe('feedback events', () => {
+  it('emits every public event with the step that produced it', () => {
+    const engine = new ZhenShaEngine();
+
+    // 1. A normal parry seven ticks after the first impact.
+    const NORMAL_TAP = FIRST_IMPACT + PERFECT_BAND_HALF_TICKS + 1;
+    // The normal parry schedules the next wind-up one recovery later.
+    const SECOND_IMPACT = NORMAL_TAP + RECOVERY_TICKS + TELEGRAPH_TICKS;
+    // 2. A whiff outside the normal band commits the second move to landing.
+    const WHIFF_TAP = SECOND_IMPACT - NORMAL_BAND_HALF_TICKS - 2;
+    const SECOND_HIT_STEP = SECOND_IMPACT + NORMAL_BAND_HALF_TICKS;
+    // 3. Charging and releasing with the guard up only produces a bare strike.
+    const CHARGE_STEP = SECOND_HIT_STEP + RECOVERY_TICKS + 3;
+    const STRIKE_STEP = CHARGE_STEP + 10;
+    // 4. Three perfect parries open the break, which then expires.
+    const THIRD_IMPACT = SECOND_HIT_STEP + RECOVERY_TICKS + TELEGRAPH_TICKS;
+    const FOURTH_IMPACT = THIRD_IMPACT + MOVE_GAP;
+    const FIFTH_IMPACT = FOURTH_IMPACT + MOVE_GAP;
+    const BREAK_END = FIFTH_IMPACT + BREAK_TICKS;
+
+    engine.input('block', NORMAL_TAP);
+    engine.input('block', WHIFF_TAP);
+    engine.input('charge', CHARGE_STEP);
+    engine.input('strike', STRIKE_STEP);
+    engine.input('block', THIRD_IMPACT);
+    engine.input('block', FOURTH_IMPACT);
+    engine.input('block', FIFTH_IMPACT);
+    advance(engine, BREAK_END + 1);
+
+    expect(engine.drainEvents()).toEqual([
+      { type: 'normal', step: NORMAL_TAP },
+      { type: 'miss', step: WHIFF_TAP },
+      { type: 'hit', step: SECOND_HIT_STEP },
+      { type: 'strike', step: STRIKE_STEP },
+      { type: 'perfect', step: THIRD_IMPACT },
+      { type: 'perfect', step: FOURTH_IMPACT },
+      { type: 'perfect', step: FIFTH_IMPACT },
+      { type: 'break', step: FIFTH_IMPACT },
+      { type: 'break-end', step: BREAK_END },
+    ]);
+    expect(engine.snapshot()).toMatchObject({
+      step: BREAK_END + 1,
+      status: 'playing',
+      hits: 1,
+      perfects: 3,
+      momentum: 0,
+      boss: { guard: 'up' },
+    });
+  });
+
+  it('returns drained events once and clears the queue', () => {
+    const engine = new ZhenShaEngine();
+    engine.input('block', FIRST_IMPACT);
+    advance(engine, FIRST_IMPACT + 1);
+
+    expect(engine.drainEvents()).toEqual([
+      { type: 'perfect', step: FIRST_IMPACT },
+    ]);
+    expect(engine.drainEvents()).toEqual([]);
+
+    // The next move lands unparried; a later drain only reports the new hit.
+    advance(engine, 200);
+    expect(engine.drainEvents().map((event) => event.type)).toEqual(['hit']);
+    expect(engine.drainEvents()).toEqual([]);
   });
 });
 
@@ -367,6 +455,32 @@ describe('momentum and guard break', () => {
     engine.input('strike');
     advance(engine, 1);
     expect(engine.snapshot().status).toBe('playing');
+  });
+
+  it('waits RECOVERY_TICKS after the break before winding up again', () => {
+    const engine = perfectThree();
+    advance(engine, BREAK_TICKS - 1);
+
+    const breakEndStep = BREAK_START + BREAK_TICKS;
+    const nextWindUpStep = breakEndStep + RECOVERY_TICKS;
+    expect(engine.snapshot().step).toBe(breakEndStep);
+    expect(engine.snapshot().attack).toBeNull();
+
+    advance(engine, RECOVERY_TICKS - 1);
+    expect(engine.snapshot().step).toBe(nextWindUpStep - 1);
+    expect(engine.snapshot().attack).toBeNull();
+
+    // The wind-up happens on the recovery frame, so the snapshot taken after
+    // it still shows no attack.
+    advance(engine, 1);
+    expect(engine.snapshot().step).toBe(nextWindUpStep);
+    expect(engine.snapshot().attack).toBeNull();
+
+    advance(engine, 1);
+    expect(engine.snapshot().attack).toMatchObject({
+      impactStep: nextWindUpStep + TELEGRAPH_TICKS,
+      phase: 'telegraph',
+    });
   });
 
   it('cannot win on the break expiry tick', () => {
@@ -475,6 +589,17 @@ describe('hits, loss and restart', () => {
     engine.input('block', FIRST_IMPACT);
     advance(engine, FIRST_IMPACT + 1);
     expect(engine.snapshot().perfects).toBe(1);
+  });
+
+  it('drops the sub-tick remainder on restart', () => {
+    const engine = new ZhenShaEngine();
+    engine.update(FIXED_STEP_MS / 2);
+    expect(engine.snapshot().step).toBe(0);
+
+    engine.restart();
+    engine.update(FIXED_STEP_MS / 2);
+
+    expect(engine.snapshot().step).toBe(0);
   });
 
   it('restarts after a win', () => {
