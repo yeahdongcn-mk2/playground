@@ -12,6 +12,7 @@ import {
   CAPTURE_EGL_VARS,
   PLAYWRIGHT_IMAGE_PIN,
   PLAYWRIGHT_IMAGE_REPOSITORY,
+  assertContainerCaptureEnvironment,
   resolveCaptureImage,
 } from '../../scripts/lib/capture-env.mjs';
 import {
@@ -193,6 +194,74 @@ describe('container capture target DPR and preview port', () => {
     ]);
   });
 
+  it('folds the passthrough flags each capture script actually reads into the targets', () => {
+    // parseCaptureEngine selects WebKit from these flags in every capture script.
+    expect(captureTargetsForScript('screenshots', ['--webkit'])).toEqual(['webkit']);
+    expect(captureTargetsForScript('screenshots:minesweeper', ['--webkit'])).toEqual([
+      'webkit',
+    ]);
+    expect(captureTargetsForScript('screenshots:2048', ['--webkit'])).toEqual([
+      'webkit',
+    ]);
+    expect(captureTargetsForScript('screenshots', ['--webkit-narrow'])).toEqual([
+      'webkit',
+    ]);
+    expect(captureTargetsForScript('screenshots', ['--webkit-narrow-before'])).toEqual([
+      'webkit',
+    ]);
+    // WebKit wins over the Chromium-only phone modes.
+    expect(
+      captureTargetsForScript('screenshots:minesweeper', [
+        '--touch-before',
+        '--webkit',
+      ]),
+    ).toEqual(['webkit']);
+
+    // Only capture-minesweeper-screenshots.mjs reads these phone modes.
+    const minesweeperMobileFlags = [
+      '--touch-before',
+      '--narrow',
+      '--narrow-before',
+      '--min',
+      '--min-before',
+      '--restart',
+      '--restart-before',
+      '--short',
+      '--short-before',
+      '--large',
+      '--large-before',
+    ];
+    for (const flag of minesweeperMobileFlags) {
+      expect(captureTargetsForScript('screenshots:minesweeper', [flag])).toEqual([
+        'mobile',
+      ]);
+    }
+
+    // Other scripts ignore those flags, so the script-name targets stay unchanged.
+    expect(captureTargetsForScript('screenshots:2048', ['--touch-before'])).toEqual([
+      'desktop',
+      'mobile',
+    ]);
+    expect(captureTargetsForScript('screenshots', ['--narrow'])).toEqual([
+      'desktop',
+      'mobile',
+    ]);
+    expect(
+      captureTargetsForScript('screenshots:minesweeper:scores', ['--touch-before']),
+    ).toEqual(['desktop', 'mobile']);
+
+    // These flags never change the target set.
+    expect(
+      captureTargetsForScript('screenshots:2048', [
+        '--before',
+        '--allow-historical-overwrite',
+      ]),
+    ).toEqual(['desktop', 'mobile']);
+    expect(captureTargetsForScript('screenshots:minesweeper:scores', ['--clear'])).toEqual(
+      ['desktop', 'mobile'],
+    );
+  });
+
   it('uses the preview port each screenshot script starts', () => {
     expect(previewPortForTarget('screenshots', '')).toBe(4174);
     expect(previewPortForTarget('screenshots:webkit', '')).toBe(4174);
@@ -281,6 +350,51 @@ describe('docker run construction', () => {
     expect(envArgs).toContain('CAPTURE_TARGET=mobile');
     expect(envArgs).toContain('CAPTURE_TARGET_DPR=2');
   });
+
+  it.each<[string, string[], string, string]>([
+    ['screenshots', ['--webkit'], 'webkit', '2'],
+    ['screenshots:minesweeper', ['--webkit'], 'webkit', '2'],
+    ['screenshots:minesweeper', ['--touch-before'], 'mobile', '2'],
+    ['screenshots:minesweeper', ['--narrow'], 'mobile', '2'],
+    ['screenshots:2048', ['--touch-before'], 'desktop,mobile', '1,2'],
+  ])(
+    'injects the passthrough-aware target contract for %s %j',
+    (target, passthrough, expectedTargets, expectedDprs) => {
+      const args = buildDockerRunArgs({
+        target,
+        passthrough,
+        repoRoot: '/repo',
+        image,
+        containerImage: localCaptureImageName(),
+        previewPort: null,
+        env: {},
+      });
+      const envArgs = envArgsOf(args);
+      expect(envArgs).toContain(`CAPTURE_TARGET=${expectedTargets}`);
+      expect(envArgs).toContain(`CAPTURE_TARGET_DPR=${expectedDprs}`);
+      expect(args.slice(-(passthrough.length + 2))).toEqual([
+        localCaptureImageName(),
+        target,
+        ...passthrough,
+      ]);
+
+      // The injected variables must satisfy the container-side assertion that
+      // re-derives the targets from the same target + passthrough pair.
+      const env = Object.fromEntries(
+        envArgs.map((entry) => {
+          const separator = entry.indexOf('=');
+          return [entry.slice(0, separator), entry.slice(separator + 1)];
+        }),
+      );
+      expect(() =>
+        assertContainerCaptureEnvironment({
+          env,
+          targets: captureTargetsForScript(target, passthrough),
+          version: image.version,
+        }),
+      ).not.toThrow();
+    },
+  );
 });
 
 describe('container entry preflight', () => {
@@ -451,6 +565,42 @@ describe('in-container capture run', () => {
     ).rejects.toThrow(/Capture DPR 1 does not match target "webkit": expected 2/);
     expect(calls).toEqual([]);
   });
+
+  it('validates the targets derived from the passthrough flags', async () => {
+    const calls: Array<{ command: string; args: readonly string[] }> = [];
+    const code = await runContainerCapture({
+      argv: ['screenshots', '--webkit'],
+      env: CONTAINER_ENV,
+      spawn: fakeSpawn((command, args) => calls.push({ command, args: [...args] })),
+      ensureDependencies: async () => false,
+      logger: { log: () => {} },
+    });
+
+    expect(code).toBe(0);
+    expect(calls).toEqual([
+      { command: 'npm', args: ['run', 'screenshots', '--', '--webkit'] },
+    ]);
+  });
+
+  it('rejects a CAPTURE_TARGET list that ignores the passthrough flags', async () => {
+    const calls: string[] = [];
+    await expect(
+      runContainerCapture({
+        argv: ['screenshots', '--webkit'],
+        env: {
+          ...CONTAINER_ENV,
+          CAPTURE_TARGET: 'desktop,mobile',
+          CAPTURE_TARGET_DPR: '1,2',
+        },
+        spawn: fakeSpawn((command) => calls.push(command)),
+        ensureDependencies: async () => false,
+        logger: { log: () => {} },
+      }),
+    ).rejects.toThrow(
+      /Capture target "webkit" does not match CAPTURE_TARGET="desktop,mobile"/,
+    );
+    expect(calls).toEqual([]);
+  });
 });
 
 describe('host container capture run', () => {
@@ -467,14 +617,16 @@ describe('host container capture run', () => {
     exitCode = 0,
     env = {},
     target = 'screenshots:webkit',
+    passthrough = [],
     checkPort = vi.fn(async () => {}),
   }: {
     exitCode?: number;
     env?: Env;
     target?: string;
+    passthrough?: string[];
     checkPort?: (port: number, host?: string) => Promise<void>;
   } = {}) {
-    const argv = [target];
+    const argv = [target, ...passthrough];
     const logDir = mkdtempSync(join(tmpdir(), 'capture-container-'));
     tempDirs.push(logDir);
     const now = '2026-11-12T00-00-00-000Z';
@@ -545,6 +697,32 @@ describe('host container capture run', () => {
 
     stdout.mockRestore();
     stderr.mockRestore();
+  });
+
+  it('injects the passthrough-derived capture targets on the host path', async () => {
+    const harness = hostHarness({
+      target: 'screenshots:2048:before',
+      passthrough: ['--webkit'],
+    });
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    await expect(runContainerCapture(harness.options)).resolves.toBe(0);
+
+    expect(harness.calls).toHaveLength(1);
+    const envArgs = envArgsOf(harness.calls[0]?.args ?? []);
+    expect(envArgs).toContain('CAPTURE_TARGET=webkit');
+    expect(envArgs).toContain('CAPTURE_TARGET_DPR=2');
+    expect(harness.calls[0]?.args.slice(-2)).toEqual([
+      'screenshots:2048:before',
+      '--webkit',
+    ]);
+    await vi.waitFor(
+      () => {
+        expect(readFileSync(harness.logPath, 'utf8')).toContain('container stdout\n');
+      },
+      { timeout: 5000 },
+    );
   });
 
   it('skips the host port probe when BASE_URL points at an external preview', async () => {
