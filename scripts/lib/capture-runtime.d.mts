@@ -34,6 +34,11 @@ export interface LogCaptureEnvironmentOptions {
   };
 }
 
+export function assertContainerCaptureTarget(
+  target: CaptureTarget,
+  env?: Record<string, string | undefined>,
+): void;
+
 export function logCaptureEnvironment(
   target: CaptureTarget,
   browser: Pick<Browser, 'version'>,

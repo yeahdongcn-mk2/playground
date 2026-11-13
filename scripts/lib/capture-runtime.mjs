@@ -1,8 +1,11 @@
 import { spawn } from 'node:child_process';
 import { chromium, devices, webkit } from '@playwright/test';
 import {
+  CAPTURE_CONTAINER_FLAG,
+  CAPTURE_TARGET_VAR,
   captureEnvironmentFingerprint,
   formatCaptureEnvironmentFingerprint,
+  normalizeCaptureTargets,
 } from './capture-env.mjs';
 
 /** Engine selector shared by every screenshot script. */
@@ -50,6 +53,47 @@ function markTargetLogged(browser, target) {
 }
 
 /**
+ * Fail when a container capture records a target that CAPTURE_TARGET omits.
+ *
+ * The container entry derives CAPTURE_TARGET from the capture script and its
+ * passthrough flags, but the script itself decides which context it creates.
+ * Asserting at the recording point catches a mismatch between the injected
+ * environment contract and the evidence actually written; the error names the
+ * real target so a wrong passthrough is easy to correct.
+ *
+ * Host runs keep the fingerprint-only behaviour and do not need CAPTURE_TARGET.
+ */
+export function assertContainerCaptureTarget(target, env = process.env) {
+  if (env[CAPTURE_CONTAINER_FLAG] !== '1') {
+    return;
+  }
+
+  const raw = env[CAPTURE_TARGET_VAR];
+  let declared;
+  try {
+    declared = normalizeCaptureTargets(raw);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Cannot validate capture target "${String(target)}": ` +
+        `${CAPTURE_TARGET_VAR}="${String(raw)}" is invalid (${detail}). ` +
+        'Run captures through npm run screenshots:container, which injects a valid target list.',
+    );
+  }
+  if (declared !== null && declared.includes(target)) {
+    return;
+  }
+
+  const actual = raw === undefined || raw.trim() === '' ? '(not set)' : raw;
+  throw new Error(
+    `Capture target "${String(target)}" was recorded but is not listed in ` +
+      `${CAPTURE_TARGET_VAR}="${actual}". Run captures through ` +
+      'npm run screenshots:container, which injects that list from the capture ' +
+      `script and its flags; the entry must include "${String(target)}".`,
+  );
+}
+
+/**
  * Log the fixed capture environment fingerprint (Issue #199) for one target.
  *
  * The fingerprint is recorded when a browser first creates a context for that
@@ -59,11 +103,14 @@ function markTargetLogged(browser, target) {
  * desktop or phone contexts still emits one line per target.
  *
  * Host runs report `source=host` with unavailable image / font / EGL fields, so
- * the existing `npm run screenshots:*` commands keep working unchanged. Errors
- * are logged as a warning instead of failing the capture; strict container
- * validation is owned by the container entry.
+ * the existing `npm run screenshots:*` commands keep working unchanged, and
+ * fingerprint errors are logged as a warning instead of failing the capture.
+ * Container target validation runs before that warning branch: a target the
+ * entry did not declare aborts the run instead of being downgraded to a
+ * warning. Strict environment validation is owned by the container entry.
  */
 export function logCaptureEnvironment(target, browser, { env, run } = {}) {
+  assertContainerCaptureTarget(target, env);
   if (loggedTargetsByBrowser.get(browser)?.has(target)) {
     return;
   }
