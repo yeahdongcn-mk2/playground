@@ -66,3 +66,53 @@ describe('container capture host preview port precheck docs (Issue #207)', () =>
     }
   });
 });
+
+describe('container capture passthrough target docs (Issue #208)', () => {
+  const WEBKIT_FLAGS = [
+    '--webkit',
+    '--webkit-narrow',
+    '--webkit-narrow-before',
+  ] as const;
+  const MINESWEEPER_MOBILE_FLAGS = [
+    '--touch-before',
+    '--narrow(-before)',
+    '--min(-before)',
+    '--restart(-before)',
+    '--short(-before)',
+    '--large(-before)',
+  ] as const;
+
+  it('documents that the webkit passthrough flags apply to every screenshot script', () => {
+    for (const flag of WEBKIT_FLAGS) {
+      expect(CONTAINER_COMMAND).toContain(`\`${flag}\``);
+    }
+    expect(CONTAINER_COMMAND).toContain('对所有截图脚本生效并注入 `webkit`');
+  });
+
+  it('documents that the minesweeper phone modes tighten the target only for screenshots:minesweeper', () => {
+    for (const flag of MINESWEEPER_MOBILE_FLAGS) {
+      expect(CONTAINER_COMMAND).toContain(`\`${flag}\``);
+    }
+    expect(CONTAINER_COMMAND).toContain(
+      '只在 target 为 `screenshots:minesweeper` 时把目标收紧为 `mobile`',
+    );
+    expect(CONTAINER_COMMAND).toContain('其他 target 会忽略这些参数、目标不变');
+  });
+
+  it('documents that before, clear and allow-historical-overwrite never change the target', () => {
+    expect(CONTAINER_COMMAND).toContain(
+      '`--before` / `--clear` / `--allow-historical-overwrite` 不改变目标',
+    );
+  });
+
+  it('documents the runtime assertion against a target outside the injected list', () => {
+    expect(CONTAINER_COMMAND).toContain('运行时断言实际记录的目标必须属于注入列表');
+    expect(CONTAINER_COMMAND).toContain(
+      '包含实际 target 与 `CAPTURE_TARGET` 的可读错误',
+    );
+  });
+
+  it('no longer derives the target from the script name alone', () => {
+    expect(CONTAINER_COMMAND).not.toContain('容器入口按脚本的捕获模式注入');
+  });
+});
