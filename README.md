@@ -393,7 +393,7 @@ games/<game>/scene → 对应引擎（动态 import）
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过（oxlint 覆盖 src、tests 与 scripts；error 与 warning 都会失败，warning 经 --deny-warnings 升级；另跑 scripts/check-boundaries.mjs，失败返回非 0）
-npm run test:unit    # 829 passed（含贪食蛇 27（引擎 23 + 调试 4）、俄罗斯方块 38、2048 41、打砖块 41、扫雷 150 个规则 / 难度 / 成绩 / 视图 / 调试用例，以及 2048 截图确定性 4 例、贪食蛇截图确定性 8 例、打砖块截图确定性 7 例、截图脚本端口 11 例、截图模式 81 例、截图历史证据文档契约 21 例（scores 10 + 2048 / 打砖块 / 贪食蛇 / 打砖块手机 / 扫雷 11）、WebKit 证据口径文档契约 9 例、截图历史证据保护契约 33 例、预览服务启动 7 例、framework 手机端 tap 诊断 10 例、framework 手机端停稳等待 3 例、e2e flaky 门禁 26 例、ci-workflow 3 例断言（含计数检查）、flake-watch workflow 12 例、flaky 口径文档 10 例、新增触摸注入单一来源与 release click 6 例、文档计数真值校验 22 例、固定捕获环境契约 21 例、容器捕获入口 28 例、捕获环境指纹 5 例、Playwright 安装包装脚本 6 例、CI 安装缓存 / apt / 超时断言 3 例、lint 覆盖契约 5 例（含 warning 失败行为与 src / tests / scripts 零告警）、lint 文档契约 17 例）
+npm run test:unit    # 833 passed（含贪食蛇 27（引擎 23 + 调试 4）、俄罗斯方块 38、2048 41、打砖块 41、扫雷 150 个规则 / 难度 / 成绩 / 视图 / 调试用例，以及 2048 截图确定性 4 例、贪食蛇截图确定性 8 例、打砖块截图确定性 7 例、截图脚本端口 11 例、截图模式 81 例、截图历史证据文档契约 21 例（scores 10 + 2048 / 打砖块 / 贪食蛇 / 打砖块手机 / 扫雷 11）、WebKit 证据口径文档契约 9 例、容器入口端口预检文档契约 4 例、截图历史证据保护契约 33 例、预览服务启动 7 例、framework 手机端 tap 诊断 10 例、framework 手机端停稳等待 3 例、e2e flaky 门禁 26 例、ci-workflow 3 例断言（含计数检查）、flake-watch workflow 12 例、flaky 口径文档 10 例、新增触摸注入单一来源与 release click 6 例、文档计数真值校验 22 例、固定捕获环境契约 21 例、容器捕获入口 28 例、捕获环境指纹 5 例、Playwright 安装包装脚本 6 例、CI 安装缓存 / apt / 超时断言 3 例、lint 覆盖契约 5 例（含 warning 失败行为与 src / tests / scripts 零告警）、lint 文档契约 17 例）
 npm run build        # 通过
 npm run check:budget # 通过（入口 10.91 KB gzip，全部 JS 405.11 KB gzip）
 npm run test:e2e     # 153 passed（桌面 86 + 手机 36 + WebKit 31）
