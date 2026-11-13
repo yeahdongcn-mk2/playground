@@ -13,6 +13,21 @@ import {
 
 const BROWSER_VERSION = '144.0.1';
 
+/** Environment the container entry injects for a Chromium desktop + phone run. */
+function containerEnv(overrides: Record<string, string> = {}): Record<string, string> {
+  return {
+    CAPTURE_CONTAINER: '1',
+    CAPTURE_IMAGE_TAG: PLAYWRIGHT_IMAGE_PIN.tag,
+    CAPTURE_IMAGE_DIGEST: PLAYWRIGHT_IMAGE_PIN.digest,
+    CAPTURE_TARGET: 'desktop,mobile',
+    CAPTURE_TARGET_DPR: '1,2',
+    EGL_PLATFORM: 'surfaceless',
+    LIBGL_ALWAYS_SOFTWARE: '1',
+    __EGL_VENDOR_LIBRARY_FILENAMES: '/usr/share/glvnd/egl_vendor.d/50_mesa.json',
+    ...overrides,
+  };
+}
+
 function fakeBrowser(version = BROWSER_VERSION): Browser {
   return {
     version: () => version,
@@ -26,6 +41,7 @@ function loggedLines(log: { mock: { calls: unknown[][] } }): string[] {
 
 beforeEach(() => {
   vi.stubEnv('CAPTURE_CONTAINER', '');
+  vi.stubEnv('CAPTURE_TARGET', '');
 });
 
 afterEach(() => {
@@ -96,19 +112,10 @@ describe('capture environment fingerprint in the capture runtime', () => {
 
   it('records the injected container fingerprint for a phone target', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const containerEnv = {
-      CAPTURE_CONTAINER: '1',
-      CAPTURE_IMAGE_TAG: PLAYWRIGHT_IMAGE_PIN.tag,
-      CAPTURE_IMAGE_DIGEST: PLAYWRIGHT_IMAGE_PIN.digest,
-      CAPTURE_TARGET: 'desktop,mobile',
-      CAPTURE_TARGET_DPR: '1,2',
-      EGL_PLATFORM: 'surfaceless',
-      LIBGL_ALWAYS_SOFTWARE: '1',
-      __EGL_VENDOR_LIBRARY_FILENAMES: '/usr/share/glvnd/egl_vendor.d/50_mesa.json',
-    };
+    const env = containerEnv();
 
     logCaptureEnvironment('mobile', fakeBrowser(), {
-      env: containerEnv,
+      env,
       run: { fontPackages: 'unavailable' },
     });
 
@@ -119,5 +126,73 @@ describe('capture environment fingerprint in the capture runtime', () => {
     );
     expect(line).toContain('fonts=unavailable');
     expect(line).toContain('env=EGL_PLATFORM=surfaceless');
+  });
+});
+
+describe('container runtime target assertion', () => {
+  it('records a webkit target when CAPTURE_TARGET declares it', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    logCaptureEnvironment('webkit', fakeBrowser('27.2'), {
+      env: containerEnv({ CAPTURE_TARGET: 'webkit', CAPTURE_TARGET_DPR: '2' }),
+      run: { fontPackages: 'unavailable' },
+    });
+
+    expect(warn).not.toHaveBeenCalled();
+    const lines = loggedLines(log);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('source=container target=webkit dpr=2');
+  });
+
+  it('fails a WebKit context whose target is missing from CAPTURE_TARGET', async () => {
+    vi.stubEnv('CAPTURE_CONTAINER', '1');
+    vi.stubEnv('CAPTURE_TARGET', 'desktop,mobile');
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await expect(createPhoneContext(fakeBrowser('27.2'), 'webkit')).rejects.toThrow(
+      /Capture target "webkit" was recorded but is not listed in CAPTURE_TARGET="desktop,mobile".*npm run screenshots:container/s,
+    );
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it('fails recording a target missing from CAPTURE_TARGET without writing a fingerprint', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    expect(() =>
+      logCaptureEnvironment('webkit', fakeBrowser(), {
+        env: containerEnv(),
+        run: { fontPackages: 'unavailable' },
+      }),
+    ).toThrow(
+      /Capture target "webkit" was recorded but is not listed in CAPTURE_TARGET="desktop,mobile".*npm run screenshots:container/s,
+    );
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it('keeps host fingerprint-only behaviour without CAPTURE_TARGET', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await createDesktopContext(fakeBrowser());
+
+    const [line] = loggedLines(log);
+    expect(line).toContain('source=host target=desktop dpr=1');
+  });
+
+  it('logs each declared target once per browser in the container', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const browser = fakeBrowser();
+    const env = containerEnv();
+    const run = { fontPackages: 'unavailable' as const };
+
+    logCaptureEnvironment('desktop', browser, { env, run });
+    logCaptureEnvironment('desktop', browser, { env, run });
+    logCaptureEnvironment('mobile', browser, { env, run });
+    logCaptureEnvironment('mobile', browser, { env, run });
+
+    expect(loggedLines(log).map((line) => line.split(' ')[2])).toEqual([
+      'target=desktop',
+      'target=mobile',
+    ]);
   });
 });
