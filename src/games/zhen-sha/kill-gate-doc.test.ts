@@ -16,13 +16,9 @@ function isProductionFile(name: string): boolean {
   return !name.endsWith('.test.ts') && !name.endsWith('.test.css') && !name.endsWith('.d.ts');
 }
 
-/** Count lines the way `wc -l` does, with or without a final newline. */
+/** Count lines exactly the way `wc -l` does: the number of newline characters. */
 function countLines(text: string): number {
-  if (text.length === 0) {
-    return 0;
-  }
-  const newlines = text.split('\n').length - 1;
-  return text.endsWith('\n') ? newlines : newlines + 1;
+  return text.split('\n').length - 1;
 }
 
 const PRODUCTION_FILES = readdirSync(GAME_DIR).filter(isProductionFile).sort();
@@ -51,7 +47,69 @@ function section(heading: string): string {
   return DOC.slice(start, end === -1 ? undefined : end);
 }
 
-const CONCLUSION = /结论[：:]\s*\*{0,2}(M|L)\b/.exec(DOC)?.[1];
+/** Parse a table cell holding a plain or bold number, e.g. `457` or `**1,416**`. */
+function parseCellNumber(cell: string): number {
+  const raw = /\d[\d,]*/.exec(cell)?.[0];
+  if (raw === undefined) {
+    throw new Error(`无法解析原型表格中的数字：${cell}`);
+  }
+  return Number(raw.replaceAll(',', ''));
+}
+
+/** One `| 文件 | 行数 |` row of the prototype measurement table. */
+interface PrototypeRow {
+  name: string;
+  lines: number;
+}
+
+/** Parse the prototype "实测" table, including its `合计` row. */
+function parsePrototypeTable(): { files: PrototypeRow[]; total: number } {
+  const subsection = section('### kill gate 原型生产规模（实测）');
+  const nextHeading = subsection.indexOf('\n### ');
+  const block = nextHeading === -1 ? subsection : subsection.slice(0, nextHeading);
+  const rows = block
+    .split('\n')
+    .filter((line) => line.startsWith('|'))
+    .map((line) =>
+      line
+        .split('|')
+        .slice(1, -1)
+        .map((cell) => cell.trim()),
+    );
+  const files: PrototypeRow[] = [];
+  let total: number | undefined;
+
+  for (const cells of rows) {
+    const nameCell = cells[0];
+    const linesCell = cells[1];
+    if (nameCell === undefined || linesCell === undefined) {
+      throw new Error(`无法解析原型表格行：${cells.join(' | ')}`);
+    }
+    if (nameCell === '生产文件' || nameCell.startsWith('---')) {
+      continue;
+    }
+    const lines = parseCellNumber(linesCell);
+    if (nameCell.replaceAll('*', '') === '合计') {
+      total = lines;
+      continue;
+    }
+    files.push({ name: nameCell.replaceAll('`', '').trim(), lines });
+  }
+
+  if (total === undefined) {
+    throw new Error('原型表格缺少「合计」行');
+  }
+  return { files, total };
+}
+
+/** The explicit `结论：M` / `结论：L` claim, rejecting an ambiguous `M 或 L`. */
+function parseConclusion(text: string): string | undefined {
+  const match = /结论[：:]\s*\*{0,2}([^\n*。.]*?)\s*\*{0,2}\s*(?:[。.]|$)/m.exec(text);
+  const claim = match?.[1]?.trim();
+  return claim === 'M' || claim === 'L' ? claim : undefined;
+}
+
+const CONCLUSION = parseConclusion(DOC);
 const PLAYTEST = section('## 3 人试玩');
 
 describe('zhen-sha kill gate engineering assessment', () => {
@@ -68,6 +126,18 @@ describe('zhen-sha kill gate engineering assessment', () => {
     for (const name of PRODUCTION_FILES) {
       expect(DOC).toContain(`\`${name}\``);
     }
+  });
+
+  it('matches the documented prototype per-file table and total', () => {
+    const table = parsePrototypeTable();
+    expect(table.files.map((row) => row.name).sort()).toEqual(PRODUCTION_FILES);
+    for (const row of table.files) {
+      expect(
+        row.lines,
+        `原型表格中 ${row.name} 的行数应等于实际 \`wc -l\``,
+      ).toBe(countLines(readFileSync(join(GAME_DIR, row.name), 'utf8')));
+    }
+    expect(table.total).toBe(PRODUCTION_LINES);
   });
 
   it('lists the registry entry separately from the prototype count', () => {
