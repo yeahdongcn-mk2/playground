@@ -77,7 +77,11 @@ function envArgsOf(args: readonly string[]): string[] {
 }
 
 const HOST_SCRIPTS = JSON.stringify({
-  scripts: { 'screenshots:webkit': 'node scripts/capture-screenshots.mjs --webkit' },
+  scripts: {
+    'screenshots:webkit': 'node scripts/capture-screenshots.mjs --webkit',
+    'screenshots:2048:before': 'node scripts/capture-2048-screenshots.mjs --before',
+    'screenshots:breakout:before': 'node scripts/capture-breakout-screenshots.mjs --before',
+  },
 });
 const HOST_LOCKFILE = JSON.stringify({
   packages: { 'node_modules/@playwright/test': { version: '1.64.1' } },
@@ -462,17 +466,20 @@ describe('host container capture run', () => {
   function hostHarness({
     exitCode = 0,
     env = {},
+    target = 'screenshots:webkit',
     checkPort = vi.fn(async () => {}),
   }: {
     exitCode?: number;
     env?: Env;
+    target?: string;
     checkPort?: (port: number, host?: string) => Promise<void>;
   } = {}) {
-    const argv = ['screenshots:webkit'];
+    const argv = [target];
     const logDir = mkdtempSync(join(tmpdir(), 'capture-container-'));
     tempDirs.push(logDir);
     const now = '2026-11-12T00-00-00-000Z';
-    const logPath = join(logDir, `screenshots-webkit-${now}.log`);
+    const safeTarget = target.replace(/[^a-zA-Z0-9._-]+/g, '-');
+    const logPath = join(logDir, `${safeTarget}-${now}.log`);
     const calls: Array<{ command: string; args: readonly string[] }> = [];
     const spawn = vi.fn((command: string, args: readonly string[]) => {
       calls.push({ command, args: [...args] });
@@ -540,19 +547,102 @@ describe('host container capture run', () => {
     stderr.mockRestore();
   });
 
-  it('wraps a preview-port failure with the capture target name', async () => {
+  it('skips the host port probe when BASE_URL points at an external preview', async () => {
     const checkPort = vi.fn(async () => {
       throw new Error('port 4174 is already in use');
     });
-    const harness = hostHarness({ checkPort });
+    const harness = hostHarness({
+      env: { BASE_URL: 'http://127.0.0.1:5189' },
+      checkPort,
+    });
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
 
-    await expect(runContainerCapture(harness.options)).rejects.toThrow(
-      'Cannot run container capture "screenshots:webkit": port 4174 is already in use',
+    await expect(runContainerCapture(harness.options)).resolves.toBe(0);
+
+    expect(checkPort).not.toHaveBeenCalled();
+    expect(harness.calls).toHaveLength(1);
+    const envArgs = envArgsOf(harness.calls[0]?.args ?? []);
+    expect(envArgs).toContain('BASE_URL=http://127.0.0.1:5189');
+    expect(envArgs).toContain('PREVIEW_PORT=4174');
+    expect(harness.calls[0]?.args.slice(-1)).toEqual(['screenshots:webkit']);
+    await vi.waitFor(
+      () => {
+        expect(readFileSync(harness.logPath, 'utf8')).toContain('container stdout\n');
+      },
+      { timeout: 5000 },
     );
-    expect(checkPort).toHaveBeenCalledWith(4174);
-    expect(harness.spawn).not.toHaveBeenCalled();
-    expect(harness.logger.log).not.toHaveBeenCalled();
   });
+
+  it.each(['screenshots:2048:before', 'screenshots:breakout:before'])(
+    'accepts %s when its default host port is busy and BASE_URL is set',
+    async (target) => {
+      const checkPort = vi.fn(async () => {
+        throw new Error(`port for ${target} is already in use`);
+      });
+      const harness = hostHarness({
+        target,
+        env: { BASE_URL: 'http://127.0.0.1:5189' },
+        checkPort,
+      });
+      vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+      await expect(runContainerCapture(harness.options)).resolves.toBe(0);
+
+      expect(checkPort).not.toHaveBeenCalled();
+      expect(harness.calls).toHaveLength(1);
+      expect(harness.calls[0]?.args.slice(-1)).toEqual([target]);
+      expect(envArgsOf(harness.calls[0]?.args ?? [])).toContain(
+        'BASE_URL=http://127.0.0.1:5189',
+      );
+      await vi.waitFor(
+        () => {
+          expect(readFileSync(harness.logPath, 'utf8')).toContain('container stdout\n');
+        },
+        { timeout: 5000 },
+      );
+    },
+  );
+
+  it('still probes the default host port when BASE_URL is an empty string', async () => {
+    const harness = hostHarness({ env: { BASE_URL: '' } });
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    await expect(runContainerCapture(harness.options)).resolves.toBe(0);
+
+    expect(harness.checkPort).toHaveBeenCalledWith(4174);
+    const envArgs = envArgsOf(harness.calls[0]?.args ?? []);
+    expect(envArgs).toContain('PREVIEW_PORT=4174');
+    expect(envArgs.some((value) => value.startsWith('BASE_URL='))).toBe(false);
+    await vi.waitFor(
+      () => {
+        expect(readFileSync(harness.logPath, 'utf8')).toContain('container stdout\n');
+      },
+      { timeout: 5000 },
+    );
+  });
+
+  it.each<[string, Env]>([
+    ['unset', {}],
+    ['an empty string', { BASE_URL: '' }],
+  ])(
+    'wraps a preview-port failure with the capture target name when BASE_URL is %s',
+    async (_label, env) => {
+      const checkPort = vi.fn(async () => {
+        throw new Error('port 4174 is already in use');
+      });
+      const harness = hostHarness({ checkPort, env });
+
+      await expect(runContainerCapture(harness.options)).rejects.toThrow(
+        'Cannot run container capture "screenshots:webkit": port 4174 is already in use',
+      );
+      expect(checkPort).toHaveBeenCalledWith(4174);
+      expect(harness.spawn).not.toHaveBeenCalled();
+      expect(harness.logger.log).not.toHaveBeenCalled();
+    },
+  );
 
   it('checks the host port configured through PREVIEW_PORT', async () => {
     const harness = hostHarness({ env: { PREVIEW_PORT: '4999' } });

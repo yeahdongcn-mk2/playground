@@ -382,7 +382,11 @@ export async function runContainerCapture({
 
   preflightDocker({ spawnSync });
   const previewPort = previewPortForTarget(target, env.PREVIEW_PORT);
-  if (previewPort !== null) {
+  // A non-empty BASE_URL points the capture at an external preview, so the
+  // target never starts its own port (the `before` modes). Probing that port
+  // would reject a shared host because of an unrelated listener.
+  const usesExternalPreview = env.BASE_URL !== undefined && env.BASE_URL !== '';
+  if (previewPort !== null && !usesExternalPreview) {
     try {
       await checkPort(previewPort);
     } catch (error) {
