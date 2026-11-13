@@ -1,5 +1,7 @@
 import type { CaptureFontPackage } from './capture-env.mjs';
 
+export type CaptureSource = 'container' | 'host';
+
 export interface ScreenshotSha256Image {
   repository: string;
   tag: string;
@@ -7,7 +9,7 @@ export interface ScreenshotSha256Image {
 }
 
 export interface ScreenshotSha256Environment {
-  source: 'container' | 'host';
+  source: CaptureSource;
   target: string;
   dpr: number;
   image: ScreenshotSha256Image;
@@ -33,8 +35,7 @@ export interface ScreenshotSha256Manifest {
 }
 
 export interface CaptureEnvironmentFingerprintRecord {
-  source: string;
-  target: string;
+  source: CaptureSource;  target: string;
   dpr: number;
   image: ScreenshotSha256Image | null;
   node: string;
@@ -88,6 +89,7 @@ export const DEFAULT_MANIFEST_PATH: string;
 export const SHA256_PATTERN: RegExp;
 export const IMAGE_DIGEST_PATTERN: RegExp;
 export const CAPTURE_COMMIT_PATTERN: RegExp;
+export const FILE_NAME_PATTERN: RegExp;
 
 export class ScreenshotSha256Error extends Error {}
 
@@ -99,6 +101,7 @@ export function manifestEnvironmentMismatches(
   manifest: ScreenshotSha256Manifest,
 ): string[];
 export function imageReference(image: ScreenshotSha256Image): string;
+export function expectedRecaptureCommand(file: string): string;
 export function parseImageReference(value: string): ScreenshotSha256Image | null;
 export function parseCaptureEnvironmentFingerprintLine(
   line: string,
@@ -108,5 +111,5 @@ export function verifyCaptureEnvironment(
   options?: VerifyCaptureEnvironmentOptions,
 ): CaptureEnvironmentVerification;
 export function verifyScreenshotSha256(
-  options?: VerifyScreenshotSha256Options,
+  options: VerifyScreenshotSha256Options,
 ): ScreenshotSha256Verification;

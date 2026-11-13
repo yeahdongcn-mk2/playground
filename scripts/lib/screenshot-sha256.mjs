@@ -36,6 +36,8 @@ export const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 export const IMAGE_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 /** A git capture commit: the repository records full 40-character objects. */
 export const CAPTURE_COMMIT_PATTERN = /^[0-9a-f]{40}$/;
+/** A plain PNG file name: no separators, control characters or `..` segments. */
+export const FILE_NAME_PATTERN = /^[^\p{Cc}/\\]+\.png$/u;
 
 const IMAGE_REFERENCE_PATTERN = /^(?<repository>.+):(?<tag>[^:@]+)@(?<digest>sha256:[0-9a-f]{64})$/;
 
@@ -155,7 +157,7 @@ function parseCapture(entry, index, source) {
   if (!file.endsWith('.png')) {
     throw new ScreenshotSha256Error(`${label}.file must be a .png file name, got "${file}"`);
   }
-  if (file.includes('/') || file.includes('\\') || file === '..' || file === '.') {
+  if (!FILE_NAME_PATTERN.test(file) || file === '..' || file === '.') {
     throw new ScreenshotSha256Error(
       `${label}.file must be a plain file name below the screenshot directory, got "${file}"`,
     );
@@ -233,10 +235,13 @@ export function parseSha256Manifest(text, { source = 'manifest' } = {}) {
   const seen = new Set();
   const captures = parsed.captures.map((entry, index) => {
     const capture = parseCapture(entry, index, source);
-    if (seen.has(capture.file)) {
+    // Case / Unicode aliases would resolve to the same file on case-insensitive
+    // filesystems, so they count as a duplicate even on Linux.
+    const key = capture.file.normalize('NFC').toLowerCase();
+    if (seen.has(key)) {
       throw new ScreenshotSha256Error(`${source}: duplicate capture file "${capture.file}"`);
     }
-    seen.add(capture.file);
+    seen.add(key);
     return capture;
   });
 
@@ -329,15 +334,34 @@ export function manifestEnvironmentMismatches(manifest) {
           `expected "${expectedReference}"`,
       );
     }
-    if (!capture.command.startsWith('npm run screenshots:container -- ')) {
+    const expectedCommand = expectedRecaptureCommand(capture.file);
+    if (capture.command !== expectedCommand) {
       problems.push(
-        `captures[${index}] command is "${capture.command}", expected a ` +
-          '"npm run screenshots:container -- <target>" recapture command',
+        `captures[${index}] command is "${capture.command}", expected "${expectedCommand}"`,
       );
     }
   });
 
   return problems;
+}
+
+/**
+ * The fixed-container recapture command for a committed WebKit evidence file.
+ *
+ * The manifest only records WebKit evidence, so the game-specific scripts are
+ * derived from the file prefix and every other file belongs to the generic
+ * `screenshots:webkit` capture. Comparing the whole command (not just its
+ * prefix) stops a stale or shell-extended command from being printed as the
+ * recapture hint.
+ */
+export function expectedRecaptureCommand(file) {
+  if (file.startsWith('after-2048-')) {
+    return 'npm run screenshots:container -- screenshots:2048:webkit';
+  }
+  if (file.startsWith('after-breakout-')) {
+    return 'npm run screenshots:container -- screenshots:breakout:webkit';
+  }
+  return 'npm run screenshots:container -- screenshots:webkit';
 }
 
 /** Render a manifest image as the reference the capture log prints. */
@@ -394,6 +418,25 @@ function parseEglList(value) {
 }
 
 /**
+ * The exact fields printed by `formatCaptureEnvironmentFingerprint`. A line
+ * with duplicate or unknown fields is malformed input, not environment drift.
+ */
+const CAPTURE_ENV_FIELDS = new Set([
+  'source',
+  'target',
+  'dpr',
+  'image',
+  'node',
+  'playwright',
+  'browser',
+  'fonts',
+  'env',
+]);
+
+/** The capture runtime's legitimate "fingerprint unavailable" fallback line. */
+const CAPTURE_ENV_UNAVAILABLE_PATTERN = /^capture-env:\s*unavailable\b/;
+
+/**
  * Parse one `capture-env:` line printed by the capture runtime.
  *
  * The format is stable (see `formatCaptureEnvironmentFingerprint` in
@@ -405,6 +448,11 @@ export function parseCaptureEnvironmentFingerprintLine(line) {
   if (!trimmed.startsWith(prefix)) {
     throw new ScreenshotSha256Error(`not a capture-env fingerprint line: "${trimmed}"`);
   }
+  if (CAPTURE_ENV_UNAVAILABLE_PATTERN.test(trimmed)) {
+    throw new ScreenshotSha256Error(
+      `capture environment fingerprint is unavailable: "${trimmed}"`,
+    );
+  }
 
   const fields = new Map();
   for (const token of trimmed.slice(prefix.length).trim().split(/\s+/)) {
@@ -413,31 +461,31 @@ export function parseCaptureEnvironmentFingerprintLine(line) {
     if (equals <= 0) {
       throw new ScreenshotSha256Error(`capture-env field "${token}" is not key=value`);
     }
-    fields.set(token.slice(0, equals), token.slice(equals + 1));
+    const key = token.slice(0, equals);
+    if (!CAPTURE_ENV_FIELDS.has(key)) {
+      throw new ScreenshotSha256Error(
+        `capture-env field "${key}" is not part of the fixed fingerprint`,
+      );
+    }
+    if (fields.has(key)) {
+      throw new ScreenshotSha256Error(`capture-env field "${key}" appears more than once`);
+    }
+    fields.set(key, token.slice(equals + 1));
   }
 
-  for (const key of [
-    'source',
-    'target',
-    'dpr',
-    'image',
-    'node',
-    'playwright',
-    'browser',
-    'fonts',
-    'env',
-  ]) {
+  for (const key of CAPTURE_ENV_FIELDS) {
     if (!fields.has(key)) {
       throw new ScreenshotSha256Error(`capture-env line is missing "${key}"`);
     }
   }
 
-  const dpr = Number(fields.get('dpr'));
-  if (!Number.isInteger(dpr) || dpr <= 0) {
+  const rawDpr = fields.get('dpr') ?? '';
+  if (!/^[1-9][0-9]*$/.test(rawDpr)) {
     throw new ScreenshotSha256Error(
-      `capture-env dpr is "${fields.get('dpr')}", expected a positive integer`,
+      `capture-env dpr is "${rawDpr}", expected a positive integer`,
     );
   }
+  const dpr = Number(rawDpr);
 
   const browser = fields.get('browser');
   return {
@@ -460,6 +508,9 @@ export function parseCaptureLogFingerprints(text) {
   for (const rawLine of String(text).split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line.startsWith('capture-env:')) continue;
+    // The runtime logs this when a probe fails; it is not a fingerprint and
+    // must surface as an unavailable environment, not as malformed input.
+    if (CAPTURE_ENV_UNAVAILABLE_PATTERN.test(line)) continue;
     fingerprints.push(parseCaptureEnvironmentFingerprintLine(line));
   }
   return fingerprints;
@@ -511,11 +562,18 @@ export function verifyCaptureEnvironment({ logText, environment } = {}) {
   }
 
   if (fingerprints.length === 0) {
+    const unavailable = String(logText)
+      .split(/\r?\n/)
+      .some((rawLine) => CAPTURE_ENV_UNAVAILABLE_PATTERN.test(rawLine.trim()));
     return {
       checked: true,
       invalid: false,
       ok: false,
-      problems: ['capture log has no "capture-env:" fingerprint line'],
+      problems: [
+        unavailable
+          ? 'capture environment fingerprint is unavailable (the capture runtime could not probe it)'
+          : 'capture log has no "capture-env:" fingerprint line',
+      ],
       fingerprints: [],
     };
   }
