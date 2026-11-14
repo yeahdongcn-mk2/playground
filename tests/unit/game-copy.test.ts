@@ -138,7 +138,11 @@ describe('current game copy', () => {
       ['src/app/hub.ts', HUB],
     ] as const) {
       expect(source, `${name} should not carry the old five-game count`).not.toContain('五款');
-      expect(source, `${name} should not carry the old four-game count`).not.toContain('四款');
+      // README's engine-split line legitimately says "其余四款使用 Phaser 场景",
+      // so only reject a stale four-game count that names a number of games.
+      expect(source, `${name} should not carry the old four-game count`).not.toMatch(
+        /四款(?:完整)?游戏/,
+      );
       expect(source, `${name} should not carry the old hub issue eyebrow`).not.toContain(
         'ISSUE #11',
       );

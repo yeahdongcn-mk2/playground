@@ -365,7 +365,7 @@ games/<game>/scene → 对应引擎（动态 import）
 ## 新增一个游戏
 
 1. 新建 `src/games/<id>/index.ts`，导出 `GameModule`：编写 `meta`，在 `mount()` 内动态 `import()` 自己的视图。
-2. 新建场景 / 逻辑 / DOM 外壳。2D 游戏可复用 `src/engine/phaser2d.ts` 的 `createPhaser2DGame()`；完整玩法参考 `src/games/snake/`（规则与渲染分离、最高分、触屏与测试）、`src/games/tetris/`（旋转 / 消行 / 等级、触屏按钮与调试接缝）、`src/games/2048/`（数字合并、键盘 + 滑动与固定初始棋盘）、`src/games/breakout/`（固定步长模拟、触屏拖动挡板与固定初始状态）和 `src/games/minesweeper/`（纯 DOM 网格、左右键与固定雷盘），最小示例参考 `src/games/blank/`。
+2. 新建场景 / 逻辑 / DOM 外壳。2D 游戏可复用 `src/engine/phaser2d.ts` 的 `createPhaser2DGame()`；完整玩法参考 `src/games/snake/`（规则与渲染分离、最高分、触屏与测试）、`src/games/tetris/`（旋转 / 消行 / 等级、触屏按钮与调试接缝）、`src/games/2048/`（数字合并、键盘 + 滑动与固定初始棋盘）、`src/games/breakout/`（固定步长模拟、触屏拖动挡板与固定初始状态）、`src/games/minesweeper/`（纯 DOM 网格、左右键与固定雷盘）和 `src/games/zhen-sha/`（镇煞：纯 DOM 轻点 / 长按 / 松手手势与测试）；其中扫雷与镇煞是 2 款纯 DOM 参考，其余四款使用 Phaser 场景；最小示例参考 `src/games/blank/`。
 3. 在 `src/games/registry.ts` 的 `games` 数组里注册；大厅会自动出现一张卡片。
 4. 需要新资源时放到 `public/games/<id>/`，在场景 `preload()` 里加载。
 
@@ -393,7 +393,7 @@ games/<game>/scene → 对应引擎（动态 import）
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过（oxlint 覆盖 src、tests 与 scripts；error 与 warning 都会失败，warning 经 --deny-warnings 升级；另跑 scripts/check-boundaries.mjs，失败返回非 0）
-npm run test:unit    # 1052 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
+npm run test:unit    # 1056 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
 npm run build        # 通过
 npm run check:budget # 通过（入口 11.16 KB gzip，全部 JS 410.58 KB gzip）
 npm run test:e2e     # 154 passed（桌面 87 + 手机 36 + WebKit 31）
