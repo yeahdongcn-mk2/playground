@@ -6,6 +6,12 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { DEFAULT_E2E_REPORT_PATH } from '../../scripts/lib/e2e-flakes.mjs';
+import {
+  PLAYWRIGHT_IMAGE_PIN,
+  PLAYWRIGHT_IMAGE_REPOSITORY,
+  imageTagForPlaywrightVersion,
+  readPlaywrightVersion,
+} from '../../scripts/lib/capture-env.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const WORKFLOW_PATH = join(ROOT, '.github', 'workflows', 'flake-watch.yml');
@@ -14,10 +20,12 @@ const WORKFLOW_SOURCE = readFileSync(WORKFLOW_PATH, 'utf8');
 const SUMMARY_SCRIPT = join(ROOT, 'scripts', 'flake-watch-summary.mjs');
 const REPEAT_COUNT = 5;
 const TEST_STEP_ID = 'flake-watch';
-const PLAYWRIGHT_INSTALL_COMMAND = 'node scripts/install-playwright-ci.mjs webkit';
-const PLAYWRIGHT_INSTALL_TIMEOUT_MINUTES = 8;
-const PLAYWRIGHT_CACHE_PATH = '~/.cache/ms-playwright';
-const APT_ACQUIRE_CONFIG_PATH = '/etc/apt/apt.conf.d/99-ci-acquire';
+/** Steps the pinned image makes unnecessary; Issue #213 removed them. */
+const REMOVED_STEP_NAMES = [
+  'Configure apt Acquire retries and timeouts',
+  'Cache Playwright browsers',
+  'Install Playwright WebKit',
+];
 const TEST_COMMAND_TOKENS = [
   'npx playwright test',
   '--project=mobile-webkit',
@@ -41,6 +49,7 @@ interface WorkflowStep {
 interface WorkflowJob {
   'runs-on'?: string;
   'timeout-minutes'?: number;
+  container?: string | { image?: string; options?: string };
   steps?: WorkflowStep[];
 }
 
@@ -56,12 +65,6 @@ const steps = job?.steps ?? [];
 
 const isFlakeCheck = (step: WorkflowStep): boolean =>
   (step.run ?? '').includes('npx playwright test');
-const isPlaywrightInstall = (step: WorkflowStep): boolean =>
-  (step.run ?? '').trim() === PLAYWRIGHT_INSTALL_COMMAND;
-const isPlaywrightCache = (step: WorkflowStep): boolean =>
-  (step.with?.path ?? '') === PLAYWRIGHT_CACHE_PATH;
-const isAptAcquireConfig = (step: WorkflowStep): boolean =>
-  (step.run ?? '').includes(APT_ACQUIRE_CONFIG_PATH);
 
 function stepIndex(predicate: (step: WorkflowStep) => boolean): number {
   return steps.findIndex(predicate);
@@ -97,7 +100,41 @@ describe('flake-watch workflow', () => {
     expect(workflow.permissions).toEqual({ contents: 'read' });
   });
 
-  it('prepares dependencies, WebKit and the build before the repeated check', () => {
+  it('runs in the same pinned Playwright image as the verify job', () => {
+    const container = job?.container;
+    const image = typeof container === 'string' ? container : container?.image;
+    expect(image, 'the watch job should declare a container image').toBeDefined();
+
+    // `npm ci` installs the @playwright/test version recorded in the lockfile,
+    // so the shared pin must cover that exact version. The tag is derived from
+    // the version and the digest fixes the multi-arch image.
+    expect(PLAYWRIGHT_IMAGE_PIN.version).toBe(readPlaywrightVersion());
+    expect(PLAYWRIGHT_IMAGE_PIN.tag).toBe(
+      imageTagForPlaywrightVersion(PLAYWRIGHT_IMAGE_PIN.version),
+    );
+    expect(PLAYWRIGHT_IMAGE_PIN.digest).toMatch(/^sha256:[0-9a-f]{64}$/);
+
+    const expectedImage = `${PLAYWRIGHT_IMAGE_REPOSITORY}:${PLAYWRIGHT_IMAGE_PIN.tag}@${PLAYWRIGHT_IMAGE_PIN.digest}`;
+    expect(image).toBe(expectedImage);
+
+    // Issue #213 requires the scheduled watch to use the exact same image as
+    // the PR verify job, so a Playwright bump updates one workflow rather than
+    // leaving the two environments to drift.
+    const ciWorkflow = parse(readFileSync(CI_WORKFLOW_PATH, 'utf8')) as Workflow;
+    const verifyContainer = ciWorkflow.jobs?.verify?.container;
+    const verifyImage =
+      typeof verifyContainer === 'string' ? verifyContainer : verifyContainer?.image;
+    expect(verifyImage).toBe(expectedImage);
+    expect(image).toBe(verifyImage);
+
+    // GitHub's container jobs default to a 64 MB /dev/shm; WebKit needs the
+    // host IPC namespace, matching the verify job and the capture container.
+    const options =
+      typeof container === 'object' && container !== null ? (container.options ?? '') : '';
+    expect(options.split(/\s+/)).toContain('--ipc=host');
+  });
+
+  it('prepares dependencies and the build before the repeated check', () => {
     const checkout = steps[0];
     expect(checkout?.uses).toMatch(/^actions\/checkout@/);
 
@@ -108,89 +145,41 @@ describe('flake-watch workflow', () => {
 
     const commands = steps.map((step) => (step.run ?? '').trim());
     const installIndex = commands.indexOf('npm ci');
-    const playwrightIndex = commands.indexOf(PLAYWRIGHT_INSTALL_COMMAND);
     const buildIndex = commands.indexOf('npm run build');
     const checkIndex = stepIndex(isFlakeCheck);
 
     expect(installIndex).toBeGreaterThanOrEqual(0);
-    expect(playwrightIndex).toBeGreaterThan(installIndex);
-    expect(buildIndex).toBeGreaterThan(playwrightIndex);
+    expect(buildIndex).toBeGreaterThan(installIndex);
     expect(checkIndex).toBeGreaterThan(buildIndex);
-
-    // The raw install command must not come back: it has no retries, no
-    // step-level timeout and no diagnostic output for apt/DNS failures.
-    expect(WORKFLOW_SOURCE).not.toContain('npx playwright install');
   });
 
-  it('installs WebKit through the bounded wrapper with an explicit step timeout', () => {
-    const install = requireStep(isPlaywrightInstall, 'a Playwright install step');
-    expect(install.name).toBe('Install Playwright WebKit');
-    expect((install.run ?? '').trim()).toBe(PLAYWRIGHT_INSTALL_COMMAND);
-    expect(install['timeout-minutes']).toBe(PLAYWRIGHT_INSTALL_TIMEOUT_MINUTES);
-    expect(install['continue-on-error']).toBeUndefined();
+  it('does not install browsers, cache ms-playwright or configure apt at runtime', () => {
+    // The pinned image already ships WebKit and its system dependencies, so
+    // the three Issue #202 install steps must stay gone.
+    for (const name of REMOVED_STEP_NAMES) {
+      expect(
+        steps.some((step) => step.name === name),
+        `the watch job should not have the "${name}" step`,
+      ).toBe(false);
+    }
+    // Only the browser cache is forbidden; a future non-browser cache (for
+    // example a build cache) should not trip this assertion. The precise
+    // check is the `ms-playwright` path below.
+    expect(
+      steps.some((step) => String(step.with?.path ?? '').includes('ms-playwright')),
+      'the image supplies the browsers, so the watch must not cache them',
+    ).toBe(false);
 
-    // The step timeout must leave the five repeats room inside the 30-minute
-    // job timeout and must still be shorter than the job itself.
-    const jobTimeout = job?.['timeout-minutes'];
-    expect(jobTimeout).toBe(30);
-    expect(install['timeout-minutes']).toBeLessThan(jobTimeout ?? 0);
-
-    const installIndex = stepIndex(isPlaywrightInstall);
-    expect(stepIndex((step) => (step.run ?? '').trim() === 'npm ci')).toBeLessThan(installIndex);
-    expect(installIndex).toBeLessThan(stepIndex((step) => (step.run ?? '').trim() === 'npm run build'));
-  });
-
-  it('caches WebKit under a distinct key while restoring the shared cache prefix', () => {
-    const cache = requireStep(isPlaywrightCache, 'a Playwright browser cache step');
-    expect(cache.uses).toBe('actions/cache@v4');
-    expect(cache.with?.path).toBe(PLAYWRIGHT_CACHE_PATH);
-    expect(cache.with?.key).toBe(
-      "playwright-webkit-${{ runner.os }}-${{ hashFiles('package-lock.json') }}",
-    );
-    const restoreKeys = String(cache.with?.['restore-keys'] ?? '');
-    // Own prefix first, then the shared prefix a cached verify job would write.
-    expect(restoreKeys).toContain('playwright-webkit-${{ runner.os }}-');
-    expect(restoreKeys).toContain('playwright-${{ runner.os }}-');
-    expect(cache['continue-on-error']).toBeUndefined();
-
-    // This job installs only WebKit. Writing that under the shared
-    // `playwright-<os>-<lockfile hash>` key would permanently poison the
-    // Chromium + WebKit cache if the cached verify job from Issue #202 is
-    // restored, so the write key stays WebKit-specific while the shared
-    // prefix remains restorable. Issue #213 moved the PR job into the pinned
-    // Playwright image, so verify no longer writes that shared entry itself.
-    const ciWorkflow = parse(readFileSync(CI_WORKFLOW_PATH, 'utf8')) as Workflow;
-    const ciCache = (ciWorkflow.jobs?.verify?.steps ?? []).find(
-      (step) =>
-        (step.uses ?? '').startsWith('actions/cache@') &&
-        (step.with?.path ?? '') === PLAYWRIGHT_CACHE_PATH,
-    );
-    expect(ciCache, 'the pinned-image verify job must not cache browsers').toBeUndefined();
-
-    const cacheIndex = stepIndex(isPlaywrightCache);
-    const installIndex = stepIndex(isPlaywrightInstall);
-    expect(installIndex).toBeGreaterThanOrEqual(0);
-    expect(cacheIndex).toBeLessThan(installIndex);
-    expect(stepIndex((step) => (step.run ?? '').trim() === 'npm ci')).toBeLessThan(cacheIndex);
-  });
-
-  it('configures apt Acquire retries and timeouts before installing WebKit', () => {
-    const apt = requireStep(isAptAcquireConfig, 'an apt Acquire config step');
-    expect(apt.name).toBe('Configure apt Acquire retries and timeouts');
-    expect(apt['continue-on-error']).toBeUndefined();
-
-    const run = apt.run ?? '';
-    expect(run).toContain('sudo');
-    expect(run).toContain(APT_ACQUIRE_CONFIG_PATH);
-    expect(run).toMatch(/Acquire::Retries\s+"1";/);
-    expect(run).toMatch(/Acquire::http::Timeout\s+"15";/);
-    expect(run).toMatch(/Acquire::https::Timeout\s+"15";/);
-
-    const aptIndex = stepIndex(isAptAcquireConfig);
-    const installIndex = stepIndex(isPlaywrightInstall);
-    expect(installIndex).toBeGreaterThanOrEqual(0);
-    expect(aptIndex).toBeLessThan(installIndex);
-    expect(stepIndex((step) => (step.run ?? '').trim() === 'npm ci')).toBeLessThan(aptIndex);
+    for (const command of steps.map((step) => step.run ?? '')) {
+      // A browser install would reintroduce the Issue #202 failure mode and
+      // ignore the image pin; apt is part of that install path. Match any
+      // `apt`/`apt-get` token so option forms such as `apt-get -y install`
+      // and `apt -y install` cannot slip through.
+      expect(command).not.toMatch(/\bplaywright\s+install\b/);
+      expect(command).not.toContain('--with-deps');
+      expect(command).not.toMatch(/\bapt(?:-get)?\b/i);
+      expect(command).not.toContain('scripts/install-playwright-ci.mjs');
+    }
   });
 
   it('repeats the mobile-webkit hub case five times without retries', () => {

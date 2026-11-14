@@ -16,8 +16,25 @@ jobs:
   mobile-webkit-first-run:
     name: mobile-webkit first-run stability
     runs-on: ubuntu-latest
-    # Five cold runs of the hub case plus dependency and browser installs.
+    # Five cold runs of the hub case plus dependency install and the build.
     timeout-minutes: 30
+    # Issue #213: reuse the pinned official Playwright image from the `verify`
+    # job in ci.yml instead of installing WebKit and its apt dependencies at
+    # runtime. The image already contains WebKit, so the scheduled watch has no
+    # `playwright install`, `--with-deps` or apt step. The tag is derived from
+    # `@playwright/test` in package-lock.json and the digest pins the exact
+    # multi-arch image; tests/unit/flake-watch-workflow.test.ts fails when this
+    # drifts from PLAYWRIGHT_IMAGE_PIN or from the verify job.
+    #
+    # Image pull happens during container setup, before any step: a missing
+    # tag/digest or an unreachable registry fails the job there with the Docker
+    # pull error, still inside the unchanged 30-minute budget.
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f
+      # GitHub container jobs default to a 64 MB /dev/shm. WebKit crashes
+      # intermittently when it fills, so share the host IPC namespace like the
+      # verify job and scripts/run-container-capture.mjs do (Issue #213).
+      options: --ipc=host
     steps:
       - uses: actions/checkout@v4
 
@@ -28,38 +45,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Configure apt Acquire retries and timeouts
-        run: |
-          set -euo pipefail
-          sudo tee /etc/apt/apt.conf.d/99-ci-acquire >/dev/null <<'EOF'
-          Acquire::Retries "1";
-          Acquire::http::Timeout "15";
-          Acquire::https::Timeout "15";
-          EOF
-
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          # This job installs only WebKit. Writing it under the shared
-          # `playwright-<os>-<lockfile hash>` key would leave a WebKit-only
-          # entry behind if the cached verify job from Issue #202 is ever
-          # restored; cached entries are immutable, so that verify job would
-          # keep restoring it and re-download Chromium for this lockfile hash.
-          # A distinct write key avoids that while the second restore key still
-          # reuses a full Chromium + WebKit cache.
-          key: playwright-webkit-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            playwright-webkit-${{ runner.os }}-
-            playwright-${{ runner.os }}-
-
-      - name: Install Playwright WebKit
-        # The bounded wrapper retries transient apt/DNS failures, kills a hung
-        # install and exits non-zero within this step timeout, so the 30-minute
-        # job keeps enough time for the five repeats.
-        run: node scripts/install-playwright-ci.mjs webkit
-        timeout-minutes: 8
 
       - name: Production build
         run: npm run build

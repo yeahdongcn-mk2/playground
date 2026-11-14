@@ -101,7 +101,6 @@ const isPreCommitRun = (step: WorkflowStep): boolean =>
   commandsOf(step).some((command) => /^pre-commit run --all-files(?:\s|$)/.test(command));
 const isTypecheck = (step: WorkflowStep): boolean => (step.run ?? '').trim() === 'npm run typecheck';
 const PLAYWRIGHT_INSTALL_COMMAND = 'node scripts/install-playwright-ci.mjs';
-const PLAYWRIGHT_INSTALL_TIMEOUT_MINUTES = 8;
 const PLAYWRIGHT_CACHE_PATH = '~/.cache/ms-playwright';
 const APT_ACQUIRE_CONFIG_PATH = '/etc/apt/apt.conf.d/99-ci-acquire';
 const isPlaywrightInstall = (step: WorkflowStep): boolean =>
@@ -239,27 +238,26 @@ describe('CI workflow', () => {
 
     for (const command of steps.flatMap(commandsOf)) {
       // A browser install would reintroduce the Issue #202 failure mode and
-      // ignore the image pin; apt is part of that install path.
+      // ignore the image pin; apt is part of that install path. Match any
+      // `apt`/`apt-get` token so option forms such as `apt-get -y install`
+      // and `apt -y install` cannot slip through.
       expect(command).not.toMatch(/\bplaywright\s+install\b/);
       expect(command).not.toContain('--with-deps');
-      expect(command).not.toMatch(/\bapt(?:-get)?\s+(?:update|install|get)\b/i);
-      expect(command).not.toContain('/etc/apt/');
+      expect(command).not.toMatch(/\bapt(?:-get)?\b/i);
     }
   });
 
-  it('keeps the bounded install wrapper as the flake-watch fallback', () => {
-    // Issue #213 keeps the #202 wrapper so the image change can be rolled back;
-    // the scheduled WebKit watch still depends on it.
+  it('keeps the bounded install wrapper available as a rollback path', () => {
+    // Issue #213 keeps the #202 wrapper so the image change can be rolled
+    // back, but both workflows now run in the pinned image and no workflow
+    // invokes it any more.
     expect(existsSync(INSTALL_WRAPPER_PATH)).toBe(true);
 
     const flakeWatch = parse(readFileSync(FLAKE_WATCH_WORKFLOW_PATH, 'utf8')) as Workflow;
     const watchSteps = flakeWatch.jobs?.['mobile-webkit-first-run']?.steps ?? [];
-    const install = watchSteps.find(
-      (step) => (step.run ?? '').trim() === 'node scripts/install-playwright-ci.mjs webkit',
-    );
-    expect(install, 'flake-watch should keep using the bounded install wrapper').toBeDefined();
-    expect(install?.['timeout-minutes']).toBe(PLAYWRIGHT_INSTALL_TIMEOUT_MINUTES);
-    expect(install?.['continue-on-error']).toBeUndefined();
+    for (const step of [...steps, ...watchSteps]) {
+      expect(step.run ?? '').not.toContain('scripts/install-playwright-ci.mjs');
+    }
   });
 
   it('runs the screenshot doc dimension check between the unit tests and the build', () => {
