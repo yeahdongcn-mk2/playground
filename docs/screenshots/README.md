@@ -43,6 +43,23 @@
 | `after-hub-desktop.png` | 大厅（Chromium 桌面，含页脚） | 1440×1000 / 深色 / DPR 1，fullPage: true | 整页 1440×3468 | `npm run screenshots:container -- screenshots` / `7232a897…` |
 | `after-hub-mobile.png` | 大厅（Chromium 手机） | 390×844（DPR 2）/ 深色，fullPage: true | 整页 780×13194 | `npm run screenshots:container -- screenshots` / `d2fa7877…` |
 
+## zhen-sha：镇煞游戏首屏命名证据（Issue #274 / t1）
+
+- 目的：记录游戏内名称统一为「镇煞」后的首屏 Before / After。Before 是改名前的旧标题，After 的 `<h1>` 读作「镇煞 Zhen Sha」；除标题首字外两张首屏图逐像素一致，布局与画布没有漂移。
+- Before 基线：`2f1d6f08cdf50369aa722181713738cde06e803d`（#274 t1 改动前的 `main`，也是本分支起点）。
+- After 构建源码提交：`46aae2cca4cf57e10b5837b2c6262d2e1bf51973`（分支 `agent/plan-274-t0`；截图 PNG 与本节是其后的证据提交，不改变构建产物）。
+- 捕获方式：同一 worktree 分别 checkout Before / After 源码后执行 `npm ci && npm run build`，用 `vite preview --host 127.0.0.1 --port 4198|4199 --strictPort` 提供生产产物；随后用 Playwright Chromium 真实渲染 `#/games/zhen-sha`，等待 `[data-testid="zhen-sha-game"]` 挂载与 `document.fonts.ready`，再把 `requestAnimationFrame` 冻结在 mount 帧后截图。冻结只用于让两版画布逐像素可比，没有改动游戏逻辑或产物。
+- 视口 / 主题：桌面 1440×1000 CSS px、DPR 1；手机 320×640 CSS px、DPR 2、`isMobile: true`、`hasTouch: true`。两张均为深色主题、`reducedMotion: reduce`、视口截图（`fullPage: false`）。
+- 像素差异：桌面 644 个像素、手机 947 个像素不同，差异包围盒分别只覆盖标题首字（桌面 147,131–181,165；手机 229,233–273,277），因此改名没有移动首屏元素。
+- 预算基线（`npm run check:budget`）：入口 33.42 KB / 11.16 KB gzip（上限 50 KB）；全部 JS 改名后 410.59 KB gzip（改名前 410.58 KB），上限 450 KB，剩余 39.41 KB；CSS 13.57 KB gzip。
+
+| 文件 | 场景 | CSS 视口 / PNG 尺寸 | sha256 |
+| --- | --- | --- | --- |
+| `before-zhen-sha-route-desktop.png` | 游戏首屏（改名前的旧标题） | 1440×1000 / 1440×1000 | `18758a81807b26e9512db9895b2abbcedf408dd7b6496d0251ea23fda36f105a` |
+| `after-zhen-sha-route-desktop.png` | 游戏首屏（「镇煞」） | 1440×1000 / 1440×1000 | `8f903d39bb5e681ec9a59a322ab5a759c5058df6c24f6ffa44a11785ef1a8002` |
+| `before-zhen-sha-route-320x640.png` | 游戏首屏（改名前的旧标题） | 320×640 / 640×1280 | `94e43a57bc1825ca7e909f194b2f49a1fccdec657bee35cbc807476cab3ba81e` |
+| `after-zhen-sha-route-320x640.png` | 游戏首屏（「镇煞」） | 320×640 / 640×1280 | `35447f5d3e9108fc4bbd6e2873c49c26f55b4b1215fa825735f4dd3a99904cee` |
+
 ## 历史 After 证据与当前构建不一致（Issue #137）
 
 - 权威对照口径：逐字节比较只在同一构建、同一捕获环境下的确定性产物之间成立。需要与历史提交对照时，用同一脚本在父提交（或该图的历史捕获 commit）的干净 worktree 里重拍，再与同一次重拍的另一次运行比较；不要求重跑结果等于已提交的历史 `fullPage` PNG。历史 After 图只代表各自 PR 时点的 UI 快照，不是当前构建的确定性基准。

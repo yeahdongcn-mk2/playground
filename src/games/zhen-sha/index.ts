@@ -9,7 +9,7 @@ function throwIfAborted(signal: AbortSignal): void {
 export const zhenShaGame: GameModule = {
   meta: {
     id: 'zhen-sha',
-    title: '真煞',
+    title: '镇煞',
     englishTitle: 'Zhen Sha',
     description:
       '一柄金棍，一位黑煞首领。轻点格挡杀招，长按蓄势，破防后松手一棍定胜负。三种手势就能试玩六十秒。',
