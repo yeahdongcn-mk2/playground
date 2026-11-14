@@ -459,7 +459,7 @@ describe('CI workflow', () => {
 
     const cache = steps.find(isPreCommitCache);
     expect(cache, 'verify job should cache pre-commit environments with actions/cache').toBeDefined();
-    const cacheKeyPrefix = 'pre-commit-${{ runner.os }}-';
+    const cacheKeyPrefix = 'pre-commit-container-${{ runner.os }}-';
     expect(cache?.with?.key).toContain(`${cacheKeyPrefix}${version}-`);
     expect(cache?.with?.key).toContain("hashFiles('.pre-commit-config.yaml')");
     expect(cache?.with?.['restore-keys']).toContain(`${cacheKeyPrefix}${version}-`);

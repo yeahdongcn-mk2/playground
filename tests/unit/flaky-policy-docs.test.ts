@@ -200,7 +200,13 @@ describe('flaky policy docs', () => {
     expect(section).toContain('bootstrap.pypa.io/get-pip.py');
     expect(section).toContain('pre-commit==4.7.0');
     expect(section).toContain('--break-system-packages');
-    expect(installCommands.filter((command) => command.includes('--break-system-packages'))).toHaveLength(2);
+    const getPipCommand = installCommands.find(
+      (command) =>
+        command.includes('"$RUNNER_TEMP/get-pip.py"') &&
+        command.includes('--break-system-packages'),
+    );
+    expect(getPipCommand).toBeDefined();
+    expect(pinnedInstall).toContain('--break-system-packages');
 
     // The bounded install remains the flake-watch fallback.
     const watchTimeout = flakeWatch.jobs?.['mobile-webkit-first-run']?.['timeout-minutes'];

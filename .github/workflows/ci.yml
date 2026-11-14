@@ -54,8 +54,8 @@ jobs:
         # available; bash is present in the image.
         shell: bash
         # The image's /usr/bin/python3 has neither pip nor ensurepip, and the
-        # setup-python toolcache CPython cannot load its ssl module inside the
-        # container (run 43560696477), so `-m pip` cannot reach PyPI there.
+        # setup-python toolcache CPython could not load its ssl module in this
+        # container (run 43560696477), so `-m pip` could not reach PyPI there.
         # The image's own Python has working OpenSSL, so bootstrap pip for it
         # and install the pinned pre-commit from the resulting environment.
         # The container is ephemeral, so PEP 668's externally-managed guard is
@@ -69,12 +69,15 @@ jobs:
           pre-commit --version
 
       - name: Cache pre-commit environments
+        # Container HOME is /github/home, so host-built entries (whose db.db
+        # stores absolute /home/runner paths) are unusable here. Scope the key
+        # to container runs so a host cache can never be restored into them.
         uses: actions/cache@v4
         with:
           path: ~/.cache/pre-commit
-          key: pre-commit-${{ runner.os }}-4.7.0-${{ hashFiles('.pre-commit-config.yaml') }}
+          key: pre-commit-container-${{ runner.os }}-4.7.0-${{ hashFiles('.pre-commit-config.yaml') }}
           restore-keys: |
-            pre-commit-${{ runner.os }}-4.7.0-
+            pre-commit-container-${{ runner.os }}-4.7.0-
 
       - name: Run pre-commit checks
         run: pre-commit run --all-files --show-diff-on-failure
