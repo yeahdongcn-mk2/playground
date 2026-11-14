@@ -16,6 +16,11 @@ export const CHROMIUM_ENGINE = 'chromium';
 export const WEBKIT_ENGINE = 'webkit';
 /** The same device the `mobile-webkit` Playwright project uses. */
 export const WEBKIT_DEVICE = 'iPhone SE (3rd gen)';
+/**
+ * The device whose viewport, fractional DPR and touch flags define the
+ * minesweeper touch evidence.
+ */
+export const TOUCH_MOBILE_DEVICE = 'Pixel 7';
 
 /**
  * Resolve the capture engine from a script's argv.
@@ -97,10 +102,11 @@ export function assertContainerCaptureTarget(target, env = process.env) {
  * Log the fixed capture environment fingerprint (Issue #199) for one target.
  *
  * The fingerprint is recorded when a browser first creates a context for that
- * target, not at browser launch: a single Chromium run captures both desktop
- * (DPR 1) and phone (DPR 2) evidence, and a launch-time guess would label the
- * phone images `desktop`. Deduped per browser and target, so a run with several
- * desktop or phone contexts still emits one line per target.
+ * target, not at browser launch: a single Chromium run captures desktop
+ * (DPR 1), phone (DPR 2) and Pixel 7 touch (DPR 2.625) evidence, and a
+ * launch-time guess would label the phone or touch images `desktop`. Deduped
+ * per browser and target, so a run with several desktop, phone or touch
+ * contexts still emits one line per target.
  *
  * Host runs report `source=host` with unavailable image / font / EGL fields, so
  * the existing `npm run screenshots:*` commands keep working unchanged, and
@@ -176,6 +182,33 @@ export async function createDesktopContext(browser, options = {}) {
 export async function createMobileContext(browser, options = {}) {
   const context = await browser.newContext(options);
   logCaptureEnvironment('mobile', browser);
+  return context;
+}
+
+/**
+ * Create the Pixel 7 touch context used by the minesweeper touch evidence.
+ *
+ * The viewport, fractional DPR 2.625, mobile and touch flags come from the
+ * Playwright device descriptor, so the `mobile-touch` fingerprint matches what
+ * the browser actually renders. The unit test pins the Pixel 7 descriptor to the
+ * target contract, so a Playwright bump that changes the device cannot silently
+ * desynchronise the fingerprint. Theme / motion default to the committed
+ * screenshots and callers may override them.
+ */
+export async function createTouchMobileContext(browser, options = {}) {
+  const device = devices[TOUCH_MOBILE_DEVICE];
+  const context = await browser.newContext({
+    viewport: device.viewport,
+    screen: device.screen,
+    deviceScaleFactor: device.deviceScaleFactor,
+    isMobile: device.isMobile,
+    hasTouch: device.hasTouch,
+    userAgent: device.userAgent,
+    colorScheme: 'dark',
+    reducedMotion: 'reduce',
+    ...options,
+  });
+  logCaptureEnvironment('mobile-touch', browser);
   return context;
 }
 

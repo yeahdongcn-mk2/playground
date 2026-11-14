@@ -1,4 +1,4 @@
-export type CaptureTarget = 'desktop' | 'mobile' | 'webkit';
+export type CaptureTarget = 'desktop' | 'mobile' | 'mobile-touch' | 'webkit';
 export type CaptureSource = 'host' | 'container';
 
 export interface CaptureImagePin {

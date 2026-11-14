@@ -16,6 +16,7 @@ export const WEBKIT_NARROW_BEFORE_FLAG: string;
 export const CHROMIUM_ENGINE: 'chromium';
 export const WEBKIT_ENGINE: 'webkit';
 export const WEBKIT_DEVICE: string;
+export const TOUCH_MOBILE_DEVICE: string;
 
 export type CaptureEngine = 'chromium' | 'webkit';
 
@@ -50,6 +51,10 @@ export function createDesktopContext(
   options?: BrowserContextOptions,
 ): Promise<BrowserContext>;
 export function createMobileContext(
+  browser: Browser,
+  options?: BrowserContextOptions,
+): Promise<BrowserContext>;
+export function createTouchMobileContext(
   browser: Browser,
   options?: BrowserContextOptions,
 ): Promise<BrowserContext>;

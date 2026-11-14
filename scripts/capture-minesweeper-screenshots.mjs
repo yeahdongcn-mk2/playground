@@ -1,5 +1,4 @@
 import { mkdir } from 'node:fs/promises';
-import { devices } from '@playwright/test';
 import {
   WEBKIT_ENGINE,
   WEBKIT_NARROW_BEFORE_FLAG,
@@ -9,6 +8,7 @@ import {
   createDesktopContext,
   createMobileContext,
   createPhoneContext,
+  createTouchMobileContext,
   engineLabel,
   launchCaptureBrowser,
   parseCaptureEngine,
@@ -345,15 +345,16 @@ function touchMobileName(prefix, state) {
  * exactly what the touch task adds, so the baseline cannot express the state
  * through touch yet.
  *
- * Chromium keeps the historical Pixel 7 framing and `-mobile` file names. The
- * WebKit run uses the same iPhone SE (3rd gen) device as the e2e project and
- * writes `-webkit` file names, so both evidence sets can coexist.
+ * Chromium keeps the historical Pixel 7 framing and `-mobile` file names
+ * through `createTouchMobileContext`, which records the separate
+ * `mobile-touch` fingerprint at DPR 2.625. The WebKit run uses the same
+ * iPhone SE (3rd gen) device as the e2e project and writes `-webkit` file
+ * names, so both evidence sets can coexist.
  */
 async function captureTouchMobile(browser, prefix) {
   const context = IS_WEBKIT
     ? await createPhoneContext(browser, ENGINE)
-    : await createMobileContext(browser, {
-        ...devices['Pixel 7'],
+    : await createTouchMobileContext(browser, {
         colorScheme: 'dark',
         reducedMotion: 'reduce',
       });

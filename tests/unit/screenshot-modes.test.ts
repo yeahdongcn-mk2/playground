@@ -713,6 +713,33 @@ describe('WebKit screenshot modes', () => {
   });
 });
 
+/**
+ * Problems with the Chromium minesweeper touch-context wiring.
+ *
+ * The capture script is a standalone entry, so the unit suite never executes
+ * `captureTouchMobile` itself. A static guard on the call site is what keeps
+ * the `mobile-touch` fingerprint from silently regressing: the old
+ * `createMobileContext({ ...devices['Pixel 7'] })` call records `target=mobile`
+ * and the per-browser dedupe then swallows the touch fingerprint.
+ */
+function touchMobileTargetProblems(source: string): string[] {
+  const problems: string[] = [];
+
+  if (!/:\s*await createTouchMobileContext\(browser, \{/.test(source)) {
+    problems.push(
+      'the Chromium touch branch must call createTouchMobileContext(browser, { ... })',
+    );
+  }
+  if (source.includes("devices['Pixel 7']")) {
+    problems.push("the script must not inline devices['Pixel 7']");
+  }
+  if (/\bcreateMobileContext\(browser, \{\s*\.\.\.devices/.test(source)) {
+    problems.push('the script must not spread a device into createMobileContext');
+  }
+
+  return problems;
+}
+
 describe('WebKit screenshot static guards', () => {
   it('guards exactly the capture scripts that write screenshots', () => {
     expect(Object.keys(WEBKIT_SCRIPT_GUARDS).sort()).toEqual(CAPTURE_SCRIPTS);
@@ -745,6 +772,26 @@ describe('WebKit screenshot static guards', () => {
     expect(source).toMatch(
       /if \(MODE === 'webkit-narrow' \|\| MODE === 'webkit-narrow-before'\)\s*\{[^{}]*captureWebkitNarrow\(browser,/,
     );
+  });
+
+  it('routes the Chromium minesweeper touch capture through createTouchMobileContext', () => {
+    const source = captureSource('capture-minesweeper-screenshots.mjs');
+
+    expect(touchMobileTargetProblems(source)).toEqual([]);
+    expect(source).toMatch(/:\s*await createTouchMobileContext\(browser, \{/);
+
+    // The guard is falsifiable: the regression reproduced in review must turn
+    // it red, not just the current source green.
+    const reverted = source.replace(
+      /:\s*await createTouchMobileContext\(browser, \{/,
+      ": await createMobileContext(browser, {\n        ...devices['Pixel 7'],",
+    );
+    expect(reverted, 'the touch branch should have a call to mutate').not.toBe(source);
+    expect(touchMobileTargetProblems(reverted)).toEqual([
+      expect.stringContaining('createTouchMobileContext'),
+      expect.stringContaining("devices['Pixel 7']"),
+      expect.stringContaining('createMobileContext'),
+    ]);
   });
 
   it.each(CAPTURE_SCRIPTS)(

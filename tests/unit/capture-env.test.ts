@@ -3,6 +3,7 @@ import {
   CAPTURE_EGL_ENV,
   CAPTURE_EGL_VARS,
   CAPTURE_FONT_PACKAGES,
+  CAPTURE_TARGETS,
   PLAYWRIGHT_IMAGE_REPOSITORY,
   PLAYWRIGHT_IMAGE_PIN,
   assertContainerCaptureEnvironment,
@@ -82,17 +83,28 @@ describe('capture image pin', () => {
 });
 
 describe('capture target DPR contract', () => {
-  it('records desktop DPR 1 and mobile / WebKit DPR 2 per target', () => {
+  it('records desktop DPR 1, mobile / WebKit DPR 2 and mobile-touch DPR 2.625', () => {
     expect(dprForCaptureTarget('desktop')).toBe(1);
     expect(dprForCaptureTarget('mobile')).toBe(2);
+    expect(dprForCaptureTarget('mobile-touch')).toBe(2.625);
     expect(dprForCaptureTarget('webkit')).toBe(2);
+    expect(CAPTURE_TARGETS).toEqual(['desktop', 'mobile', 'mobile-touch', 'webkit']);
     expect(() => dprForCaptureTarget('tablet')).toThrow(/Unknown capture target "tablet"/);
   });
 
   it('normalizes comma-separated and array target declarations', () => {
-    expect(normalizeCaptureTargets(' desktop, mobile ')).toEqual(['desktop', 'mobile']);
-    expect(normalizeCaptureTargets(['desktop', 'mobile'])).toEqual(['desktop', 'mobile']);
+    expect(normalizeCaptureTargets(' desktop, mobile, mobile-touch ')).toEqual([
+      'desktop',
+      'mobile',
+      'mobile-touch',
+    ]);
+    expect(normalizeCaptureTargets(['desktop', 'mobile', 'mobile-touch'])).toEqual([
+      'desktop',
+      'mobile',
+      'mobile-touch',
+    ]);
     expect(normalizeCaptureTargets('webkit')).toEqual(['webkit']);
+    expect(normalizeCaptureTargets('mobile-touch')).toEqual(['mobile-touch']);
     expect(normalizeCaptureTargets('')).toBeNull();
     expect(normalizeCaptureTargets(undefined)).toBeNull();
   });
@@ -175,6 +187,37 @@ describe('captureEnvironmentFingerprint', () => {
     ).not.toThrow();
   });
 
+  it('records the mobile-touch target at the fractional Pixel 7 DPR', () => {
+    const run = {
+      browserVersion: '144.0.1',
+      nodeVersion: 'v24.22.0',
+      playwrightVersion: '1.64.1',
+    };
+    const host = captureEnvironmentFingerprint({
+      target: 'mobile-touch',
+      run,
+      env: {},
+    });
+    expect(host.source).toBe('host');
+    expect(host.target).toBe('mobile-touch');
+    expect(host.dpr).toBe(2.625);
+    expect(formatCaptureEnvironmentFingerprint(host)).toContain(
+      'target=mobile-touch dpr=2.625',
+    );
+
+    const container = captureEnvironmentFingerprint({
+      target: 'mobile-touch',
+      run: { ...run, fontPackages: 'unavailable' },
+      env: {
+        ...CONTAINER_ENV,
+        CAPTURE_TARGET: 'mobile-touch',
+        CAPTURE_TARGET_DPR: '2.625',
+      },
+    });
+    expect(container.source).toBe('container');
+    expect(container.dpr).toBe(2.625);
+  });
+
   it('records the container image, fonts, EGL variables and target DPR', () => {
     const fingerprint = captureEnvironmentFingerprint({
       target: 'webkit',
@@ -246,6 +289,53 @@ describe('assertContainerCaptureEnvironment', () => {
       imageTag: PLAYWRIGHT_IMAGE_PIN.tag,
       version: '1.64.1',
     });
+  });
+
+  it('accepts the fractional mobile-touch DPR 2.625', () => {
+    expect(
+      assertContainerCaptureEnvironment({
+        env: {
+          ...CONTAINER_ENV,
+          CAPTURE_TARGET: 'desktop,mobile,mobile-touch',
+          CAPTURE_TARGET_DPR: '1,2,2.625',
+        },
+        targets: ['desktop', 'mobile', 'mobile-touch'],
+        version: '1.64.1',
+      }),
+    ).toEqual({
+      targets: ['desktop', 'mobile', 'mobile-touch'],
+      dprs: [1, 2, 2.625],
+      imageTag: PLAYWRIGHT_IMAGE_PIN.tag,
+      version: '1.64.1',
+    });
+  });
+
+  it('rejects a wrong fractional DPR and a malformed decimal list', () => {
+    expect(() =>
+      assertContainerCaptureEnvironment({
+        env: {
+          ...CONTAINER_ENV,
+          CAPTURE_TARGET: 'mobile-touch',
+          CAPTURE_TARGET_DPR: '2.62',
+        },
+        target: 'mobile-touch',
+        version: '1.64.1',
+      }),
+    ).toThrow(/Capture DPR 2\.62 does not match target "mobile-touch": expected 2\.625/);
+
+    for (const dpr of ['2.625.0', '2.', '.625']) {
+      expect(() =>
+        assertContainerCaptureEnvironment({
+          env: {
+            ...CONTAINER_ENV,
+            CAPTURE_TARGET: 'mobile-touch',
+            CAPTURE_TARGET_DPR: dpr,
+          },
+          target: 'mobile-touch',
+          version: '1.64.1',
+        }),
+      ).toThrow(/CAPTURE_TARGET_DPR/);
+    }
   });
 
   it('names each missing EGL variable', () => {
