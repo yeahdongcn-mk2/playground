@@ -21,6 +21,7 @@ import {
   parseCaptureEngine,
   phoneContextOptions,
 } from '../../scripts/lib/capture-runtime.mjs';
+import { assertPortAvailable } from '../../scripts/lib/preview-port.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SCRIPT = join(ROOT, 'scripts', 'capture-minesweeper-screenshots.mjs');
@@ -475,6 +476,21 @@ async function bindPortOrSkip(
     `127.0.0.1:${port} is owned by another process (${result.reason}). ` +
       'The random-port `fails fast without screenshots when PREVIEW_PORT is taken` ' +
       'case already covers the fail-fast path.',
+  );
+}
+
+/**
+ * Does `output` show the dev-server port guard rejecting `127.0.0.1:<port>`?
+ *
+ * The fallback test releases 5188 before spawning, so a third process can win
+ * the port in that window. The script then exits through `assertPortAvailable`
+ * instead of reaching the fake entry: that is the known transient-owner race,
+ * not a regression. Match the guard wording for the expected port so a failure
+ * on another port, or a genuine fake-entry failure, still fails the test.
+ */
+function isPortTakenFailure(output: string, port: number): boolean {
+  return output.includes(
+    `Cannot start the dev server on 127.0.0.1:${port}: the port is already in use`,
   );
 }
 
@@ -1889,6 +1905,115 @@ describe('exclusive bind helper for the default dev-server port', () => {
       await owner.close();
     }
   });
+
+  it('wins the port when a transient owner releases it inside the retry window', async () => {
+    const transient = await listenOnRandomPort();
+    const port = transient.port;
+    let closing: Promise<void> | undefined;
+    const releaseTransient = (): Promise<void> => {
+      closing ??= transient.close();
+      return closing;
+    };
+    // Release inside the 2 s window so only the retry loop can win the port.
+    // Only the timer path swallows the rejection; the finally below still
+    // surfaces a real close failure.
+    const releaseTimer = setTimeout(
+      () => void releaseTransient().catch(() => undefined),
+      200,
+    );
+    try {
+      const result = await tryBindExclusive(port, {
+        windowMs: 2_000,
+        retryDelayMs: 25,
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        throw new Error(result.reason);
+      }
+
+      try {
+        expect(result.owner.port).toBe(port);
+        // The retried owner is exclusive while it lives.
+        const [second, bindError] = await listenOnPort(port).then(
+          (server) => [server, null] as const,
+          (error: NodeJS.ErrnoException) => [null, error] as const,
+        );
+        await second?.close();
+        expect(bindError?.code).toBe('EADDRINUSE');
+      } finally {
+        await result.owner.close();
+      }
+
+      // Closing the retried owner releases the port again.
+      const rebound = await listenOnPort(port);
+      await rebound.close();
+    } finally {
+      clearTimeout(releaseTimer);
+      await releaseTransient();
+    }
+  });
+
+  it('reports the port as unavailable when the transient owner outlives a short retry window', async () => {
+    const owner = await listenOnRandomPort();
+    try {
+      // The owner stays bound for the whole 100 ms window (closing it only in
+      // finally), so the unavailable result is deterministic instead of racing
+      // a release that may or may not land inside the window.
+      const result = await tryBindExclusive(owner.port, {
+        windowMs: 100,
+        retryDelayMs: 25,
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        await result.owner.close();
+        throw new Error('Expected the occupied port to be reported unavailable');
+      }
+      expect(result.reason).toContain(`127.0.0.1:${owner.port}`);
+      expect(result.reason).toContain('retry window');
+    } finally {
+      await owner.close();
+    }
+  });
+});
+
+describe('dev-server port-taken output detection', () => {
+  it('recognises the real dev-server port guard failure', async () => {
+    const owner = await listenOnRandomPort();
+    try {
+      // Take the guard message from the implementation instead of restating
+      // its wording: a change to the separator or the sentence would otherwise
+      // pass this unit test while the fallback test silently stopped skipping.
+      const guardMessage = await assertPortAvailable(owner.port, '127.0.0.1', {
+        serverName: 'dev',
+      }).then(
+        () => '',
+        (reason: Error) => reason.message,
+      );
+      expect(guardMessage).toContain(`127.0.0.1:${owner.port}`);
+      expect(isPortTakenFailure(guardMessage, owner.port)).toBe(true);
+    } finally {
+      await owner.close();
+    }
+  });
+
+  it('does not mistake another port or another failure for a 5188 takeover', () => {
+    expect(
+      isPortTakenFailure(
+        'Error: Cannot start the dev server on 127.0.0.1:4192: the port is already in use.',
+        5188,
+      ),
+    ).toBe(false);
+    // The fake entry's exit names the fallback port but is the failure the
+    // fallback test still must assert, not a port-guard skip.
+    expect(
+      isPortTakenFailure(
+        'The dev server exited before http://127.0.0.1:5188 became ready ' +
+          '(vite dev server stopped; exit code 7)',
+        5188,
+      ),
+    ).toBe(false);
+    expect(isPortTakenFailure('', 5188)).toBe(false);
+  });
 });
 
 describe('snake screenshot dev server startup', () => {
@@ -1940,9 +2065,8 @@ describe('snake screenshot dev server startup', () => {
         expect(status).toBe(1);
         // The dev server is named, not the preview the other scripts start.
         expect(output).toContain(
-          `Cannot start the dev server on 127.0.0.1:${owner.port}`,
+          `Cannot start the dev server on 127.0.0.1:${owner.port}: the port is already in use.`,
         );
-        expect(output).toContain('the port is already in use');
         expect(output).toContain('Set PREVIEW_PORT');
         expect(output).not.toContain('Cannot start the preview server');
         expect(output).not.toContain('Captured');
@@ -1975,10 +2099,12 @@ describe('snake screenshot dev server startup', () => {
         // not be masked by the status assertion that follows it.
         expect(screenshotHashes()).toEqual(screenshotsBefore);
         expect(status).toBe(1);
+        // The full contiguous guard message pins the exact wording the
+        // `isPortTakenFailure` detector matches; split substrings alone would
+        // stay green if the separator changed and the detector stopped firing.
         expect(output).toContain(
-          'Cannot start the dev server on 127.0.0.1:5188',
+          'Cannot start the dev server on 127.0.0.1:5188: the port is already in use.',
         );
-        expect(output).toContain('the port is already in use');
         expect(output).toContain('Set PREVIEW_PORT');
         expect(output).not.toContain('Cannot start the preview server');
         expect(output).not.toContain('Captured');
@@ -2054,10 +2180,26 @@ describe('snake screenshot dev server startup', () => {
         // Hash first: an unexpected write must fail as "evidence was rewritten",
         // not be masked by the status assertion that follows it.
         expect(screenshotHashes()).toEqual(screenshotsBefore);
+        // Assertions that hold on both the fake-entry and the port-guard paths
+        // run before the skip; only the fake-entry-specific checks follow it.
         expect(status).toBe(1);
         // The resolved port proves the empty value fell back to 5188, not 4192.
         expect(output).toContain('127.0.0.1:5188');
         expect(output).not.toContain('127.0.0.1:4192');
+
+        // A third process can win 5188 between our close and the child's
+        // pre-spawn probe. The script then exits through the port guard before
+        // the fake entry runs: skip with the port named instead of reporting
+        // the transient-owner race as a flaky failure.
+        if (isPortTakenFailure(output, 5188)) {
+          context.skip(
+            '127.0.0.1:5188 was taken by another process after this test released it; ' +
+              'the dev-server port guard fired instead of the fake entry. The ' +
+              'random-port `fails fast without screenshots when PREVIEW_PORT is taken` ' +
+              'case already covers the fail-fast path.',
+          );
+        }
+
         expect(output).toContain('The dev server exited before');
         expect(output).toContain('exit code 7');
         expect(output).not.toContain('Captured');
