@@ -17,6 +17,7 @@
   6. 运行 `npm run test:unit`、`npm run verify:doc-counts` 与 `npm run verify:screenshots:doc-dims`；在容器内重跑受影响的截图，确认 PNG 尺寸仍与文档记录一致（像素差异按「webkit-phone」的既有口径评估）。
   7. 重新取得一次无缓存与一次有缓存的 `verify` run，并重新触发 `flake-watch` 验收，把新的 run 链接与耗时写回本节。
 - 容器镜像：`docker/capture/Dockerfile` 以上述 digest 为基础，只校验官方镜像自带的 `libegl1` / `libegl-mesa0` / `libgl1` / `libgl1-mesa-dri` / `libglx-mesa0` 与 EGL vendor 文件，不安装任何额外系统包；构建失败会指出缺失的包名。
+- 本地镜像复用：`ensureCaptureImage` 先把 `PLAYWRIGHT_IMAGE_PIN` 的 tag / digest 与 `docker/capture/Dockerfile` 全文哈希成构建输入指纹，构建时写入 Docker 标签 `playground.capture.build-input`；每次运行用 `docker image inspect --format` 读取该标签，只有镜像存在且标签与当前指纹一致时才跳过 `docker build`。标签缺失（旧镜像）或 tag / digest / Dockerfile 任一变化都会使指纹失效：Dockerfile 的非 `FROM` 内容变化会重建，pin 与 `FROM` 一起更新时也会重建；若只改 Dockerfile 的运行阶段 `FROM`（最后一个）而不同步 pin，则直接以包含期望 reference 与实际 FROM 的可读错误失败，避免复用旧基础镜像却继续打印新 digest。
 - 字体：保留官方镜像自带字体，不额外引入会改变光栅的字体；固定清单为 `fonts-freefont-ttf`、`fonts-ipafont-gothic`、`fonts-liberation`、`fonts-noto-color-emoji`、`fonts-tlwg-loma-otf`、`fonts-unifont`、`fonts-wqy-zenhei`。字体版本由容器内 `dpkg-query` 实测记录，不预置未知版本；记录与实际不一致时按环境差异处理，而不是静默重拍。
 - EGL / 软件渲染变量：`EGL_PLATFORM=surfaceless`、`LIBGL_ALWAYS_SOFTWARE=1`、`__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json`。缺少 WebKit 会报 `Could not create surfaceless EGL display`；容器入口会校验这三个变量，缺失或值不符时指出变量名与期望值。
 - 按捕获目标的 DPR（不做全局常量）：

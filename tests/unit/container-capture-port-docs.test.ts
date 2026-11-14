@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { CAPTURE_IMAGE_BUILD_LABEL } from '../../scripts/run-container-capture.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SCREENSHOTS_README = readFileSync(
@@ -31,6 +32,10 @@ function bullet(text: string, prefix: string): string {
 const CONTAINER_COMMAND = bullet(
   section('## 固定捕获环境（Issue #199）'),
   '- 容器命令：',
+);
+const LOCAL_IMAGE_CONTRACT = bullet(
+  section('## 固定捕获环境（Issue #199）'),
+  '- 本地镜像复用：',
 );
 const GAME_2048_PORT = bullet(section('## t4：2048（PR #26）'), '- 预览端口：');
 const BREAKOUT_PORT = bullet(section('## t5：打砖块（Issue #27 / 子任务 1）'), '- 预览端口：');
@@ -114,5 +119,29 @@ describe('container capture passthrough target docs (Issue #208)', () => {
 
   it('no longer derives the target from the script name alone', () => {
     expect(CONTAINER_COMMAND).not.toContain('容器入口按脚本的捕获模式注入');
+  });
+});
+
+describe('container capture image build input docs (Issue #210)', () => {
+  it('documents the build-input label and the Dockerfile input', () => {
+    expect(LOCAL_IMAGE_CONTRACT).toContain(
+      `Docker 标签 \`${CAPTURE_IMAGE_BUILD_LABEL}\``,
+    );
+    expect(LOCAL_IMAGE_CONTRACT).toContain('`docker/capture/Dockerfile`');
+    expect(LOCAL_IMAGE_CONTRACT).toContain('构建输入指纹');
+  });
+
+  it('documents when the local image is reused and when it is rebuilt', () => {
+    expect(LOCAL_IMAGE_CONTRACT).toContain(
+      '只有镜像存在且标签与当前指纹一致时才跳过 `docker build`',
+    );
+    expect(LOCAL_IMAGE_CONTRACT).toContain('标签缺失（旧镜像）');
+    expect(LOCAL_IMAGE_CONTRACT).toContain('任一变化都会使指纹失效');
+    expect(LOCAL_IMAGE_CONTRACT).toContain('Dockerfile 的非 `FROM` 内容变化会重建');
+  });
+
+  it('documents the FROM drift error with the expected reference and actual FROM', () => {
+    expect(LOCAL_IMAGE_CONTRACT).toContain('只改 Dockerfile 的运行阶段 `FROM`（最后一个）而不同步 pin');
+    expect(LOCAL_IMAGE_CONTRACT).toContain('包含期望 reference 与实际 FROM 的可读错误');
   });
 });
