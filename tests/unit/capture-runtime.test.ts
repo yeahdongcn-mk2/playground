@@ -1,13 +1,15 @@
-import type { Browser } from '@playwright/test';
+import { devices, type Browser } from '@playwright/test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   PLAYWRIGHT_IMAGE_PIN,
   PLAYWRIGHT_IMAGE_REPOSITORY,
 } from '../../scripts/lib/capture-env.mjs';
 import {
+  TOUCH_MOBILE_DEVICE,
   createDesktopContext,
   createMobileContext,
   createPhoneContext,
+  createTouchMobileContext,
   logCaptureEnvironment,
 } from '../../scripts/lib/capture-runtime.mjs';
 
@@ -85,6 +87,41 @@ describe('capture environment fingerprint in the capture runtime', () => {
     ]);
   });
 
+  it('creates the Pixel 7 touch context and records target=mobile-touch dpr=2.625', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const browser = fakeBrowser();
+    // `screen` is present in the runtime Pixel 7 descriptor but not in
+    // Playwright's DeviceDescriptor type; the helper must pass it through so
+    // the capture keeps the committed framing.
+    const device = devices['Pixel 7'] as (typeof devices)['Pixel 7'] & {
+      screen: { width: number; height: number };
+    };
+    expect(TOUCH_MOBILE_DEVICE).toBe('Pixel 7');
+
+    const context = await createTouchMobileContext(browser, {
+      colorScheme: 'dark',
+      reducedMotion: 'reduce',
+    });
+
+    expect(context).toEqual({ close: expect.any(Function) });
+    expect(browser.newContext).toHaveBeenCalledWith({
+      viewport: device.viewport,
+      screen: device.screen,
+      deviceScaleFactor: device.deviceScaleFactor,
+      isMobile: device.isMobile,
+      hasTouch: device.hasTouch,
+      userAgent: device.userAgent,
+      colorScheme: 'dark',
+      reducedMotion: 'reduce',
+    });
+    expect(device.deviceScaleFactor).toBe(2.625);
+    expect(loggedLines(log)).toEqual([
+      'capture-env: source=host target=mobile-touch dpr=2.625 image=unavailable ' +
+        `node=${process.version} playwright=${PLAYWRIGHT_IMAGE_PIN.version} ` +
+        `browser=${BROWSER_VERSION} fonts=unavailable env=unavailable`,
+    ]);
+  });
+
   it('records WebKit phone contexts as target=webkit dpr=2', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
 
@@ -127,6 +164,21 @@ describe('capture environment fingerprint in the capture runtime', () => {
     expect(line).toContain('fonts=unavailable');
     expect(line).toContain('env=EGL_PLATFORM=surfaceless');
   });
+
+  it('records the injected mobile-touch fingerprint at DPR 2.625', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    logCaptureEnvironment('mobile-touch', fakeBrowser(), {
+      env: containerEnv({
+        CAPTURE_TARGET: 'desktop,mobile,mobile-touch',
+        CAPTURE_TARGET_DPR: '1,2,2.625',
+      }),
+      run: { fontPackages: 'unavailable' },
+    });
+
+    const [line] = loggedLines(log);
+    expect(line).toContain('source=container target=mobile-touch dpr=2.625');
+  });
 });
 
 describe('container runtime target assertion', () => {
@@ -152,6 +204,17 @@ describe('container runtime target assertion', () => {
 
     await expect(createPhoneContext(fakeBrowser('27.2'), 'webkit')).rejects.toThrow(
       /Capture target "webkit" was recorded but is not listed in CAPTURE_TARGET="desktop,mobile".*npm run screenshots:container/s,
+    );
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it('fails a mobile-touch context whose target is missing from CAPTURE_TARGET', async () => {
+    vi.stubEnv('CAPTURE_CONTAINER', '1');
+    vi.stubEnv('CAPTURE_TARGET', 'desktop,mobile');
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await expect(createTouchMobileContext(fakeBrowser())).rejects.toThrow(
+      /Capture target "mobile-touch" was recorded but is not listed in CAPTURE_TARGET="desktop,mobile".*npm run screenshots:container/s,
     );
     expect(log).not.toHaveBeenCalled();
   });

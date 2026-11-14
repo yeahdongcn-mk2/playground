@@ -153,6 +153,7 @@ describe('container capture target DPR and preview port', () => {
     expect(captureTargetsForScript('screenshots:minesweeper')).toEqual([
       'desktop',
       'mobile',
+      'mobile-touch',
     ]);
     expect(captureTargetsForScript('screenshots:minesweeper:scores')).toEqual([
       'desktop',
@@ -189,8 +190,10 @@ describe('container capture target DPR and preview port', () => {
     expect(captureTargetsForScript('screenshots:minesweeper:large')).toEqual([
       'mobile',
     ]);
+    // The touch-before mode creates the Pixel 7 context at its fractional DPR
+    // and no desktop / DPR-2 phone context.
     expect(captureTargetsForScript('screenshots:minesweeper:touch-before')).toEqual([
-      'mobile',
+      'mobile-touch',
     ]);
   });
 
@@ -217,9 +220,10 @@ describe('container capture target DPR and preview port', () => {
       ]),
     ).toEqual(['webkit']);
 
-    // Only capture-minesweeper-screenshots.mjs reads these phone modes.
-    const minesweeperMobileFlags = [
-      '--touch-before',
+    // Only capture-minesweeper-screenshots.mjs reads these phone modes. The
+    // narrow-family modes keep the DPR-2 mobile target; --touch-before selects
+    // the Pixel 7 mobile-touch target.
+    const minesweeperPhoneFlags = [
       '--narrow',
       '--narrow-before',
       '--min',
@@ -231,11 +235,28 @@ describe('container capture target DPR and preview port', () => {
       '--large',
       '--large-before',
     ];
-    for (const flag of minesweeperMobileFlags) {
+    for (const flag of minesweeperPhoneFlags) {
       expect(captureTargetsForScript('screenshots:minesweeper', [flag])).toEqual([
         'mobile',
       ]);
     }
+    expect(captureTargetsForScript('screenshots:minesweeper', ['--touch-before'])).toEqual([
+      'mobile-touch',
+    ]);
+    // The script's MODE resolution prefers the narrow-family modes, so a
+    // combined invocation still records the DPR-2 mobile target.
+    expect(
+      captureTargetsForScript('screenshots:minesweeper', [
+        '--narrow',
+        '--touch-before',
+      ]),
+    ).toEqual(['mobile']);
+
+    // The touch-before script name does not override a narrow-family flag
+    // passed through by the container entry.
+    expect(
+      captureTargetsForScript('screenshots:minesweeper:touch-before', ['--narrow']),
+    ).toEqual(['mobile']);
 
     // Other scripts ignore those flags, so the script-name targets stay unchanged.
     expect(captureTargetsForScript('screenshots:2048', ['--touch-before'])).toEqual([
@@ -351,10 +372,42 @@ describe('docker run construction', () => {
     expect(envArgs).toContain('CAPTURE_TARGET_DPR=2');
   });
 
+  it('declares desktop, mobile and mobile-touch DPRs for the minesweeper after run', () => {
+    const args = buildDockerRunArgs({
+      target: 'screenshots:minesweeper',
+      repoRoot: '/repo',
+      image,
+      containerImage: localCaptureImageName(),
+      previewPort: 4186,
+      env: {},
+    });
+    const envArgs = envArgsOf(args);
+    expect(envArgs).toContain('CAPTURE_TARGET=desktop,mobile,mobile-touch');
+    expect(envArgs).toContain('CAPTURE_TARGET_DPR=1,2,2.625');
+  });
+
+  it('declares only the Pixel 7 mobile-touch DPR for the touch-before mode', () => {
+    const args = buildDockerRunArgs({
+      target: 'screenshots:minesweeper',
+      passthrough: ['--touch-before'],
+      repoRoot: '/repo',
+      image,
+      containerImage: localCaptureImageName(),
+      previewPort: 4186,
+      env: {},
+    });
+    const envArgs = envArgsOf(args);
+    expect(envArgs).toContain('CAPTURE_TARGET=mobile-touch');
+    expect(envArgs).toContain('CAPTURE_TARGET_DPR=2.625');
+  });
+
   it.each<[string, string[], string, string]>([
     ['screenshots', ['--webkit'], 'webkit', '2'],
     ['screenshots:minesweeper', ['--webkit'], 'webkit', '2'],
-    ['screenshots:minesweeper', ['--touch-before'], 'mobile', '2'],
+    ['screenshots:minesweeper', [], 'desktop,mobile,mobile-touch', '1,2,2.625'],
+    ['screenshots:minesweeper', ['--touch-before'], 'mobile-touch', '2.625'],
+    ['screenshots:minesweeper:touch-before', [], 'mobile-touch', '2.625'],
+    ['screenshots:minesweeper:touch-before', ['--narrow'], 'mobile', '2'],
     ['screenshots:minesweeper', ['--narrow'], 'mobile', '2'],
     ['screenshots:2048', ['--touch-before'], 'desktop,mobile', '1,2'],
   ])(

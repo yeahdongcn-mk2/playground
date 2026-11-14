@@ -48,7 +48,8 @@ export const CAPTURE_IMAGE_TAG_VAR = 'CAPTURE_IMAGE_TAG';
 export const CAPTURE_IMAGE_DIGEST_VAR = 'CAPTURE_IMAGE_DIGEST';
 /**
  * Comma-separated list of every capture target the run records. A Chromium run
- * captures desktop and phone evidence, so a single target would misdescribe it.
+ * can capture desktop, phone and Pixel 7 touch evidence, so a single target
+ * would misdescribe it.
  */
 export const CAPTURE_TARGET_VAR = 'CAPTURE_TARGET';
 /** Comma-separated DPRs, in the same order as {@link CAPTURE_TARGET_VAR}. */
@@ -68,16 +69,25 @@ export const CAPTURE_EGL_ENV = Object.freeze({
 export const CAPTURE_EGL_VARS = Object.freeze(Object.keys(CAPTURE_EGL_ENV));
 
 /**
- * Device-pixel ratio per capture target. Desktop evidence is DPR 1; phone and
- * WebKit device emulation are DPR 2. Kept per target instead of a global
- * constant so a new target must state its own ratio.
+ * Device-pixel ratio per capture target. Desktop evidence is DPR 1, the
+ * custom 390x844 phone and WebKit device emulation are DPR 2, and the Pixel 7
+ * touch evidence keeps the device descriptor's fractional DPR 2.625. Kept per
+ * target instead of a global constant so a new target must state its own
+ * ratio.
  */
 export const CAPTURE_TARGET_DPRS = Object.freeze({
   desktop: 1,
   mobile: 2,
+  'mobile-touch': 2.625,
   webkit: 2,
 });
 
+/**
+ * Every capture target in declaration order: `desktop`, `mobile`,
+ * `mobile-touch` and `webkit`. `mobile-touch` is the Pixel 7 touch context used
+ * by the minesweeper touch evidence; it stays separate from `mobile` because
+ * its DPR 2.625 would otherwise be folded into the DPR-2 phone fingerprint.
+ */
 export const CAPTURE_TARGETS = Object.freeze(Object.keys(CAPTURE_TARGET_DPRS));
 
 /**
@@ -207,11 +217,11 @@ export function dprForCaptureTarget(target) {
 /**
  * Normalize a declared capture-target list.
  *
- * A capture run can record more than one target (Chromium runs capture both
- * desktop and phone evidence), so the container contract stores the targets
- * and their DPRs as comma-separated lists. Accepts an array, a single target or
- * the comma-separated string form; returns `null` for an absent declaration and
- * rejects any unknown target.
+ * A capture run can record more than one target (a Chromium minesweeper run
+ * captures desktop, phone and Pixel 7 touch evidence), so the container
+ * contract stores the targets and their DPRs as comma-separated lists. Accepts
+ * an array, a single target or the comma-separated string form; returns `null`
+ * for an absent declaration and rejects any unknown target.
  */
 export function normalizeCaptureTargets(targets) {
   if (targets === undefined || targets === null) {
@@ -231,12 +241,20 @@ export function normalizeCaptureTargets(targets) {
   return normalized;
 }
 
+/**
+ * Parse the comma-separated DPR list injected by the container entry.
+ *
+ * DPRs are non-negative decimals, not only integers: the Pixel 7 touch target
+ * keeps the device's 2.625 ratio. Anything else (`2.`, `.5`, `2.625.0`, a
+ * non-numeric token) is rejected so a malformed list never reaches the
+ * comparison below.
+ */
 function parseDprList(value) {
   if (typeof value !== 'string' || value.trim() === '') {
     return null;
   }
   const parts = value.split(',').map((part) => part.trim());
-  if (parts.some((part) => !/^\d+$/.test(part))) {
+  if (parts.some((part) => !/^\d+(?:\.\d+)?$/.test(part))) {
     return null;
   }
   return parts.map(Number);

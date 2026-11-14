@@ -96,11 +96,17 @@ export function captureTargets(scripts) {
  *   which selects WebKit for `--webkit`, `--webkit-narrow` and
  *   `--webkit-narrow-before`; a WebKit run records only the WebKit phone
  *   target, even when a phone-only mode is also passed;
+ * - minesweeper script names narrow the target: the
+ *   `:narrow` / `:min` / `:restart` / `:short` / `:large` (and `-before`)
+ *   commands record only `mobile`, `:touch-before` records only
+ *   `mobile-touch`, and the plain `screenshots:minesweeper` after run records
+ *   `desktop`, `mobile` and `mobile-touch`;
  * - `--touch-before` and the `--narrow` / `--min` / `--restart` / `--short` /
  *   `--large` (and `-before`) modes are only read by
- *   `capture-minesweeper-screenshots.mjs`, so they switch the target to phone
- *   only when the container target is `screenshots:minesweeper`; the other
- *   scripts ignore them and must keep their script-name targets;
+ *   `capture-minesweeper-screenshots.mjs`. On `screenshots:minesweeper` and
+ *   `screenshots:minesweeper:touch-before` the narrow-family flags win over
+ *   `--touch-before`, matching the capture script's MODE precedence; the other
+ *   scripts ignore those flags and must keep their script-name targets;
  * - `--before`, `--clear` and `--allow-historical-overwrite` never change the
  *   target set.
  */
@@ -110,8 +116,11 @@ const WEBKIT_CAPTURE_FLAGS = [
   '--webkit-narrow-before',
 ];
 
-const MINESWEEPER_MOBILE_CAPTURE_FLAGS = [
-  '--touch-before',
+/** The one flag that selects the minesweeper Pixel 7 touch-before mode. */
+const MINESWEEPER_TOUCH_CAPTURE_FLAG = '--touch-before';
+
+/** Minesweeper modes that only create the custom DPR-2 phone context. */
+const MINESWEEPER_PHONE_ONLY_CAPTURE_FLAGS = [
   '--narrow',
   '--narrow-before',
   '--min',
@@ -124,10 +133,8 @@ const MINESWEEPER_MOBILE_CAPTURE_FLAGS = [
   '--large-before',
 ];
 
-const MOBILE_ONLY_CAPTURE_TARGETS = [
-  /^screenshots:minesweeper:(narrow|min|restart|short|large)(-before)?$/,
-  /^screenshots:minesweeper:touch-before$/,
-];
+const MOBILE_ONLY_CAPTURE_TARGET =
+  /^screenshots:minesweeper:(narrow|min|restart|short|large)(-before)?$/;
 
 export function captureTargetsForScript(script, passthrough = []) {
   if (
@@ -136,13 +143,26 @@ export function captureTargetsForScript(script, passthrough = []) {
   ) {
     return ['webkit'];
   }
-  if (
-    script === 'screenshots:minesweeper' &&
-    MINESWEEPER_MOBILE_CAPTURE_FLAGS.some((flag) => passthrough.includes(flag))
-  ) {
-    return ['mobile'];
+
+  const touchBeforeTarget = script === 'screenshots:minesweeper:touch-before';
+  if (script === 'screenshots:minesweeper' || touchBeforeTarget) {
+    // The narrow-family modes take precedence over --touch-before in the
+    // capture script's MODE resolution, so mirror that order here. This also
+    // covers the touch-before npm script when an extra narrow-family flag is
+    // passed through: it then runs the narrow mode and records `mobile`.
+    if (
+      MINESWEEPER_PHONE_ONLY_CAPTURE_FLAGS.some((flag) =>
+        passthrough.includes(flag),
+      )
+    ) {
+      return ['mobile'];
+    }
+    if (touchBeforeTarget || passthrough.includes(MINESWEEPER_TOUCH_CAPTURE_FLAG)) {
+      return ['mobile-touch'];
+    }
+    return ['desktop', 'mobile', 'mobile-touch'];
   }
-  if (MOBILE_ONLY_CAPTURE_TARGETS.some((pattern) => pattern.test(script))) {
+  if (MOBILE_ONLY_CAPTURE_TARGET.test(script)) {
     return ['mobile'];
   }
   return ['desktop', 'mobile'];
