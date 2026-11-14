@@ -27,6 +27,10 @@ jobs:
     # back without losing the retry/timeout behavior.
     container:
       image: mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f
+      # GitHub container jobs default to a 64 MB /dev/shm. Chromium and WebKit
+      # crash intermittently when it fills, so share the host IPC namespace like
+      # scripts/run-container-capture.mjs does (Issue #213 review).
+      options: --ipc=host
     steps:
       - uses: actions/checkout@v4
 
@@ -44,7 +48,11 @@ jobs:
           python-version: '3.12'
 
       - name: Install pre-commit
-        run: pip install pre-commit==4.7.0
+        # The image's /usr/bin/python3 has no pip and the hosted toolcache
+        # Python's `pip` console script is not resolvable inside the container
+        # (run 43558572972 failed with `pip: not found`). Call the interpreter
+        # setup-python installed directly so `-m pip` resolves the module.
+        run: '"$pythonLocation/bin/python" -m pip install pre-commit==4.7.0'
 
       - name: Cache pre-commit environments
         uses: actions/cache@v4

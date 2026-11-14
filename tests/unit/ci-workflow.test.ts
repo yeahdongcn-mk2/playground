@@ -80,10 +80,15 @@ const isSetupPython = (step: WorkflowStep): boolean =>
   (step.uses ?? '').startsWith('actions/setup-python@');
 const PRE_COMMIT_INSTALL_PATTERN =
   /(?:^|\s)(?:pip|pipx|uv)(?:\s+tool)?\s+install(?:\s+--?[^\s]+)*\s+pre-commit(?:[=~><][^\s]*)?(?=\s|$)/;
+/** `$pythonLocation/bin/python`, the interpreter setup-python installed. */
+const SETUP_PYTHON = '"$pythonLocation/bin/python"';
 const PRE_COMMIT_PIN_PATTERN =
   /(?:^|\s)(?:pip|pipx|uv)(?:\s+tool)?\s+install(?:\s+--?[^\s]+)*\s+pre-commit==(\d+\.\d+\.\d+)(?=\s|$)/;
 const isPreCommitInstall = (step: WorkflowStep): boolean =>
   PRE_COMMIT_INSTALL_PATTERN.test(step.run ?? '');
+/** True when the command runs pip through setup-python's interpreter. */
+const usesSetupPythonPip = (command: string): boolean =>
+  command.includes(`${SETUP_PYTHON} -m pip install`);
 
 /** Exact `x.y.z` version pinned by a pre-commit install command, if any. */
 function pinnedPreCommitVersion(command: string): string | null {
@@ -177,6 +182,15 @@ describe('CI workflow', () => {
     expect(Object.keys(workflow.jobs ?? {})).toContain('verify');
     expect(verify?.['runs-on']).toBe('ubuntu-latest');
     expect(verify?.['timeout-minutes']).toBe(20);
+  });
+
+  it('gives the verify container the host IPC namespace', () => {
+    // GitHub's container jobs default to a 64 MB /dev/shm. Chromium and WebKit
+    // need more shared memory than that and crash intermittently otherwise.
+    // scripts/run-container-capture.mjs uses the same option for its captures.
+    const container = verify?.container;
+    expect(container, 'verify should declare container options').toBeTypeOf('object');
+    expect(typeof container === 'object' ? container.options : undefined).toBe('--ipc=host');
   });
 
   it('does not install browsers, cache ~/.cache/ms-playwright or configure apt at runtime', () => {
@@ -366,6 +380,21 @@ describe('CI workflow', () => {
     expect(stepIndex(isSetupPython)).toBeLessThan(stepIndex(isPreCommitInstall));
   });
 
+  it('installs pre-commit through the setup-python interpreter, not a bare pip', () => {
+    const install = requireStep(isPreCommitInstall, 'a pre-commit install step');
+    const command = commandsOf(install).find(usesSetupPythonPip);
+    // run 43558572972 failed on `pip install pre-commit==4.7.0` with
+    // `sh: 1: pip: not found`: the pinned image's system Python has no pip and
+    // the hosted toolcache path is not exposed as a bare console script inside
+    // the container, so the interpreter supplied by setup-python must be used.
+    expect(command, `the install step should run "${SETUP_PYTHON} -m pip install"`).toBeDefined();
+    expect(command).toContain('pre-commit==4.7.0');
+    expect(
+      commandsOf(install).some((candidate) => /^\s*pip\s+install\s/.test(candidate)),
+      'installing with a bare `pip` would fail inside the pinned image again',
+    ).toBe(false);
+  });
+
   it('pins one exact pre-commit version and ties the cache key to it', () => {
     const install = requireStep(isPreCommitInstall, 'a pre-commit install step');
     const installCommand = commandsOf(install).find(
@@ -399,9 +428,13 @@ describe('CI workflow', () => {
       'pipx install pre-commit',
       'uv tool install pre-commit',
       'pip install pre-commit==4.7.0',
+      '"$pythonLocation/bin/python" -m pip install pre-commit==4.7.0',
     ]) {
       expect(isPreCommitInstall({ run: command }), command).toBe(true);
     }
+    expect(
+      pinnedPreCommitVersion('"$pythonLocation/bin/python" -m pip install pre-commit==4.7.0'),
+    ).toBe('4.7.0');
   });
 
   it('caches the pre-commit environments to keep the job fast', () => {

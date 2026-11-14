@@ -64,6 +64,8 @@ npx playwright test \
 Issue #213 起，`ci.yml` 的 `verify` job 直接运行在固定 tag + digest 的官方 Playwright 镜像里，不再在运行时用 `--with-deps` 安装浏览器（背景见 Issue #202）：
 
 - **镜像与版本对齐**：`container.image` 为 `mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f`。tag 的版本来自 `package-lock.json` 的 `@playwright/test`（当前 1.64.1），digest 固定多架构镜像；两者与 `scripts/lib/capture-env.mjs` 的 `PLAYWRIGHT_IMAGE_PIN` 同源。`tests/unit/ci-workflow.test.ts` 校验 workflow、`PLAYWRIGHT_IMAGE_PIN` 与 lockfile 三者一致，任一处漂移都会让单测失败。
+- **容器 IPC**：`container.options` 为 `--ipc=host`，与 `scripts/run-container-capture.mjs` 的截图容器一致。GitHub container job 默认 `/dev/shm` 只有 64 MB，Chromium / WebKit 在 e2e 与窄屏冒烟里共用这块内存时可能偶发崩溃；共享 host IPC 避免这一失败模式。
+- **pre-commit 安装**：镜像自带的 `/usr/bin/python3` 没有 pip，`actions/setup-python` 的 toolcache Python 在容器里也没有可解析的 `pip` console script（[run 43558572972](https://github.com/yeahdongcn-mk2/playground/actions/runs/43558572972) 因此报 `pip: not found`）。所以 `Install pre-commit` 改为 `"$pythonLocation/bin/python" -m pip install pre-commit==4.7.0`，通过 setup-python 注入的解释器调用 pip 模块；后续 `pre-commit` 命令仍由该解释器的 bin 目录提供。
 - **已移除的步骤**：官方镜像内置 Chromium、WebKit、Node 与 WebKit 所需的系统依赖，因此 `verify` 不再有 `Configure apt Acquire retries and timeouts`、`Cache Playwright browsers`、`Install Playwright Chromium and WebKit` 三个步骤；日志里不会再出现 `playwright install`、`--with-deps` 或 apt GET。
 - **镜像拉取失败边界**：镜像拉取发生在 job 启动阶段、任何步骤之前；tag/digest 不存在或 registry 不可达会立刻以 Docker 拉取错误让 job 失败，不会先跑完前面的步骤再拖到 20 分钟上限。`verify` 的 job 名与 20 分钟预算保持不变。
 

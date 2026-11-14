@@ -25,7 +25,7 @@ interface WorkflowStep {
 
 interface WorkflowJob {
   'timeout-minutes'?: number;
-  container?: string | { image?: string };
+  container?: string | { image?: string; options?: string };
   steps?: WorkflowStep[];
 }
 
@@ -167,6 +167,17 @@ describe('flaky policy docs', () => {
     expect(jobTimeout).toBe(20);
     expect(section).toContain(pinned.reference);
     expect(section).toContain(`${jobTimeout} 分钟`);
+
+    // The container needs a host IPC namespace for Chromium / WebKit, and the
+    // pre-commit install must go through setup-python's interpreter: a bare
+    // `pip` is not available inside the pinned image (run 43558572972).
+    const verifyContainerOptions =
+      typeof verifyContainer === 'string' ? undefined : verifyContainer?.options;
+    expect(verifyContainerOptions).toBe('--ipc=host');
+    expect(section).toContain('--ipc=host');
+    const preCommitInstall = requireStep(verifySteps, 'Install pre-commit');
+    expect(preCommitInstall.run?.trim()).toContain('"$pythonLocation/bin/python" -m pip install');
+    expect(section).toContain(preCommitInstall.run?.trim() ?? '');
 
     // The bounded install remains the flake-watch fallback.
     const watchTimeout = flakeWatch.jobs?.['mobile-webkit-first-run']?.['timeout-minutes'];
