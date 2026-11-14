@@ -186,6 +186,20 @@ describe('CI workflow', () => {
     expect(verify?.['timeout-minutes']).toBe(20);
   });
 
+  it('persists the git safe.directory for git-using container steps', () => {
+    const checkoutIndex = steps.findIndex((step) =>
+      (step.uses ?? '').startsWith('actions/checkout@'),
+    );
+    const safeDirectoryIndex = steps.findIndex((step) =>
+      (step.run ?? '').includes('git config --global --add safe.directory "$GITHUB_WORKSPACE"'),
+    );
+    // actions/checkout writes safe.directory into a temporary HOME, but the
+    // container runs as root over a host-owned mount, so pre-commit's git
+    // calls need the entry persisted in the container's HOME.
+    expect(safeDirectoryIndex).toBeGreaterThan(checkoutIndex);
+    expect(safeDirectoryIndex).toBeLessThan(stepIndex(isPreCommitInstall));
+  });
+
   it('runs pipefail steps with bash inside the container', () => {
     // GitHub container jobs default to `sh` (dash), where `set -o pipefail`
     // is illegal; a `run` step that opts into pipefail must request bash.

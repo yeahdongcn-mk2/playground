@@ -182,6 +182,8 @@ describe('flaky policy docs', () => {
     const webkitSmoke = requireStep(verifySteps, 'WebKit narrow screenshot smoke test');
     expect(webkitSmoke.shell).toBe('bash');
     expect(section).toContain('shell: bash');
+    expect(section).toContain('safe.directory');
+    expect(section).toContain('43561619210');
     const installCommands = (preCommitInstall.run ?? '')
       .split('\n')
       .map((command) => command.trim())

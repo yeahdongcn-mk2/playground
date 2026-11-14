@@ -34,6 +34,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Trust the git workspace in the container
+        # actions/checkout writes safe.directory into a temporary HOME, while
+        # run steps use the container's persistent HOME. The checkout is
+        # host-owned but git runs as root, so pre-commit's git calls would
+        # otherwise fail with "dubious ownership" (run 43561619210).
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - uses: actions/setup-node@v4
         with:
           node-version: 24
