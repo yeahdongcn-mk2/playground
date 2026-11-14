@@ -4,9 +4,10 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { Page } from '@playwright/test';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, type TestContext } from 'vitest';
 import {
   CAPTURE_CONTAINER_FLAG,
   CAPTURE_EGL_ENV,
@@ -378,11 +379,19 @@ function screenshotHashes(): Record<string, string> {
   );
 }
 
-/** Hold a 127.0.0.1 port open for the duration of the test. */
-function listenOnPort(port: number): Promise<{
+/** A live 127.0.0.1 listener the test owns until it closes it. */
+interface PortOwner {
   port: number;
   close: () => Promise<void>;
-}> {
+}
+
+/** Outcome of trying to win a port inside the bounded retry window. */
+type TryBindResult =
+  | { ok: true; owner: PortOwner }
+  | { ok: false; reason: string };
+
+/** Hold a 127.0.0.1 port open for the duration of the test. */
+function listenOnPort(port: number): Promise<PortOwner> {
   return new Promise((resolve, reject) => {
     const server = createServer();
     server.once('error', reject);
@@ -405,11 +414,68 @@ function listenOnPort(port: number): Promise<{
 }
 
 /** Hold a random 127.0.0.1 port open for the duration of the test. */
-function listenOnRandomPort(): Promise<{
-  port: number;
-  close: () => Promise<void>;
-}> {
+function listenOnRandomPort(): Promise<PortOwner> {
   return listenOnPort(0);
+}
+
+/**
+ * Try to take exclusive ownership of `127.0.0.1:<port>` within a bounded window.
+ *
+ * A transient owner (a parallel worktree's screenshot run, a dev server that is
+ * being restarted) can release the port between our probe and the capture
+ * script's own probe. Continuing without the port in that case lets the script
+ * start the real dev server, capture screenshots and exit 0, which both fails
+ * the test and overwrites evidence. Retrying inside the window either wins the
+ * port for the whole spawn or reports it unavailable so the caller can skip.
+ *
+ * Only `EADDRINUSE` is retried; any other bind failure (for example `EACCES`)
+ * is a real problem and is rethrown.
+ */
+async function tryBindExclusive(
+  port: number,
+  { windowMs = 2_000, retryDelayMs = 100 } = {},
+): Promise<TryBindResult> {
+  const deadline = Date.now() + windowMs;
+  for (;;) {
+    try {
+      return { ok: true, owner: await listenOnPort(port) };
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'EADDRINUSE') {
+        throw error;
+      }
+      if (Date.now() + retryDelayMs > deadline) {
+        return {
+          ok: false,
+          reason: `127.0.0.1:${port} stayed in use for the whole ${windowMs} ms retry window`,
+        };
+      }
+      await delay(retryDelayMs);
+    }
+  }
+}
+
+/**
+ * Take `127.0.0.1:<port>` for the duration of the test, or skip the test.
+ *
+ * Tests that depend on the default dev-server port must not silently pass while
+ * another process owns it: the skip names the port and points at the
+ * random-port PREVIEW_PORT case that already covers fail-fast. `ctx.skip()`
+ * throws, so nothing after this call runs on a skip.
+ */
+async function bindPortOrSkip(
+  context: TestContext,
+  port: number,
+): Promise<PortOwner> {
+  const result = await tryBindExclusive(port);
+  if (result.ok) {
+    return result.owner;
+  }
+  context.skip(
+    `127.0.0.1:${port} is owned by another process (${result.reason}). ` +
+      'The random-port `fails fast without screenshots when PREVIEW_PORT is taken` ' +
+      'case already covers the fail-fast path.',
+  );
 }
 
 /**
@@ -1771,6 +1837,60 @@ describe('generic, 2048 and breakout screenshot preview startup', () => {
   );
 });
 
+describe('exclusive bind helper for the default dev-server port', () => {
+  it('takes exclusive ownership of a free 127.0.0.1 port and releases it on close', async () => {
+    const probe = await listenOnRandomPort();
+    const port = probe.port;
+    await probe.close();
+
+    const result = await tryBindExclusive(port, {
+      windowMs: 1_000,
+      retryDelayMs: 25,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(result.reason);
+    }
+
+    try {
+      expect(result.owner.port).toBe(port);
+      // Exclusivity: a second bind must fail while the helper's owner lives.
+      const [second, bindError] = await listenOnPort(port).then(
+        (server) => [server, null] as const,
+        (error: NodeJS.ErrnoException) => [null, error] as const,
+      );
+      expect(bindError?.code).toBe('EADDRINUSE');
+      await second?.close();
+    } finally {
+      await result.owner.close();
+    }
+
+    // Closing the owner releases the port for the next probe.
+    const rebound = await listenOnPort(port);
+    await rebound.close();
+  });
+
+  it('reports the port as unavailable after the retry window when it stays taken', async () => {
+    const owner = await listenOnRandomPort();
+    try {
+      const result = await tryBindExclusive(owner.port, {
+        windowMs: 300,
+        retryDelayMs: 50,
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        await result.owner.close();
+        throw new Error('Expected the occupied port to be reported unavailable');
+      }
+      expect(result.reason).toContain(`127.0.0.1:${owner.port}`);
+      expect(result.reason).toContain('stayed in use');
+      expect(result.reason).toContain('retry window');
+    } finally {
+      await owner.close();
+    }
+  });
+});
+
 describe('snake screenshot dev server startup', () => {
   it('guards the dev server port before spawning and uses the shared readiness helper', () => {
     const source = readFileSync(SNAKE_SCRIPT, 'utf8');
@@ -1837,17 +1957,12 @@ describe('snake screenshot dev server startup', () => {
   it(
     'fails fast without screenshots when the default 5188 port is taken',
     { timeout: 30_000 },
-    async () => {
-      let owner: Awaited<ReturnType<typeof listenOnPort>> | null = null;
-      try {
-        owner = await listenOnPort(5188);
-      } catch (error) {
-        // Another process may already own 5188; the script must still report
-        // the taken default port, so keep going without owning it.
-        if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE') {
-          throw error;
-        }
-      }
+    async (context) => {
+      // Hold 5188 for the whole spawn. If another process owns it for the whole
+      // retry window, skip instead of racing it: continuing without the port
+      // lets the capture script start a real dev server, overwrite evidence and
+      // exit 0.
+      const owner = await bindPortOrSkip(context, 5188);
       const screenshotsBefore = screenshotHashes();
       try {
         const env = { ...process.env };
@@ -1856,6 +1971,9 @@ describe('snake screenshot dev server startup', () => {
 
         const { status, output } = spawnNode(SNAKE_SCRIPT, [], env);
 
+        // Hash first: an unexpected write must fail as "evidence was rewritten",
+        // not be masked by the status assertion that follows it.
+        expect(screenshotHashes()).toEqual(screenshotsBefore);
         expect(status).toBe(1);
         expect(output).toContain(
           'Cannot start the dev server on 127.0.0.1:5188',
@@ -1864,9 +1982,8 @@ describe('snake screenshot dev server startup', () => {
         expect(output).toContain('Set PREVIEW_PORT');
         expect(output).not.toContain('Cannot start the preview server');
         expect(output).not.toContain('Captured');
-        expect(screenshotHashes()).toEqual(screenshotsBefore);
       } finally {
-        await owner?.close();
+        await owner.close();
       }
     },
   );
@@ -1913,17 +2030,12 @@ describe('snake screenshot dev server startup', () => {
   it(
     'falls back to 5188 when PREVIEW_PORT is empty',
     { timeout: 45_000 },
-    async () => {
-      // The fallback path needs 5188 to be free; if another process owns it,
-      // the occupied-port test above already covers that failure mode.
-      const probe = await listenOnPort(5188).catch(
-        (error: NodeJS.ErrnoException) => error,
-      );
-      if (probe instanceof Error) {
-        expect(probe.code).toBe('EADDRINUSE');
-        return;
-      }
-      await probe.close();
+    async (context) => {
+      // The fallback path needs 5188. Take it exclusively (or skip with the
+      // port named) and release it before spawning, so the fake entry sees the
+      // resolved fallback port instead of failing the pre-spawn probe.
+      const owner = await bindPortOrSkip(context, 5188);
+      await owner.close();
 
       const dir = mkdtempSync(join(tmpdir(), 'snake-dev-fallback-'));
       const fakeEntry = join(dir, 'fake-dev-server.mjs');
@@ -1939,6 +2051,9 @@ describe('snake screenshot dev server startup', () => {
 
         const { status, output } = spawnNode(SNAKE_SCRIPT, [], env);
 
+        // Hash first: an unexpected write must fail as "evidence was rewritten",
+        // not be masked by the status assertion that follows it.
+        expect(screenshotHashes()).toEqual(screenshotsBefore);
         expect(status).toBe(1);
         // The resolved port proves the empty value fell back to 5188, not 4192.
         expect(output).toContain('127.0.0.1:5188');
@@ -1946,7 +2061,6 @@ describe('snake screenshot dev server startup', () => {
         expect(output).toContain('The dev server exited before');
         expect(output).toContain('exit code 7');
         expect(output).not.toContain('Captured');
-        expect(screenshotHashes()).toEqual(screenshotsBefore);
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
