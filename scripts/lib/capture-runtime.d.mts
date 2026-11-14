@@ -46,6 +46,23 @@ export function logCaptureEnvironment(
   options?: LogCaptureEnvironmentOptions,
 ): void;
 
+/** Capture targets recorded so far in this process, in first-recording order. */
+export function recordedCaptureTargets(): CaptureTarget[];
+/** Clear the process-wide recorded set; used by unit tests. */
+export function resetRecordedCaptureTargets(): void;
+
+export interface AssertDeclaredCaptureTargetsOptions {
+  /** Label of the declaration that is compared, named in the error. */
+  source?: string;
+  /** Recorded targets to compare; defaults to the process-wide set. */
+  recorded?: readonly string[];
+}
+
+export function assertAllDeclaredCaptureTargets(
+  declared: string | readonly string[] | null | undefined,
+  options?: AssertDeclaredCaptureTargetsOptions,
+): void;
+
 export function createDesktopContext(
   browser: Browser,
   options?: BrowserContextOptions,

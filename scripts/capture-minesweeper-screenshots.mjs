@@ -1,8 +1,7 @@
 import { mkdir } from 'node:fs/promises';
 import {
   WEBKIT_ENGINE,
-  WEBKIT_NARROW_BEFORE_FLAG,
-  WEBKIT_NARROW_FLAG,
+  assertAllDeclaredCaptureTargets,
   captureScreenshot,
   closeCaptureBrowser,
   createDesktopContext,
@@ -15,6 +14,15 @@ import {
   startPreviewServer,
   stopPreviewServer,
 } from './lib/capture-runtime.mjs';
+import {
+  CAPTURE_TARGET_IDS,
+  MINESWEEPER_NARROW_FLAGS,
+  MINESWEEPER_TOUCH_BEFORE_FLAG,
+  WEBKIT_NARROW_BEFORE_FLAG,
+  WEBKIT_NARROW_FLAG,
+  isPrintCaptureTargetsRequested,
+  printCaptureTargets,
+} from './lib/capture-targets.mjs';
 import { assertPortAvailable, parsePreviewPort } from './lib/preview-port.mjs';
 import { waitForPreviewServer } from './lib/preview-server.mjs';
 import {
@@ -76,7 +84,50 @@ import { touchLongPress } from './lib/touch-input.mjs';
  * writing, so current evidence and the CI smoke re-capture still refresh.
  */
 
-if (process.argv.slice(2).includes('--before')) {
+const ARGS = process.argv.slice(2);
+
+/** Repository-relative name of this script, used in its target declaration. */
+const SCRIPT_NAME = 'scripts/capture-minesweeper-screenshots.mjs';
+
+/**
+ * Capture targets this script records for one argv (Issue #293).
+ *
+ * The declaration mirrors the script's real branch order:
+ *
+ * 1. a WebKit flag records only the `webkit` phone target (the dedicated
+ *    `--webkit-narrow` matrix also records only `webkit`);
+ * 2. the Chromium narrow family (`--narrow`, `--min`, `--restart`, `--short`,
+ *    `--large` and their `-before` forms) records only the DPR-2 `mobile`
+ *    target and takes precedence over `--touch-before`;
+ * 3. `--touch-before` records only the Pixel 7 `mobile-touch` target;
+ * 4. the After run records desktop, mobile and mobile-touch.
+ *
+ * `--before` (removed), `--allow-historical-overwrite` and the target's
+ * BASE_URL never change this set.
+ */
+function captureTargets(args) {
+  if (parseCaptureEngine(args) === WEBKIT_ENGINE) {
+    return [CAPTURE_TARGET_IDS.WEBKIT];
+  }
+  if (MINESWEEPER_NARROW_FLAGS.some((flag) => args.includes(flag))) {
+    return [CAPTURE_TARGET_IDS.MOBILE];
+  }
+  if (args.includes(MINESWEEPER_TOUCH_BEFORE_FLAG)) {
+    return [CAPTURE_TARGET_IDS.MOBILE_TOUCH];
+  }
+  return [
+    CAPTURE_TARGET_IDS.DESKTOP,
+    CAPTURE_TARGET_IDS.MOBILE,
+    CAPTURE_TARGET_IDS.MOBILE_TOUCH,
+  ];
+}
+
+const DECLARED_CAPTURE_TARGETS = captureTargets(ARGS);
+if (isPrintCaptureTargetsRequested(ARGS)) {
+  printCaptureTargets(SCRIPT_NAME, DECLARED_CAPTURE_TARGETS);
+}
+
+if (ARGS.includes('--before')) {
   console.error(
     'The generic --before mode has been removed: its baseline (main without a minesweeper route) is historical evidence only. ' +
       'Use --touch-before, --narrow-before, --min-before, --restart-before, --short-before or --large-before for their own baselines, or omit the flag to capture After screenshots.',
@@ -88,13 +139,12 @@ const HOST = '127.0.0.1';
 const PORT = parsePreviewPort(process.env.PREVIEW_PORT, 4186);
 const ORIGIN = `http://${HOST}:${PORT}`;
 const OUTPUT = 'docs/screenshots';
-const ARGS = process.argv.slice(2);
 const ALLOW_HISTORICAL_OVERWRITE = ARGS.includes(HISTORICAL_OVERWRITE_FLAG);
 const ENGINE = parseCaptureEngine(ARGS);
 const IS_WEBKIT = ENGINE === WEBKIT_ENGINE;
 const WEBKIT_NARROW = ARGS.includes(WEBKIT_NARROW_FLAG);
 const WEBKIT_NARROW_BEFORE = ARGS.includes(WEBKIT_NARROW_BEFORE_FLAG);
-const TOUCH_BEFORE = ARGS.includes('--touch-before');
+const TOUCH_BEFORE = ARGS.includes(MINESWEEPER_TOUCH_BEFORE_FLAG);
 const NARROW = ARGS.includes('--narrow');
 const NARROW_BEFORE = ARGS.includes('--narrow-before');
 const MIN = ARGS.includes('--min');
@@ -601,6 +651,9 @@ try {
       await captureTouchMobile(browser, 'before');
     }
   }
+  assertAllDeclaredCaptureTargets(DECLARED_CAPTURE_TARGETS, {
+    source: SCRIPT_NAME,
+  });
   console.log(
     `Captured ${MODE_LABEL} minesweeper screenshots on ${engineLabel(ENGINE)} in ${OUTPUT}`,
   );
