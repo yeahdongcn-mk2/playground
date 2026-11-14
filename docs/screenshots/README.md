@@ -119,24 +119,24 @@
 
 ```text
 FAIL: 发现 1 处尺寸 / sha256 问题（检查了 24 个文件 / 24 行 README，整页 16 行 / 视口 8 行）：
-  README 78: after-hub-copy-desktop.png: 视口 PNG 1441×1000 != PNG 1440×1000（尺寸不一致）
+  README 87: after-hub-copy-desktop.png: 视口 PNG 1441×1000 != PNG 1440×1000（尺寸不一致）
 ```
 
   把 `after-zhen-sha-route-desktop.png` 行的完整 sha256 首字符 `8` 改成 `0` 后输出：
 
 ```text
 FAIL: 发现 1 处尺寸 / sha256 问题（检查了 24 个文件 / 24 行 README，整页 16 行 / 视口 8 行）：
-  README 59: after-zhen-sha-route-desktop.png: sha256 文档 0f903d39bb5e681ec9a59a322ab5a759c5058df6c24f6ffa44a11785ef1a8002 != 实际 8f903d39bb5e681ec9a59a322ab5a759c5058df6c24f6ffa44a11785ef1a8002（sha256 不一致）
+  README 68: after-zhen-sha-route-desktop.png: sha256 文档 0f903d39bb5e681ec9a59a322ab5a759c5058df6c24f6ffa44a11785ef1a8002 != 实际 8f903d39bb5e681ec9a59a322ab5a759c5058df6c24f6ffa44a11785ef1a8002（sha256 不一致）
 ```
 
   把同一行的完整 sha256 去掉最后一位（截断成 63 位）后输出：
 
 ```text
 FAIL: 发现 1 处尺寸 / sha256 问题（检查了 24 个文件 / 24 行 README，整页 16 行 / 视口 8 行）：
-  README 59: after-zhen-sha-route-desktop.png: sha256 文档 8f903d39bb5e681ec9a59a322ab5a759c5058df6c24f6ffa44a11785ef1a800 != 实际 8f903d39bb5e681ec9a59a322ab5a759c5058df6c24f6ffa44a11785ef1a8002（sha256 截断：文档 63 位，实际 64 位）
+  README 68: after-zhen-sha-route-desktop.png: sha256 文档 8f903d39bb5e681ec9a59a322ab5a759c5058df6c24f6ffa44a11785ef1a800 != 实际 8f903d39bb5e681ec9a59a322ab5a759c5058df6c24f6ffa44a11785ef1a8002（sha256 截断：文档 63 位，实际 64 位）
 ```
 
-  以上修改都以 1 退出，恢复文档后重新通过；「通用大厅整页证据」两行的缩略哈希不会产生哈希问题。整页行仍按原口径校验，把 `after-minesweeper-scores-desktop.png` 行的 `整页 1440×1606` 改成 `1440×1607` 时输出 `README 287: after-minesweeper-scores-desktop.png: 整页 1440×1607 != PNG 1440×1606（尺寸不一致）`。PNG 缺失、PNG 签名错误或 IHDR 截断时同样逐条给出 README 行号、文件名、文档值与实际 PNG 状态。
+  以上修改都以 1 退出，恢复文档后重新通过；「通用大厅整页证据」两行的缩略哈希不会产生哈希问题。整页行仍按原口径校验，把 `after-minesweeper-scores-desktop.png` 行的 `整页 1440×1606` 改成 `1440×1607` 时输出 `README 296: after-minesweeper-scores-desktop.png: 整页 1440×1607 != PNG 1440×1606（尺寸不一致）`。PNG 缺失、PNG 签名错误或 IHDR 截断时同样逐条给出 README 行号、文件名、文档值与实际 PNG 状态。
 - 实测耗时：2026-11-11 在 `agent/plan-134-t1` 的本地 worktree 实测，`npm run verify:screenshots:doc-dims` 约 0.08–0.09 s（`node scripts/check-screenshot-doc-dims.mjs` 本身约 0.02 s，其余为 npm 启动开销），属于毫秒级；相对 `verify` job 的分钟级耗时（见下节 WebKit 冒烟步骤的参考 run）可忽略。CI runner 的绝对耗时不同，以实际 run 为准。
 - 防回归：`tests/unit/ci-workflow.test.ts` 断言 `Screenshot doc dimensions` 步骤存在、其 `run` 恰为 `npm run verify:screenshots:doc-dims`、位于 `npm run test:unit` 之后且在 `npm run build` 之前，并继续钉住 `verify` 的 `timeout-minutes: 20`；脚本行为（整页 / 视口尺寸写错、完整 sha256 写错与截断、省略号简写跳过、PNG 缺失 / 签名错误 / IHDR 截断、CLI 退出码与 24 行 / 24 文件 / 8 个哈希文件计数）由 `tests/unit/screenshot-doc-dims.test.ts` 覆盖。
 
