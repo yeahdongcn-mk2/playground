@@ -33,9 +33,11 @@ const verifyRunCommands = (workflow.jobs?.verify?.steps ?? []).flatMap((step) =>
     .map((command) => command.trim())
     .filter((command) => command.length > 0),
 );
-// CI installs pre-commit either with a bare `pip` / `pipx` or, inside the
-// Playwright container, as `"$pythonLocation/bin/python" -m pip install`
-// (the image's system Python has no pip; see docs/ci-flaky-policy.md).
+// CI installs pre-commit inside the Playwright container as
+// `/usr/bin/python3 -m pip install ...` after bootstrapping pip with
+// get-pip.py (see docs/ci-flaky-policy.md). The matcher intentionally also
+// accepts the local bare `pip` / `pipx` forms documented in README.md and
+// .pre-commit-config.yaml.
 const ciInstallCommands = verifyRunCommands.filter(
   (command) => /\bpipx?\s+install\b/.test(command) && /\bpre-commit\b/.test(command),
 );

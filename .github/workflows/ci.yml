@@ -42,17 +42,21 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Set up Python for pre-commit
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
       - name: Install pre-commit
-        # The image's /usr/bin/python3 has no pip and the hosted toolcache
-        # Python's `pip` console script is not resolvable inside the container
-        # (run 43558572972 failed with `pip: not found`). Call the interpreter
-        # setup-python installed directly so `-m pip` resolves the module.
-        run: '"$pythonLocation/bin/python" -m pip install pre-commit==4.7.0'
+        # The image's /usr/bin/python3 has neither pip nor ensurepip, and the
+        # setup-python toolcache CPython cannot load its ssl module inside the
+        # container (run 43560696477), so `-m pip` cannot reach PyPI there.
+        # The image's own Python has working OpenSSL, so bootstrap pip for it
+        # and install the pinned pre-commit from the resulting environment.
+        # The container is ephemeral, so PEP 668's externally-managed guard is
+        # explicitly bypassed with --break-system-packages.
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location --retry 3 --retry-delay 2 \
+            https://bootstrap.pypa.io/get-pip.py --output "$RUNNER_TEMP/get-pip.py"
+          /usr/bin/python3 "$RUNNER_TEMP/get-pip.py" --break-system-packages
+          /usr/bin/python3 -m pip install --break-system-packages --disable-pip-version-check --no-cache-dir pre-commit==4.7.0
+          pre-commit --version
 
       - name: Cache pre-commit environments
         uses: actions/cache@v4

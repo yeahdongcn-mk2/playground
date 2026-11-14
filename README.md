@@ -51,7 +51,7 @@ pre-commit install
 pre-commit run --all-files
 ```
 
-pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和缓存键保持一致。升级时请同步更新 CI 的安装命令与缓存键、`.pre-commit-config.yaml` 顶部注释以及本节指引，然后运行 `npm run test:unit` 防止版本漂移。
+pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和缓存键保持一致。升级时请同步更新 CI 的安装命令与缓存键、`.pre-commit-config.yaml` 顶部注释、`docs/ci-flaky-policy.md` 的安装说明以及本节指引，然后运行 `npm run test:unit` 防止版本漂移。
 
 ## 贪食蛇玩法
 

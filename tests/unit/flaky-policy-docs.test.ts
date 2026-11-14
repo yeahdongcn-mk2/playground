@@ -168,16 +168,32 @@ describe('flaky policy docs', () => {
     expect(section).toContain(pinned.reference);
     expect(section).toContain(`${jobTimeout} 分钟`);
 
-    // The container needs a host IPC namespace for Chromium / WebKit, and the
-    // pre-commit install must go through setup-python's interpreter: a bare
-    // `pip` is not available inside the pinned image (run 43558572972).
+    // The container needs host IPC for Chromium's shared-memory use, and the
+    // pre-commit install must bootstrap pip for the image's Python: both the
+    // image's own pip and setup-python's container ssl are unusable
+    // (runs 43558572972 / 43560696477).
     const verifyContainerOptions =
-      typeof verifyContainer === 'string' ? undefined : verifyContainer?.options;
-    expect(verifyContainerOptions).toBe('--ipc=host');
+      typeof verifyContainer === 'string' ? '' : (verifyContainer?.options ?? '');
+    expect(verifyContainerOptions.split(/\s+/)).toContain('--ipc=host');
     expect(section).toContain('--ipc=host');
     const preCommitInstall = requireStep(verifySteps, 'Install pre-commit');
-    expect(preCommitInstall.run?.trim()).toContain('"$pythonLocation/bin/python" -m pip install');
-    expect(section).toContain(preCommitInstall.run?.trim() ?? '');
+    const installCommands = (preCommitInstall.run ?? '')
+      .split('\n')
+      .map((command) => command.trim())
+      .filter((command) => command.length > 0);
+    expect(
+      installCommands.some((command) => command.includes('bootstrap.pypa.io/get-pip.py')),
+    ).toBe(true);
+    const pinnedInstall = installCommands.find((command) => command.includes('pre-commit==4.7.0'));
+    expect(pinnedInstall).toBeDefined();
+    expect(pinnedInstall).toContain('python3 -m pip install');
+    expect(pinnedInstall).toContain('--break-system-packages');
+    // Assert the stable fragments, not the entire multi-line step, so adding a
+    // harmless pip flag does not force the policy doc to copy it verbatim.
+    expect(section).toContain('bootstrap.pypa.io/get-pip.py');
+    expect(section).toContain('pre-commit==4.7.0');
+    expect(section).toContain('--break-system-packages');
+    expect(installCommands.filter((command) => command.includes('--break-system-packages'))).toHaveLength(2);
 
     // The bounded install remains the flake-watch fallback.
     const watchTimeout = flakeWatch.jobs?.['mobile-webkit-first-run']?.['timeout-minutes'];

@@ -80,15 +80,16 @@ const isSetupPython = (step: WorkflowStep): boolean =>
   (step.uses ?? '').startsWith('actions/setup-python@');
 const PRE_COMMIT_INSTALL_PATTERN =
   /(?:^|\s)(?:pip|pipx|uv)(?:\s+tool)?\s+install(?:\s+--?[^\s]+)*\s+pre-commit(?:[=~><][^\s]*)?(?=\s|$)/;
-/** `$pythonLocation/bin/python`, the interpreter setup-python installed. */
-const SETUP_PYTHON = '"$pythonLocation/bin/python"';
 const PRE_COMMIT_PIN_PATTERN =
   /(?:^|\s)(?:pip|pipx|uv)(?:\s+tool)?\s+install(?:\s+--?[^\s]+)*\s+pre-commit==(\d+\.\d+\.\d+)(?=\s|$)/;
 const isPreCommitInstall = (step: WorkflowStep): boolean =>
   PRE_COMMIT_INSTALL_PATTERN.test(step.run ?? '');
-/** True when the command runs pip through setup-python's interpreter. */
-const usesSetupPythonPip = (command: string): boolean =>
-  command.includes(`${SETUP_PYTHON} -m pip install`);
+/** pip's official bootstrap script; required because the image has no pip. */
+const PIP_BOOTSTRAP_URL = 'https://bootstrap.pypa.io/get-pip.py';
+const isPipBootstrap = (command: string): boolean => command.includes(PIP_BOOTSTRAP_URL);
+/** `python3 -m pip install` against the image's own interpreter. */
+const IMAGE_PIP_INSTALL_PATTERN = /(?:^|\s)\/usr\/bin\/python3\s+-m\s+pip\s+install\b/;
+const usesImagePip = (command: string): boolean => IMAGE_PIP_INSTALL_PATTERN.test(command);
 
 /** Exact `x.y.z` version pinned by a pre-commit install command, if any. */
 function pinnedPreCommitVersion(command: string): string | null {
@@ -185,12 +186,17 @@ describe('CI workflow', () => {
   });
 
   it('gives the verify container the host IPC namespace', () => {
-    // GitHub's container jobs default to a 64 MB /dev/shm. Chromium and WebKit
-    // need more shared memory than that and crash intermittently otherwise.
+    // GitHub's container jobs default to a 64 MB /dev/shm; Chromium's own
+    // Docker guidance recommends host IPC to avoid shared-memory crashes.
     // scripts/run-container-capture.mjs uses the same option for its captures.
     const container = verify?.container;
     expect(container, 'verify should declare container options').toBeTypeOf('object');
-    expect(typeof container === 'object' ? container.options : undefined).toBe('--ipc=host');
+    expect(container).not.toBeNull();
+    const options =
+      typeof container === 'object' && container !== null ? (container.options ?? '') : '';
+    // Match the token so another legitimate docker option can be added
+    // without breaking the IPC contract.
+    expect(options.split(/\s+/)).toContain('--ipc=host');
   });
 
   it('does not install browsers, cache ~/.cache/ms-playwright or configure apt at runtime', () => {
@@ -362,11 +368,12 @@ describe('CI workflow', () => {
     );
   });
 
-  it('sets up Python and installs pre-commit after npm ci', () => {
-    const setupPython = requireStep(isSetupPython, 'an actions/setup-python step');
+  it('installs pre-commit after npm ci without a setup-python step', () => {
     const install = requireStep(isPreCommitInstall, 'a pre-commit install step');
 
-    expect(setupPython.with?.['python-version']).toBeDefined();
+    // The setup-python toolcache CPython cannot load its ssl module inside the
+    // container (run 43560696477), so it cannot install packages from PyPI.
+    expect(steps.some(isSetupPython), 'verify should not rely on actions/setup-python').toBe(false);
     // An installation command such as `pip install pre-commit==4.7.0`,
     // `pip install --upgrade pre-commit`, `pipx install pre-commit` or
     // `uv tool install pre-commit`.
@@ -376,22 +383,39 @@ describe('CI workflow', () => {
 
     const npmCiIndex = stepIndex(isNpmCi);
     expect(npmCiIndex).toBeGreaterThanOrEqual(0);
-    expect(npmCiIndex).toBeLessThan(stepIndex(isSetupPython));
-    expect(stepIndex(isSetupPython)).toBeLessThan(stepIndex(isPreCommitInstall));
+    expect(npmCiIndex).toBeLessThan(stepIndex(isPreCommitInstall));
   });
 
-  it('installs pre-commit through the setup-python interpreter, not a bare pip', () => {
+  it('bootstraps pip for the image interpreter before installing pre-commit', () => {
     const install = requireStep(isPreCommitInstall, 'a pre-commit install step');
-    const command = commandsOf(install).find(usesSetupPythonPip);
-    // run 43558572972 failed on `pip install pre-commit==4.7.0` with
-    // `sh: 1: pip: not found`: the pinned image's system Python has no pip and
-    // the hosted toolcache path is not exposed as a bare console script inside
-    // the container, so the interpreter supplied by setup-python must be used.
-    expect(command, `the install step should run "${SETUP_PYTHON} -m pip install"`).toBeDefined();
-    expect(command).toContain('pre-commit==4.7.0');
+    const commands = commandsOf(install);
+    const bootstrapIndex = commands.findIndex(isPipBootstrap);
+    const pipInstallIndex = commands.findIndex(
+      (command) => usesImagePip(command) && pinnedPreCommitVersion(command) !== null,
+    );
+
+    // run 43558572972 failed on a bare `pip: not found`; the image's
+    // /usr/bin/python3 has neither pip nor ensurepip, so pip must be
+    // bootstrapped for that interpreter before the pinned install.
+    expect(bootstrapIndex, 'the install step should fetch get-pip.py').toBeGreaterThanOrEqual(0);
+    expect(commands[bootstrapIndex + 1]).toContain('get-pip.py');
+    expect(commands[bootstrapIndex + 1]).toContain('--break-system-packages');
     expect(
-      commandsOf(install).some((candidate) => /^\s*pip\s+install\s/.test(candidate)),
+      pipInstallIndex,
+      'the install step should run `/usr/bin/python3 -m pip install`',
+    ).toBeGreaterThan(bootstrapIndex);
+    expect(commands[pipInstallIndex]).toContain('--break-system-packages');
+    expect(commands[pipInstallIndex]).toContain('pre-commit==4.7.0');
+    // The interpreter check runs after the install, so a missing console
+    // script fails with a clear error instead of a later command-not-found.
+    expect(commands.indexOf('pre-commit --version')).toBeGreaterThan(pipInstallIndex);
+    expect(
+      commands.some((candidate) => /^\s*pip\s+install\s/.test(candidate)),
       'installing with a bare `pip` would fail inside the pinned image again',
+    ).toBe(false);
+    expect(
+      commands.some((candidate) => candidate.includes('"$pythonLocation/bin/python"')),
+      'the setup-python toolcache interpreter has no usable ssl module in the container',
     ).toBe(false);
   });
 
@@ -428,12 +452,14 @@ describe('CI workflow', () => {
       'pipx install pre-commit',
       'uv tool install pre-commit',
       'pip install pre-commit==4.7.0',
-      '"$pythonLocation/bin/python" -m pip install pre-commit==4.7.0',
+      '/usr/bin/python3 -m pip install --break-system-packages pre-commit==4.7.0',
     ]) {
       expect(isPreCommitInstall({ run: command }), command).toBe(true);
     }
     expect(
-      pinnedPreCommitVersion('"$pythonLocation/bin/python" -m pip install pre-commit==4.7.0'),
+      pinnedPreCommitVersion(
+        '/usr/bin/python3 -m pip install --break-system-packages pre-commit==4.7.0',
+      ),
     ).toBe('4.7.0');
   });
 
