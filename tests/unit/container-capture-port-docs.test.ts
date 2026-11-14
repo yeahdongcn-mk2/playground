@@ -5,7 +5,8 @@ import { describe, expect, it } from 'vitest';
 import { dprForCaptureTarget } from '../../scripts/lib/capture-env.mjs';
 import {
   CAPTURE_IMAGE_BUILD_LABEL,
-  captureTargetsForScript,
+  readPackageScripts,
+  resolveCaptureTargets,
 } from '../../scripts/run-container-capture.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -13,13 +14,30 @@ const SCREENSHOTS_README = readFileSync(
   join(ROOT, 'docs', 'screenshots', 'README.md'),
   'utf8',
 );
+const SCRIPTS = readPackageScripts({ packagePath: join(ROOT, 'package.json') });
+const DECLARATION_CACHE = new Map<string, string[]>();
+
+/** The targets a target's own script declaration reports for this argv. */
+function declaredTargets(target: string, passthrough: readonly string[] = []): string[] {
+  const key = JSON.stringify([target, passthrough]);
+  const cached = DECLARATION_CACHE.get(key);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const { targets } = resolveCaptureTargets(target, [...passthrough], {
+    scripts: SCRIPTS,
+  });
+  DECLARATION_CACHE.set(key, targets);
+  return targets;
+}
 
 /**
- * The backticked `targets` / `dprs` contract derived from the capture entry, so
- * the docs cannot pin a hand-written target list that drifts from the code.
+ * The backticked `targets` / `dprs` contract derived from the capture entry's
+ * declaration resolver, so the docs cannot pin a hand-written target list that
+ * drifts from the script declarations.
  */
 function targetContract(script: string, passthrough: readonly string[] = []): string {
-  const targets = captureTargetsForScript(script, passthrough);
+  const targets = declaredTargets(script, passthrough);
   return `\`${targets.join(',')}\` / \`${targets
     .map((target) => dprForCaptureTarget(target))
     .join(',')}\``;
@@ -87,63 +105,29 @@ describe('container capture host preview port precheck docs (Issue #207)', () =>
   });
 });
 
-describe('container capture passthrough target docs (Issue #208 / #209)', () => {
-  const WEBKIT_FLAGS = [
-    '--webkit',
-    '--webkit-narrow',
-    '--webkit-narrow-before',
-  ] as const;
-  const MINESWEEPER_PHONE_ONLY_FLAGS = [
-    '--narrow(-before)',
-    '--min(-before)',
-    '--restart(-before)',
-    '--short(-before)',
-    '--large(-before)',
-  ] as const;
-
-  it('documents that the webkit passthrough flags apply to every screenshot script', () => {
-    for (const flag of WEBKIT_FLAGS) {
-      expect(CONTAINER_COMMAND).toContain(`\`${flag}\``);
-    }
-    expect(CONTAINER_COMMAND).toContain('对所有截图脚本生效并注入 `webkit`');
+describe('container capture declaration docs (Issue #293)', () => {
+  it('documents that the entry executes the target script declaration', () => {
+    expect(CONTAINER_COMMAND).toContain('执行目标脚本的声明');
+    expect(CONTAINER_COMMAND).toContain('`--print-capture-targets`');
+    expect(CONTAINER_COMMAND).toContain('`script` + `targets`');
   });
 
-  it('documents that the narrow / short / large phone modes tighten both minesweeper targets to mobile', () => {
-    for (const flag of MINESWEEPER_PHONE_ONLY_FLAGS) {
-      expect(CONTAINER_COMMAND).toContain(`\`${flag}\``);
-    }
+  it('documents the npm script arguments plus passthrough with validation', () => {
+    expect(CONTAINER_COMMAND).toContain('`package.json`');
+    expect(CONTAINER_COMMAND).toContain('脚本自带参数');
+    expect(CONTAINER_COMMAND).toContain('容器透传参数');
+    expect(CONTAINER_COMMAND).toContain('校验目标白名单与固定 DPR');
     expect(CONTAINER_COMMAND).toContain(
-      '对 `screenshots:minesweeper` 与 `screenshots:minesweeper:touch-before` 生效',
+      '`screenshots:minesweeper:webkit-before` 自带 `--webkit --touch-before`',
     );
-    expect(CONTAINER_COMMAND).toContain(
-      `先于 \`--touch-before\` 把目标收紧为 ${targetContract('screenshots:minesweeper', [
-        '--narrow',
-      ])}`,
-    );
-    expect(CONTAINER_COMMAND).toContain(
-      `\`screenshots:minesweeper:touch-before --narrow\` 注入 ${targetContract(
-        'screenshots:minesweeper:touch-before',
-        ['--narrow'],
-      )}`,
-    );
-    expect(CONTAINER_COMMAND).toContain('其他 target 会忽略这些参数、目标不变');
   });
 
-  it('documents that --touch-before selects the Pixel 7 mobile-touch target', () => {
-    expect(CONTAINER_COMMAND).toContain('`--touch-before`');
+  it('documents the declared targets for the minesweeper examples', () => {
+    expect(CONTAINER_COMMAND).toContain(targetContract('screenshots:minesweeper'));
     expect(CONTAINER_COMMAND).toContain(
-      '只在 target 为 `screenshots:minesweeper` 时把目标收紧为 `mobile-touch` / `2.625`',
+      targetContract('screenshots:minesweeper:touch-before'),
     );
-    expect(CONTAINER_COMMAND).toContain(
-      `\`screenshots:minesweeper\` 的 After 会截桌面、390×844 手机与 Pixel 7 触屏，注入 ${targetContract(
-        'screenshots:minesweeper',
-      )}`,
-    );
-    expect(CONTAINER_COMMAND).toContain(
-      `\`screenshots:minesweeper:touch-before\` 只截 Pixel 7 触屏，注入 ${targetContract(
-        'screenshots:minesweeper:touch-before',
-      )}`,
-    );
+    expect(CONTAINER_COMMAND).toContain(targetContract('screenshots:webkit'));
   });
 
   it('documents that before, clear and allow-historical-overwrite never change the target', () => {
@@ -152,15 +136,17 @@ describe('container capture passthrough target docs (Issue #208 / #209)', () => 
     );
   });
 
-  it('documents the runtime assertion against a target outside the injected list', () => {
-    expect(CONTAINER_COMMAND).toContain('运行时断言实际记录的目标必须属于注入列表');
-    expect(CONTAINER_COMMAND).toContain(
-      '包含实际 target 与 `CAPTURE_TARGET` 的可读错误',
-    );
+  it('documents the runtime assertion against the declaration', () => {
+    expect(CONTAINER_COMMAND).toContain('实际记录必须与声明一致');
+    expect(CONTAINER_COMMAND).toContain('多记或漏记');
+    expect(CONTAINER_COMMAND).not.toContain('实际记录的目标必须属于注入列表');
   });
 
   it('no longer derives the target from the script name alone', () => {
     expect(CONTAINER_COMMAND).not.toContain('容器入口按脚本的捕获模式注入');
+    expect(CONTAINER_COMMAND).not.toContain(
+      '入口按 target 脚本与透传参数共同推导并注入',
+    );
   });
 });
 

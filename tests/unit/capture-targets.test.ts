@@ -34,11 +34,14 @@ import {
 } from '../../scripts/lib/capture-runtime.mjs';
 import {
   captureTargets as containerCaptureTargets,
-  captureTargetsForScript,
   readPackageScripts,
+  resolveCaptureTargets,
 } from '../../scripts/run-container-capture.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+// Each declaration case spawns a real capture script, whose Playwright import
+// is slow enough to exceed the default 5s when a test covers many flag combos.
+vi.setConfig({ testTimeout: 30_000 });
 const SCRIPTS = readPackageScripts({
   packagePath: join(ROOT, 'package.json'),
 });
@@ -169,10 +172,13 @@ async function mapWithConcurrency<T>(
 }
 
 /**
- * Assert that every case prints its declaration and that it matches the
- * container entry's current `captureTargetsForScript` mapping item-by-item.
- * This ticket does not change the container entry, so the declarations are
- * cross-checked against it first and become the source of truth later.
+ * Assert that the container entry's declaration resolver reproduces the JSON a
+ * target script prints for the same npm command arguments + passthrough args.
+ *
+ * The container entry parses `package.json` to recover the script's built-in
+ * arguments and appends the passthrough args, so this cross-checks both the
+ * command parsing and the one-line declaration consumed by the host / container
+ * paths without keeping a second script-name / flag table in the tests.
  */
 async function assertDeclarationsMatchContainer(
   cases: readonly DeclarationCase[],
@@ -183,7 +189,7 @@ async function assertDeclarationsMatchContainer(
     const declaration = parseDeclaration(stdout, entry.label);
     expect(declaration.script, entry.label).toBe(entry.script);
     expect(declaration.targets, entry.label).toEqual(
-      captureTargetsForScript(entry.target, args),
+      resolveCaptureTargets(entry.target, args, { scripts: SCRIPTS }).targets,
     );
   });
 }
@@ -268,6 +274,39 @@ describe('npm screenshot target declarations', () => {
     expect(NPM_TARGET_CASES.map((entry) => entry.target)).not.toContain(
       'screenshots:baseline',
     );
+  });
+
+  it('pins the declared targets of the key npm modes', () => {
+    const expectations: Record<string, string[]> = {
+      screenshots: ['desktop', 'mobile'],
+      'screenshots:webkit': ['webkit'],
+      'screenshots:2048:before': ['desktop', 'mobile'],
+      'screenshots:minesweeper': ['desktop', 'mobile', 'mobile-touch'],
+      'screenshots:minesweeper:scores': ['desktop', 'mobile'],
+      'screenshots:minesweeper:scores-clear': ['desktop', 'mobile'],
+      'screenshots:minesweeper:narrow': ['mobile'],
+      'screenshots:minesweeper:narrow-before': ['mobile'],
+      'screenshots:minesweeper:touch-before': ['mobile-touch'],
+      // The webkit-before npm script carries its own --webkit --touch-before
+      // arguments, which the resolver must append before the passthrough args.
+      'screenshots:minesweeper:webkit-before': ['webkit'],
+    };
+    for (const [target, expected] of Object.entries(expectations)) {
+      expect(
+        resolveCaptureTargets(target, [], { scripts: SCRIPTS }).targets,
+        target,
+      ).toEqual(expected);
+    }
+    expect(
+      resolveCaptureTargets('screenshots:minesweeper', ['--narrow'], {
+        scripts: SCRIPTS,
+      }).targets,
+    ).toEqual(['mobile']);
+    expect(
+      resolveCaptureTargets('screenshots:minesweeper:touch-before', ['--narrow'], {
+        scripts: SCRIPTS,
+      }).targets,
+    ).toEqual(['mobile']);
   });
 
   it('prints the targets of every npm target, matching the container entry', async () => {
@@ -434,7 +473,8 @@ describe('npm screenshot target declarations', () => {
         const declaration = parseDeclaration(stdout, base.target);
         expect(declaration.script).toBe(base.script);
         expect(declaration.targets).toEqual(
-          captureTargetsForScript(base.target, base.args),
+          resolveCaptureTargets(base.target, base.args, { scripts: SCRIPTS })
+            .targets,
         );
         expect(stderr, `${base.target} must not write to stderr`).toBe('');
       });
@@ -490,6 +530,30 @@ describe('capture script declaration wiring', () => {
         'assertAllDeclaredCaptureTargets(DECLARED_CAPTURE_TARGETS',
       );
     }
+  });
+});
+
+describe('container entry declaration wiring', () => {
+  it('deletes the hand-written script-name / flag target map', () => {
+    const source = readFileSync(
+      join(ROOT, 'scripts', 'run-container-capture.mjs'),
+      'utf8',
+    );
+
+    for (const removed of [
+      'captureTargetsForScript',
+      'WEBKIT_CAPTURE_FLAGS',
+      'MINESWEEPER_TOUCH_CAPTURE_FLAG',
+      'MINESWEEPER_PHONE_ONLY_CAPTURE_FLAGS',
+      'MOBILE_ONLY_CAPTURE_TARGET',
+    ]) {
+      expect(source, `${removed} must be deleted`).not.toContain(removed);
+    }
+
+    // The only target source is the declaration printed by the target script.
+    expect(source).toContain('export function resolveCaptureTargets(');
+    expect(source).toContain('PRINT_CAPTURE_TARGETS_FLAG');
+    expect(source).toContain('node ${printable}');
   });
 });
 
