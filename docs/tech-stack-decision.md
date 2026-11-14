@@ -167,7 +167,7 @@ games/<game>/scene → 对应引擎（scene 模块在 mount 内动态加载）
 
 ```bash
 npm ci                              # 安装锁定依赖
-npx playwright install --with-deps chromium   # 首次安装浏览器（Linux 需 root 或预装依赖）
+npx playwright install chromium webkit        # 首次安装 Chromium 与 WebKit
 
 npm run dev                         # 开发服务器，默认 http://localhost:5173
 npm run typecheck                   # tsc --noEmit

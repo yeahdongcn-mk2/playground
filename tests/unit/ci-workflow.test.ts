@@ -583,6 +583,12 @@ describe('CI workflow', () => {
     expect(section).toContain('[README.md](../README.md)');
     expect(section).toContain('「### CI 检查顺序」');
 
+    // §7's local browser install must match the README command: the
+    // `mobile-webkit` project needs WebKit, so installing only Chromium makes
+    // the local e2e suite fail before it can run.
+    expect(section).toContain('npx playwright install chromium webkit');
+    expect(section).not.toContain('npx playwright install --with-deps chromium');
+
     // The ADR delegates to the README instead of keeping a third copy; the
     // referenced list must still match the verify steps in ci.yml.
     expect(readmeCiCheckOrder()).toEqual(VERIFY_CHECK_ORDER);
