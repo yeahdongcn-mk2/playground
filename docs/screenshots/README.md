@@ -97,20 +97,23 @@
 
 ## CI：截图文档整页尺寸校验（Issue #134）
 
-- 覆盖范围：`docs/screenshots/README.md` 表格里带 `整页 W×H` 的单元格与 `docs/screenshots/<file>.png` 的 PNG 签名 / IHDR 宽高逐项比对，其中包括「通用大厅整页证据」收录的 `after-hub-desktop.png` / `after-hub-mobile.png`；只读 README 与已提交 PNG，不执行截图脚本、不写文件，也不需要浏览器或生产构建。
+- 覆盖范围：`docs/screenshots/README.md` 表格里的两类尺寸行与 `docs/screenshots/<file>.png` 的 PNG 签名 / IHDR 宽高逐项比对：
+  - 整页行 `整页 W×H`：把文档尺寸与 PNG 签名 / IHDR 宽高比对，共 16 行 / 16 个文件，其中包括「通用大厅整页证据」收录的 `after-hub-desktop.png` / `after-hub-mobile.png`。
+  - 视口行 `CSS 视口 / PNG 尺寸`（`W1×H1 / W2×H2`）：只把斜杠后的 `W2×H2` 与 PNG 签名 / IHDR 宽高比对；斜杠前的 CSS 视口按 DPR 可能与 PNG 尺寸不同，仅作为文档元数据保留。现有 8 条视口证据是 `before/after-zhen-sha-route-desktop`、`before/after-zhen-sha-route-320x640`、`before/after-hub-copy-desktop`、`before/after-hub-copy-320x640`，共 8 行 / 8 个文件。
+  - 合计 24 行 / 24 个文件。只读 README 与已提交 PNG，不执行截图脚本、不写文件，也不需要浏览器或生产构建。
 - CI 位置：`.github/workflows/ci.yml` 的 `verify` job，在 `Unit tests`（`npm run test:unit`）之后、`Production build`（`npm run build`）之前新增名为 `Screenshot doc dimensions` 的步骤；`verify` 的 `timeout-minutes` 保持 20。放在构建前，尺寸漂移会尽早失败。
 - 步骤命令：`npm run verify:screenshots:doc-dims`（即 `node scripts/check-screenshot-doc-dims.mjs`）。
-- 复现命令：`npm run verify:screenshots:doc-dims`。通过时输出 `OK: 检查了 16 个文件 / 16 行 README，整页尺寸全部一致。` 并以 0 退出；该计数与 `tests/unit/screenshot-doc-dims.test.ts` 的 CLI 契约断言一致。
-- 失败表现：把 `after-minesweeper-scores-desktop.png` 行的 `整页 1440×1606` 改成 `1440×1607` 后，本地实测输出：
+- 复现命令：`npm run verify:screenshots:doc-dims`。通过时输出 `OK: 检查了 24 个文件 / 24 行 README（整页 16 行 / 视口 8 行），尺寸全部一致。` 并以 0 退出；该计数与 `tests/unit/screenshot-doc-dims.test.ts` 的 CLI 契约断言一致。
+- 失败表现：把 `after-hub-copy-desktop.png` 行斜杠后的 `1440×1000` 改成 `1441×1000` 后，本地实测输出：
 
 ```text
-FAIL: 发现 1 处整页尺寸问题（检查了 16 个文件 / 16 行 README）：
-  README 232: after-minesweeper-scores-desktop.png: 整页 1440×1607 != PNG 1440×1606（尺寸不一致）
+FAIL: 发现 1 处尺寸问题（检查了 24 个文件 / 24 行 README，整页 16 行 / 视口 8 行）：
+  README 78: after-hub-copy-desktop.png: 视口 PNG 1441×1000 != PNG 1440×1000（尺寸不一致）
 ```
 
-  命令以 1 退出；恢复文档后重新通过。PNG 缺失、PNG 签名错误或 IHDR 截断时同样逐条给出 README 行号、文件名、文档值与实际 PNG 状态。
+  命令以 1 退出；恢复文档后重新通过。整页行仍按原口径校验，把 `after-minesweeper-scores-desktop.png` 行的 `整页 1440×1606` 改成 `1440×1607` 时输出 `README 271: after-minesweeper-scores-desktop.png: 整页 1440×1607 != PNG 1440×1606（尺寸不一致）`。PNG 缺失、PNG 签名错误或 IHDR 截断时同样逐条给出 README 行号、文件名、文档值与实际 PNG 状态。
 - 实测耗时：2026-11-11 在 `agent/plan-134-t1` 的本地 worktree 实测，`npm run verify:screenshots:doc-dims` 约 0.08–0.09 s（`node scripts/check-screenshot-doc-dims.mjs` 本身约 0.02 s，其余为 npm 启动开销），属于毫秒级；相对 `verify` job 的分钟级耗时（见下节 WebKit 冒烟步骤的参考 run）可忽略。CI runner 的绝对耗时不同，以实际 run 为准。
-- 防回归：`tests/unit/ci-workflow.test.ts` 断言 `Screenshot doc dimensions` 步骤存在、其 `run` 恰为 `npm run verify:screenshots:doc-dims`、位于 `npm run test:unit` 之后且在 `npm run build` 之前，并继续钉住 `verify` 的 `timeout-minutes: 20`；脚本行为（改错任一维度、PNG 缺失 / 签名错误 / IHDR 截断、CLI 退出码）由 `tests/unit/screenshot-doc-dims.test.ts` 覆盖。
+- 防回归：`tests/unit/ci-workflow.test.ts` 断言 `Screenshot doc dimensions` 步骤存在、其 `run` 恰为 `npm run verify:screenshots:doc-dims`、位于 `npm run test:unit` 之后且在 `npm run build` 之前，并继续钉住 `verify` 的 `timeout-minutes: 20`；脚本行为（整页 / 视口尺寸写错、PNG 缺失 / 签名错误 / IHDR 截断、CLI 退出码与 24 行 / 24 文件计数）由 `tests/unit/screenshot-doc-dims.test.ts` 覆盖。
 
 ## CI：WebKit 窄屏截图冒烟（Issue #121）
 

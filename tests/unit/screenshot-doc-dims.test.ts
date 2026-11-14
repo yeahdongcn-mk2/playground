@@ -74,6 +74,17 @@ function tableRow(files: string[], width: number, height: number): string {
   return `| ${names} | 场景 | 1440×1000 / 深色 / 整页 ${width}×${height} | 说明 |`;
 }
 
+function viewportRow(
+  files: string[],
+  viewportWidth: number,
+  viewportHeight: number,
+  width: number,
+  height: number,
+): string {
+  const names = files.map((file) => `\`${file}\``).join(' / ');
+  return `| ${names} | 场景 | ${viewportWidth}×${viewportHeight} / ${width}×${height} | sha256 |`;
+}
+
 function writeReadme(dir: string, lines: string[]): string {
   const file = join(dir, 'README.md');
   writeFileSync(file, `${lines.join('\n')}\n`);
@@ -105,26 +116,117 @@ describe('parseDocDimensions', () => {
     ].join('\n');
 
     expect(parseDocDimensions(text)).toEqual([
-      { line: 5, files: ['before-a.png', 'after-a.png'], width: 1440, height: 1324 },
+      {
+        line: 5,
+        kind: 'full-page',
+        files: ['before-a.png', 'after-a.png'],
+        width: 1440,
+        height: 1324,
+      },
     ]);
   });
 
-  it('ignores body text and rows without a backticked PNG name or full-page size', () => {
+  it('parses viewport rows with the PNG size after the slash', () => {
+    const text = [
+      '# 截图来源',
+      '| 文件 | 场景 | CSS 视口 / PNG 尺寸 | sha256 |',
+      '| --- | --- | --- | --- |',
+      viewportRow(['before-a.png', 'after-a.png'], 1440, 1000, 1440, 1000),
+      viewportRow(['phone.png'], 320, 640, 640, 1280),
+    ].join('\n');
+
+    expect(parseDocDimensions(text)).toEqual([
+      {
+        line: 4,
+        kind: 'viewport',
+        files: ['before-a.png', 'after-a.png'],
+        viewportWidth: 1440,
+        viewportHeight: 1000,
+        width: 1440,
+        height: 1000,
+      },
+      {
+        line: 5,
+        kind: 'viewport',
+        files: ['phone.png'],
+        viewportWidth: 320,
+        viewportHeight: 640,
+        width: 640,
+        height: 1280,
+      },
+    ]);
+  });
+
+  it('ignores body text and rows without a backticked PNG name or recognised size', () => {
     expect(parseDocDimensions('正文整页 1440×1324，`a.png` 不在表格里')).toEqual([]);
     expect(parseDocDimensions('| a.png | 整页 1440×1324 |')).toEqual([]);
     expect(parseDocDimensions('| `a.png` | 1440×1000 / 深色 |')).toEqual([]);
+    expect(parseDocDimensions('正文 320×640 / 640×1280，`a.png` 不在表格里')).toEqual([]);
+    expect(parseDocDimensions('| a.png | 320×640 / 640×1280 |')).toEqual([]);
+    expect(parseDocDimensions('| `a.png` | 320×640 / 深色 |')).toEqual([]);
   });
 
-  it('lists the 16 documented full-page rows in the committed README', () => {
-    const rows = parseDocDimensions(readFileSync(README, 'utf8'));
-    const files = rows.flatMap((row) => row.files);
+  it('counts a row with both formats once as a full-page row', () => {
+    const text = [
+      '| `both.png` | 场景 | 整页 1440×1324 | 1440×1000 / 1440×1000 |',
+    ].join('\n');
 
-    expect(rows).toHaveLength(16);
-    expect(files).toHaveLength(16);
+    expect(parseDocDimensions(text)).toEqual([
+      { line: 1, kind: 'full-page', files: ['both.png'], width: 1440, height: 1324 },
+    ]);
+  });
+
+  it('lists the 16 full-page and 8 viewport rows in the committed README', () => {
+    const rows = parseDocDimensions(readFileSync(README, 'utf8'));
+    const fullPage = rows.filter((row) => row.kind === 'full-page');
+    const viewport = rows.filter((row) => row.kind === 'viewport');
+    const fullPageFiles = fullPage.flatMap((row) => row.files);
+    const viewportFiles = viewport.flatMap((row) => row.files);
+
+    expect(rows).toHaveLength(24);
+    expect(fullPage).toHaveLength(16);
+    expect(fullPageFiles).toHaveLength(16);
+    expect(viewport).toHaveLength(8);
+    expect(viewportFiles).toHaveLength(8);
     expect(
-      files.filter((file) => file.includes('scores') && !file.includes('clear')),
+      fullPageFiles.filter((file) => file.includes('scores') && !file.includes('clear')),
     ).toHaveLength(4);
-    expect(files.filter((file) => file.includes('clear-scores'))).toHaveLength(4);
+    expect(fullPageFiles.filter((file) => file.includes('clear-scores'))).toHaveLength(4);
+
+    expect(new Set(viewportFiles)).toEqual(
+      new Set([
+        'before-zhen-sha-route-desktop.png',
+        'after-zhen-sha-route-desktop.png',
+        'before-zhen-sha-route-320x640.png',
+        'after-zhen-sha-route-320x640.png',
+        'before-hub-copy-desktop.png',
+        'after-hub-copy-desktop.png',
+        'before-hub-copy-320x640.png',
+        'after-hub-copy-320x640.png',
+      ]),
+    );
+
+    const viewportByFile = new Map(
+      viewport.flatMap((row) => row.files.map((file) => [file, row] as const)),
+    );
+    for (const file of ['before-zhen-sha-route-desktop.png', 'after-zhen-sha-route-desktop.png',
+      'before-hub-copy-desktop.png', 'after-hub-copy-desktop.png']) {
+      expect(viewportByFile.get(file)).toMatchObject({
+        viewportWidth: 1440,
+        viewportHeight: 1000,
+        width: 1440,
+        height: 1000,
+      });
+    }
+    for (const file of ['before-zhen-sha-route-320x640.png', 'after-zhen-sha-route-320x640.png',
+      'before-hub-copy-320x640.png', 'after-hub-copy-320x640.png']) {
+      expect(viewportByFile.get(file)).toMatchObject({
+        viewportWidth: 320,
+        viewportHeight: 640,
+        width: 640,
+        height: 1280,
+      });
+    }
   });
 });
 
@@ -204,6 +306,21 @@ describe('parsePngDimensions', () => {
 });
 
 describe('verifyDocDimensions', () => {
+  it('passes for the committed README with 24 rows and 24 files', () => {
+    const report = verifyDocDimensions({
+      readmeText: readFileSync(README, 'utf8'),
+      dir: SCREENSHOT_DIR,
+    });
+
+    expect(report).toEqual({
+      rows: 24,
+      files: 24,
+      fullPageRows: 16,
+      viewportRows: 8,
+      problems: [],
+    });
+  });
+
   it('passes when document and PNG sizes agree', () => {
     const dir = makeTempDir();
     writePng(dir, 'after-a.png', 1440, 1324);
@@ -213,7 +330,75 @@ describe('verifyDocDimensions', () => {
       dir,
     });
 
-    expect(report).toEqual({ rows: 1, files: 1, problems: [] });
+    expect(report).toEqual({
+      rows: 1,
+      files: 1,
+      fullPageRows: 1,
+      viewportRows: 0,
+      problems: [],
+    });
+  });
+
+  it('passes when the CSS viewport differs from the PNG size but the slash size matches', () => {
+    const dir = makeTempDir();
+    writePng(dir, 'phone.png', 640, 1280);
+
+    const report = verifyDocDimensions({
+      readmeText: viewportRow(['phone.png'], 320, 640, 640, 1280),
+      dir,
+    });
+
+    expect(report).toEqual({
+      rows: 1,
+      files: 1,
+      fullPageRows: 0,
+      viewportRows: 1,
+      problems: [],
+    });
+  });
+
+  it('reports a wrong documented viewport PNG size', () => {
+    const dir = makeTempDir();
+    writePng(dir, 'after-hub-copy-desktop.png', 1440, 1000);
+
+    const { problems } = verifyDocDimensions({
+      readmeText: viewportRow(['after-hub-copy-desktop.png'], 1440, 1000, 1441, 1000),
+      dir,
+    });
+
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatchObject({
+      readmeLine: 1,
+      file: 'after-hub-copy-desktop.png',
+      kind: 'viewport',
+      docWidth: 1441,
+      docHeight: 1000,
+      actualWidth: 1440,
+      actualHeight: 1000,
+      reason: '尺寸不一致',
+    });
+  });
+
+  it('reports a missing viewport PNG', () => {
+    const dir = makeTempDir();
+
+    const { files, problems } = verifyDocDimensions({
+      readmeText: viewportRow(['missing.png'], 320, 640, 640, 1280),
+      dir,
+    });
+
+    expect(files).toBe(1);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatchObject({
+      readmeLine: 1,
+      file: 'missing.png',
+      kind: 'viewport',
+      docWidth: 640,
+      docHeight: 1280,
+      actualWidth: null,
+      actualHeight: null,
+    });
+    expect(problems[0]?.reason).toContain('PNG 文件缺失');
   });
 
   it('reports a wrong documented width and a wrong documented height', () => {
@@ -231,6 +416,7 @@ describe('verifyDocDimensions', () => {
     expect(problems[0]).toMatchObject({
       readmeLine: 1,
       file: 'width.png',
+      kind: 'full-page',
       docWidth: 1000,
       docHeight: 1324,
       actualWidth: 1440,
@@ -240,6 +426,7 @@ describe('verifyDocDimensions', () => {
     expect(problems[1]).toMatchObject({
       readmeLine: 2,
       file: 'height.png',
+      kind: 'full-page',
       docWidth: 1440,
       docHeight: 1606,
       actualWidth: 1440,
@@ -261,6 +448,7 @@ describe('verifyDocDimensions', () => {
     expect(problems[0]).toMatchObject({
       readmeLine: 1,
       file: 'missing.png',
+      kind: 'full-page',
       docWidth: 1440,
       docHeight: 1324,
       actualWidth: null,
@@ -313,9 +501,59 @@ describe('check-screenshot-doc-dims CLI', () => {
 
     expect(stderr).toBe('');
     expect(status).toBe(0);
-    expect(stdout).toContain('16 个文件');
-    expect(stdout).toContain('16 行');
-    expect(stdout).toContain('整页尺寸全部一致');
+    expect(stdout).toContain('24 个文件');
+    expect(stdout).toContain('24 行 README');
+    expect(stdout).toContain('整页 16 行 / 视口 8 行');
+    expect(stdout).toContain('尺寸全部一致');
+  });
+
+  it('exits 0 for a correct viewport row whose CSS size differs from the PNG size', () => {
+    const dir = makeTempDir();
+    writePng(dir, 'phone.png', 640, 1280);
+    const readme = writeReadme(dir, [
+      '# 截图来源',
+      viewportRow(['phone.png'], 320, 640, 640, 1280),
+    ]);
+
+    const { status, stdout, stderr } = runCli(['--readme', readme, '--dir', dir]);
+
+    expect(stderr).toBe('');
+    expect(status).toBe(0);
+    expect(stdout).toContain('1 个文件');
+    expect(stdout).toContain('1 行 README');
+    expect(stdout).toContain('整页 0 行 / 视口 1 行');
+  });
+
+  it('exits 1 for a wrong viewport PNG size and prints the documented and actual sizes', () => {
+    const dir = makeTempDir();
+    writePng(dir, 'after-hub-copy-desktop.png', 1440, 1000);
+    const readme = writeReadme(dir, [
+      '# 截图来源',
+      viewportRow(['after-hub-copy-desktop.png'], 1440, 1000, 1441, 1000),
+    ]);
+
+    const { status, stdout } = runCli(['--readme', readme, '--dir', dir]);
+
+    expect(status).toBe(1);
+    expect(stdout).toContain('README 2: after-hub-copy-desktop.png');
+    expect(stdout).toContain('视口 PNG 1441×1000');
+    expect(stdout).toContain('!= PNG 1440×1000');
+    expect(stdout).toContain('尺寸不一致');
+  });
+
+  it('exits 1 and names a missing viewport PNG', () => {
+    const dir = makeTempDir();
+    const readme = writeReadme(dir, [
+      '# 截图来源',
+      viewportRow(['missing-viewport.png'], 320, 640, 640, 1280),
+    ]);
+
+    const { status, stdout } = runCli(['--readme', readme, '--dir', dir]);
+
+    expect(status).toBe(1);
+    expect(stdout).toContain('README 2: missing-viewport.png');
+    expect(stdout).toContain('视口 PNG 640×1280');
+    expect(stdout).toContain('PNG 文件缺失');
   });
 
   it('exits 0 for a temporary README and ignores body 整页 text', () => {

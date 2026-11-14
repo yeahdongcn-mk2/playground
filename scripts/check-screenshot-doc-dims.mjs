@@ -8,8 +8,16 @@ import {
 
 const USAGE = `Usage: node scripts/check-screenshot-doc-dims.mjs [options]
 
-Verify the full-page (整页 W×H) sizes documented in the screenshot README
-against the PNG signature and IHDR width/height of the committed files.
+Verify the sizes documented in the screenshot README against the PNG signature
+and IHDR width/height of the committed files. Two table row formats are
+supported:
+
+  - full-page rows: 整页 W×H
+  - viewport rows:  CSS 视口 / PNG 尺寸 (e.g. 1440×1000 / 1440×1000)
+
+For viewport rows only the PNG size after the slash is compared with the IHDR;
+the CSS viewport before the slash is recorded but not compared, because it can
+differ by the device pixel ratio.
 
 Options:
   --readme <path>    screenshot README (default: ${DEFAULT_README_PATH})
@@ -50,7 +58,12 @@ function formatProblem(problem) {
     problem.actualWidth === null
       ? 'PNG'
       : `PNG ${problem.actualWidth}×${problem.actualHeight}`;
-  return `README ${problem.readmeLine}: ${problem.file}: 整页 ${docSize} != ${actual}（${problem.reason}）`;
+  const label = problem.kind === 'viewport' ? '视口 PNG' : '整页';
+  return `README ${problem.readmeLine}: ${problem.file}: ${label} ${docSize} != ${actual}（${problem.reason}）`;
+}
+
+function formatBreakdown(fullPageRows, viewportRows) {
+  return `整页 ${fullPageRows} 行 / 视口 ${viewportRows} 行`;
 }
 
 function main(argv) {
@@ -91,11 +104,14 @@ function main(argv) {
     return 2;
   }
 
-  const { rows, files, problems } = verifyDocDimensions({ readmeText, dir });
+  const { rows, files, fullPageRows, viewportRows, problems } = verifyDocDimensions({
+    readmeText,
+    dir,
+  });
 
   if (problems.length > 0) {
     console.log(
-      `FAIL: 发现 ${problems.length} 处整页尺寸问题（检查了 ${files} 个文件 / ${rows} 行 README）：`,
+      `FAIL: 发现 ${problems.length} 处尺寸问题（检查了 ${files} 个文件 / ${rows} 行 README，${formatBreakdown(fullPageRows, viewportRows)}）：`,
     );
     for (const problem of problems) {
       console.log(`  ${formatProblem(problem)}`);
@@ -103,7 +119,9 @@ function main(argv) {
     return 1;
   }
 
-  console.log(`OK: 检查了 ${files} 个文件 / ${rows} 行 README，整页尺寸全部一致。`);
+  console.log(
+    `OK: 检查了 ${files} 个文件 / ${rows} 行 README（${formatBreakdown(fullPageRows, viewportRows)}），尺寸全部一致。`,
+  );
   return 0;
 }
 
