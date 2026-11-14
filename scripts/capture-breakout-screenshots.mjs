@@ -57,7 +57,8 @@ import {
  * The After mode skips the frozen ready / levelclear / gameover desktop and
  * ready / gameover mobile PNGs (and the matching WebKit captures) and prints a
  * warning unless `--allow-historical-overwrite` is passed; the playing
- * captures and the hub still refresh.
+ * captures still refresh. The shared hub screenshots belong to
+ * `scripts/capture-screenshots.mjs`, so this game script never writes them.
  */
 
 const ARGS = process.argv.slice(2);
@@ -193,13 +194,6 @@ async function captureDesktop(browser) {
     await capture(route, 'before-breakout-route-desktop.png', true);
     await route.close();
   } else {
-    const hub = await context.newPage();
-    await hub.goto(`${BASE_URL}/`, { waitUntil: 'networkidle' });
-    await hub.getByTestId('game-card-breakout').waitFor();
-    await settle(hub);
-    await capture(hub, 'after-hub-desktop.png', true);
-    await hub.close();
-
     // A fresh page per state avoids a hash-remount race between screenshots.
     const ready = await context.newPage();
     await openReady(ready);
@@ -251,14 +245,6 @@ async function captureMobile(browser) {
     await capture(route, 'before-breakout-route-mobile.png', false);
     await route.close();
   } else {
-    // Same full-page framing as the Before hub so the breakout card is comparable.
-    const hub = await context.newPage();
-    await hub.goto(`${BASE_URL}/`, { waitUntil: 'networkidle' });
-    await hub.getByTestId('game-card-breakout').waitFor();
-    await settle(hub);
-    await capture(hub, 'after-hub-mobile.png', true);
-    await hub.close();
-
     const ready = await context.newPage();
     await openReady(ready);
     await capture(ready, 'after-breakout-ready-mobile.png', false);

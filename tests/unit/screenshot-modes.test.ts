@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { Page } from '@playwright/test';
 import { describe, expect, it, vi } from 'vitest';
@@ -837,28 +837,24 @@ describe('WebKit screenshot static guards', () => {
 });
 
 /**
- * The five capture scripts that write the shared hub screenshots. The generic
- * script passes `fullPage` inside an options object; the four game scripts
- * forward it as the third positional argument to their local `capture()`
- * helper, so the extractor below has to understand both call shapes.
+ * The single script allowed to write the shared Chromium hub screenshots.
+ *
+ * The game capture scripts used to refresh `after-hub-desktop.png` /
+ * `after-hub-mobile.png` as a side effect of their After runs. That made the
+ * shared evidence depend on whichever game script ran last, so ownership moved
+ * to the generic hub script; the guards below keep it from creeping back (see
+ * Issue #221 t1).
  */
-const HUB_SCRIPTS = [
-  'capture-2048-screenshots.mjs',
-  'capture-breakout-screenshots.mjs',
-  'capture-minesweeper-screenshots.mjs',
-  'capture-screenshots.mjs',
-  'capture-snake-screenshots.mjs',
-] as const;
+const HUB_WRITER = 'capture-screenshots.mjs';
 
 const HUB_FILES = ['after-hub-desktop.png', 'after-hub-mobile.png'] as const;
 
 /**
- * Screenshots that must stay viewport-sized even though their script also
- * writes the full-page shared hub. The WebKit hub and every game's own phone
- * frame keep their historical viewport framing; only the shared Chromium hub
- * becomes a full-page capture.
+ * Screenshots that must stay viewport-sized. The WebKit hub and every game's
+ * own phone frame keep their historical viewport framing; only the shared
+ * Chromium hub is a full-page capture.
  */
-const HUB_VIEWPORT_SHOTS: Record<string, readonly string[]> = {
+const VIEWPORT_SHOTS: Record<string, readonly string[]> = {
   'capture-screenshots.mjs': [
     'after-blank-desktop.png',
     'after-blank-mobile.png',
@@ -875,13 +871,37 @@ const HUB_VIEWPORT_SHOTS: Record<string, readonly string[]> = {
     'after-breakout-playing-mobile.png',
     'after-breakout-gameover-mobile.png',
   ],
-  'capture-minesweeper-screenshots.mjs': [],
   'capture-snake-screenshots.mjs': [
     'before-framework-hub-mobile.png',
     'after-snake-mobile.png',
     'after-snake-webkit.png',
   ],
 };
+
+interface ScriptSource {
+  /** Repository-relative path, e.g. `scripts/capture-2048-screenshots.mjs`. */
+  file: string;
+  source: string;
+}
+
+/** Every `.mjs` under `scripts/`, recursively, with its repository-relative path. */
+function allScriptSources(): ScriptSource[] {
+  const walk = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        return walk(path);
+      }
+      return entry.name.endsWith('.mjs') ? [path] : [];
+    });
+
+  return walk(SCRIPT_DIR)
+    .sort()
+    .map((path) => ({
+      file: relative(ROOT, path),
+      source: readFileSync(path, 'utf8'),
+    }));
+}
 
 interface CaptureCall {
   /** Which call shape wrote the PNG. */
@@ -946,29 +966,60 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-describe('shared hub screenshot full-page guard (Issues #161, #218)', () => {
-  it('covers every capture script that writes the shared hub', () => {
-    const writers = CAPTURE_SCRIPTS.filter((file) =>
-      HUB_FILES.some((name) => captureCalls(captureSource(file)).has(name)),
-    );
+/**
+ * Problems with the shared hub evidence ownership in one tree of sources.
+ *
+ * Only `capture-screenshots.mjs` may name the two Chromium hub files, and its
+ * two calls must stay full-page. Every other script under `scripts/` (games and
+ * `scripts/lib/` modules) must stay silent about those names, so a game run can
+ * never overwrite the shared evidence with its own viewport framing.
+ */
+function sharedHubProblems(entries: readonly ScriptSource[]): string[] {
+  const problems: string[] = [];
 
-    expect(writers).toEqual([...HUB_SCRIPTS]);
+  for (const { file, source } of entries) {
+    if (file === `scripts/${HUB_WRITER}`) {
+      continue;
+    }
+    for (const name of HUB_FILES) {
+      if (source.includes(name)) {
+        problems.push(
+          `${file} must not reference ${name}: ${HUB_WRITER} is the only writer`,
+        );
+      }
+    }
+  }
+
+  const writer = entries.find((entry) => entry.file === `scripts/${HUB_WRITER}`);
+  if (writer === undefined) {
+    problems.push(`${HUB_WRITER} is missing`);
+  } else {
+    problems.push(...hubFullPageProblems(writer.source));
+  }
+
+  return problems;
+}
+
+describe('shared hub screenshot ownership and full-page guard (Issues #161, #218, #221)', () => {
+  it('keeps capture-screenshots.mjs the only writer of the shared hub', () => {
+    const writers = allScriptSources()
+      .filter(({ source }) => HUB_FILES.some((name) => source.includes(name)))
+      .map(({ file }) => file);
+
+    expect(writers).toEqual([`scripts/${HUB_WRITER}`]);
   });
 
-  it.each(HUB_SCRIPTS)(
-    'pins fullPage true for both shared hub captures in %s',
-    (file) => {
-      // The hub is taller than the 1440x1000 / 390x844 viewports, so dropping
-      // fullPage silently regresses the committed full-page evidence.
-      expect(hubFullPageProblems(captureSource(file)), file).toEqual([]);
-    },
-  );
+  it('pins fullPage true for both shared hub captures in the generic script', () => {
+    // The hub is taller than the 1440x1000 / 390x844 viewports, so dropping
+    // fullPage silently regresses the committed full-page evidence.
+    expect(hubFullPageProblems(captureSource(HUB_WRITER))).toEqual([]);
+  });
 
-  it.each(HUB_SCRIPTS)(
+  it.each(Object.entries(VIEWPORT_SHOTS))(
     'keeps the WebKit hub and game phone frames at the viewport in %s',
-    (file) => {
+    (file, names) => {
       const calls = captureCalls(captureSource(file));
-      for (const name of HUB_VIEWPORT_SHOTS[file] ?? []) {
+      for (const name of names) {
         const call = calls.get(name);
         expect(call, `${file}: ${name}`).toBeDefined();
         // `fullPage` may be omitted (the runtime default is false) but the
@@ -992,29 +1043,57 @@ describe('shared hub screenshot full-page guard (Issues #161, #218)', () => {
     }
   });
 
-  it.each(HUB_SCRIPTS)(
-    'fails when a hub capture in %s falls back to the viewport',
+  it.each(CAPTURE_SCRIPTS.filter((file) => file !== HUB_WRITER))(
+    'fails when the game script %s writes the shared hub again',
     (file) => {
-      const source = captureSource(file);
-      for (const name of HUB_FILES) {
-        const pattern = escapeRegExp(name);
-        const mutated = source
-          .replace(
-            new RegExp(
-              `(captureScreenshot\\([^,]+, '${pattern}', \\{[\\s\\S]*?fullPage:\\s*)true`,
-            ),
-            '$1false',
-          )
-          .replace(new RegExp(`(capture\\([^,]+, '${pattern}', )true`), '$1false');
+      const entries = allScriptSources();
+      const target = `scripts/${file}`;
 
-        expect(
-          mutated,
-          `${file}: ${name} should have a fullPage true call to mutate`,
-        ).not.toBe(source);
-        expect(hubFullPageProblems(mutated), `${file}: ${name}`).toContainEqual(
-          expect.stringContaining(name),
+      // A `fullPage: false` viewport call is the regression from the removal
+      // task: it still overwrites the shared full-page evidence with a crop.
+      for (const line of [
+        "capture(hub, 'after-hub-desktop.png', true);",
+        "capture(hub, 'after-hub-mobile.png', false);",
+      ]) {
+        const mutated = entries.map((entry) =>
+          entry.file === target
+            ? { ...entry, source: `${entry.source}\n${line}\n` }
+            : entry,
+        );
+
+        expect(mutated, `${file}: the injected capture should change the source`).not.toEqual(
+          entries,
+        );
+        expect(sharedHubProblems(mutated), `${file}: ${line}`).toContainEqual(
+          expect.stringContaining(file),
         );
       }
+    },
+  );
+
+  it.each(HUB_FILES)(
+    'fails when the shared hub capture %s falls back to the viewport',
+    (name) => {
+      const source = captureSource(HUB_WRITER);
+      const pattern = escapeRegExp(name);
+      const mutated = source.replace(
+        new RegExp(
+          `(captureScreenshot\\([^,]+, '${pattern}', \\{[\\s\\S]*?fullPage:\\s*)true`,
+        ),
+        '$1false',
+      );
+
+      expect(
+        mutated,
+        `${HUB_WRITER}: ${name} should have a fullPage true call to mutate`,
+      ).not.toBe(source);
+
+      const entries = allScriptSources().map((entry) =>
+        entry.file === `scripts/${HUB_WRITER}` ? { ...entry, source: mutated } : entry,
+      );
+      expect(sharedHubProblems(entries), name).toContainEqual(
+        expect.stringContaining(name),
+      );
     },
   );
 });

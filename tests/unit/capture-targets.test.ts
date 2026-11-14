@@ -281,7 +281,7 @@ describe('npm screenshot target declarations', () => {
       screenshots: ['desktop', 'mobile'],
       'screenshots:webkit': ['webkit'],
       'screenshots:2048:before': ['desktop', 'mobile'],
-      'screenshots:minesweeper': ['desktop', 'mobile', 'mobile-touch'],
+      'screenshots:minesweeper': ['desktop', 'mobile-touch'],
       'screenshots:minesweeper:scores': ['desktop', 'mobile'],
       'screenshots:minesweeper:scores-clear': ['desktop', 'mobile'],
       'screenshots:minesweeper:narrow': ['mobile'],
