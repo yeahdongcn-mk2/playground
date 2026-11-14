@@ -16,8 +16,10 @@ import {
   resolveCaptureImage,
 } from '../../scripts/lib/capture-env.mjs';
 import {
+  CAPTURE_IMAGE_BUILD_LABEL,
   CAPTURE_LOCK_HASH_FILE,
   buildDockerRunArgs,
+  captureImageBuildInputFingerprint,
   captureTargetsForScript,
   captureTargets,
   ensureCaptureImage,
@@ -45,21 +47,25 @@ const CONTAINER_ENV: Env = {
   ...CAPTURE_EGL_ENV,
 };
 
-function fakeSpawnSync(
-  result: Partial<{
-    error: Error & { code?: string };
-    status: number | null;
-    stdout: string;
-    stderr: string;
-  }>,
-): typeof spawnSync {
-  return (() => ({
+type FakeSpawnSyncResult = Partial<{
+  error: Error & { code?: string };
+  status: number | null;
+  stdout: string;
+  stderr: string;
+}>;
+
+function spawnSyncResult(result: FakeSpawnSyncResult = {}) {
+  return {
     error: undefined,
     status: 0,
     stdout: '',
     stderr: '',
     ...result,
-  })) as unknown as typeof spawnSync;
+  };
+}
+
+function fakeSpawnSync(result: FakeSpawnSyncResult): typeof spawnSync {
+  return (() => spawnSyncResult(result)) as unknown as typeof spawnSync;
 }
 
 function fakeSpawn(
@@ -87,6 +93,8 @@ const HOST_SCRIPTS = JSON.stringify({
 const HOST_LOCKFILE = JSON.stringify({
   packages: { 'node_modules/@playwright/test': { version: '1.64.1' } },
 });
+const PINNED_FROM = `FROM ${PLAYWRIGHT_IMAGE_REPOSITORY}:${PLAYWRIGHT_IMAGE_PIN.tag}@${PLAYWRIGHT_IMAGE_PIN.digest}`;
+const PINNED_DOCKERFILE = `${PINNED_FROM}\nENV EGL_PLATFORM=surfaceless\n`;
 
 function fakeHostReadFile(path: string): string {
   if (path.endsWith('package-lock.json')) {
@@ -94,6 +102,9 @@ function fakeHostReadFile(path: string): string {
   }
   if (path.endsWith('package.json')) {
     return HOST_SCRIPTS;
+  }
+  if (path.endsWith('docker/capture/Dockerfile')) {
+    return PINNED_DOCKERFILE;
   }
   throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
 }
@@ -478,28 +489,252 @@ describe('container entry preflight', () => {
       /does not match.*1\.65\.0|v1\.64\.1-noble/,
     );
   });
+});
 
-  it('builds the local image only when it is missing', () => {
+describe('capture image build input', () => {
+  const DOCKERFILE_PATH = '/repo/docker/capture/Dockerfile';
+
+  function readDockerfile(dockerfile = PINNED_DOCKERFILE) {
+    return (path: string): string => {
+      if (path === DOCKERFILE_PATH) {
+        return dockerfile;
+      }
+      throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+    };
+  }
+
+  function recordingSpawnSync(results: FakeSpawnSyncResult[] = []) {
     const calls: string[][] = [];
     const spawnSyncFake = ((command: string, args: readonly string[]) => {
       calls.push([command, ...args]);
-      return calls.length === 1
-        ? { error: undefined, status: 1, stdout: '', stderr: 'No such image' }
-        : { error: undefined, status: 0, stdout: '', stderr: '' };
+      return spawnSyncResult(results[calls.length - 1]);
     }) as unknown as typeof spawnSync;
+    return { calls, spawnSync: spawnSyncFake };
+  }
 
-    expect(ensureCaptureImage({ spawnSync: spawnSyncFake, repoRoot: '/repo' })).toBe(
-      localCaptureImageName(),
-    );
-    expect(calls[1]).toEqual([
+  function fingerprintOf(
+    dockerfile = PINNED_DOCKERFILE,
+    tag = PLAYWRIGHT_IMAGE_PIN.tag,
+    digest = PLAYWRIGHT_IMAGE_PIN.digest,
+  ): string {
+    return captureImageBuildInputFingerprint({ tag, digest, dockerfile });
+  }
+
+  function inspectCall(localImage = localCaptureImageName()): string[] {
+    return [
+      'docker',
+      'image',
+      'inspect',
+      '--format',
+      `{{ index .Config.Labels "${CAPTURE_IMAGE_BUILD_LABEL}" }}`,
+      localImage,
+    ];
+  }
+
+  function buildCall(
+    fingerprint: string,
+    localImage = localCaptureImageName(),
+  ): string[] {
+    return [
       'docker',
       'build',
+      '--label',
+      `${CAPTURE_IMAGE_BUILD_LABEL}=${fingerprint}`,
       '--file',
-      '/repo/docker/capture/Dockerfile',
+      DOCKERFILE_PATH,
       '--tag',
-      localCaptureImageName(),
+      localImage,
       '/repo/docker/capture',
+    ];
+  }
+
+  it('fingerprints the pin and the whole Dockerfile, stable for equal inputs', () => {
+    const base = fingerprintOf();
+    expect(base).toMatch(/^[0-9a-f]{64}$/);
+    expect(fingerprintOf()).toBe(base);
+
+    // Every build input is part of the fingerprint on its own.
+    expect(fingerprintOf(`${PINNED_DOCKERFILE}LABEL changed=1\n`)).not.toBe(base);
+    expect(
+      captureImageBuildInputFingerprint({
+        tag: 'v1.65.0-noble',
+        digest: PLAYWRIGHT_IMAGE_PIN.digest,
+        dockerfile: PINNED_DOCKERFILE,
+      }),
+    ).not.toBe(base);
+    expect(
+      captureImageBuildInputFingerprint({
+        tag: PLAYWRIGHT_IMAGE_PIN.tag,
+        digest: `sha256:${'0'.repeat(64)}`,
+        dockerfile: PINNED_DOCKERFILE,
+      }),
+    ).not.toBe(base);
+  });
+
+  it('builds with the fingerprint label when the image is missing', () => {
+    const { calls, spawnSync: spawnSyncFake } = recordingSpawnSync([
+      { status: 1, stderr: 'No such image' },
+      { status: 0 },
     ]);
+
+    expect(
+      ensureCaptureImage({
+        spawnSync: spawnSyncFake,
+        readFile: readDockerfile(),
+        repoRoot: '/repo',
+      }),
+    ).toBe(localCaptureImageName());
+    expect(calls).toEqual([
+      inspectCall(),
+      buildCall(fingerprintOf()),
+    ]);
+  });
+
+  it('reuses the image only when its build label matches the fingerprint', () => {
+    const { calls, spawnSync: spawnSyncFake } = recordingSpawnSync([
+      { status: 0, stdout: `${fingerprintOf()}\n` },
+    ]);
+
+    expect(
+      ensureCaptureImage({
+        spawnSync: spawnSyncFake,
+        readFile: readDockerfile(),
+        repoRoot: '/repo',
+      }),
+    ).toBe(localCaptureImageName());
+    expect(calls).toEqual([inspectCall()]);
+  });
+
+  it('validates the runtime (last) FROM of a multi-stage Dockerfile', () => {
+    const multiStageDockerfile = `FROM busybox:1 AS build\n${PINNED_FROM}\n`;
+    const { calls, spawnSync: spawnSyncFake } = recordingSpawnSync([
+      { status: 0, stdout: `${fingerprintOf(multiStageDockerfile)}\n` },
+    ]);
+
+    expect(
+      ensureCaptureImage({
+        spawnSync: spawnSyncFake,
+        readFile: readDockerfile(multiStageDockerfile),
+        repoRoot: '/repo',
+      }),
+    ).toBe(localCaptureImageName());
+    expect(calls).toEqual([inspectCall()]);
+  });
+
+  it('rebuilds when the pinned tag/digest changes', () => {
+    const changedTag = 'v1.65.0-noble';
+    const changedDigest = `sha256:${'a'.repeat(64)}`;
+    const changedDockerfile = `FROM ${PLAYWRIGHT_IMAGE_REPOSITORY}:${changedTag}@${changedDigest}\n`;
+    const { calls, spawnSync: spawnSyncFake } = recordingSpawnSync([
+      { status: 0, stdout: `${fingerprintOf()}\n` },
+      { status: 0 },
+    ]);
+
+    expect(
+      ensureCaptureImage({
+        spawnSync: spawnSyncFake,
+        readFile: readDockerfile(changedDockerfile),
+        repoRoot: '/repo',
+        tag: changedTag,
+        digest: changedDigest,
+      }),
+    ).toBe(localCaptureImageName(changedTag));
+    const changedImage = localCaptureImageName(changedTag);
+    expect(calls).toEqual([
+      inspectCall(changedImage),
+      buildCall(
+        fingerprintOf(changedDockerfile, changedTag, changedDigest),
+        changedImage,
+      ),
+    ]);
+  });
+
+  it('rebuilds when only the Dockerfile contents change', () => {
+    const changedDockerfile = `${PINNED_DOCKERFILE}LABEL rebuild-check=1\n`;
+    const { calls, spawnSync: spawnSyncFake } = recordingSpawnSync([
+      { status: 0, stdout: `${fingerprintOf()}\n` },
+      { status: 0 },
+    ]);
+
+    expect(
+      ensureCaptureImage({
+        spawnSync: spawnSyncFake,
+        readFile: readDockerfile(changedDockerfile),
+        repoRoot: '/repo',
+      }),
+    ).toBe(localCaptureImageName());
+    expect(calls).toEqual([inspectCall(), buildCall(fingerprintOf(changedDockerfile))]);
+  });
+
+  it.each(['', '<no value>\n'])(
+    'rebuilds an image built before the label existed (%j)',
+    (stdout) => {
+      const { calls, spawnSync: spawnSyncFake } = recordingSpawnSync([
+        { status: 0, stdout },
+        { status: 0 },
+      ]);
+
+      expect(
+        ensureCaptureImage({
+          spawnSync: spawnSyncFake,
+          readFile: readDockerfile(),
+          repoRoot: '/repo',
+        }),
+      ).toBe(localCaptureImageName());
+      expect(calls).toEqual([inspectCall(), buildCall(fingerprintOf())]);
+    },
+  );
+
+  it('fails with the expected and actual FROM when the Dockerfile drifts from the pin', () => {
+    const driftedDigest = `sha256:${'b'.repeat(64)}`;
+    const driftedDockerfile = PINNED_DOCKERFILE.replace(
+      PLAYWRIGHT_IMAGE_PIN.digest,
+      driftedDigest,
+    );
+    const { calls, spawnSync: spawnSyncFake } = recordingSpawnSync();
+
+    expect(() =>
+      ensureCaptureImage({
+        spawnSync: spawnSyncFake,
+        readFile: readDockerfile(driftedDockerfile),
+        repoRoot: '/repo',
+      }),
+    ).toThrow(
+      `Capture image base mismatch in ${DOCKERFILE_PATH}: ` +
+        `expected FROM ${PLAYWRIGHT_IMAGE_REPOSITORY}:${PLAYWRIGHT_IMAGE_PIN.tag}@${PLAYWRIGHT_IMAGE_PIN.digest}, ` +
+        `found FROM ${PLAYWRIGHT_IMAGE_REPOSITORY}:${PLAYWRIGHT_IMAGE_PIN.tag}@${driftedDigest}.`,
+    );
+    // The mismatch fails before Docker is touched, so no stale image can run.
+    expect(calls).toEqual([]);
+  });
+
+  it('fails with a readable error when the Dockerfile has no FROM', () => {
+    const { spawnSync: spawnSyncFake } = recordingSpawnSync();
+
+    expect(() =>
+      ensureCaptureImage({
+        spawnSync: spawnSyncFake,
+        readFile: readDockerfile('# no FROM here\n'),
+        repoRoot: '/repo',
+      }),
+    ).toThrow(`${DOCKERFILE_PATH} has no FROM instruction`);
+  });
+
+  it('keeps the readable error when docker build fails', () => {
+    const { spawnSync: spawnSyncFake } = recordingSpawnSync([
+      { status: 1, stderr: 'No such image' },
+      { status: 1, stderr: 'base image pull failed' },
+    ]);
+
+    expect(() =>
+      ensureCaptureImage({
+        spawnSync: spawnSyncFake,
+        readFile: readDockerfile(),
+        repoRoot: '/repo',
+      }),
+    ).toThrow(
+      `Docker build for ${localCaptureImageName()} failed (exit 1): base image pull failed`,
+    );
   });
 });
 

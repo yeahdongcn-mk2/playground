@@ -20,6 +20,7 @@ import {
   CAPTURE_TARGET_DPR_VAR,
   CAPTURE_TARGET_VAR,
   PLAYWRIGHT_IMAGE_PIN,
+  PLAYWRIGHT_IMAGE_REPOSITORY,
   assertContainerCaptureEnvironment,
   dprForCaptureTarget,
   resolveCaptureImage,
@@ -52,6 +53,13 @@ export const CONTAINER_WORKDIR = '/work';
 export const CONTAINER_CAPTURE_IMAGE = 'playground-capture';
 export const CONTAINER_LOG_DIR = 'test-results/capture-container';
 export const CAPTURE_LOCK_HASH_FILE = 'node_modules/.capture-package-lock-hash';
+
+/**
+ * Docker label that records the build-input fingerprint on the local capture
+ * image. A local image without this label predates the fingerprint check and is
+ * rebuilt instead of silently reused.
+ */
+export const CAPTURE_IMAGE_BUILD_LABEL = 'playground.capture.build-input';
 
 /** npm scripts that can be run through the container entry. */
 const EXCLUDED_TARGETS = new Set(['screenshots:container', 'screenshots:baseline']);
@@ -225,17 +233,120 @@ export function localCaptureImageName(tag = PLAYWRIGHT_IMAGE_PIN.tag) {
   return `${CONTAINER_CAPTURE_IMAGE}:${tag}`;
 }
 
-/** Build the local capture image when it is not present yet. */
+/**
+ * Stable sha256 of every input that changes the local capture image.
+ *
+ * A local `playground-capture:<tag>` image is only reusable when it was built
+ * from the same Playwright pin (tag + digest) and the same
+ * `docker/capture/Dockerfile` contents. Changing either input changes the
+ * fingerprint, so the image is rebuilt instead of silently reusing an image
+ * that no longer describes the injected `CAPTURE_IMAGE_DIGEST`.
+ */
+export function captureImageBuildInputFingerprint({
+  tag = PLAYWRIGHT_IMAGE_PIN.tag,
+  digest = PLAYWRIGHT_IMAGE_PIN.digest,
+  dockerfile,
+} = {}) {
+  if (typeof dockerfile !== 'string') {
+    throw new TypeError(
+      'captureImageBuildInputFingerprint needs the docker/capture/Dockerfile contents.',
+    );
+  }
+  return createHash('sha256')
+    .update(JSON.stringify({ tag, digest, dockerfile }))
+    .digest('hex');
+}
+
+/** Returns the image reference every FROM instruction of a Dockerfile names. */
+function dockerfileFromImages(dockerfile) {
+  const images = [];
+  for (const line of dockerfile.split(/\r?\n/)) {
+    const match = /^\s*FROM\s+(?:--\S+\s+)?(\S+)/i.exec(line);
+    if (match?.[1] !== undefined) {
+      images.push(match[1]);
+    }
+  }
+  return images;
+}
+
+/**
+ * Fail with a readable error when the Dockerfile's runtime base image drifts
+ * from the pinned Playwright image.
+ *
+ * The container entry injects `CAPTURE_IMAGE_DIGEST`, so a Dockerfile built on
+ * another base image would make the capture log claim a digest that did not
+ * produce the pixels. The last FROM stage is the runtime image; intermediate
+ * build stages are still covered by the Dockerfile content fingerprint.
+ */
+function assertDockerfileMatchesCaptureImage({
+  dockerfile,
+  dockerfilePath,
+  tag,
+  digest,
+}) {
+  const expected = `${PLAYWRIGHT_IMAGE_REPOSITORY}:${tag}@${digest}`;
+  const images = dockerfileFromImages(dockerfile);
+  const actual = images.at(-1);
+  if (actual === undefined) {
+    throw new Error(
+      `Cannot use the capture image: ${dockerfilePath} has no FROM instruction. ` +
+        `Expected FROM ${expected}.`,
+    );
+  }
+  if (actual !== expected) {
+    throw new Error(
+      `Capture image base mismatch in ${dockerfilePath}: expected FROM ${expected}, ` +
+        `found FROM ${actual}. Update PLAYWRIGHT_IMAGE_PIN and the Dockerfile together, ` +
+        `otherwise CAPTURE_IMAGE_DIGEST would not describe the image that runs.`,
+    );
+  }
+}
+
+/**
+ * Build the local capture image when it is missing or was built from other
+ * inputs.
+ *
+ * The image is tagged with the Docker label
+ * `playground.capture.build-input`; an image whose label matches the current
+ * fingerprint is reused, while a missing label (an image from before this
+ * check) or a changed tag / digest / Dockerfile rebuilds it.
+ */
 export function ensureCaptureImage({
   spawnSync = defaultSpawnSync,
   repoRoot = CAPTURE_REPO_ROOT,
   tag = PLAYWRIGHT_IMAGE_PIN.tag,
+  digest = PLAYWRIGHT_IMAGE_PIN.digest,
+  readFile = defaultReadFile,
 } = {}) {
   const localImage = localCaptureImageName(tag);
-  const inspect = spawnSync('docker', ['image', 'inspect', localImage], {
-    encoding: 'utf8',
-  });
-  if (!inspect?.error && inspect.status === 0) {
+  const dockerfilePath = resolve(repoRoot, 'docker/capture/Dockerfile');
+  let dockerfile;
+  try {
+    dockerfile = readFile(dockerfilePath, 'utf8');
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`Cannot read ${dockerfilePath} for ${localImage}: ${detail}`);
+  }
+
+  assertDockerfileMatchesCaptureImage({ dockerfile, dockerfilePath, tag, digest });
+  const fingerprint = captureImageBuildInputFingerprint({ tag, digest, dockerfile });
+
+  const inspect = spawnSync(
+    'docker',
+    [
+      'image',
+      'inspect',
+      '--format',
+      `{{ index .Config.Labels "${CAPTURE_IMAGE_BUILD_LABEL}" }}`,
+      localImage,
+    ],
+    { encoding: 'utf8' },
+  );
+  if (
+    !inspect?.error &&
+    inspect.status === 0 &&
+    String(inspect.stdout ?? '').trim() === fingerprint
+  ) {
     return localImage;
   }
 
@@ -245,8 +356,10 @@ export function ensureCaptureImage({
     'docker',
     [
       'build',
+      '--label',
+      `${CAPTURE_IMAGE_BUILD_LABEL}=${fingerprint}`,
       '--file',
-      resolve(repoRoot, 'docker/capture/Dockerfile'),
+      dockerfilePath,
       '--tag',
       localImage,
       resolve(repoRoot, 'docker/capture'),
@@ -455,7 +568,13 @@ export async function runContainerCapture({
     }
   }
 
-  const localImage = ensureCaptureImage({ spawnSync, repoRoot, tag: image.tag });
+  const localImage = ensureCaptureImage({
+    spawnSync,
+    repoRoot,
+    tag: image.tag,
+    digest: image.digest,
+    readFile,
+  });
   const args = buildDockerRunArgs({
     target,
     passthrough,

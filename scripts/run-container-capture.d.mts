@@ -46,6 +46,8 @@ export interface EnsureCaptureImageOptions {
   spawnSync?: typeof spawnSync;
   repoRoot?: string;
   tag?: string;
+  digest?: string;
+  readFile?: (path: string, encoding?: 'utf8') => string;
 }
 
 export interface BuildDockerRunArgsOptions {
@@ -79,6 +81,7 @@ export const CONTAINER_WORKDIR: string;
 export const CONTAINER_CAPTURE_IMAGE: string;
 export const CONTAINER_LOG_DIR: string;
 export const CAPTURE_LOCK_HASH_FILE: string;
+export const CAPTURE_IMAGE_BUILD_LABEL: string;
 
 export function readPackageScripts(options?: {
   packagePath?: string;
@@ -108,6 +111,11 @@ export function preflightDocker(options?: {
   spawnSync?: typeof spawnSync;
 }): void;
 export function localCaptureImageName(tag?: string): string;
+export function captureImageBuildInputFingerprint(options: {
+  tag?: string;
+  digest?: string;
+  dockerfile: string;
+}): string;
 export function ensureCaptureImage(
   options?: EnsureCaptureImageOptions,
 ): string;
