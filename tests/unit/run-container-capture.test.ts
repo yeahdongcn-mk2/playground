@@ -720,6 +720,29 @@ describe('capture image build input', () => {
     ).toThrow(`${DOCKERFILE_PATH} has no FROM instruction`);
   });
 
+  it('reports an unreadable Dockerfile with the image context', () => {
+    const { calls, spawnSync: spawnSyncFake } = recordingSpawnSync();
+    const readError = Object.assign(
+      new Error('ENOENT: no such file or directory, open /repo/docker/capture/Dockerfile'),
+      { code: 'ENOENT' },
+    );
+
+    expect(() =>
+      ensureCaptureImage({
+        spawnSync: spawnSyncFake,
+        readFile: () => {
+          throw readError;
+        },
+        repoRoot: '/repo',
+      }),
+    ).toThrow(
+      `Cannot read ${DOCKERFILE_PATH} for ${localCaptureImageName()}: ` +
+        'ENOENT: no such file or directory, open /repo/docker/capture/Dockerfile',
+    );
+    // Reading fails before Docker is touched, so the raw error cannot leak.
+    expect(calls).toEqual([]);
+  });
+
   it('keeps the readable error when docker build fails', () => {
     const { spawnSync: spawnSyncFake } = recordingSpawnSync([
       { status: 1, stderr: 'No such image' },
