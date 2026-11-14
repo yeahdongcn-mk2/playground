@@ -603,7 +603,7 @@ describe('browser coverage documentation', () => {
     }
   });
 
-  it('documents the browser install and e2e commands, and CI runs e2e in the pinned image', () => {
+  it('documents the browser install and e2e commands, and CI no longer installs browsers', () => {
     const scripts = packageJson.scripts ?? {};
     expect(scripts['test:e2e']).toContain('playwright test');
     expect(scripts['test:e2e:webkit']).toContain('playwright test');

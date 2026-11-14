@@ -8,7 +8,6 @@ import {
   PLAYWRIGHT_IMAGE_REPOSITORY,
   imageTagForPlaywrightVersion,
   readPlaywrightVersion,
-  resolveCaptureImage,
 } from '../../scripts/lib/capture-env.mjs';
 import { WEBKIT_SCREENSHOT_ARTIFACTS } from '../../scripts/lib/screenshot-artifacts.mjs';
 import type { ScreenshotArtifact } from '../../scripts/lib/screenshot-artifacts.mjs';
@@ -162,23 +161,16 @@ describe('CI workflow', () => {
     expect(image, 'verify should declare a job-level container image').toBeDefined();
 
     // `npm ci` installs the @playwright/test version recorded in the lockfile,
-    // so that version must be the one the image ships. `resolveCaptureImage()`
-    // reads the lockfile, rejects a mismatched tag and returns the tag + digest
-    // reference the workflow has to use.
-    const pinned = resolveCaptureImage();
-    expect(pinned.version).toBe(readPlaywrightVersion());
-    expect(PLAYWRIGHT_IMAGE_PIN.version).toBe(pinned.version);
-    expect(PLAYWRIGHT_IMAGE_PIN.tag).toBe(imageTagForPlaywrightVersion(pinned.version));
+    // so PLAYWRIGHT_IMAGE_PIN must cover that exact version. The tag is derived
+    // from the version and the digest pins the multi-arch image.
+    expect(PLAYWRIGHT_IMAGE_PIN.version).toBe(readPlaywrightVersion());
+    expect(PLAYWRIGHT_IMAGE_PIN.tag).toBe(
+      imageTagForPlaywrightVersion(PLAYWRIGHT_IMAGE_PIN.version),
+    );
     expect(PLAYWRIGHT_IMAGE_PIN.digest).toMatch(/^sha256:[0-9a-f]{64}$/);
 
-    expect(image).toBe(
-      `${PLAYWRIGHT_IMAGE_REPOSITORY}:${PLAYWRIGHT_IMAGE_PIN.tag}@${PLAYWRIGHT_IMAGE_PIN.digest}`,
-    );
-    expect(image).toBe(pinned.reference);
-    // A digest-free tag or a tag for another Playwright version would silently
-    // pull a different browser build.
-    expect(image).toContain(`:${PLAYWRIGHT_IMAGE_PIN.tag}@`);
-    expect(image).toContain(`@${PLAYWRIGHT_IMAGE_PIN.digest}`);
+    const expectedImage = `${PLAYWRIGHT_IMAGE_REPOSITORY}:${PLAYWRIGHT_IMAGE_PIN.tag}@${PLAYWRIGHT_IMAGE_PIN.digest}`;
+    expect(image).toBe(expectedImage);
 
     // The image replaces the runtime install only: the branch-protection check
     // name (`verify`) and its budget must not change.

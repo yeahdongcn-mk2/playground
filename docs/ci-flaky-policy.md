@@ -67,13 +67,13 @@ Issue #213 起，`ci.yml` 的 `verify` job 直接运行在固定 tag + digest �
 - **已移除的步骤**：官方镜像内置 Chromium、WebKit、Node 与 WebKit 所需的系统依赖，因此 `verify` 不再有 `Configure apt Acquire retries and timeouts`、`Cache Playwright browsers`、`Install Playwright Chromium and WebKit` 三个步骤；日志里不会再出现 `playwright install`、`--with-deps` 或 apt GET。
 - **镜像拉取失败边界**：镜像拉取发生在 job 启动阶段、任何步骤之前；tag/digest 不存在或 registry 不可达会立刻以 Docker 拉取错误让 job 失败，不会先跑完前面的步骤再拖到 20 分钟上限。`verify` 的 job 名与 20 分钟预算保持不变。
 
-**为什么选官方镜像**：预装浏览器的 runner 镜像需要自建并随 Playwright 版本重建，`ubuntu-latest` 没有按版本预装 Chromium / WebKit 的标签；自托管 runner 还要长期维护主机、系统依赖、扩缩容与隔离，本仓库没有这套基础设施。官方 Playwright 镜像直接发布在 MCR，tag 与 `@playwright/test` 一一对应、digest 可固定，GitHub-hosted runner 可直接拉取，维护成本最低。相对 #202 的有界安装基线（run 43129697008：冷缓存 job 4m37s，热缓存 job 6m50s），`verify` 不再有浏览器安装与 apt 阶段，耗时只剩镜像拉取、`npm ci` 与原有检查；本改动的冷/热 `verify` 耗时由计划收口时的 PR run 记录。
+**为什么选官方镜像**：预装浏览器的 runner 镜像需要自建并随 Playwright 版本重建，`ubuntu-latest` 没有按版本预装 Chromium / WebKit 的标签；自托管 runner 还要长期维护主机、系统依赖、扩缩容与隔离，本仓库没有这套基础设施。官方 Playwright 镜像直接发布在 MCR，tag 与 `@playwright/test` 一一对应、digest 可固定，GitHub-hosted runner 可直接拉取，维护成本最低。相对 #202 的有界安装基线（run 43129697008：冷缓存 job 4m37s，热缓存 job 6m50s），`verify` 不再有浏览器安装与 apt 阶段，耗时只剩镜像拉取、`npm ci` 与原有检查。
 
 定时巡检 `.github/workflows/flake-watch.yml` 仍保留 #202 的有界安装作为回退，`scripts/install-playwright-ci.mjs` 不随本改动删除：
 
 - **缓存路径与 key**：`Cache Playwright browsers` 用 `actions/cache@v4` 缓存 `~/.cache/ms-playwright`，key 为 `playwright-webkit-${{ runner.os }}-${{ hashFiles('package-lock.json') }}`，restore key 为 `playwright-webkit-${{ runner.os }}-` 与 `playwright-${{ runner.os }}-`。key 绑定 `package-lock.json`，因此依赖或 Playwright 版本变化时冷缓存重新下载，命中时直接复用已安装的浏览器。
 - **安装步骤与超时**：`Install Playwright WebKit` 只执行 `node scripts/install-playwright-ci.mjs webkit`，步骤级 `timeout-minutes: 8`。包装脚本最多尝试 2 次，每次尝试独立 180 秒超时，失败后按 10 秒退避重试。
-- **apt Acquire 配置**：安装前由 `Configure apt Acquire retries and timeouts` 把 `Acquire::Retries "1"`、`Acquire::http::Timeout "15"` 与 `Acquire::https::Timeout "15"` 写入 `/etc/apt/apt.conf.d/99-ci-acquire`，让单次 apt 请求快速失败，而不是长时间挂起。
+- **apt Acquire 配置**：`flake-watch` 安装前由 `Configure apt Acquire retries and timeouts` 把 `Acquire::Retries "1"`、`Acquire::http::Timeout "15"` 与 `Acquire::https::Timeout "15"` 写入 `/etc/apt/apt.conf.d/99-ci-acquire`，让单次 apt 请求快速失败，而不是长时间挂起。
 - **两种失败形态**：DNS 抖动表现为 `Temporary failure resolving` / `Could not resolve`；apt 镜像 404 表现为 `Failed to fetch ... 404 Not Found`，通常以 exit 100 结束。两者都按 runner 的瞬时基础设施故障处理：包装脚本重试并打印 apt/DNS 提示，重试用尽后仍失败就返回非零状态。
 - **失败边界**：最坏情况由 2 × 180 秒尝试、退避和进程组 SIGTERM/SIGKILL 收敛组成，仍小于步骤级 8 分钟；因此失败会在步骤自身的 `timeout-minutes` 内以非零状态和可操作诊断（尝试次数、耗时、node/npm/Playwright 版本、`~/.cache/ms-playwright` 内容与 apt 提示）退出，不会耗尽 flake-watch job 的 30 分钟。
 - **验收 run**：Issue #202 使用 [run 43129697008](https://github.com/yeahdongcn-mk2/playground/actions/runs/43129697008) 的两个 attempt 验收：attempt 1 冷缓存（`Cache not found`，job 4m37s），attempt 2 热缓存重跑（`Cache restored from key: playwright-Linux-...`，job 6m50s），两次 `verify` 均通过。
