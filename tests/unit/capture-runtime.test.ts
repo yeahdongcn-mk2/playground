@@ -87,7 +87,7 @@ describe('capture environment fingerprint in the capture runtime', () => {
     ]);
   });
 
-  it('creates the Pixel 7 touch context and records target=mobile-touch dpr=2.625', async () => {
+  it('creates the Pixel 7 touch context with the committed dark/reduce defaults', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const browser = fakeBrowser();
     // `screen` is present in the runtime Pixel 7 descriptor but not in
@@ -98,10 +98,9 @@ describe('capture environment fingerprint in the capture runtime', () => {
     };
     expect(TOUCH_MOBILE_DEVICE).toBe('Pixel 7');
 
-    const context = await createTouchMobileContext(browser, {
-      colorScheme: 'dark',
-      reducedMotion: 'reduce',
-    });
+    // Call without options so the assertion fails if the helper loses the
+    // committed dark / reduce defaults.
+    const context = await createTouchMobileContext(browser);
 
     expect(context).toEqual({ close: expect.any(Function) });
     expect(browser.newContext).toHaveBeenCalledWith({
@@ -115,6 +114,33 @@ describe('capture environment fingerprint in the capture runtime', () => {
       reducedMotion: 'reduce',
     });
     expect(device.deviceScaleFactor).toBe(2.625);
+    expect(loggedLines(log)).toEqual([
+      'capture-env: source=host target=mobile-touch dpr=2.625 image=unavailable ' +
+        `node=${process.version} playwright=${PLAYWRIGHT_IMAGE_PIN.version} ` +
+        `browser=${BROWSER_VERSION} fonts=unavailable env=unavailable`,
+    ]);
+  });
+
+  it('lets callers override the touch context theme and motion', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const browser = fakeBrowser();
+
+    // Non-default values prove `...options` still reaches newContext; the
+    // device fields must also survive the override.
+    await createTouchMobileContext(browser, {
+      colorScheme: 'light',
+      reducedMotion: 'no-preference',
+    });
+
+    expect(browser.newContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deviceScaleFactor: 2.625,
+        isMobile: true,
+        hasTouch: true,
+        colorScheme: 'light',
+        reducedMotion: 'no-preference',
+      }),
+    );
     expect(loggedLines(log)).toEqual([
       'capture-env: source=host target=mobile-touch dpr=2.625 image=unavailable ' +
         `node=${process.version} playwright=${PLAYWRIGHT_IMAGE_PIN.version} ` +
