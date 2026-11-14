@@ -23,8 +23,8 @@ jobs:
     # tag/digest or an unreachable registry fails the job there with the Docker
     # pull error, still inside the unchanged 20-minute budget. The bounded
     # `scripts/install-playwright-ci.mjs` fallback from Issue #202 stays in the
-    # repository (flake-watch.yml still uses it) so this change can be rolled
-    # back without losing the retry/timeout behavior.
+    # repository as a documented rollback path; after Issue #213 moved
+    # flake-watch.yml into the same image, no workflow invokes it.
     container:
       image: mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f
       # GitHub container jobs default to a 64 MB /dev/shm. Chromium and WebKit
