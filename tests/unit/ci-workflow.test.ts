@@ -23,6 +23,25 @@ const NARROW_CAPTURE_COMMAND = 'npm run screenshots:minesweeper:webkit-narrow';
 const NARROW_ARTIFACT_GLOB = 'docs/screenshots/after-minesweeper-webkit-narrow-*.png';
 const VERIFY_CLI = 'node scripts/verify-screenshot-artifacts.mjs';
 const README_PATH = join(ROOT, 'README.md');
+const TECH_STACK_DECISION_PATH = join(ROOT, 'docs', 'tech-stack-decision.md');
+
+/**
+ * Ordered `verify` checks. The README documents them as the human-facing
+ * contract; ci.yml must run the same named steps in the same order.
+ */
+const VERIFY_CHECK_ORDER = [
+  'Run pre-commit checks',
+  'Typecheck',
+  'Lint and module boundaries',
+  'Unit tests',
+  'Verify doc test counts',
+  'Screenshot doc dimensions',
+  'Production build',
+  'Bundle budget',
+  'End-to-end tests',
+  'Check target e2e flakes',
+  'WebKit narrow screenshot smoke test',
+];
 
 interface WorkflowStep {
   name?: string;
@@ -73,6 +92,18 @@ function readmeCiCheckOrder(): string[] {
   const end = readme.indexOf('\n### ', start + heading.length);
   const section = readme.slice(start, end === -1 ? undefined : end);
   return [...section.matchAll(/^\d+\. `([^`]+)`$/gm)].map((match) => match[1] ?? '');
+}
+
+/** Section 7 of the tech stack ADR, which owns the local/CI command contract. */
+function techStackDecisionSectionSeven(): string {
+  const adr = readFileSync(TECH_STACK_DECISION_PATH, 'utf8');
+  const heading = '## 7. 本地开发 / 构建 / 测试命令';
+  const start = adr.indexOf(heading);
+  if (start < 0) {
+    throw new Error(`docs/tech-stack-decision.md is missing the "${heading}" section`);
+  }
+  const end = adr.indexOf('\n## ', start + heading.length);
+  return adr.slice(start, end === -1 ? undefined : end);
 }
 
 function stepIndex(predicate: (step: WorkflowStep) => boolean): number {
@@ -524,27 +555,15 @@ describe('CI workflow', () => {
   });
 
   it('documents the verify check order in README exactly as the workflow runs it', () => {
-    const expectedOrder = [
-      'Run pre-commit checks',
-      'Typecheck',
-      'Lint and module boundaries',
-      'Unit tests',
-      'Verify doc test counts',
-      'Screenshot doc dimensions',
-      'Production build',
-      'Bundle budget',
-      'End-to-end tests',
-      'Check target e2e flakes',
-      'WebKit narrow screenshot smoke test',
-    ];
-
     // The README list is the human-facing contract for the verify order.
-    expect(readmeCiCheckOrder()).toEqual(expectedOrder);
+    expect(readmeCiCheckOrder()).toEqual(VERIFY_CHECK_ORDER);
 
     const namedSteps = steps
       .map((step) => step.name)
       .filter((name): name is string => name !== undefined);
-    expect(namedSteps.filter((name) => expectedOrder.includes(name))).toEqual(expectedOrder);
+    expect(namedSteps.filter((name) => VERIFY_CHECK_ORDER.includes(name))).toEqual(
+      VERIFY_CHECK_ORDER,
+    );
 
     // The local WebKit install stays documented, but CI must no longer claim to
     // install browsers at runtime after Issue #213 moved verify into the image.
@@ -557,5 +576,41 @@ describe('CI workflow', () => {
     expect(engineSection).toContain('npx playwright install chromium webkit');
     expect(engineSection).toMatch(/CI 的 `verify` job 不再执行这条安装/);
     expect(engineSection).toContain('官方 Playwright 镜像');
+  });
+
+  it('references the README CI check order from the tech stack ADR', () => {
+    const section = techStackDecisionSectionSeven();
+    expect(section).toContain('[README.md](../README.md)');
+    expect(section).toContain('「### CI 检查顺序」');
+
+    // The ADR delegates to the README instead of keeping a third copy; the
+    // referenced list must still match the verify steps in ci.yml.
+    expect(readmeCiCheckOrder()).toEqual(VERIFY_CHECK_ORDER);
+    const namedSteps = steps
+      .map((step) => step.name)
+      .filter((name): name is string => name !== undefined);
+    expect(namedSteps.filter((name) => VERIFY_CHECK_ORDER.includes(name))).toEqual(
+      VERIFY_CHECK_ORDER,
+    );
+  });
+
+  it('drops the stale CI order and dist archive claim from the tech stack ADR', () => {
+    const section = techStackDecisionSectionSeven();
+    for (const fragment of [
+      '`npm ci` → `typecheck`',
+      '`typecheck` → `lint`',
+      '`test:unit` → `build`',
+      '`check:budget` → `test:e2e`',
+      '归档 `dist/`',
+    ]) {
+      expect(section, `tech stack ADR §7 must not keep the stale fragment ${fragment}`).not.toContain(
+        fragment,
+      );
+    }
+
+    // The replacement names the single source of truth and still records that
+    // dependency installation happens before the checks.
+    expect(section).toContain('`npm ci`');
+    expect(section).toContain('`.github/workflows/ci.yml`');
   });
 });
