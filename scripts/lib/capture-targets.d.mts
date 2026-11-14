@@ -18,6 +18,8 @@ export const MINESWEEPER_NARROW_FLAGS: readonly string[];
 export interface CaptureTargetsDeclaration {
   script: string;
   targets: CaptureTargetId[];
+  /** The script's own default preview port; `PREVIEW_PORT` never changes it. */
+  previewPort: number;
 }
 
 export interface PrintCaptureTargetsOptions {
@@ -33,13 +35,16 @@ export function isPrintCaptureTargetsRequested(
 export function captureTargetsDeclaration(
   script: string,
   targets: string | readonly string[],
+  previewPort: number | string,
 ): CaptureTargetsDeclaration;
 export function formatCaptureTargetsDeclaration(
   script: string,
   targets: string | readonly string[],
+  previewPort: number | string,
 ): string;
 export function printCaptureTargets(
   script: string,
   targets: string | readonly string[],
+  previewPort: number | string,
   options?: PrintCaptureTargetsOptions,
 ): void;

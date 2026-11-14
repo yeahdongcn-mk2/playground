@@ -109,7 +109,12 @@ describe('container capture declaration docs (Issue #293)', () => {
   it('documents that the entry executes the target script declaration', () => {
     expect(CONTAINER_COMMAND).toContain('执行目标脚本的声明');
     expect(CONTAINER_COMMAND).toContain('`--print-capture-targets`');
-    expect(CONTAINER_COMMAND).toContain('`script` + `targets`');
+    expect(CONTAINER_COMMAND).toContain('`script` + `targets` + `previewPort`');
+  });
+
+  it('documents that the declared preview port is the script default, not the env override', () => {
+    expect(CONTAINER_COMMAND).toContain('`previewPort` 是脚本自身的默认预览端口');
+    expect(CONTAINER_COMMAND).toContain('`PREVIEW_PORT` 只覆盖运行时端口而不改变声明');
   });
 
   it('documents the npm script arguments plus passthrough with validation', () => {
