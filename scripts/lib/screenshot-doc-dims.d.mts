@@ -2,16 +2,15 @@ export interface DocDimensionRowBase {
   line: number;
   files: string[];
   /**
-   * Complete 64-hex sha256 values documented in the row, lower-cased and paired
-   * with `files` by position. Truncated hashes are not collected here.
+   * One hash slot per file, aligned with `files` by index: a complete 64-hex
+   * sha256 (lower-cased), an 8–63-character hex prefix treated as a possible
+   * truncated hash, or null for a file without a documented hash (including the
+   * `…` / `...` shorthand). Slots are read from the row's last table cell; when
+   * that cell carries extra hash-like tokens, the trailing slots are used. A
+   * short value is only reported when it is a prefix of that file's actual
+   * sha256.
    */
-  hashes: string[];
-  /**
-   * Backticked 8–63-character hex values without a trailing ellipsis, in order.
-   * They are only reported when they are a prefix of the file's actual sha256,
-   * which catches a truncated hash without flagging commit prefixes.
-   */
-  truncatedHashes: string[];
+  hashes: Array<string | null>;
   /** Documented PNG size: either the full-page size or the value after `/`. */
   width: number;
   height: number;
@@ -45,7 +44,11 @@ export interface DocDimensionProblem {
   docHeight: number;
   actualWidth: number | null;
   actualHeight: number | null;
-  /** Documented sha256 for this file (complete, or the truncated prefix), or null. */
+  /**
+   * Documented sha256 on a `sha256` problem: the complete hash, or the
+   * truncated prefix when only a short value was documented. On size / read
+   * problems it is the complete documented hash, or null when none was.
+   */
   docSha256: string | null;
   /** Actual sha256 when it was computed, or null when the file could not be read. */
   actualSha256: string | null;

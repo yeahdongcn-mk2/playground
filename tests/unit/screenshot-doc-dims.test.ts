@@ -70,6 +70,17 @@ function writePng(dir: string, name: string, width: number, height: number): voi
   writeFileSync(join(dir, name), makePng(width, height));
 }
 
+/**
+ * Build a valid PNG of the requested size with a distinct tEXt chunk, so two
+ * files in the same row can share dimensions but differ byte-for-byte.
+ */
+function makeLabelledPng(width: number, height: number, label: string): Buffer {
+  const png = makePng(width, height);
+  const text = pngChunk('tEXt', Buffer.from(`label=${label}`, 'latin1'));
+  // IEND is the last 12 bytes (length + type + CRC); keep it last.
+  return Buffer.concat([png.subarray(0, png.length - 12), text, png.subarray(png.length - 12)]);
+}
+
 function sha256Of(bytes: Buffer): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
@@ -136,8 +147,7 @@ describe('parseDocDimensions', () => {
         line: 5,
         kind: 'full-page',
         files: ['before-a.png', 'after-a.png'],
-        hashes: [],
-        truncatedHashes: [],
+        hashes: [null, null],
         width: 1440,
         height: 1324,
       },
@@ -158,8 +168,7 @@ describe('parseDocDimensions', () => {
         line: 4,
         kind: 'viewport',
         files: ['before-a.png', 'after-a.png'],
-        hashes: [],
-        truncatedHashes: [],
+        hashes: [null, null],
         viewportWidth: 1440,
         viewportHeight: 1000,
         width: 1440,
@@ -169,8 +178,7 @@ describe('parseDocDimensions', () => {
         line: 5,
         kind: 'viewport',
         files: ['phone.png'],
-        hashes: [],
-        truncatedHashes: [],
+        hashes: [null],
         viewportWidth: 320,
         viewportHeight: 640,
         width: 640,
@@ -194,7 +202,6 @@ describe('parseDocDimensions', () => {
         kind: 'viewport',
         files: ['before-a.png', 'after-a.png'],
         hashes: [first, second.toLowerCase()],
-        truncatedHashes: [],
         viewportWidth: 1440,
         viewportHeight: 1000,
         width: 1440,
@@ -203,7 +210,7 @@ describe('parseDocDimensions', () => {
     ]);
   });
 
-  it('ignores ellipsis shorthand and non-hex values, and records unmarked short hex', () => {
+  it('ignores ellipsis shorthand and non-hex values, and keeps short hex in its file slot', () => {
     const text = [
       viewportRow(['truncated.png'], 1440, 1000, 1440, 1000, ['7232a897…']),
       viewportRow(['short.png'], 320, 640, 640, 1280, ['a'.repeat(63)]),
@@ -212,13 +219,7 @@ describe('parseDocDimensions', () => {
     ].join('\n');
     const rows = parseDocDimensions(text);
 
-    expect(rows.map((row) => row.hashes)).toEqual([[], [], [], []]);
-    expect(rows.map((row) => row.truncatedHashes)).toEqual([
-      [],
-      ['a'.repeat(63)],
-      [],
-      [],
-    ]);
+    expect(rows.map((row) => row.hashes)).toEqual([[null], ['a'.repeat(63)], [null], [null]]);
   });
 
   it('ignores body text and rows without a backticked PNG name or recognised size', () => {
@@ -240,8 +241,7 @@ describe('parseDocDimensions', () => {
         line: 1,
         kind: 'full-page',
         files: ['both.png'],
-        hashes: [],
-        truncatedHashes: [],
+        hashes: [null],
         width: 1440,
         height: 1324,
       },
@@ -304,7 +304,7 @@ describe('parseDocDimensions', () => {
   it('documents a complete sha256 only for the 8 viewport evidence rows', () => {
     const readmeText = readFileSync(README, 'utf8');
     const rows = parseDocDimensions(readmeText);
-    const hashedRows = rows.filter((row) => row.hashes.length > 0);
+    const hashedRows = rows.filter((row) => row.hashes.some((hash) => hash !== null));
 
     expect(hashedRows.flatMap((row) => row.files)).toEqual([
       'before-zhen-sha-route-desktop.png',
@@ -334,7 +334,7 @@ describe('parseDocDimensions', () => {
     expect(hubRows).toHaveLength(2);
     for (const row of hubRows) {
       expect(row.kind).toBe('full-page');
-      expect(row.hashes).toEqual([]);
+      expect(row.hashes).toEqual([null]);
     }
   });
 });
@@ -514,15 +514,111 @@ describe('verifyDocDimensions', () => {
     });
   });
 
+  it('pairs each complete sha256 with its own file in a multi-file row', () => {
+    const dir = makeTempDir();
+    const firstBytes = makeLabelledPng(1440, 1000, 'first');
+    const secondBytes = makeLabelledPng(1440, 1000, 'second');
+    writeFileSync(join(dir, 'before-a.png'), firstBytes);
+    writeFileSync(join(dir, 'after-a.png'), secondBytes);
+    const firstHash = sha256Of(firstBytes);
+    const secondHash = sha256Of(secondBytes);
+    const wrongSecond = `${secondHash.slice(0, 63)}${secondHash.endsWith('0') ? '1' : '0'}`;
+
+    const { sha256Files, problems } = verifyDocDimensions({
+      readmeText: viewportRow(
+        ['before-a.png', 'after-a.png'],
+        1440,
+        1000,
+        1440,
+        1000,
+        [firstHash, wrongSecond],
+      ),
+      dir,
+    });
+
+    expect(sha256Files).toBe(2);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatchObject({
+      readmeLine: 1,
+      file: 'after-a.png',
+      kind: 'viewport',
+      check: 'sha256',
+      docSha256: wrongSecond,
+      actualSha256: secondHash,
+      reason: 'sha256 不一致',
+    });
+  });
+
+  it('reports a truncated sha256 against the second file of a multi-file row', () => {
+    const dir = makeTempDir();
+    const firstBytes = makeLabelledPng(640, 1280, 'first');
+    const secondBytes = makeLabelledPng(640, 1280, 'second');
+    writeFileSync(join(dir, 'before-b.png'), firstBytes);
+    writeFileSync(join(dir, 'after-b.png'), secondBytes);
+    const firstHash = sha256Of(firstBytes);
+    const secondHash = sha256Of(secondBytes);
+    const truncatedSecond = secondHash.slice(0, 63);
+
+    const { sha256Files, problems } = verifyDocDimensions({
+      readmeText: viewportRow(
+        ['before-b.png', 'after-b.png'],
+        320,
+        640,
+        640,
+        1280,
+        [firstHash, truncatedSecond],
+      ),
+      dir,
+    });
+
+    expect(sha256Files).toBe(1);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatchObject({
+      readmeLine: 1,
+      file: 'after-b.png',
+      kind: 'viewport',
+      check: 'sha256',
+      docSha256: truncatedSecond,
+      actualSha256: secondHash,
+    });
+    expect(problems[0]?.reason).toContain('sha256 截断');
+  });
+
+  it('ignores unrelated hash-like tokens and keeps the trailing documented hash', () => {
+    const dir = makeTempDir();
+    const bytes = makePng(1440, 1000);
+    writeFileSync(join(dir, 'after-a.png'), bytes);
+    const actual = sha256Of(bytes);
+    const wrong = `${actual.slice(0, 63)}${actual.endsWith('0') ? '1' : '0'}`;
+    const commit = 'c'.repeat(40);
+    const readmeText =
+      `| \`after-a.png\` | \`${commit}\` | 1440×1000 / 1440×1000 | ` +
+      `\`${commit}\` / \`${wrong}\` |`;
+
+    const { sha256Files, problems } = verifyDocDimensions({ readmeText, dir });
+
+    expect(sha256Files).toBe(1);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatchObject({
+      readmeLine: 1,
+      file: 'after-a.png',
+      check: 'sha256',
+      docSha256: wrong,
+      actualSha256: actual,
+      reason: 'sha256 不一致',
+    });
+  });
+
   it('skips ellipsis shorthand and short hex that does not match the PNG hash', () => {
     const dir = makeTempDir();
     writePng(dir, 'after-a.png', 1440, 1000);
-    const readmeText = viewportRow(['after-a.png'], 1440, 1000, 1440, 1000, [
-      '7232a897…',
-      'a'.repeat(63),
-      'deadbeef',
-      'g'.repeat(64),
-    ]);
+    const readmeText = [
+      viewportRow(['after-a.png'], 1440, 1000, 1440, 1000, ['7232a897…']),
+      viewportRow(['after-a.png'], 1440, 1000, 1440, 1000, ['a'.repeat(63)]),
+      viewportRow(['after-a.png'], 1440, 1000, 1440, 1000, ['deadbeef']),
+      viewportRow(['after-a.png'], 1440, 1000, 1440, 1000, ['abc1234']),
+      viewportRow(['after-a.png'], 1440, 1000, 1440, 1000, ['g'.repeat(64)]),
+    ].join('\n');
 
     const report = verifyDocDimensions({ readmeText, dir });
 

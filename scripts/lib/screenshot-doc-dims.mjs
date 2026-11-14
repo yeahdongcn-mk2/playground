@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
- * Reusable validator for the sizes and complete sha256 hashes documented in
+ * Reusable validator for the sizes and sha256 hashes documented in
  * `docs/screenshots/README.md`.
  *
  * The README tables record committed screenshot sizes in two forms:
@@ -12,14 +12,15 @@ import { join } from 'node:path';
  * - viewport rows: `<cssWidth>×<cssHeight> / <width>×<height>`, where the
  *   value after the slash is the actual PNG size.
  *
- * A row may also document a complete sha256 as a backticked 64-character
- * hexadecimal value (for example
- * `` `8f903d39bb5e681ec9a59a322ab5a759c5058df6c24f6ffa44a11785ef1a8002` ``).
- * Hashes are paired with the row's files in order. Truncated hashes such as
- * `` `7232a897…` `` are documentation shorthand: they are skipped, because
- * they cannot be compared with the file content. A shorter hex value without
- * the ellipsis is treated as a possible truncation and reported only when it
- * really is a prefix of the committed file's sha256.
+ * A row may also document sha256 hashes as backticked hexadecimal values. A
+ * complete 64-character value (for example
+ * `` `8f903d39bb5e681ec9a59a322ab5a759c5058df6c24f6ffa44a11785ef1a8002` ``)
+ * is compared with the file bytes. Hash slots are paired with the row's files
+ * in order (one slot per file); a shorter 8–63 character value without an
+ * ellipsis is a possible truncated hash and is reported only when it really is
+ * a prefix of the committed file's sha256. An ellipsis shorthand such as
+ * `` `7232a897…` `` occupies a slot without a value, so it neither shifts later
+ * hashes nor produces a problem.
  *
  * This module parses only table rows that start with `|` and contain both a
  * backticked `.png` file name and one of those sizes, then reads the PNG
@@ -44,14 +45,14 @@ const MIN_PNG_SIZE = IHDR_DATA_OFFSET + 8;
 const FULL_PAGE_SIZE = /整页\s+(\d+)×(\d+)/;
 const VIEWPORT_SIZE = /(\d+)×(\d+)\s*\/\s*(\d+)×(\d+)/;
 const BACKTICK_PNG = /`([^`\n]+\.png)`/g;
-/** Only a complete 64-character hex hash is comparable with the file bytes. */
-const BACKTICK_SHA256 = /`([0-9a-fA-F]{64})`/g;
 /**
- * Unmarked shorter hex values are treated as possible truncated hashes. A
- * trailing ellipsis (as in `7232a897…`) marks documentation shorthand instead,
- * so it does not match this pattern and is skipped.
+ * A backticked 8–64-character hex value. A 64-character value is a complete
+ * sha256; a shorter value without a trailing ellipsis is a possible truncated
+ * hash. A trailing `…` (or `...`, as in `7232a897…`) marks documentation
+ * shorthand: the slot is kept but holds no value, so hashes that follow stay
+ * aligned with their files.
  */
-const BACKTICK_SHA256_TRUNCATED = /`([0-9a-fA-F]{8,63})`/g;
+const BACKTICK_HASH = /`([0-9a-fA-F]{8,64})(…|\.{3})?`/g;
 
 /** Raised when a file cannot be read as a PNG with a complete IHDR. */
 export class ScreenshotDocDimsError extends Error {
@@ -68,11 +69,17 @@ export class ScreenshotDocDimsError extends Error {
  * Body text that mentions a size outside a table row is ignored, as are table
  * rows without a backticked `.png` file name or without a recognised size. A
  * row may list several files in one cell; each file is recorded under the same
- * row so the verifier can check them one by one. Complete backticked 64-hex
- * hashes are recorded in the same order and paired with the files by position.
- * Shorter hex values without an ellipsis are recorded as possible truncations;
- * the verifier only reports one when it is a prefix of the file's actual hash,
- * so unrelated short hex values (commit prefixes, colours) are ignored.
+ * row so the verifier can check them one by one. Hash slots are read from the
+ * row's last table cell (the sha256 / capture-command column) and aligned with
+ * the files by position: one slot per file, `hashes[index]` belongs to
+ * `files[index]`. When that cell carries extra hash-like tokens (for example a
+ * commit prefix before the documented hash), the trailing slots are the ones
+ * that line up with the files. A slot is a complete 64-hex sha256, a shorter
+ * hex value without an ellipsis (a possible truncation), or `null` for ellipsis
+ * shorthand and for files without a documented hash. A row that documents only
+ * some files' hashes must use the `…` placeholder for the others. The verifier
+ * only reports a short value when it is a prefix of that file's actual hash, so
+ * unrelated short hex values (commit prefixes, colours) are ignored.
  * A full-page size takes precedence over a viewport size in the same row, so a
  * row is never counted twice.
  *
@@ -81,8 +88,7 @@ export class ScreenshotDocDimsError extends Error {
  *       line: number,
  *       kind: 'full-page',
  *       files: string[],
- *       hashes: string[],
- *       truncatedHashes: string[],
+ *       hashes: Array<string | null>,
  *       width: number,
  *       height: number,
  *     }
@@ -90,8 +96,7 @@ export class ScreenshotDocDimsError extends Error {
  *       line: number,
  *       kind: 'viewport',
  *       files: string[],
- *       hashes: string[],
- *       truncatedHashes: string[],
+ *       hashes: Array<string | null>,
  *       viewportWidth: number,
  *       viewportHeight: number,
  *       width: number,
@@ -127,19 +132,27 @@ export function parseDocDimensions(text) {
     }
     if (files.length === 0) continue;
 
-    const hashes = [];
-    for (const match of line.matchAll(BACKTICK_SHA256)) {
+    // Read hash slots from the last table cell (sha256 / capture command) and
+    // align them with the files. A `…` shorthand keeps its slot as `null` so it
+    // does not shift the hashes after it onto the wrong file. When the cell
+    // carries more hash-like tokens than files, the trailing slots are the
+    // documented hashes, so a leading commit prefix cannot shadow them.
+    const hashCell = cells.findLast((cell) => cell.trim() !== '') ?? '';
+    const documentedHashes = [];
+    for (const match of hashCell.matchAll(BACKTICK_HASH)) {
       const hash = match[1];
       if (hash === undefined) continue;
-      hashes.push(hash.toLowerCase());
+      // A 64-character value is complete even if someone appends an ellipsis;
+      // a shorter value with an ellipsis is documentation shorthand.
+      documentedHashes.push(
+        match[2] === undefined || hash.length === 64 ? hash.toLowerCase() : null,
+      );
     }
-
-    const truncatedHashes = [];
-    for (const match of line.matchAll(BACKTICK_SHA256_TRUNCATED)) {
-      const hash = match[1];
-      if (hash === undefined) continue;
-      truncatedHashes.push(hash.toLowerCase());
-    }
+    const alignedHashes =
+      documentedHashes.length > files.length
+        ? documentedHashes.slice(documentedHashes.length - files.length)
+        : documentedHashes;
+    const hashes = files.map((_, fileIndex) => alignedHashes[fileIndex] ?? null);
 
     if (fullPageCell !== undefined) {
       const size = FULL_PAGE_SIZE.exec(fullPageCell);
@@ -149,7 +162,6 @@ export function parseDocDimensions(text) {
         kind: 'full-page',
         files,
         hashes,
-        truncatedHashes,
         width: Number(size[1]),
         height: Number(size[2]),
       });
@@ -163,7 +175,6 @@ export function parseDocDimensions(text) {
       kind: 'viewport',
       files,
       hashes,
-      truncatedHashes,
       viewportWidth: Number(size[1]),
       viewportHeight: Number(size[2]),
       width: Number(size[3]),
@@ -228,12 +239,12 @@ function readErrorReason(error, filePath) {
  * Full-page rows compare the documented full-page size with the IHDR size;
  * viewport rows compare the PNG size after the slash. The CSS viewport before
  * the slash is not derived from the PNG because it can differ by the device
- * pixel ratio. A row that documents a complete sha256 also gets its file
- * hashed and compared; an unmarked shorter hash is reported only when it is a
- * prefix of the actual hash, which catches a truncated full hash while
- * ignoring commit prefixes and other short hex values. Explicit shorthand with
- * a trailing ellipsis (for example `` `7232a897…` ``) is never collected by
- * `parseDocDimensions`, so it produces no hash problem.
+ * pixel ratio. Hash slots are paired with files by position, so a row with
+ * several files checks each file against its own hash: a complete 64-hex slot
+ * is compared with the file's sha256, and a shorter slot is reported only when
+ * it is a prefix of that file's actual sha256 (a truncated full hash). An
+ * ellipsis shorthand (for example `` `7232a897…` ``) is parsed as an empty
+ * slot and therefore produces no hash problem.
  *
  * Each file is read once per row, so a row that documents both a size and a
  * complete hash reports both problems in a single pass.
@@ -277,17 +288,13 @@ export function verifyDocDimensions({ readmeText, dir = DEFAULT_SCREENSHOT_DIR }
     for (const [index, file] of row.files.entries()) {
       files += 1;
       const filePath = join(dir, file);
-      const docSha256 = row.hashes[index] ?? null;
-      if (docSha256 !== null) sha256Files += 1;
-
-      // With a single file, every unmarked short hash in the row could be its
-      // truncation; with several files, keep the positional pairing.
-      const truncatedHashes =
-        row.files.length === 1
-          ? row.truncatedHashes
-          : row.truncatedHashes[index] === undefined
-            ? []
-            : [row.truncatedHashes[index]];
+      // One slot per file: complete hash, possible truncation, or nothing.
+      const documentedHash = row.hashes[index] ?? null;
+      const completeHash =
+        documentedHash !== null && documentedHash.length === 64 ? documentedHash : null;
+      const truncatedHash =
+        documentedHash !== null && documentedHash.length < 64 ? documentedHash : null;
+      if (completeHash !== null) sha256Files += 1;
 
       let bytes;
       try {
@@ -302,7 +309,7 @@ export function verifyDocDimensions({ readmeText, dir = DEFAULT_SCREENSHOT_DIR }
           docHeight: row.height,
           actualWidth: null,
           actualHeight: null,
-          docSha256,
+          docSha256: completeHash,
           actualSha256: null,
           reason: readErrorReason(error, filePath),
         });
@@ -322,7 +329,7 @@ export function verifyDocDimensions({ readmeText, dir = DEFAULT_SCREENSHOT_DIR }
           docHeight: row.height,
           actualWidth: null,
           actualHeight: null,
-          docSha256,
+          docSha256: completeHash,
           actualSha256: null,
           reason: readErrorReason(error, filePath),
         });
@@ -330,7 +337,7 @@ export function verifyDocDimensions({ readmeText, dir = DEFAULT_SCREENSHOT_DIR }
       }
 
       const actualSha256 =
-        docSha256 === null && truncatedHashes.length === 0
+        documentedHash === null
           ? null
           : createHash('sha256').update(bytes).digest('hex');
 
@@ -344,13 +351,13 @@ export function verifyDocDimensions({ readmeText, dir = DEFAULT_SCREENSHOT_DIR }
           docHeight: row.height,
           actualWidth: actual.width,
           actualHeight: actual.height,
-          docSha256,
+          docSha256: completeHash,
           actualSha256,
           reason: '尺寸不一致',
         });
       }
 
-      if (docSha256 !== null && docSha256 !== actualSha256) {
+      if (completeHash !== null && completeHash !== actualSha256) {
         problems.push({
           readmeLine: row.line,
           file,
@@ -360,14 +367,17 @@ export function verifyDocDimensions({ readmeText, dir = DEFAULT_SCREENSHOT_DIR }
           docHeight: row.height,
           actualWidth: actual.width,
           actualHeight: actual.height,
-          docSha256,
+          docSha256: completeHash,
           actualSha256,
           reason: 'sha256 不一致',
         });
       }
 
-      for (const truncated of truncatedHashes) {
-        if (actualSha256 === null || !actualSha256.startsWith(truncated)) continue;
+      if (
+        truncatedHash !== null &&
+        actualSha256 !== null &&
+        actualSha256.startsWith(truncatedHash)
+      ) {
         problems.push({
           readmeLine: row.line,
           file,
@@ -377,9 +387,9 @@ export function verifyDocDimensions({ readmeText, dir = DEFAULT_SCREENSHOT_DIR }
           docHeight: row.height,
           actualWidth: actual.width,
           actualHeight: actual.height,
-          docSha256: truncated,
+          docSha256: truncatedHash,
           actualSha256,
-          reason: `sha256 截断：文档 ${truncated.length} 位，实际 64 位`,
+          reason: `sha256 截断：文档 ${truncatedHash.length} 位，实际 64 位`,
         });
       }
     }
