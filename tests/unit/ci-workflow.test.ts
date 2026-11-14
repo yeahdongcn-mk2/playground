@@ -27,6 +27,7 @@ interface WorkflowStep {
   name?: string;
   uses?: string;
   run?: string;
+  shell?: string;
   with?: Record<string, string>;
   env?: Record<string, string>;
   'continue-on-error'?: boolean;
@@ -183,6 +184,16 @@ describe('CI workflow', () => {
     expect(Object.keys(workflow.jobs ?? {})).toContain('verify');
     expect(verify?.['runs-on']).toBe('ubuntu-latest');
     expect(verify?.['timeout-minutes']).toBe(20);
+  });
+
+  it('runs pipefail steps with bash inside the container', () => {
+    // GitHub container jobs default to `sh` (dash), where `set -o pipefail`
+    // is illegal; a `run` step that opts into pipefail must request bash.
+    const pipefailSteps = steps.filter((step) => (step.run ?? '').includes('pipefail'));
+    expect(pipefailSteps.length).toBeGreaterThan(0);
+    for (const step of pipefailSteps) {
+      expect(step.shell, `${step.name ?? 'a step'} should run with bash`).toBe('bash');
+    }
   });
 
   it('gives the verify container the host IPC namespace', () => {

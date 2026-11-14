@@ -43,6 +43,9 @@ jobs:
         run: npm ci
 
       - name: Install pre-commit
+        # Container jobs default to `sh` (dash) where `set -o pipefail` is not
+        # available; bash is present in the image.
+        shell: bash
         # The image's /usr/bin/python3 has neither pip nor ensurepip, and the
         # setup-python toolcache CPython cannot load its ssl module inside the
         # container (run 43560696477), so `-m pip` cannot reach PyPI there.
@@ -99,6 +102,9 @@ jobs:
         run: node scripts/check-e2e-flakes.mjs
 
       - name: WebKit narrow screenshot smoke test
+        # Keep the pipeline failure semantics under the container's default
+        # `sh`, which does not support `set -o pipefail`.
+        shell: bash
         run: |
           set -euo pipefail
           rm -f docs/screenshots/after-minesweeper-webkit-narrow-*.png

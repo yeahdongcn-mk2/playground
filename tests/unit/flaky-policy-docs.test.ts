@@ -18,6 +18,7 @@ interface WorkflowStep {
   name?: string;
   uses?: string;
   run?: string;
+  shell?: string;
   with?: Record<string, string>;
   'timeout-minutes'?: number;
   'continue-on-error'?: boolean;
@@ -177,6 +178,10 @@ describe('flaky policy docs', () => {
     expect(verifyContainerOptions.split(/\s+/)).toContain('--ipc=host');
     expect(section).toContain('--ipc=host');
     const preCommitInstall = requireStep(verifySteps, 'Install pre-commit');
+    expect(preCommitInstall.shell).toBe('bash');
+    const webkitSmoke = requireStep(verifySteps, 'WebKit narrow screenshot smoke test');
+    expect(webkitSmoke.shell).toBe('bash');
+    expect(section).toContain('shell: bash');
     const installCommands = (preCommitInstall.run ?? '')
       .split('\n')
       .map((command) => command.trim())
