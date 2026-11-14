@@ -162,10 +162,9 @@ describe('flake-watch workflow', () => {
         `the watch job should not have the "${name}" step`,
       ).toBe(false);
     }
-    expect(
-      steps.some((step) => (step.uses ?? '').startsWith('actions/cache@')),
-      'the image supplies the browsers, so the watch must not cache them',
-    ).toBe(false);
+    // Only the browser cache is forbidden; a future non-browser cache (for
+    // example a build cache) should not trip this assertion. The precise
+    // check is the `ms-playwright` path below.
     expect(
       steps.some((step) => String(step.with?.path ?? '').includes('ms-playwright')),
       'the image supplies the browsers, so the watch must not cache them',
@@ -173,11 +172,12 @@ describe('flake-watch workflow', () => {
 
     for (const command of steps.map((step) => step.run ?? '')) {
       // A browser install would reintroduce the Issue #202 failure mode and
-      // ignore the image pin; apt is part of that install path.
+      // ignore the image pin; apt is part of that install path. Match any
+      // `apt`/`apt-get` token so option forms such as `apt-get -y install`
+      // and `apt -y install` cannot slip through.
       expect(command).not.toMatch(/\bplaywright\s+install\b/);
       expect(command).not.toContain('--with-deps');
-      expect(command).not.toMatch(/\bapt(?:-get)?\s+(?:update|install|get)\b/i);
-      expect(command).not.toContain('/etc/apt/');
+      expect(command).not.toMatch(/\bapt(?:-get)?\b/i);
       expect(command).not.toContain('scripts/install-playwright-ci.mjs');
     }
   });

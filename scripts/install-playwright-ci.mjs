@@ -9,8 +9,10 @@
  * This is the bounded fallback kept by Issue #213. Both the PR `verify` job and
  * the scheduled `.github/workflows/flake-watch.yml` job now run in the pinned
  * official Playwright image and no longer install browsers, so no workflow
- * invokes this wrapper. It stays as a tested rollback path: re-adding the
- * `webkit` install step (step-level `timeout-minutes: 8`) restores the
+ * invokes this wrapper. It stays as a tested rollback path: remove the job's
+ * `container:` block first (the image's `PLAYWRIGHT_BROWSERS_PATH` would
+ * otherwise redirect the browsers away from the cache), then re-add the
+ * `webkit` install step with step-level `timeout-minutes: 8` to restore the
  * bounded-install behavior from Issue #202.
  *
  * GitHub's ubuntu runners intermittently fail inside
@@ -26,9 +28,9 @@
  * 5. prints node/npm/Playwright versions, the ~/.cache/ms-playwright
  *    contents and apt DNS/404 hints when an attempt fails.
  *
- * Callers set `timeout-minutes: 8`, so the worst case here (2 * 180s + backoff
- * + kill grace) still exits before the step timeout and long before the job
- * timeout.
+ * The rollback step should set `timeout-minutes: 8`, so the worst case here
+ * (2 * 180s + backoff + kill grace) still exits before the step timeout and
+ * long before the job timeout.
  *
  * The timeout, retry delay, SIGTERM grace, post-SIGKILL group-settle wait and
  * root-kill escalation can be tuned through PLAYWRIGHT_INSTALL_TIMEOUT_MS,

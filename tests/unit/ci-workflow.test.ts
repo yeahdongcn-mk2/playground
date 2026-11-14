@@ -238,11 +238,12 @@ describe('CI workflow', () => {
 
     for (const command of steps.flatMap(commandsOf)) {
       // A browser install would reintroduce the Issue #202 failure mode and
-      // ignore the image pin; apt is part of that install path.
+      // ignore the image pin; apt is part of that install path. Match any
+      // `apt`/`apt-get` token so option forms such as `apt-get -y install`
+      // and `apt -y install` cannot slip through.
       expect(command).not.toMatch(/\bplaywright\s+install\b/);
       expect(command).not.toContain('--with-deps');
-      expect(command).not.toMatch(/\bapt(?:-get)?\s+(?:update|install|get)\b/i);
-      expect(command).not.toContain('/etc/apt/');
+      expect(command).not.toMatch(/\bapt(?:-get)?\b/i);
     }
   });
 
