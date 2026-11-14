@@ -151,6 +151,7 @@ describe('flaky policy docs', () => {
     expect(section).toMatch(/非零状态/);
     expect(section).toContain('Issue #202');
     expect(section).toContain('43129697008');
+    expect(section).toContain('43567248722');
     expect(section).toContain('冷缓存');
     expect(section).toContain('热缓存');
   });
