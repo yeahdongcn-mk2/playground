@@ -60,6 +60,25 @@
 | `before-zhen-sha-route-320x640.png` | 游戏首屏（改名前的旧标题） | 320×640 / 640×1280 | `94e43a57bc1825ca7e909f194b2f49a1fccdec657bee35cbc807476cab3ba81e` |
 | `after-zhen-sha-route-320x640.png` | 游戏首屏（「镇煞」） | 320×640 / 640×1280 | `35447f5d3e9108fc4bbd6e2873c49c26f55b4b1215fa825735f4dd3a99904cee` |
 
+## 大厅六款计数文案证据（Issue #274 / t2）
+
+- 目的：记录大厅首屏从旧的 `ISSUE #11` 与五款游戏叙事改为当前「六款游戏 + 镇煞」叙事后的 Before / After。After 首屏同时能读出「六款游戏」与「镇煞」；除 eyebrow 与 lede 文本外，两张首屏图没有布局或视觉漂移。
+- Before 基线：`0965faa695b0e9935e461211aa5f66020f546021`（#275 合并后的 #274 t1 head，也是本子任务 t2 的 base）。
+- After 构建源码提交：`fbe5bcbf4a0362b16d4b1bc16122a8e2f42368d6`（分支 `agent/plan-274-t1`；截图 PNG 与本节是其后的证据提交，不改变构建产物）。
+- 捕获方式：同一 worktree 先在 base 提交执行 `npm ci && npm run build` 并捕获 Before，完成文案改动后再构建捕获 After；两次都用 `vite preview --host 127.0.0.1 --port 4194|4195 --strictPort` 提供各自的生产产物。随后用 Playwright Chromium 真实渲染 `/`，等待 `networkidle`、`document.fonts.ready` 后再等待 400 ms 截视口图（`fullPage: false`）。
+- 视口 / 主题：桌面 1440×1000 CSS px、DPR 1；手机 320×640 CSS px、DPR 2、`isMobile: true`、`hasTouch: true`。四张均为深色主题、`reducedMotion: reduce`。
+- 首屏可读性：After 桌面与手机首屏都完整显示 eyebrow「六款游戏已上线」与包含「镇煞」的 lede；手机端 lede 底边为 y=603（<640），无需滚动即可读到。
+- 像素差异：桌面 3144 个像素不同（bbox 214,173–509,502）；手机 8546 个像素不同（bbox 88,668–593,1196，PNG 坐标，对应 CSS 44,334–296,598）。差异只落在 eyebrow 与 lede 文本带，hero、按钮与右侧视觉未移动。
+- 预算（`npm run check:budget`，After 提交实测）：入口 33.45 KB / 11.16 KB gzip（上限 50 KB，余 38.84 KB）；全部 JS 410.58 KB gzip（上限 450 KB，余 39.42 KB）；CSS 13.57 KB gzip。
+- t1 游戏首屏证据沿用上一节「zhen-sha：镇煞游戏首屏命名证据」，本轮未重拍。
+
+| 文件 | 场景 | CSS 视口 / PNG 尺寸 | sha256 |
+| --- | --- | --- | --- |
+| `before-hub-copy-desktop.png` | 大厅首屏（Before：eyebrow 为 `ISSUE #11`、lede 未含镇煞） | 1440×1000 / 1440×1000 | `5ddcb814e3280e29382948eb8dc1ea868374ecf136c33ecd0ace145a9508cba8` |
+| `after-hub-copy-desktop.png` | 大厅首屏（After：「六款游戏已上线」+「镇煞」） | 1440×1000 / 1440×1000 | `72b976e5a9ff2f39a89a5d192a417c595d6bb202df8c441d29b257b52e7e77a8` |
+| `before-hub-copy-320x640.png` | 大厅首屏（Before：eyebrow 为 `ISSUE #11`、lede 未含镇煞） | 320×640 / 640×1280 | `bbcf73a1dbe7d9822c5e7b9da464cf165ace935cdf01c837731c03aeeee4002e` |
+| `after-hub-copy-320x640.png` | 大厅首屏（After：「六款游戏已上线」+「镇煞」） | 320×640 / 640×1280 | `d01ee645cf07577a2abdea391fef8546b1d196de20711bf09f2a5c12601cb660` |
+
 ## 历史 After 证据与当前构建不一致（Issue #137）
 
 - 权威对照口径：逐字节比较只在同一构建、同一捕获环境下的确定性产物之间成立。需要与历史提交对照时，用同一脚本在父提交（或该图的历史捕获 commit）的干净 worktree 里重拍，再与同一次重拍的另一次运行比较；不要求重跑结果等于已提交的历史 `fullPage` PNG。历史 After 图只代表各自 PR 时点的 UI 快照，不是当前构建的确定性基准。

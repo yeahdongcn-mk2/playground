@@ -4,9 +4,9 @@
 
 供 dsh-superagent 做端到端测试使用。
 
-## Playground Arcade：共享网页游戏框架 + 贪食蛇 + 俄罗斯方块 + 2048 + 打砖块 + 扫雷
+## Playground Arcade：共享网页游戏框架 + 贪食蛇 + 俄罗斯方块 + 2048 + 打砖块 + 扫雷 + 镇煞
 
-这是 Issue #11 的交付：一套可以继续扩展的网页游戏工程骨架，以及第一款完整游戏「贪食蛇」。Issue #19 又接入了第二款完整游戏「俄罗斯方块」，Issue #24 接入了第三款完整游戏「2048」，Issue #27 接入了第四款完整游戏「打砖块」，Issue #33 接入了第五款完整游戏「扫雷」。空白画布保留为框架示例。
+这是 Issue #11 的交付：一套可以继续扩展的网页游戏工程骨架，以及第一款完整游戏「贪食蛇」。Issue #19、#24、#27、#33 先后接入了「俄罗斯方块」「2048」「打砖块」与「扫雷」，Issue #250 接入了第六款完整游戏「镇煞」。空白画布保留为框架示例。
 
 ![Playground Arcade 大厅](docs/screenshots/after-hub-desktop.png)
 
@@ -393,9 +393,9 @@ games/<game>/scene → 对应引擎（动态 import）
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过（oxlint 覆盖 src、tests 与 scripts；error 与 warning 都会失败，warning 经 --deny-warnings 升级；另跑 scripts/check-boundaries.mjs，失败返回非 0）
-npm run test:unit    # 936 passed（覆盖五个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
+npm run test:unit    # 942 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
 npm run build        # 通过
-npm run check:budget # 通过（入口 11.16 KB gzip，全部 JS 410.59 KB gzip）
+npm run check:budget # 通过（入口 11.16 KB gzip，全部 JS 410.58 KB gzip）
 npm run test:e2e     # 154 passed（桌面 87 + 手机 36 + WebKit 31）
 ```
 
@@ -441,7 +441,7 @@ Playwright 的 WebKit 是 Linux 上的 WebKit 构建，不等于 iOS Safari。�
 
 ## 已知限制
 
-- 目前有贪食蛇、俄罗斯方块、2048、打砖块与扫雷五款完整游戏；空白画布用于演示框架的输入与渲染能力。
+- 目前有贪食蛇、俄罗斯方块、2048、打砖块、扫雷与镇煞六款完整游戏；空白画布用于演示框架的输入与渲染能力。
 - 贪食蛇固定 20×20，没有穿墙、障碍物、特殊道具或在线排行榜；最高分只保存在本机浏览器。
 - 俄罗斯方块固定 10×20，没有暂存（hold）、多块预览、T-spin 计分或在线排行榜。
 - 2048 固定 4×4，没有撤销、存档读档或在线排行榜；最高分只保存在本机浏览器。
