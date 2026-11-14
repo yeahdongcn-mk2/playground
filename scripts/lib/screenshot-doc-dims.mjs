@@ -2,15 +2,22 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
- * Reusable validator for the full-page dimensions documented in
+ * Reusable validator for the dimensions documented in
  * `docs/screenshots/README.md`.
  *
- * The README tables record the committed full-page size of each screenshot as
- * `整页 <width>×<height>`. This module parses only table rows that start with
- * `|` and contain both a backticked `.png` file name and such a size, then
- * reads the PNG signature and IHDR width/height (bytes 16–23) from the
- * committed file. It never runs a capture script, needs no image decoder, and
- * does not write any file, so it can check the repository offline.
+ * The README tables record committed screenshot sizes in two forms:
+ *
+ * - full-page rows: `整页 <width>×<height>`;
+ * - viewport rows: `<cssWidth>×<cssHeight> / <width>×<height>`, where the
+ *   value after the slash is the actual PNG size.
+ *
+ * This module parses only table rows that start with `|` and contain both a
+ * backticked `.png` file name and one of those sizes, then reads the PNG
+ * signature and IHDR width/height (bytes 16–23) from the committed file. For
+ * viewport rows only the PNG size after the slash is compared with the IHDR;
+ * the CSS viewport before the slash is kept as metadata. It never runs a
+ * capture script, needs no image decoder, and does not write any file, so it
+ * can check the repository offline.
  */
 
 export const DEFAULT_README_PATH = 'docs/screenshots/README.md';
@@ -25,6 +32,7 @@ const IHDR_DATA_OFFSET = 16;
 const MIN_PNG_SIZE = IHDR_DATA_OFFSET + 8;
 
 const FULL_PAGE_SIZE = /整页\s+(\d+)×(\d+)/;
+const VIEWPORT_SIZE = /(\d+)×(\d+)\s*\/\s*(\d+)×(\d+)/;
 const BACKTICK_PNG = /`([^`\n]+\.png)`/g;
 
 /** Raised when a file cannot be read as a PNG with a complete IHDR. */
@@ -36,14 +44,27 @@ export class ScreenshotDocDimsError extends Error {
 }
 
 /**
- * Extract the documented full-page sizes from Markdown table rows.
+ * Extract the documented sizes from Markdown table rows.
  *
- * Body text that mentions `整页 W×H` outside a table row is ignored, as are
- * table rows without a backticked `.png` file name or without a full-page
- * size. A row may list several files in one cell; each file is recorded under
- * the same row so the verifier can check them one by one.
+ * Body text that mentions a size outside a table row is ignored, as are table
+ * rows without a backticked `.png` file name or without a recognised size. A
+ * row may list several files in one cell; each file is recorded under the same
+ * row so the verifier can check them one by one. A full-page size takes
+ * precedence over a viewport size in the same row, so a row is never counted
+ * twice.
  *
- * @returns {Array<{ line: number, files: string[], width: number, height: number }>}
+ * @returns {Array<
+ *   | { line: number, kind: 'full-page', files: string[], width: number, height: number }
+ *   | {
+ *       line: number,
+ *       kind: 'viewport',
+ *       files: string[],
+ *       viewportWidth: number,
+ *       viewportHeight: number,
+ *       width: number,
+ *       height: number,
+ *     }
+ * >}
  */
 export function parseDocDimensions(text) {
   const rows = [];
@@ -55,10 +76,13 @@ export function parseDocDimensions(text) {
 
     // The documented size must live in a table cell, not merely in the row
     // text; split on the cell separators before matching.
-    const dimensionCell = line.split('|').find((cell) => FULL_PAGE_SIZE.test(cell));
-    if (dimensionCell === undefined) continue;
-    const size = FULL_PAGE_SIZE.exec(dimensionCell);
-    if (size === null) continue;
+    const cells = line.split('|');
+    const fullPageCell = cells.find((cell) => FULL_PAGE_SIZE.test(cell));
+    const viewportCell =
+      fullPageCell === undefined
+        ? cells.find((cell) => VIEWPORT_SIZE.test(cell))
+        : undefined;
+    if (fullPageCell === undefined && viewportCell === undefined) continue;
 
     const files = [];
     const seen = new Set();
@@ -70,11 +94,29 @@ export function parseDocDimensions(text) {
     }
     if (files.length === 0) continue;
 
+    if (fullPageCell !== undefined) {
+      const size = FULL_PAGE_SIZE.exec(fullPageCell);
+      if (size === null) continue;
+      rows.push({
+        line: index + 1,
+        kind: 'full-page',
+        files,
+        width: Number(size[1]),
+        height: Number(size[2]),
+      });
+      continue;
+    }
+
+    const size = VIEWPORT_SIZE.exec(viewportCell);
+    if (size === null) continue;
     rows.push({
       line: index + 1,
+      kind: 'viewport',
       files,
-      width: Number(size[1]),
-      height: Number(size[2]),
+      viewportWidth: Number(size[1]),
+      viewportHeight: Number(size[2]),
+      width: Number(size[3]),
+      height: Number(size[4]),
     });
   }
 
@@ -129,14 +171,22 @@ function readErrorReason(error, filePath) {
 }
 
 /**
- * Verify every documented full-page size against the committed PNG bytes.
+ * Verify every documented size against the committed PNG bytes.
+ *
+ * Full-page rows compare the documented full-page size with the IHDR size;
+ * viewport rows compare the PNG size after the slash. The CSS viewport before
+ * the slash is not derived from the PNG because it can differ by the device
+ * pixel ratio.
  *
  * @returns {{
  *   rows: number,
  *   files: number,
+ *   fullPageRows: number,
+ *   viewportRows: number,
  *   problems: Array<{
  *     readmeLine: number,
  *     file: string,
+ *     kind: 'full-page' | 'viewport',
  *     docWidth: number,
  *     docHeight: number,
  *     actualWidth: number | null,
@@ -149,8 +199,16 @@ export function verifyDocDimensions({ readmeText, dir = DEFAULT_SCREENSHOT_DIR }
   const rows = parseDocDimensions(readmeText);
   const problems = [];
   let files = 0;
+  let fullPageRows = 0;
+  let viewportRows = 0;
 
   for (const row of rows) {
+    if (row.kind === 'full-page') {
+      fullPageRows += 1;
+    } else {
+      viewportRows += 1;
+    }
+
     for (const file of row.files) {
       files += 1;
       const filePath = join(dir, file);
@@ -162,6 +220,7 @@ export function verifyDocDimensions({ readmeText, dir = DEFAULT_SCREENSHOT_DIR }
         problems.push({
           readmeLine: row.line,
           file,
+          kind: row.kind,
           docWidth: row.width,
           docHeight: row.height,
           actualWidth: null,
@@ -175,6 +234,7 @@ export function verifyDocDimensions({ readmeText, dir = DEFAULT_SCREENSHOT_DIR }
         problems.push({
           readmeLine: row.line,
           file,
+          kind: row.kind,
           docWidth: row.width,
           docHeight: row.height,
           actualWidth: actual.width,
@@ -185,5 +245,5 @@ export function verifyDocDimensions({ readmeText, dir = DEFAULT_SCREENSHOT_DIR }
     }
   }
 
-  return { rows: rows.length, files, problems };
+  return { rows: rows.length, files, fullPageRows, viewportRows, problems };
 }

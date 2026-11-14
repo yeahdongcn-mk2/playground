@@ -1,9 +1,23 @@
-export interface DocDimensionRow {
+export interface DocDimensionRowBase {
   line: number;
   files: string[];
+  /** Documented PNG size: either the full-page size or the value after `/`. */
   width: number;
   height: number;
 }
+
+export interface DocFullPageDimensionRow extends DocDimensionRowBase {
+  kind: 'full-page';
+}
+
+export interface DocViewportDimensionRow extends DocDimensionRowBase {
+  kind: 'viewport';
+  /** CSS viewport size before the slash; not compared with the IHDR size. */
+  viewportWidth: number;
+  viewportHeight: number;
+}
+
+export type DocDimensionRow = DocFullPageDimensionRow | DocViewportDimensionRow;
 
 export interface PngDimensions {
   width: number;
@@ -13,6 +27,7 @@ export interface PngDimensions {
 export interface DocDimensionProblem {
   readmeLine: number;
   file: string;
+  kind: 'full-page' | 'viewport';
   docWidth: number;
   docHeight: number;
   actualWidth: number | null;
@@ -28,6 +43,8 @@ export interface VerifyDocDimensionsOptions {
 export interface DocDimensionsReport {
   rows: number;
   files: number;
+  fullPageRows: number;
+  viewportRows: number;
   problems: DocDimensionProblem[];
 }
 
