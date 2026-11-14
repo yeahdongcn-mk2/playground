@@ -56,6 +56,30 @@ const CAPTURE_SCRIPT_FILES = [
   'capture-minesweeper-screenshots.mjs',
 ] as const;
 
+/**
+ * Each script's own default preview port (Issue #298), keyed by file name.
+ *
+ * The declaration must report this value even when `PREVIEW_PORT` overrides the
+ * runtime port; the same constant is the fallback passed to `parsePreviewPort`.
+ */
+const DECLARED_PREVIEW_PORTS: Record<string, number> = {
+  'capture-screenshots.mjs': 4174,
+  'capture-snake-screenshots.mjs': 5188,
+  'capture-2048-screenshots.mjs': 4183,
+  'capture-breakout-screenshots.mjs': 4185,
+  'capture-minesweeper-screenshots.mjs': 4186,
+  'capture-minesweeper-scores-screenshots.mjs': 4192,
+};
+
+/** The expected default port of one repository-relative capture script path. */
+function declaredPreviewPort(script: string): number {
+  const port = DECLARED_PREVIEW_PORTS[script.split('/').at(-1) ?? ''];
+  if (port === undefined) {
+    throw new Error(`No expected default preview port for ${script}`);
+  }
+  return port;
+}
+
 interface ParsedCommand {
   script: string;
   args: string[];
@@ -188,6 +212,9 @@ async function assertDeclarationsMatchContainer(
     const { stdout } = await runPrintMode(entry.script, args);
     const declaration = parseDeclaration(stdout, entry.label);
     expect(declaration.script, entry.label).toBe(entry.script);
+    expect(declaration.previewPort, entry.label).toBe(
+      declaredPreviewPort(entry.script),
+    );
     expect(declaration.targets, entry.label).toEqual(
       resolveCaptureTargets(entry.target, args, { scripts: SCRIPTS }).targets,
     );
@@ -229,27 +256,71 @@ describe('capture target declaration contract', () => {
     expect(isPrintCaptureTargetsRequested(['--webkit'])).toBe(false);
   });
 
-  it('formats one JSON line with the script and validated targets', () => {
-    expect(captureTargetsDeclaration('scripts/x.mjs', ['desktop', 'mobile'])).toEqual({
+  it('formats one JSON line with the script, validated targets and preview port', () => {
+    expect(
+      captureTargetsDeclaration('scripts/x.mjs', ['desktop', 'mobile'], 4174),
+    ).toEqual({
       script: 'scripts/x.mjs',
       targets: ['desktop', 'mobile'],
+      previewPort: 4174,
     });
-    expect(formatCaptureTargetsDeclaration('scripts/x.mjs', 'mobile-touch')).toBe(
-      '{"script":"scripts/x.mjs","targets":["mobile-touch"]}',
+    expect(
+      formatCaptureTargetsDeclaration('scripts/x.mjs', 'mobile-touch', 5188),
+    ).toBe(
+      '{"script":"scripts/x.mjs","targets":["mobile-touch"],"previewPort":5188}',
     );
+
+    // Preview-port validation mirrors parsePreviewPort: numeric strings are
+    // accepted and normalized, while both range boundaries stay valid.
+    expect(
+      captureTargetsDeclaration('scripts/x.mjs', ['desktop'], '4174').previewPort,
+    ).toBe(4174);
+    expect(
+      captureTargetsDeclaration('scripts/x.mjs', ['desktop'], 1).previewPort,
+    ).toBe(1);
+    expect(
+      captureTargetsDeclaration('scripts/x.mjs', ['desktop'], 65535).previewPort,
+    ).toBe(65535);
+
     // Validation reuses capture-env's target / DPR contract.
     expect(() =>
-      captureTargetsDeclaration('scripts/x.mjs', ['tablet']),
+      captureTargetsDeclaration('scripts/x.mjs', ['tablet'], 4174),
     ).toThrow(/Unknown capture target "tablet"/);
-    expect(() => captureTargetsDeclaration('', ['desktop'])).toThrow(/script name/);
-    expect(() => captureTargetsDeclaration('scripts/x.mjs', [])).toThrow(/is empty/);
+    expect(() => captureTargetsDeclaration('', ['desktop'], 4174)).toThrow(
+      /script name/,
+    );
+    expect(() => captureTargetsDeclaration('scripts/x.mjs', [], 4174)).toThrow(
+      /is empty/,
+    );
+  });
+
+  it('rejects a missing or invalid preview port with a readable error', () => {
+    expect(() =>
+      captureTargetsDeclaration('scripts/x.mjs', ['desktop'], undefined as never),
+    ).toThrow(
+      /Capture target declaration for scripts\/x\.mjs needs the script's default previewPort \(1-65535\)/,
+    );
+    for (const invalid of [null, '', '   ', 0, 65536, -1, 1.5, 'abc', true]) {
+      expect(() =>
+        captureTargetsDeclaration('scripts/x.mjs', ['desktop'], invalid as never),
+      ).toThrow(/Capture target declaration for scripts\/x\.mjs (?:needs|has an invalid)/);
+    }
+    expect(() =>
+      captureTargetsDeclaration('scripts/x.mjs', ['desktop'], 'abc'),
+    ).toThrow(/invalid previewPort "abc"/);
+    expect(() =>
+      captureTargetsDeclaration('scripts/x.mjs', ['desktop'], 0),
+    ).toThrow(/invalid previewPort 0/);
+    expect(() =>
+      captureTargetsDeclaration('scripts/x.mjs', ['desktop'], 65536),
+    ).toThrow(/between 1 and 65535/);
   });
 
   it('prints the declaration with a synchronous write and exits 0', () => {
     const writes: string[] = [];
     const exits: number[] = [];
 
-    printCaptureTargets('scripts/x.mjs', ['webkit'], {
+    printCaptureTargets('scripts/x.mjs', ['webkit'], 4174, {
       write: (text) => {
         writes.push(text);
       },
@@ -259,7 +330,7 @@ describe('capture target declaration contract', () => {
     });
 
     expect(writes).toEqual([
-      '{"script":"scripts/x.mjs","targets":["webkit"]}\n',
+      '{"script":"scripts/x.mjs","targets":["webkit"],"previewPort":4174}\n',
     ]);
     expect(exits).toEqual([0]);
   });
@@ -472,6 +543,7 @@ describe('npm screenshot target declarations', () => {
         const { stdout, stderr } = await runPrintMode(base.script, base.args, env);
         const declaration = parseDeclaration(stdout, base.target);
         expect(declaration.script).toBe(base.script);
+        expect(declaration.previewPort).toBe(declaredPreviewPort(base.script));
         expect(declaration.targets).toEqual(
           resolveCaptureTargets(base.target, base.args, { scripts: SCRIPTS })
             .targets,
@@ -485,6 +557,24 @@ describe('npm screenshot target declarations', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('reports the script default port even when PREVIEW_PORT overrides the runtime', async () => {
+    const env: NodeJS.ProcessEnv = { ...process.env, PREVIEW_PORT: '4999' };
+
+    await mapWithConcurrency(FLAG_BASE_CASES, 3, async (base) => {
+      const { stdout } = await runPrintMode(base.script, base.args, env);
+      const declaration = parseDeclaration(stdout, base.target);
+      // The declaration always names the script's own default; PREVIEW_PORT
+      // only changes the runtime port parsed after the print branch.
+      expect(declaration.previewPort, base.target).toBe(
+        declaredPreviewPort(base.script),
+      );
+      expect(declaration.targets, base.target).toEqual(
+        resolveCaptureTargets(base.target, base.args, { scripts: SCRIPTS })
+          .targets,
+      );
+    });
   });
 });
 
@@ -502,9 +592,42 @@ describe('capture script declaration wiring', () => {
         'isPrintCaptureTargetsRequested(ARGS)',
       );
 
-      const printIndex = source.indexOf(
-        'printCaptureTargets(SCRIPT_NAME, DECLARED_CAPTURE_TARGETS);',
+      // The declaration and the runtime fallback share one default port.
+      expect(source, file).toMatch(
+        /printCaptureTargets\(\s*SCRIPT_NAME,\s*DECLARED_CAPTURE_TARGETS,\s*DEFAULT_PREVIEW_PORT,?\s*\)/,
       );
+      expect(source, file).toMatch(
+        /parsePreviewPort\(\s*process\.env\.PREVIEW_PORT,\s*DEFAULT_PREVIEW_PORT,?\s*\)/,
+      );
+      const expectedPort = declaredPreviewPort(file);
+      if (file === 'capture-minesweeper-scores-screenshots.mjs') {
+        // The scores script reuses the shared 4192 default instead of copying it.
+        expect(source, file).toMatch(
+          /import \{[^}]*DEFAULT_PREVIEW_PORT[^}]*\} from '\.\/lib\/preview-port\.mjs';/s,
+        );
+        expect(source, file).not.toContain('const DEFAULT_PREVIEW_PORT');
+      } else {
+        expect(source, file).toContain(
+          `const DEFAULT_PREVIEW_PORT = ${expectedPort};`,
+        );
+        expect(
+          source.split('const DEFAULT_PREVIEW_PORT').length - 1,
+          `${file}: must declare the default port once`,
+        ).toBe(1);
+      }
+      // Neither usage reintroduces the literal instead of the constant.
+      expect(source, file).not.toMatch(
+        new RegExp(
+          `printCaptureTargets\\(\\s*SCRIPT_NAME,\\s*DECLARED_CAPTURE_TARGETS,\\s*${expectedPort},?\\s*\\)`,
+        ),
+      );
+      expect(source, file).not.toMatch(
+        new RegExp(
+          `parsePreviewPort\\(\\s*process\\.env\\.PREVIEW_PORT,\\s*${expectedPort},?\\s*\\)`,
+        ),
+      );
+
+      const printIndex = source.indexOf('printCaptureTargets(');
       expect(printIndex, `${file}: missing print call`).toBeGreaterThanOrEqual(0);
 
       // The print branch must run before anything that validates the mode,

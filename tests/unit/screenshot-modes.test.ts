@@ -1417,9 +1417,15 @@ describe('minesweeper scores screenshot preview startup', () => {
     expect(source).not.toContain('previewStartupError');
     expect(source).not.toMatch(/from 'node:timers\/promises'/);
 
-    // No fallback argument keeps the shared 4192 default; preview-port.test.ts
-    // covers the empty-string PREVIEW_PORT fallback.
-    expect(source).toContain('const PORT = parsePreviewPort();');
+    // The scores script reuses the shared 4192 DEFAULT_PREVIEW_PORT for both
+    // its declaration and the runtime fallback; preview-port.test.ts covers the
+    // empty-string PREVIEW_PORT fallback.
+    expect(source).toMatch(
+      /import \{[^}]*DEFAULT_PREVIEW_PORT[^}]*\} from '\.\/lib\/preview-port\.mjs';/s,
+    );
+    expect(source).toMatch(
+      /const PORT = parsePreviewPort\(\s*process\.env\.PREVIEW_PORT,\s*DEFAULT_PREVIEW_PORT,?\s*\);/,
+    );
     expect(source).toContain('entry: process.env.PREVIEW_ENTRY || undefined');
 
     // The probe and spawn stay inside the After branch, so a Before run with
@@ -1673,10 +1679,12 @@ describe('generic, 2048 and breakout screenshot preview startup', () => {
       expect(source).not.toContain('function waitForServer');
       expect(source).not.toMatch(/from 'node:timers\/promises'/);
 
-      // The fallback argument keeps each script's original default port, so an
-      // empty PREVIEW_PORT cannot silently move the capture to the shared 4192.
-      expect(source).toContain(
-        `const PORT = parsePreviewPort(process.env.PREVIEW_PORT, ${defaultPort});`,
+      // Each script declares its original default port once and reuses the same
+      // constant as the runtime fallback, so an empty PREVIEW_PORT cannot
+      // silently move the capture to the shared 4192.
+      expect(source).toContain(`const DEFAULT_PREVIEW_PORT = ${defaultPort};`);
+      expect(source).toMatch(
+        /const PORT = parsePreviewPort\(\s*process\.env\.PREVIEW_PORT,\s*DEFAULT_PREVIEW_PORT,?\s*\);/,
       );
       expect(source).toContain('entry: process.env.PREVIEW_ENTRY || undefined');
 
@@ -2022,10 +2030,12 @@ describe('snake screenshot dev server startup', () => {
 
     expect(source).toMatch(/from '\.\/lib\/preview-port\.mjs'/);
     expect(source).toMatch(/from '\.\/lib\/preview-server\.mjs'/);
-    // The dev server keeps its own 5188 default; an empty PREVIEW_PORT must
-    // fall back to it instead of the shared 4192 preview default.
-    expect(source).toContain(
-      'const PORT = parsePreviewPort(process.env.PREVIEW_PORT, 5188);',
+    // The dev server declares its own 5188 default once and reuses it as the
+    // runtime fallback; an empty PREVIEW_PORT must fall back to it instead of
+    // the shared 4192 preview default.
+    expect(source).toContain('const DEFAULT_PREVIEW_PORT = 5188;');
+    expect(source).toMatch(
+      /const PORT = parsePreviewPort\(\s*process\.env\.PREVIEW_PORT,\s*DEFAULT_PREVIEW_PORT,?\s*\);/,
     );
     expect(source).toContain("const SERVER_NAME = 'dev';");
     expect(source).toContain(

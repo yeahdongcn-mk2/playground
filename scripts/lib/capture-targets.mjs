@@ -1,5 +1,6 @@
 import { writeSync } from 'node:fs';
 import { dprForCaptureTarget, normalizeCaptureTargets } from './capture-env.mjs';
+import { parsePreviewPort } from './preview-port.mjs';
 
 /**
  * Machine-readable capture-target declarations (Issue #293).
@@ -12,9 +13,10 @@ import { dprForCaptureTarget, normalizeCaptureTargets } from './capture-env.mjs'
  * script actually writes.
  *
  * This module is the single source for the target ids, the shared WebKit /
- * narrow flag spellings and the one-line print format. The DPR contract stays
- * in `capture-env.mjs`: {@link dprForCaptureTarget} is reused for validation
- * instead of keeping a second target-to-DPR map here.
+ * narrow flag spellings, the declared default preview port and the one-line
+ * print format. The DPR contract stays in `capture-env.mjs` and the port range
+ * stays in `preview-port.mjs`: both are reused for validation instead of
+ * keeping a second target-to-DPR map or a second port range here.
  */
 
 /** The capture target ids every declaration may name, in contract order. */
@@ -61,16 +63,49 @@ export function isPrintCaptureTargetsRequested(args = process.argv.slice(2)) {
 }
 
 /**
+ * Validate the default preview port a declaration reports.
+ *
+ * A declaration always names the script's own default port, so a missing value
+ * is an error instead of silently falling back to the shared default. The
+ * accepted values and the 1-65535 range match `parsePreviewPort`, which
+ * resolves the runtime port from `PREVIEW_PORT` with the same fallback.
+ */
+function validatePreviewPort(script, previewPort) {
+  const missing =
+    previewPort === undefined ||
+    previewPort === null ||
+    !['number', 'string'].includes(typeof previewPort) ||
+    String(previewPort).trim() === '';
+  if (missing) {
+    throw new Error(
+      `Capture target declaration for ${script} needs the script's default previewPort (1-65535).`,
+    );
+  }
+
+  try {
+    return parsePreviewPort(previewPort);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Capture target declaration for ${script} has an invalid previewPort ` +
+        `${JSON.stringify(previewPort)}: ${detail}`,
+    );
+  }
+}
+
+/**
  * Build the one-line declaration object a screenshot script prints.
  *
  * `script` is the repository-relative script path, so a consumer can tie an
  * unexpected target back to the exact declaration. Every target id is
  * validated against the fixed capture-env DPR contract; an empty list is
  * rejected because a capture script always records at least one context.
+ * `previewPort` is the script's own default preview port; `PREVIEW_PORT` only
+ * overrides the runtime port, so the declaration never reports the env value.
  *
- * @returns {{ script: string, targets: string[] }}
+ * @returns {{ script: string, targets: string[], previewPort: number }}
  */
-export function captureTargetsDeclaration(script, targets) {
+export function captureTargetsDeclaration(script, targets, previewPort) {
   if (typeof script !== 'string' || script.trim() === '') {
     throw new Error(
       'A capture target declaration needs the repository-relative capture script name.',
@@ -88,12 +123,16 @@ export function captureTargetsDeclaration(script, targets) {
     dprForCaptureTarget(target);
   }
 
-  return { script, targets: normalized };
+  return {
+    script,
+    targets: normalized,
+    previewPort: validatePreviewPort(script, previewPort),
+  };
 }
 
 /** Format a declaration exactly as the `--print-capture-targets` line. */
-export function formatCaptureTargetsDeclaration(script, targets) {
-  return JSON.stringify(captureTargetsDeclaration(script, targets));
+export function formatCaptureTargetsDeclaration(script, targets, previewPort) {
+  return JSON.stringify(captureTargetsDeclaration(script, targets, previewPort));
 }
 
 /**
@@ -106,11 +145,14 @@ export function formatCaptureTargetsDeclaration(script, targets) {
 export function printCaptureTargets(
   script,
   targets,
+  previewPort,
   {
     write = (text) => writeSync(1, text),
     exit = (code) => process.exit(code),
   } = {},
 ) {
-  write(`${formatCaptureTargetsDeclaration(script, targets)}\n`);
+  write(
+    `${formatCaptureTargetsDeclaration(script, targets, previewPort)}\n`,
+  );
   exit(0);
 }

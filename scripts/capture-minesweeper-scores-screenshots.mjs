@@ -19,7 +19,11 @@ import {
   isPrintCaptureTargetsRequested,
   printCaptureTargets,
 } from './lib/capture-targets.mjs';
-import { assertPortAvailable, parsePreviewPort } from './lib/preview-port.mjs';
+import {
+  DEFAULT_PREVIEW_PORT,
+  assertPortAvailable,
+  parsePreviewPort,
+} from './lib/preview-port.mjs';
 import { waitForPreviewServer } from './lib/preview-server.mjs';
 
 /**
@@ -83,11 +87,15 @@ function captureTargets(args) {
 
 const DECLARED_CAPTURE_TARGETS = captureTargets(ARGS);
 if (isPrintCaptureTargetsRequested(ARGS)) {
-  printCaptureTargets(SCRIPT_NAME, DECLARED_CAPTURE_TARGETS);
+  printCaptureTargets(
+    SCRIPT_NAME,
+    DECLARED_CAPTURE_TARGETS,
+    DEFAULT_PREVIEW_PORT,
+  );
 }
 
 const HOST = '127.0.0.1';
-const PORT = parsePreviewPort();
+const PORT = parsePreviewPort(process.env.PREVIEW_PORT, DEFAULT_PREVIEW_PORT);
 const ORIGIN = `http://${HOST}:${PORT}`;
 const OUTPUT = 'docs/screenshots';
 const BEFORE = ARGS.includes('--before');

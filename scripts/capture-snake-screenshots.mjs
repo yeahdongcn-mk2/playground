@@ -61,6 +61,9 @@ const ARGS = process.argv.slice(2);
 /** Repository-relative name of this script, used in its target declaration. */
 const SCRIPT_NAME = 'scripts/capture-snake-screenshots.mjs';
 
+/** Default preview port for this script; `PREVIEW_PORT` overrides it at runtime. */
+const DEFAULT_PREVIEW_PORT = 5188;
+
 /**
  * Capture targets this script records for one argv (Issue #293).
  *
@@ -77,11 +80,15 @@ function captureTargets(args) {
 
 const DECLARED_CAPTURE_TARGETS = captureTargets(ARGS);
 if (isPrintCaptureTargetsRequested(ARGS)) {
-  printCaptureTargets(SCRIPT_NAME, DECLARED_CAPTURE_TARGETS);
+  printCaptureTargets(
+    SCRIPT_NAME,
+    DECLARED_CAPTURE_TARGETS,
+    DEFAULT_PREVIEW_PORT,
+  );
 }
 
 const HOST = '127.0.0.1';
-const PORT = parsePreviewPort(process.env.PREVIEW_PORT, 5188);
+const PORT = parsePreviewPort(process.env.PREVIEW_PORT, DEFAULT_PREVIEW_PORT);
 const ORIGIN = `http://${HOST}:${PORT}`;
 const SERVER_NAME = 'dev';
 const OUTPUT = 'docs/screenshots';
