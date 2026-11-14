@@ -45,7 +45,8 @@ import {
  *
  * The After mode skips the frozen ready / gameover desktop and mobile PNGs and
  * prints a warning unless `--allow-historical-overwrite` is passed; the playing
- * capture and the hub still refresh.
+ * capture still refreshes. The shared hub screenshots belong to
+ * `scripts/capture-screenshots.mjs`, so this game script never writes them.
  *
  * The dev server port is 5188 by default; on a shared host set `PREVIEW_PORT`
  * to a free port instead of editing this file. When that port is already
@@ -207,11 +208,6 @@ try {
       await capture(mobileHub, 'before-framework-hub-mobile.png', false);
       await mobile.close();
     } else {
-      const hub = await desktop.newPage();
-      await hub.goto(ORIGIN, { waitUntil: 'networkidle' });
-      await settle(hub);
-      await capture(hub, 'after-hub-desktop.png', true);
-
       const ready = await desktop.newPage();
       await ready.goto(`${ORIGIN}/#/games/snake?debug=1&food=11,10`, { waitUntil: 'networkidle' });
       await waitForSnakeReady(ready);
@@ -253,11 +249,6 @@ try {
         colorScheme: 'dark',
         reducedMotion: 'reduce',
       });
-      const mobileHub = await mobile.newPage();
-      await mobileHub.goto(ORIGIN, { waitUntil: 'networkidle' });
-      await settle(mobileHub);
-      await capture(mobileHub, 'after-hub-mobile.png', true);
-
       const mobileGame = await mobile.newPage();
       await mobileGame.goto(`${ORIGIN}/#/games/snake?debug=1&food=11,10`, { waitUntil: 'networkidle' });
       await waitForSnakeReady(mobileGame);

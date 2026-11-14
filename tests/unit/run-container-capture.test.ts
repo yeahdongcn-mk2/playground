@@ -194,11 +194,9 @@ describe('container capture target declaration', () => {
     expectDeclared('screenshots:minesweeper:webkit-narrow', [], ['webkit']);
     expectDeclared('screenshots:snake:webkit', [], ['webkit']);
     expectDeclared('screenshots', [], ['desktop', 'mobile']);
-    expectDeclared('screenshots:minesweeper', [], [
-      'desktop',
-      'mobile',
-      'mobile-touch',
-    ]);
+    // The shared hub capture moved to the generic script, so the After run no
+    // longer creates a 390x844 `mobile` context.
+    expectDeclared('screenshots:minesweeper', [], ['desktop', 'mobile-touch']);
     expectDeclared('screenshots:minesweeper:scores', [], ['desktop', 'mobile']);
     // The Before variants capture the same desktop + phone pair.
     expectDeclared('screenshots:2048:before', [], ['desktop', 'mobile']);
@@ -530,7 +528,7 @@ describe('docker run construction', () => {
     expect(envArgs).toContain('CAPTURE_TARGET_DPR=2');
   });
 
-  it('declares desktop, mobile and mobile-touch DPRs for the minesweeper after run', () => {
+  it('declares desktop and mobile-touch DPRs for the minesweeper after run', () => {
     const args = buildDockerRunArgs({
       target: 'screenshots:minesweeper',
       repoRoot: '/repo',
@@ -541,8 +539,8 @@ describe('docker run construction', () => {
       env: {},
     });
     const envArgs = envArgsOf(args);
-    expect(envArgs).toContain('CAPTURE_TARGET=desktop,mobile,mobile-touch');
-    expect(envArgs).toContain('CAPTURE_TARGET_DPR=1,2,2.625');
+    expect(envArgs).toContain('CAPTURE_TARGET=desktop,mobile-touch');
+    expect(envArgs).toContain('CAPTURE_TARGET_DPR=1,2.625');
   });
 
   it('declares only the Pixel 7 mobile-touch DPR for the touch-before mode', () => {
@@ -564,7 +562,7 @@ describe('docker run construction', () => {
   it.each<[string, string[], string, string]>([
     ['screenshots', ['--webkit'], 'webkit', '2'],
     ['screenshots:minesweeper', ['--webkit'], 'webkit', '2'],
-    ['screenshots:minesweeper', [], 'desktop,mobile,mobile-touch', '1,2,2.625'],
+    ['screenshots:minesweeper', [], 'desktop,mobile-touch', '1,2.625'],
     ['screenshots:minesweeper', ['--touch-before'], 'mobile-touch', '2.625'],
     ['screenshots:minesweeper:touch-before', [], 'mobile-touch', '2.625'],
     ['screenshots:minesweeper:touch-before', ['--narrow'], 'mobile', '2'],

@@ -53,8 +53,9 @@ import {
  *
  * The After mode skips the frozen `after-2048-ready-desktop.png` and
  * `after-2048-ready-mobile.png` historical evidence and prints a warning unless
- * `--allow-historical-overwrite` is passed; the playing / gameover / hub
- * captures still refresh.
+ * `--allow-historical-overwrite` is passed; the playing / gameover captures
+ * still refresh. The shared hub screenshots belong to
+ * `scripts/capture-screenshots.mjs`, so this game script never writes them.
  */
 
 const ARGS = process.argv.slice(2);
@@ -159,13 +160,6 @@ async function captureDesktop(browser) {
     await capture(route, 'before-2048-route-desktop.png', true);
     await route.close();
   } else {
-    const hub = await context.newPage();
-    await hub.goto(`${BASE_URL}/`, { waitUntil: 'networkidle' });
-    await hub.getByTestId('game-card-2048').waitFor();
-    await settle(hub);
-    await capture(hub, 'after-hub-desktop.png', true);
-    await hub.close();
-
     // A fresh page per state avoids a hash-remount race between screenshots.
     const ready = await context.newPage();
     await open2048(ready, COLOR_BOARD);
@@ -225,14 +219,6 @@ async function captureMobile(browser) {
     await capture(route, 'before-2048-route-mobile.png', false);
     await route.close();
   } else {
-    // Same full-page framing as the Before hub so the 2048 card is comparable.
-    const hub = await context.newPage();
-    await hub.goto(`${BASE_URL}/`, { waitUntil: 'networkidle' });
-    await hub.getByTestId('game-card-2048').waitFor();
-    await settle(hub);
-    await capture(hub, 'after-hub-mobile.png', true);
-    await hub.close();
-
     const ready = await context.newPage();
     await open2048(ready, COLOR_BOARD);
     await capture(ready, 'after-2048-ready-mobile.png', false);

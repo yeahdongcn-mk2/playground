@@ -137,7 +137,6 @@ describe('capture target docs (Issue #209)', () => {
     const command = lineStartingWith(FIXED_ENV, '- 容器命令：');
     expect(declaredTargets('screenshots:minesweeper')).toEqual([
       'desktop',
-      'mobile',
       'mobile-touch',
     ]);
     expect(declaredTargets('screenshots:minesweeper:touch-before')).toEqual([
@@ -204,10 +203,11 @@ describe('capture target docs (Issue #209)', () => {
     }
   });
 
-  it('scopes the three-context Chromium note to the minesweeper after run', () => {
+  it('scopes the two-context Chromium note to the minesweeper after run', () => {
     expect(FIXED_ENV).toContain(
-      '扫雷 After 的 Chromium 运行会同时创建桌面、390×844 手机与 Pixel 7 触屏上下文',
+      '扫雷 After 的 Chromium 运行会同时创建桌面与 Pixel 7 触屏上下文',
     );
+    expect(FIXED_ENV).toContain('大厅证据统一由 `npm run screenshots` 生成');
     expect(FIXED_ENV).toContain('其他 Chromium 截图脚本');
     expect(FIXED_ENV).toContain('不会出现 `mobile-touch` 行');
   });
