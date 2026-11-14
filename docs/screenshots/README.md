@@ -42,15 +42,15 @@
 - 目的：`scripts/capture-screenshots.mjs` 已为 Chromium 大厅显式补上 `fullPage: true`；本节记录重拍后的两张共享整页证据，并让 `npm run verify:screenshots:doc-dims` 逐张校验它们。
 - 捕获环境 / 命令：固定 Playwright 容器（镜像 tag / digest、字体与 EGL 变量见「固定捕获环境」）内执行 `npm run screenshots:container -- screenshots`（生产构建 + `vite preview`，端口 4174）。同一构建、端口空闲时连跑两次。
 - 捕获提交：`6217a208f55ca7ed2f4d8eb4f5a1c383c60f6d26`（分支 `agent/plan-161-t1`，该提交只含这两张 PNG；文档与测试在后续提交）。
-- 确定性口径：两次运行写出的两张图 sha256 完全一致，并与该提交的 PNG 一致：桌面 `7232a8977654561531fd1a1acf507d62ebf9486e78fb16b1714f5b732e7fc168`、手机 `d2fa7877424f0552010f63bb3731d4b82b0771c7ce70e7f72c233b467419f448`。这是同一构建、同一捕获环境的确定性结果，不是跨构建的像素基准。
+- 确定性口径：两次运行写出的两张图 sha256 完全一致，并与该提交的 PNG 一致；桌面 / 手机的完整 sha256 记录在下方表格的「捕获命令 / sha256」列，由 `npm run verify:screenshots:doc-dims` 一并校验。这是同一构建、同一捕获环境的确定性结果，不是跨构建的像素基准。
 - 页脚漂移：桌面整页图会截入共享页脚，旧提交捕获的桌面 After 图带旧页脚，用当前构建重跑必然不同；按「历史 After 证据与当前构建不一致（Issue #137）」的口径，不要求新图等于历史 PNG，本节 sha256 只对上述两次同构建运行有效。
 - 视口 / 主题：桌面 1440×1000 CSS px、DPR 1；手机 390×844 CSS px、DPR 2、`isMobile: true`、`hasTouch: true`；深色主题、`reducedMotion: reduce`。两张均为整页截图（`fullPage: true`），手机整页高度按同一次捕获实测记录。
 - WebKit 口径不变：`after-hub-webkit.png` 仍由 `npm run screenshots:webkit` 生成，保持 WebKit `iPhone SE (3rd gen)` 375×667 / DPR 2 的视口截图（`fullPage: false`，750×1334），本次未重拍。
 
 | 文件 | 场景 | 视口 / 主题 | 整页尺寸 | 捕获命令 / sha256 |
 | --- | --- | --- | --- | --- |
-| `after-hub-desktop.png` | 大厅（Chromium 桌面，含页脚） | 1440×1000 / 深色 / DPR 1，fullPage: true | 整页 1440×3468 | `npm run screenshots:container -- screenshots` / `7232a897…` |
-| `after-hub-mobile.png` | 大厅（Chromium 手机） | 390×844（DPR 2）/ 深色，fullPage: true | 整页 780×13194 | `npm run screenshots:container -- screenshots` / `d2fa7877…` |
+| `after-hub-desktop.png` | 大厅（Chromium 桌面，含页脚） | 1440×1000 / 深色 / DPR 1，fullPage: true | 整页 1440×3468 | `npm run screenshots:container -- screenshots` / `7232a8977654561531fd1a1acf507d62ebf9486e78fb16b1714f5b732e7fc168` |
+| `after-hub-mobile.png` | 大厅（Chromium 手机） | 390×844（DPR 2）/ 深色，fullPage: true | 整页 780×13194 | `npm run screenshots:container -- screenshots` / `d2fa7877424f0552010f63bb3731d4b82b0771c7ce70e7f72c233b467419f448` |
 
 ## zhen-sha：镇煞游戏首屏命名证据（Issue #274 / t1）
 
@@ -109,12 +109,12 @@
 - 覆盖范围：`docs/screenshots/README.md` 表格里的尺寸行、完整 sha256 与 `docs/screenshots/<file>.png` 逐项比对：
   - 整页行 `整页 W×H`：把文档尺寸与 PNG 签名 / IHDR 宽高比对，共 16 行 / 16 个文件，其中包括「通用大厅整页证据」收录的 `after-hub-desktop.png` / `after-hub-mobile.png`。
   - 视口行 `CSS 视口 / PNG 尺寸`（`W1×H1 / W2×H2`）：只把斜杠后的 `W2×H2` 与 PNG 签名 / IHDR 宽高比对；斜杠前的 CSS 视口按 DPR 可能与 PNG 尺寸不同，仅作为文档元数据保留。现有 8 条视口证据是 `before/after-zhen-sha-route-desktop`、`before/after-zhen-sha-route-320x640`、`before/after-hub-copy-desktop`、`before/after-hub-copy-320x640`，共 8 行 / 8 个文件。
-  - 完整 sha256：同一表格行最后一列（sha256 / 捕获命令）里反引号包裹的哈希按文件位置一一对齐（每个文件一个哈希槽），完整 64 位哈希用 `node:crypto` 的 SHA-256 计算 `docs/screenshots/<file>.png` 的实际哈希后比对；现有 8 条视口证据各带 1 个完整哈希，共 8 个文件。哈希与尺寸在同一行、同一次遍历中校验。
-  - 省略号简写不校验：「通用大厅整页证据」两行的 `7232a897…` / `d2fa7877…` 是 8 位加省略号的文档简写，不参与比较；完整 64 位哈希与文件整体比对，8–63 位不带省略号的短哈希只做截断前缀检查（仍会读取文件哈希并与文档前缀比对），以免把写短的完整哈希静默放过；普通短十六进制（如表格里的 7 位提交前缀）不受影响。
-  - 合计 24 行 / 24 个文件，其中 8 个文件校验完整 sha256。只读 README 与已提交 PNG，不执行截图脚本、不写文件，也不需要浏览器或生产构建。
+  - 完整 sha256：同一表格行最后一列（捕获命令 / sha256）里反引号包裹的哈希按文件位置一一对齐（每个文件一个哈希槽），完整 64 位哈希用 `node:crypto` 的 SHA-256 计算 `docs/screenshots/<file>.png` 的实际哈希后比对；现有 8 条视口证据与「通用大厅整页证据」两行各带 1 个完整哈希，共 10 个文件。哈希与尺寸在同一行、同一次遍历中校验。
+  - 省略号简写：解析器把带 `…` 的缩略哈希当作空槽跳过，不与文件比较；本 README 的表格已无缩略哈希写法（「通用大厅整页证据」两行已改用完整哈希），解析器保留该兼容分支并由测试覆盖。不带省略号的 8–63 位短十六进制若恰好是文件 sha256 的前缀，会作为截断报告（见失败表现），以免把写短的完整哈希静默放过；普通短十六进制（如表格里的 7 位提交前缀）不受影响。
+  - 合计 24 行 / 24 个文件，其中 10 个文件校验完整 sha256。只读 README 与已提交 PNG，不执行截图脚本、不写文件，也不需要浏览器或生产构建。
 - CI 位置：`.github/workflows/ci.yml` 的 `verify` job，在 `Unit tests`（`npm run test:unit`）之后、`Production build`（`npm run build`）之前新增名为 `Screenshot doc dimensions` 的步骤；`verify` 的 `timeout-minutes` 保持 20。放在构建前，尺寸或哈希漂移会尽早失败。
 - 步骤命令：`npm run verify:screenshots:doc-dims`（即 `node scripts/check-screenshot-doc-dims.mjs`）。
-- 复现命令：`npm run verify:screenshots:doc-dims`。通过时输出 `OK: 检查了 24 个文件 / 24 行 README（整页 16 行 / 视口 8 行，sha256 8 个文件），尺寸与 sha256 全部一致。` 并以 0 退出；该计数与 `tests/unit/screenshot-doc-dims.test.ts` 的 CLI 契约断言一致。
+- 复现命令：`npm run verify:screenshots:doc-dims`。通过时输出 `OK: 检查了 24 个文件 / 24 行 README（整页 16 行 / 视口 8 行，sha256 10 个文件），尺寸与 sha256 全部一致。` 并以 0 退出；该计数与 `tests/unit/screenshot-doc-dims.test.ts` 的 CLI 契约断言一致。
 - 失败表现：尺寸问题与哈希问题进入同一个问题列表，并以相同的非 0 状态退出。把 `after-hub-copy-desktop.png` 行斜杠后的 `1440×1000` 改成 `1441×1000` 后，本地实测输出：
 
 ```text
@@ -136,9 +136,9 @@ FAIL: 发现 1 处尺寸 / sha256 问题（检查了 24 个文件 / 24 行 READM
   README 68: after-zhen-sha-route-desktop.png: sha256 文档 8f903d39bb5e681ec9a59a322ab5a759c5058df6c24f6ffa44a11785ef1a800 != 实际 8f903d39bb5e681ec9a59a322ab5a759c5058df6c24f6ffa44a11785ef1a8002（sha256 截断：文档 63 位，实际 64 位）
 ```
 
-  以上修改都以 1 退出，恢复文档后重新通过；「通用大厅整页证据」两行的缩略哈希不会产生哈希问题。整页行仍按原口径校验，把 `after-minesweeper-scores-desktop.png` 行的 `整页 1440×1606` 改成 `1440×1607` 时输出 `README 296: after-minesweeper-scores-desktop.png: 整页 1440×1607 != PNG 1440×1606（尺寸不一致）`。PNG 缺失、PNG 签名错误或 IHDR 截断时同样逐条给出 README 行号、文件名、文档值与实际 PNG 状态。
+  以上修改都以 1 退出，恢复文档后重新通过；「通用大厅整页证据」两行现在也校验完整 sha256，改错一个字符，或删掉末尾一位（得到 63 位前缀），同样以 1 退出并给出行号、文件名与两份哈希。整页行仍按原口径校验，把 `after-minesweeper-scores-desktop.png` 行的 `整页 1440×1606` 改成 `1440×1607` 时输出 `README 296: after-minesweeper-scores-desktop.png: 整页 1440×1607 != PNG 1440×1606（尺寸不一致）`。PNG 缺失、PNG 签名错误或 IHDR 截断时同样逐条给出 README 行号、文件名、文档值与实际 PNG 状态。
 - 实测耗时：2026-11-11 在 `agent/plan-134-t1` 的本地 worktree 实测，`npm run verify:screenshots:doc-dims` 约 0.08–0.09 s（`node scripts/check-screenshot-doc-dims.mjs` 本身约 0.02 s，其余为 npm 启动开销），属于毫秒级；相对 `verify` job 的分钟级耗时（见下节 WebKit 冒烟步骤的参考 run）可忽略。CI runner 的绝对耗时不同，以实际 run 为准。
-- 防回归：`tests/unit/ci-workflow.test.ts` 断言 `Screenshot doc dimensions` 步骤存在、其 `run` 恰为 `npm run verify:screenshots:doc-dims`、位于 `npm run test:unit` 之后且在 `npm run build` 之前，并继续钉住 `verify` 的 `timeout-minutes: 20`；脚本行为（整页 / 视口尺寸写错、完整 sha256 写错与截断、省略号简写跳过、PNG 缺失 / 签名错误 / IHDR 截断、CLI 退出码与 24 行 / 24 文件 / 8 个哈希文件计数）由 `tests/unit/screenshot-doc-dims.test.ts` 覆盖。
+- 防回归：`tests/unit/ci-workflow.test.ts` 断言 `Screenshot doc dimensions` 步骤存在、其 `run` 恰为 `npm run verify:screenshots:doc-dims`、位于 `npm run test:unit` 之后且在 `npm run build` 之前，并继续钉住 `verify` 的 `timeout-minutes: 20`；脚本行为（整页 / 视口尺寸写错、完整 sha256 写错与截断、省略号简写跳过、PNG 缺失 / 签名错误 / IHDR 截断、CLI 退出码与 24 行 / 24 文件 / 10 个哈希文件计数）由 `tests/unit/screenshot-doc-dims.test.ts` 覆盖。
 
 ## CI：WebKit 窄屏截图冒烟（Issue #121）
 

@@ -301,12 +301,14 @@ describe('parseDocDimensions', () => {
     }
   });
 
-  it('documents a complete sha256 only for the 8 viewport evidence rows', () => {
+  it('documents a complete sha256 for the 8 viewport rows and 2 hub full-page rows', () => {
     const readmeText = readFileSync(README, 'utf8');
     const rows = parseDocDimensions(readmeText);
     const hashedRows = rows.filter((row) => row.hashes.some((hash) => hash !== null));
 
     expect(hashedRows.flatMap((row) => row.files)).toEqual([
+      'after-hub-desktop.png',
+      'after-hub-mobile.png',
       'before-zhen-sha-route-desktop.png',
       'after-zhen-sha-route-desktop.png',
       'before-zhen-sha-route-320x640.png',
@@ -322,19 +324,21 @@ describe('parseDocDimensions', () => {
       expect(row.hashes[0]).toMatch(/^[0-9a-f]{64}$/);
     }
 
-    // The hub full-page rows use an 8-character shorthand; it is skipped, not
-    // compared with a non-existent file prefix.
-    expect(readmeText).toContain('7232a897…');
-    expect(readmeText).toContain('d2fa7877…');
     const hubRows = rows.filter((row) =>
       row.files.some(
         (file) => file === 'after-hub-desktop.png' || file === 'after-hub-mobile.png',
       ),
     );
     expect(hubRows).toHaveLength(2);
-    for (const row of hubRows) {
-      expect(row.kind).toBe('full-page');
-      expect(row.hashes).toEqual([null]);
+    const hubRowsByFile = new Map(
+      hubRows.flatMap((row) => row.files.map((file) => [file, row] as const)),
+    );
+    for (const file of ['after-hub-desktop.png', 'after-hub-mobile.png']) {
+      const row = hubRowsByFile.get(file);
+      expect(row?.kind).toBe('full-page');
+      expect(row?.hashes).toEqual([
+        sha256Of(readFileSync(join(SCREENSHOT_DIR, file))),
+      ]);
     }
   });
 });
@@ -393,6 +397,46 @@ describe('committed hub screenshot full-page docs (Issue #161)', () => {
       readPngDimensions(join(SCREENSHOT_DIR, 'after-hub-desktop.png')),
     );
   });
+
+  it('checks the complete hub sha256 and reports a wrong or truncated hash with both values', () => {
+    const source = readFileSync(README, 'utf8');
+    const rows = parseDocDimensions(source);
+
+    for (const file of HUB_SCREENSHOTS) {
+      const row = rows.find((candidate) => candidate.files.includes(file));
+      if (row === undefined) throw new Error(`README 缺少 ${file} 的整页尺寸行`);
+      const actual = sha256Of(readFileSync(join(SCREENSHOT_DIR, file)));
+      expect(row.hashes).toEqual([actual]);
+
+      const wrong = `${actual.slice(0, 63)}${actual.endsWith('0') ? '1' : '0'}`;
+      const truncated = actual.slice(0, 63);
+      for (const [documented, reason] of [
+        [wrong, 'sha256 不一致'],
+        [truncated, 'sha256 截断'],
+      ] as const) {
+        const mutated = source.replace(`\`${actual}\``, `\`${documented}\``);
+        expect(mutated).not.toBe(source);
+        const report = verifyDocDimensions({ readmeText: mutated, dir: SCREENSHOT_DIR });
+
+        const completeHashes = parseDocDimensions(mutated)
+          .flatMap((mutatedRow) => mutatedRow.hashes)
+          .filter((hash) => hash !== null && hash.length === 64);
+        expect(report.sha256Files).toBe(completeHashes.length);
+        expect(report.problems).toHaveLength(1);
+        expect(report.problems[0]).toMatchObject({
+          readmeLine: row.line,
+          file,
+          kind: 'full-page',
+          check: 'sha256',
+          docSha256: documented,
+          actualSha256: actual,
+        });
+        expect(report.problems[0]?.reason).toContain(reason);
+      }
+    }
+
+    expect(verifyDocDimensions({ readmeText: source, dir: SCREENSHOT_DIR }).problems).toEqual([]);
+  });
 });
 
 describe('parsePngDimensions', () => {
@@ -426,7 +470,7 @@ describe('verifyDocDimensions', () => {
       files: 24,
       fullPageRows: 16,
       viewportRows: 8,
-      sha256Files: 8,
+      sha256Files: 10,
       problems: [],
     });
   });
@@ -861,7 +905,7 @@ describe('check-screenshot-doc-dims CLI', () => {
     expect(stdout).toContain('24 个文件');
     expect(stdout).toContain('24 行 README');
     expect(stdout).toContain('整页 16 行 / 视口 8 行');
-    expect(stdout).toContain('sha256 8 个文件');
+    expect(stdout).toContain('sha256 10 个文件');
     expect(stdout).toContain('尺寸与 sha256 全部一致');
   });
 
@@ -969,6 +1013,36 @@ describe('check-screenshot-doc-dims CLI', () => {
     expect(stdout).toContain(documented);
     expect(stdout).toContain(actual);
     expect(stdout).toContain('sha256 截断');
+  });
+
+  it('exits 1 for a wrong or truncated hub full-page sha256 and prints the line, file and both hashes', () => {
+    const source = readFileSync(README, 'utf8');
+    const rows = parseDocDimensions(source);
+    const dir = makeTempDir();
+
+    for (const { file, truncate } of [
+      { file: 'after-hub-desktop.png', truncate: false },
+      { file: 'after-hub-mobile.png', truncate: true },
+    ] as const) {
+      const row = rows.find((candidate) => candidate.files.includes(file));
+      if (row === undefined) throw new Error(`README 缺少 ${file} 的整页尺寸行`);
+      const actual = sha256Of(readFileSync(join(SCREENSHOT_DIR, file)));
+      const documented = truncate
+        ? actual.slice(0, 63)
+        : `${actual.slice(0, 63)}${actual.endsWith('0') ? '1' : '0'}`;
+      const readme = writeReadme(
+        dir,
+        source.replace(`\`${actual}\``, `\`${documented}\``).split('\n'),
+      );
+
+      const { status, stdout, stderr } = runCli(['--readme', readme, '--dir', SCREENSHOT_DIR]);
+
+      expect(stderr).toBe('');
+      expect(status).toBe(1);
+      expect(stdout).toContain(`README ${row.line}: ${file}`);
+      expect(stdout).toContain(`sha256 文档 ${documented} != 实际 ${actual}`);
+      expect(stdout).toContain(truncate ? 'sha256 截断' : 'sha256 不一致');
+    }
   });
 
   it('exits 0 and skips an ellipsis 8-character sha256', () => {
