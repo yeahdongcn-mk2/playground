@@ -11,6 +11,7 @@ const README = read('README.md');
 const INDEX = read('index.html');
 const APP = read('src/app/app.ts');
 const HUB = read('src/app/hub.ts');
+const PACKAGE = JSON.parse(read('package.json')) as { description?: string };
 
 const CHINESE_DIGITS = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九'] as const;
 
@@ -19,6 +20,19 @@ const shippedIds = shippedGames.map((game) => game.meta.id);
 const shippedTitles = shippedGames.map((game) => game.meta.title);
 const shippedCount = CHINESE_DIGITS[shippedGames.length] ?? '?';
 const countLabel = `${shippedCount}款`;
+
+/** The English name package.json lists for a game; 2048 keeps its numeral title. */
+function packageName(game: (typeof games)[number]): string {
+  return game.meta.id === '2048' ? '2048' : game.meta.englishTitle;
+}
+
+const shippedPackageNames = shippedGames.map(packageName);
+const phaserPackageNames = shippedGames
+  .filter((game) => game.meta.engine === 'phaser')
+  .map(packageName);
+const domPackageNames = shippedGames
+  .filter((game) => game.meta.engine === 'dom')
+  .map(packageName);
 
 /** The current copy line that contains the given marker. */
 function lineContaining(source: string, marker: string): string {
@@ -39,12 +53,23 @@ function extract(source: string, pattern: RegExp, name: string): string {
 }
 
 describe('current game copy', () => {
-  it('ships six complete games plus the blank canvas example', () => {
+  it('ships six complete games plus the blank canvas example and lists them in package.json', () => {
     expect(shippedGames).toHaveLength(6);
     expect(games).toHaveLength(shippedGames.length + 1);
     expect(shippedIds).toContain('zhen-sha');
     expect(shippedTitles).toContain('镇煞');
     expect(games.find((game) => game.meta.id === 'blank')).toBeDefined();
+
+    const description = PACKAGE.description ?? '';
+    expect(description).not.toBe('');
+    for (const name of shippedPackageNames) {
+      expect(description).toContain(name);
+    }
+    // The Phaser / DOM split must stay attached to the right games, so the copy
+    // cannot quietly flatten two DOM games into the Phaser group.
+    expect(description).toContain(`${phaserPackageNames.join(', ')} (Phaser)`);
+    expect(description).toContain(`${domPackageNames.join(' and ')} (DOM)`);
+    expect(description).toContain('blank canvas example');
   });
 
   it('keeps the README title, intro, verification and limitations on the six games', () => {
