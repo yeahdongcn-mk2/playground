@@ -23,8 +23,10 @@ import {
   PLAYWRIGHT_IMAGE_REPOSITORY,
   assertContainerCaptureEnvironment,
   dprForCaptureTarget,
+  normalizeCaptureTargets,
   resolveCaptureImage,
 } from './lib/capture-env.mjs';
+import { PRINT_CAPTURE_TARGETS_FLAG } from './lib/capture-targets.mjs';
 import { assertPortAvailable, parsePreviewPort } from './lib/preview-port.mjs';
 
 /**
@@ -34,15 +36,17 @@ import { assertPortAvailable, parsePreviewPort } from './lib/preview-port.mjs';
  *   npm run screenshots:container -- <target> [passthrough...]
  *
  * It preflights Docker, the pinned image tag against package-lock.json, the
- * target whitelist and the target's preview port, builds the local capture
- * image from docker/capture/Dockerfile when needed, then runs the existing
- * `npm run <target>` command inside the fixed Playwright container. The
- * repository is mounted at /work, so the PNGs and the build output are written
- * back to the host; the combined output is also saved under
+ * target whitelist and the target's preview port, resolves the capture targets
+ * from the target script's `--print-capture-targets` declaration, builds the
+ * local capture image from docker/capture/Dockerfile when needed, then runs the
+ * existing `npm run <target>` command inside the fixed Playwright container.
+ * The repository is mounted at /work, so the PNGs and the build output are
+ * written back to the host; the combined output is also saved under
  * test-results/capture-container/.
  *
  * Container side (the same script, CAPTURE_CONTAINER=1):
- *   It re-validates the image tag, EGL variables and target DPR, installs
+ *   It re-validates the image tag, EGL variables and target DPR, re-resolves the
+ *   same script declaration to check the injected targets, installs
  *   dependencies on demand (`npm ci`) and runs the capture command. The shared
  *   capture runtime logs the environment fingerprint once the browser launches.
  *   Font versions are recorded only; nothing pins an unknown font version or
@@ -94,86 +98,127 @@ export function captureTargets(scripts) {
 }
 
 /**
- * The capture targets (DPR contract) one container run records.
+ * Parse the `node scripts/....mjs [args]` invocation of one npm screenshot
+ * command.
  *
- * The npm script name alone is not enough: the container entry forwards extra
- * arguments to the capture script, and some of them change the set of targets
- * the script records. The rules mirror what each script actually reads:
- *
- * - every `capture-*.mjs` script resolves its engine with `parseCaptureEngine`,
- *   which selects WebKit for `--webkit`, `--webkit-narrow` and
- *   `--webkit-narrow-before`; a WebKit run records only the WebKit phone
- *   target, even when a phone-only mode is also passed;
- * - minesweeper script names narrow the target: the
- *   `:narrow` / `:min` / `:restart` / `:short` / `:large` (and `-before`)
- *   commands record only `mobile`, `:touch-before` records only
- *   `mobile-touch`, and the plain `screenshots:minesweeper` after run records
- *   `desktop`, `mobile` and `mobile-touch`;
- * - `--touch-before` and the `--narrow` / `--min` / `--restart` / `--short` /
- *   `--large` (and `-before`) modes are only read by
- *   `capture-minesweeper-screenshots.mjs`. On `screenshots:minesweeper` and
- *   `screenshots:minesweeper:touch-before` the narrow-family flags win over
- *   `--touch-before`, matching the capture script's MODE precedence; the other
- *   scripts ignore those flags and must keep their script-name targets;
- * - `--before`, `--clear` and `--allow-historical-overwrite` never change the
- *   target set.
+ * Commands may be prefixed with `npm run build &&`; only the node invocation
+ * declares capture targets, and the container entry must never execute the
+ * build step itself. Arguments are plain whitespace-separated flags in this
+ * repository, so no shell quoting is needed.
  */
-const WEBKIT_CAPTURE_FLAGS = [
-  '--webkit',
-  '--webkit-narrow',
-  '--webkit-narrow-before',
-];
+export function parseCaptureScriptCommand(command, target = '') {
+  const match =
+    typeof command === 'string'
+      ? /(?:^|&&)\s*node\s+(\S+\.mjs)(?:\s+(.*))?$/.exec(command.trim())
+      : null;
+  if (match?.[1] === undefined) {
+    throw new Error(
+      `Cannot resolve capture targets for "${target}": its npm command does not ` +
+        `invoke a node capture script (${String(command)}).`,
+    );
+  }
+  const rest = match[2]?.trim() ?? '';
+  return { script: match[1], args: rest === '' ? [] : rest.split(/\s+/) };
+}
 
-/** The one flag that selects the minesweeper Pixel 7 touch-before mode. */
-const MINESWEEPER_TOUCH_CAPTURE_FLAG = '--touch-before';
+/**
+ * Capture targets (Issue #293) one container run records, read from the target
+ * script's own `--print-capture-targets` declaration.
+ *
+ * The container entry does not keep a script-name / flag mapping. It parses the
+ * target's npm command for the node script and the script's built-in arguments,
+ * appends the container passthrough arguments and asks the same script to print
+ * its declaration:
+ *
+ *   node <script> <script args...> <passthrough...> --print-capture-targets
+ *
+ * The printed one-line JSON is the only source of truth. The script path must
+ * match the npm command, the targets must be a non-empty subset of the fixed
+ * capture-env DPR contract, and a missing declaration / non-zero exit / invalid
+ * JSON fails with a readable error before a container is started.
+ */
+export function resolveCaptureTargets(
+  target,
+  passthrough = [],
+  {
+    scripts = readPackageScripts(),
+    spawnSync = defaultSpawnSync,
+    repoRoot = CAPTURE_REPO_ROOT,
+    env = process.env,
+  } = {},
+) {
+  const { script, args } = parseCaptureScriptCommand(scripts[target], target);
+  const invocation = [
+    script,
+    ...args,
+    ...passthrough,
+    PRINT_CAPTURE_TARGETS_FLAG,
+  ];
+  const printable = invocation.join(' ');
+  const result = spawnSync(process.execPath, invocation, {
+    cwd: repoRoot,
+    env,
+    encoding: 'utf8',
+  });
 
-/** Minesweeper modes that only create the custom DPR-2 phone context. */
-const MINESWEEPER_PHONE_ONLY_CAPTURE_FLAGS = [
-  '--narrow',
-  '--narrow-before',
-  '--min',
-  '--min-before',
-  '--restart',
-  '--restart-before',
-  '--short',
-  '--short-before',
-  '--large',
-  '--large-before',
-];
-
-const MOBILE_ONLY_CAPTURE_TARGET =
-  /^screenshots:minesweeper:(narrow|min|restart|short|large)(-before)?$/;
-
-export function captureTargetsForScript(script, passthrough = []) {
-  if (
-    script.includes('webkit') ||
-    WEBKIT_CAPTURE_FLAGS.some((flag) => passthrough.includes(flag))
-  ) {
-    return ['webkit'];
+  if (result?.error) {
+    throw new Error(
+      `Cannot resolve capture targets for "${target}" with "node ${printable}": ` +
+        result.error.message,
+    );
+  }
+  const status = result?.status;
+  if (status !== 0) {
+    const detail = String(result?.stderr ?? result?.stdout ?? '').trim();
+    const exit = status === null || status === undefined ? 'no status' : `code ${status}`;
+    throw new Error(
+      `Cannot resolve capture targets for "${target}": "node ${printable}" exited ` +
+        `with ${exit}${detail === '' ? '' : `: ${detail}`}.`,
+    );
   }
 
-  const touchBeforeTarget = script === 'screenshots:minesweeper:touch-before';
-  if (script === 'screenshots:minesweeper' || touchBeforeTarget) {
-    // The narrow-family modes take precedence over --touch-before in the
-    // capture script's MODE resolution, so mirror that order here. This also
-    // covers the touch-before npm script when an extra narrow-family flag is
-    // passed through: it then runs the narrow mode and records `mobile`.
-    if (
-      MINESWEEPER_PHONE_ONLY_CAPTURE_FLAGS.some((flag) =>
-        passthrough.includes(flag),
-      )
-    ) {
-      return ['mobile'];
-    }
-    if (touchBeforeTarget || passthrough.includes(MINESWEEPER_TOUCH_CAPTURE_FLAG)) {
-      return ['mobile-touch'];
-    }
-    return ['desktop', 'mobile', 'mobile-touch'];
+  const stdout = String(result?.stdout ?? '').trim();
+  let declaration;
+  try {
+    declaration = JSON.parse(stdout);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Cannot resolve capture targets for "${target}": "node ${printable}" did not ` +
+        `print one JSON capture-target declaration (${stdout === '' ? 'empty stdout' : stdout}): ${detail}.`,
+    );
   }
-  if (MOBILE_ONLY_CAPTURE_TARGET.test(script)) {
-    return ['mobile'];
+
+  if (declaration === null || typeof declaration !== 'object') {
+    throw new Error(
+      `Cannot resolve capture targets for "${target}": the declaration from ` +
+        `"node ${printable}" is not a JSON object.`,
+    );
   }
-  return ['desktop', 'mobile'];
+  if (declaration.script !== script) {
+    throw new Error(
+      `Cannot resolve capture targets for "${target}": the declaration names ` +
+        `script "${String(declaration.script)}" but the npm command runs "${script}".`,
+    );
+  }
+
+  let declaredTargets;
+  try {
+    declaredTargets = normalizeCaptureTargets(declaration.targets);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Cannot use the capture target declaration from "${script}": ${detail}`,
+    );
+  }
+  if (declaredTargets === null) {
+    throw new Error(
+      `Cannot resolve capture targets for "${target}": "${script}" declared no ` +
+        'capture targets.',
+    );
+  }
+
+  return { script, targets: declaredTargets };
 }
 
 /** The preview port a target starts, or null when it does not start one. */
@@ -391,11 +436,17 @@ export function buildDockerRunArgs({
   gid = typeof process.getgid === 'function' ? process.getgid() : 1000,
   previewPort = null,
   env = process.env,
+  scripts = readPackageScripts(),
+  spawnSync = defaultSpawnSync,
 } = {}) {
   if (image === undefined || containerImage === undefined) {
     throw new Error('buildDockerRunArgs needs the resolved capture image.');
   }
-  const captureTargets = captureTargetsForScript(target, passthrough);
+  const { targets: captureTargets } = resolveCaptureTargets(target, passthrough, {
+    scripts,
+    spawnSync,
+    repoRoot,
+  });
   const args = [
     'run',
     '--rm',
@@ -531,12 +582,28 @@ export async function runContainerCapture({
   const image = resolveCaptureImage({ readFile, lockfilePath });
 
   if (env[CAPTURE_CONTAINER_FLAG] === '1') {
+    // Validate everything that does not need the capture script before npm ci:
+    // a malformed injected environment should fail without installing anything.
     assertContainerCaptureEnvironment({
       env,
-      targets: captureTargetsForScript(target, passthrough),
       version: image.version,
     });
     await ensureDependencies({ repoRoot, env, readFile, existsSync });
+
+    // The declaration comes from the target script itself, not from a
+    // script-name / flag table. Re-resolve it inside the container and compare
+    // the result with the values the host injected.
+    const { targets } = resolveCaptureTargets(target, passthrough, {
+      scripts,
+      spawnSync,
+      repoRoot,
+      env,
+    });
+    assertContainerCaptureEnvironment({
+      env,
+      targets,
+      version: image.version,
+    });
 
     const { code, signal } = await runCommand({
       spawn: spawnImpl,
@@ -587,6 +654,8 @@ export async function runContainerCapture({
     env,
     uid,
     gid,
+    scripts,
+    spawnSync,
   });
 
   mkdirSync(logDir, { recursive: true });

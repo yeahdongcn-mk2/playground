@@ -62,6 +62,25 @@ export interface BuildDockerRunArgsOptions {
   gid?: number;
   previewPort?: number | null;
   env?: Record<string, string | undefined>;
+  scripts?: Record<string, string>;
+  spawnSync?: typeof spawnSync;
+}
+
+export interface ResolveCaptureTargetsOptions {
+  scripts?: Record<string, string>;
+  spawnSync?: typeof spawnSync;
+  repoRoot?: string;
+  env?: Record<string, string | undefined>;
+}
+
+export interface ParsedCaptureScriptCommand {
+  script: string;
+  args: string[];
+}
+
+export interface ResolvedCaptureTargets {
+  script: string;
+  targets: string[];
 }
 
 export interface EnsureContainerDependenciesOptions {
@@ -88,17 +107,23 @@ export function readPackageScripts(options?: {
   readFile?: (path: string, encoding?: 'utf8') => string;
 }): Record<string, string>;
 export function captureTargets(scripts: Record<string, string>): string[];
+export function parseCaptureScriptCommand(
+  command: string | undefined,
+  target?: string,
+): ParsedCaptureScriptCommand;
 /**
- * Capture targets (in DPR order) one container run records.
+ * Capture targets (in DPR order) one container run records, read from the
+ * target script's own `--print-capture-targets` declaration.
  *
  * `passthrough` is the extra argv the container entry forwards to the capture
- * script; the flags that change the recorded target set are folded in on top of
- * the target script name (see the implementation for the exact rules).
+ * script; it is appended to the npm script's built-in arguments before the
+ * declaration is printed, so the script itself decides the target set.
  */
-export function captureTargetsForScript(
-  script: string,
+export function resolveCaptureTargets(
+  target: string,
   passthrough?: readonly string[],
-): string[];
+  options?: ResolveCaptureTargetsOptions,
+): ResolvedCaptureTargets;
 export function previewPortForTarget(
   target: string,
   value?: string,

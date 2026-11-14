@@ -4,7 +4,10 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { dprForCaptureTarget } from '../../scripts/lib/capture-env.mjs';
-import { captureTargetsForScript } from '../../scripts/run-container-capture.mjs';
+import {
+  readPackageScripts,
+  resolveCaptureTargets,
+} from '../../scripts/run-container-capture.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SCREENSHOTS_README = readFileSync(
@@ -12,6 +15,8 @@ const SCREENSHOTS_README = readFileSync(
   'utf8',
 );
 const SCREENSHOT_DIR = join(ROOT, 'docs', 'screenshots');
+const SCRIPTS = readPackageScripts({ packagePath: join(ROOT, 'package.json') });
+const DECLARATION_CACHE = new Map<string, string[]>();
 
 const require = createRequire(import.meta.url);
 const PLAYWRIGHT_CORE_DIR = dirname(require.resolve('playwright-core/package.json'));
@@ -62,12 +67,27 @@ function targetRow(text: string, target: string): string {
   return row;
 }
 
+/** The targets a target's own script declaration reports for this argv. */
+function declaredTargets(target: string, passthrough: readonly string[] = []): string[] {
+  const key = JSON.stringify([target, passthrough]);
+  const cached = DECLARATION_CACHE.get(key);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const { targets } = resolveCaptureTargets(target, [...passthrough], {
+    scripts: SCRIPTS,
+  });
+  DECLARATION_CACHE.set(key, targets);
+  return targets;
+}
+
 /**
- * The backticked `targets` / `dprs` contract derived from the capture entry, so
- * the docs cannot pin a hand-written target list that drifts from the code.
+ * The backticked `targets` / `dprs` contract derived from the capture entry's
+ * declaration resolver, so the docs cannot pin a hand-written target list that
+ * drifts from the script declarations.
  */
 function targetContract(script: string, passthrough: readonly string[] = []): string {
-  const targets = captureTargetsForScript(script, passthrough);
+  const targets = declaredTargets(script, passthrough);
   const dprs = targets.map((target) => dprForCaptureTarget(target));
   return `\`${targets.join(',')}\` / \`${dprs.join(',')}\``;
 }
@@ -115,12 +135,12 @@ describe('capture target docs (Issue #209)', () => {
 
   it('documents the container targets of the minesweeper after run and touch-before', () => {
     const command = lineStartingWith(FIXED_ENV, '- 容器命令：');
-    expect(captureTargetsForScript('screenshots:minesweeper')).toEqual([
+    expect(declaredTargets('screenshots:minesweeper')).toEqual([
       'desktop',
       'mobile',
       'mobile-touch',
     ]);
-    expect(captureTargetsForScript('screenshots:minesweeper:touch-before')).toEqual([
+    expect(declaredTargets('screenshots:minesweeper:touch-before')).toEqual([
       'mobile-touch',
     ]);
     expect(command).toContain('`screenshots:minesweeper`');
@@ -129,41 +149,59 @@ describe('capture target docs (Issue #209)', () => {
     expect(command).toContain(targetContract('screenshots:minesweeper:touch-before'));
   });
 
-  it('documents that the narrow family wins over touch-before for touch-before runs', () => {
+  it('documents that the container entry reads the target script declaration', () => {
     const command = lineStartingWith(FIXED_ENV, '- 容器命令：');
-    expect(captureTargetsForScript('screenshots:minesweeper', ['--narrow'])).toEqual([
-      'mobile',
-    ]);
-    expect(
-      captureTargetsForScript('screenshots:minesweeper:touch-before', ['--narrow']),
-    ).toEqual(['mobile']);
+    expect(command).toContain('捕获目标不再由入口按脚本名或透传 flag 的手写映射推导');
+    expect(command).toContain('执行目标脚本的声明');
+    expect(command).toContain('`package.json`');
+    expect(command).toContain('脚本自带参数');
+    expect(command).toContain('容器透传参数');
     expect(command).toContain(
-      '对 `screenshots:minesweeper` 与 `screenshots:minesweeper:touch-before` 生效',
+      '`<script> <脚本自带参数...> <透传参数...> --print-capture-targets`',
     );
-    expect(command).toContain(
-      `先于 \`--touch-before\` 把目标收紧为 ${targetContract(
-        'screenshots:minesweeper',
-        ['--narrow'],
-      )}`,
-    );
-    expect(command).toContain(
-      `\`screenshots:minesweeper:touch-before --narrow\` 注入 ${targetContract(
-        'screenshots:minesweeper:touch-before',
-        ['--narrow'],
-      )}`,
-    );
+    expect(command).toContain('不执行 `npm run build`');
+    expect(command).toContain('唯一来源');
+    expect(command).toContain('目标白名单与固定 DPR');
   });
 
-  it('keeps the phone-only modes and the scores phone part at mobile / 2', () => {
+  it('documents declaration examples that match the target scripts', () => {
     const command = lineStartingWith(FIXED_ENV, '- 容器命令：');
-    for (const flag of ['--narrow(-before)', '--short(-before)', '--large(-before)']) {
-      expect(command).toContain(`\`${flag}\``);
+    for (const target of [
+      'screenshots:minesweeper',
+      'screenshots:minesweeper:touch-before',
+      'screenshots:webkit',
+    ]) {
+      expect(command, target).toContain(targetContract(target));
     }
-    expect(command).toContain('`mobile` / `2`');
-    expect(command).toContain(
-      `成绩榜是桌面 + 手机组合 ${targetContract('screenshots:minesweeper:scores')}`,
-    );
-    expect(command).toContain('其手机图仍为 DPR 2');
+    expect(command).toContain('透传参数会原样传给脚本');
+  });
+
+  it('documents the readable declaration failure paths', () => {
+    const command = lineStartingWith(FIXED_ENV, '- 容器命令：');
+    expect(command).toContain('无声明');
+    expect(command).toContain('退出码非 0');
+    expect(command).toContain('JSON 或目标非法');
+    expect(command).toContain('可读错误');
+  });
+
+  it('documents that the runtime assertion compares against the declaration', () => {
+    const command = lineStartingWith(FIXED_ENV, '- 容器命令：');
+    expect(command).toContain('实际记录必须与声明一致');
+    expect(command).toContain('多记或漏记');
+    expect(command).not.toContain('实际记录的目标必须属于注入列表');
+  });
+
+  it('no longer documents a script-name / flag target mapping', () => {
+    const command = lineStartingWith(FIXED_ENV, '- 容器命令：');
+    for (const stale of [
+      '入口按 target 脚本与透传参数共同推导并注入',
+      '`--webkit` / `--webkit-narrow` / `--webkit-narrow-before` 对所有截图脚本生效并注入 `webkit`',
+      '先于 `--touch-before` 把目标收紧为',
+      '只在 target 为 `screenshots:minesweeper` 时把目标收紧为',
+      '其他 target 会忽略这些参数、目标不变',
+    ]) {
+      expect(command, stale).not.toContain(stale);
+    }
   });
 
   it('scopes the three-context Chromium note to the minesweeper after run', () => {

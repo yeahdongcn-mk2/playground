@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
+import { spawnSync as nodeSpawnSync } from 'node:child_process';
 import type { spawnSync } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -20,20 +21,24 @@ import {
   CAPTURE_LOCK_HASH_FILE,
   buildDockerRunArgs,
   captureImageBuildInputFingerprint,
-  captureTargetsForScript,
   captureTargets,
   ensureCaptureImage,
   ensureContainerDependencies,
   localCaptureImageName,
+  parseCaptureScriptCommand,
   parseContainerCaptureArgs,
   preflightDocker,
   previewPortForTarget,
   readPackageScripts,
+  resolveCaptureTargets,
   runContainerCapture,
   type RunContainerCaptureOptions,
 } from '../../scripts/run-container-capture.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+// The declaration tests spawn the real capture scripts (which import
+// Playwright), so several cases together exceed the default 5s.
+vi.setConfig({ testTimeout: 30_000 });
 const SCRIPTS = readPackageScripts();
 
 type Env = Record<string, string | undefined>;
@@ -66,6 +71,26 @@ function spawnSyncResult(result: FakeSpawnSyncResult = {}) {
 
 function fakeSpawnSync(result: FakeSpawnSyncResult): typeof spawnSync {
   return (() => spawnSyncResult(result)) as unknown as typeof spawnSync;
+}
+
+/**
+ * Let the real capture scripts answer `--print-capture-targets` even when a
+ * test uses a fake repository root for the Docker arguments; Docker commands
+ * keep returning the supplied fake result.
+ */
+function declarationAwareSpawnSync(
+  dockerResult: FakeSpawnSyncResult = {},
+): typeof spawnSync {
+  return ((command: string, args: readonly string[]) => {
+    if (command === process.execPath) {
+      const [script, ...rest] = args;
+      return nodeSpawnSync(process.execPath, [join(ROOT, script!), ...rest], {
+        cwd: ROOT,
+        encoding: 'utf8',
+      });
+    }
+    return spawnSyncResult(dockerResult);
+  }) as unknown as typeof spawnSync;
 }
 
 function fakeSpawn(
@@ -153,87 +178,61 @@ describe('container capture target whitelist', () => {
   });
 });
 
-describe('container capture target DPR and preview port', () => {
+describe('container capture target declaration', () => {
+  function expectDeclared(
+    target: string,
+    passthrough: string[],
+    expected: string[],
+  ): void {
+    expect(
+      resolveCaptureTargets(target, passthrough, { scripts: SCRIPTS }).targets,
+    ).toEqual(expected);
+  }
+
   it('maps every screenshot script to the targets it actually records', () => {
-    expect(captureTargetsForScript('screenshots:webkit')).toEqual(['webkit']);
-    expect(captureTargetsForScript('screenshots:minesweeper:webkit-narrow')).toEqual([
-      'webkit',
-    ]);
-    expect(captureTargetsForScript('screenshots:snake:webkit')).toEqual(['webkit']);
-    expect(captureTargetsForScript('screenshots')).toEqual(['desktop', 'mobile']);
-    expect(captureTargetsForScript('screenshots:minesweeper')).toEqual([
+    expectDeclared('screenshots:webkit', [], ['webkit']);
+    expectDeclared('screenshots:minesweeper:webkit-narrow', [], ['webkit']);
+    expectDeclared('screenshots:snake:webkit', [], ['webkit']);
+    expectDeclared('screenshots', [], ['desktop', 'mobile']);
+    expectDeclared('screenshots:minesweeper', [], [
       'desktop',
       'mobile',
       'mobile-touch',
     ]);
-    expect(captureTargetsForScript('screenshots:minesweeper:scores')).toEqual([
-      'desktop',
-      'mobile',
-    ]);
+    expectDeclared('screenshots:minesweeper:scores', [], ['desktop', 'mobile']);
     // The Before variants capture the same desktop + phone pair.
-    expect(captureTargetsForScript('screenshots:2048:before')).toEqual([
+    expectDeclared('screenshots:2048:before', [], ['desktop', 'mobile']);
+    expectDeclared('screenshots:breakout:before', [], ['desktop', 'mobile']);
+    expectDeclared('screenshots:minesweeper:scores-before', [], [
       'desktop',
       'mobile',
     ]);
-    expect(captureTargetsForScript('screenshots:breakout:before')).toEqual([
-      'desktop',
-      'mobile',
-    ]);
-    expect(captureTargetsForScript('screenshots:minesweeper:scores-before')).toEqual([
-      'desktop',
-      'mobile',
-    ]);
-    expect(captureTargetsForScript('screenshots:minesweeper:scores-clear')).toEqual([
+    expectDeclared('screenshots:minesweeper:scores-clear', [], [
       'desktop',
       'mobile',
     ]);
     // These modes only create Chromium phone contexts, so a run captured them
     // at DPR 2 and never wrote a desktop image.
-    expect(captureTargetsForScript('screenshots:minesweeper:narrow')).toEqual([
-      'mobile',
-    ]);
-    expect(captureTargetsForScript('screenshots:minesweeper:min-before')).toEqual([
-      'mobile',
-    ]);
-    expect(captureTargetsForScript('screenshots:minesweeper:short')).toEqual([
-      'mobile',
-    ]);
-    expect(captureTargetsForScript('screenshots:minesweeper:large')).toEqual([
-      'mobile',
-    ]);
+    expectDeclared('screenshots:minesweeper:narrow', [], ['mobile']);
+    expectDeclared('screenshots:minesweeper:min-before', [], ['mobile']);
+    expectDeclared('screenshots:minesweeper:short', [], ['mobile']);
+    expectDeclared('screenshots:minesweeper:large', [], ['mobile']);
     // The touch-before mode creates the Pixel 7 context at its fractional DPR
     // and no desktop / DPR-2 phone context.
-    expect(captureTargetsForScript('screenshots:minesweeper:touch-before')).toEqual([
-      'mobile-touch',
-    ]);
+    expectDeclared('screenshots:minesweeper:touch-before', [], ['mobile-touch']);
   });
 
-  it('folds the passthrough flags each capture script actually reads into the targets', () => {
-    // parseCaptureEngine selects WebKit from these flags in every capture script.
-    expect(captureTargetsForScript('screenshots', ['--webkit'])).toEqual(['webkit']);
-    expect(captureTargetsForScript('screenshots:minesweeper', ['--webkit'])).toEqual([
-      'webkit',
-    ]);
-    expect(captureTargetsForScript('screenshots:2048', ['--webkit'])).toEqual([
-      'webkit',
-    ]);
-    expect(captureTargetsForScript('screenshots', ['--webkit-narrow'])).toEqual([
-      'webkit',
-    ]);
-    expect(captureTargetsForScript('screenshots', ['--webkit-narrow-before'])).toEqual([
-      'webkit',
-    ]);
+  it('folds the passthrough flags into the declaration the script prints', () => {
+    expectDeclared('screenshots', ['--webkit'], ['webkit']);
+    expectDeclared('screenshots:minesweeper', ['--webkit'], ['webkit']);
+    expectDeclared('screenshots:2048', ['--webkit'], ['webkit']);
+    expectDeclared('screenshots', ['--webkit-narrow'], ['webkit']);
+    expectDeclared('screenshots', ['--webkit-narrow-before'], ['webkit']);
     // WebKit wins over the Chromium-only phone modes.
-    expect(
-      captureTargetsForScript('screenshots:minesweeper', [
-        '--touch-before',
-        '--webkit',
-      ]),
-    ).toEqual(['webkit']);
+    expectDeclared('screenshots:minesweeper', ['--touch-before', '--webkit'], [
+      'webkit',
+    ]);
 
-    // Only capture-minesweeper-screenshots.mjs reads these phone modes. The
-    // narrow-family modes keep the DPR-2 mobile target; --touch-before selects
-    // the Pixel 7 mobile-touch target.
     const minesweeperPhoneFlags = [
       '--narrow',
       '--narrow-before',
@@ -247,51 +246,196 @@ describe('container capture target DPR and preview port', () => {
       '--large-before',
     ];
     for (const flag of minesweeperPhoneFlags) {
-      expect(captureTargetsForScript('screenshots:minesweeper', [flag])).toEqual([
-        'mobile',
-      ]);
+      expectDeclared('screenshots:minesweeper', [flag], ['mobile']);
     }
-    expect(captureTargetsForScript('screenshots:minesweeper', ['--touch-before'])).toEqual([
+    expectDeclared('screenshots:minesweeper', ['--touch-before'], [
       'mobile-touch',
     ]);
     // The script's MODE resolution prefers the narrow-family modes, so a
     // combined invocation still records the DPR-2 mobile target.
-    expect(
-      captureTargetsForScript('screenshots:minesweeper', [
-        '--narrow',
-        '--touch-before',
-      ]),
-    ).toEqual(['mobile']);
+    expectDeclared(
+      'screenshots:minesweeper',
+      ['--narrow', '--touch-before'],
+      ['mobile'],
+    );
+    // The touch-before script's built-in flag does not override a
+    // narrow-family flag passed through by the container entry.
+    expectDeclared(
+      'screenshots:minesweeper:touch-before',
+      ['--narrow'],
+      ['mobile'],
+    );
 
-    // The touch-before script name does not override a narrow-family flag
-    // passed through by the container entry.
-    expect(
-      captureTargetsForScript('screenshots:minesweeper:touch-before', ['--narrow']),
-    ).toEqual(['mobile']);
+    // The script's own npm arguments are part of the declaration.
+    expectDeclared('screenshots:minesweeper:webkit-before', [], ['webkit']);
+    expectDeclared(
+      'screenshots:minesweeper:webkit-before',
+      ['--touch-before'],
+      ['webkit'],
+    );
 
-    // Other scripts ignore those flags, so the script-name targets stay unchanged.
-    expect(captureTargetsForScript('screenshots:2048', ['--touch-before'])).toEqual([
+    // Other scripts ignore those flags, so their declared targets stay unchanged.
+    expectDeclared('screenshots:2048', ['--touch-before'], [
       'desktop',
       'mobile',
     ]);
-    expect(captureTargetsForScript('screenshots', ['--narrow'])).toEqual([
+    expectDeclared('screenshots', ['--narrow'], ['desktop', 'mobile']);
+    expectDeclared('screenshots:minesweeper:scores', ['--touch-before'], [
       'desktop',
       'mobile',
     ]);
-    expect(
-      captureTargetsForScript('screenshots:minesweeper:scores', ['--touch-before']),
-    ).toEqual(['desktop', 'mobile']);
 
     // These flags never change the target set.
-    expect(
-      captureTargetsForScript('screenshots:2048', [
-        '--before',
-        '--allow-historical-overwrite',
-      ]),
-    ).toEqual(['desktop', 'mobile']);
-    expect(captureTargetsForScript('screenshots:minesweeper:scores', ['--clear'])).toEqual(
+    expectDeclared(
+      'screenshots:2048',
+      ['--before', '--allow-historical-overwrite'],
       ['desktop', 'mobile'],
     );
+    expectDeclared('screenshots:minesweeper:scores', ['--clear'], [
+      'desktop',
+      'mobile',
+    ]);
+  });
+
+  it('parses the node invocation out of npm screenshot commands', () => {
+    expect(parseCaptureScriptCommand('node scripts/capture-screenshots.mjs')).toEqual({
+      script: 'scripts/capture-screenshots.mjs',
+      args: [],
+    });
+    expect(
+      parseCaptureScriptCommand(
+        'npm run build && node scripts/capture-2048-screenshots.mjs --before',
+      ),
+    ).toEqual({
+      script: 'scripts/capture-2048-screenshots.mjs',
+      args: ['--before'],
+    });
+    expect(
+      parseCaptureScriptCommand(
+        'node scripts/capture-minesweeper-screenshots.mjs --webkit --touch-before',
+      ),
+    ).toEqual({
+      script: 'scripts/capture-minesweeper-screenshots.mjs',
+      args: ['--webkit', '--touch-before'],
+    });
+    expect(() => parseCaptureScriptCommand('echo nope', 'screenshots:bad')).toThrow(
+      /does not invoke a node capture script/,
+    );
+  });
+
+  it('runs the npm script args plus passthrough, then --print-capture-targets', () => {
+    const calls: string[][] = [];
+    const declarationSpawnSync = ((
+      command: string,
+      args: readonly string[],
+    ) => {
+      calls.push([command, ...args]);
+      return spawnSyncResult({
+        stdout: JSON.stringify({
+          script: args[0],
+          targets: ['webkit'],
+        }),
+      });
+    }) as unknown as typeof spawnSync;
+
+    expect(
+      resolveCaptureTargets('screenshots:2048:before', ['--webkit'], {
+        scripts: SCRIPTS,
+        spawnSync: declarationSpawnSync,
+        repoRoot: '/repo',
+      }),
+    ).toEqual({ script: 'scripts/capture-2048-screenshots.mjs', targets: ['webkit'] });
+    expect(calls).toEqual([
+      [
+        process.execPath,
+        'scripts/capture-2048-screenshots.mjs',
+        '--before',
+        '--webkit',
+        '--print-capture-targets',
+      ],
+    ]);
+  });
+
+  it('fails readably when the target command has no node script', () => {
+    expect(() =>
+      resolveCaptureTargets('screenshots:bad', [], {
+        scripts: { 'screenshots:bad': 'echo nope' },
+        repoRoot: '/repo',
+      }),
+    ).toThrow(/Cannot resolve capture targets for "screenshots:bad".*node capture script/);
+  });
+
+  it('fails readably when the declaration process cannot start', () => {
+    expect(() =>
+      resolveCaptureTargets('screenshots:webkit', [], {
+        scripts: SCRIPTS,
+        spawnSync: fakeSpawnSync({
+          error: Object.assign(new Error('spawn node ENOENT'), { code: 'ENOENT' }),
+          status: null,
+        }),
+        repoRoot: '/repo',
+      }),
+    ).toThrow(/Cannot resolve capture targets for "screenshots:webkit".*ENOENT/);
+  });
+
+  it('fails readably when the declaration exits non-zero', () => {
+    expect(() =>
+      resolveCaptureTargets('screenshots:webkit', [], {
+        scripts: SCRIPTS,
+        spawnSync: fakeSpawnSync({ status: 2, stderr: 'boom' }),
+        repoRoot: '/repo',
+      }),
+    ).toThrow(/exited with code 2: boom/);
+  });
+
+  it('fails readably when the declaration is not one JSON object', () => {
+    expect(() =>
+      resolveCaptureTargets('screenshots:webkit', [], {
+        scripts: SCRIPTS,
+        spawnSync: fakeSpawnSync({ status: 0, stdout: 'not json' }),
+        repoRoot: '/repo',
+      }),
+    ).toThrow(/did not print one JSON capture-target declaration \(not json\)/);
+  });
+
+  it('fails readably when the declaration is empty or names another script', () => {
+    const script = 'scripts/capture-screenshots.mjs';
+    expect(() =>
+      resolveCaptureTargets('screenshots:webkit', [], {
+        scripts: SCRIPTS,
+        spawnSync: fakeSpawnSync({
+          status: 0,
+          stdout: JSON.stringify({ script, targets: [] }),
+        }),
+        repoRoot: '/repo',
+      }),
+    ).toThrow(/declared no capture targets/);
+    expect(() =>
+      resolveCaptureTargets('screenshots:webkit', [], {
+        scripts: SCRIPTS,
+        spawnSync: fakeSpawnSync({
+          status: 0,
+          stdout: JSON.stringify({ script: 'scripts/other.mjs', targets: ['webkit'] }),
+        }),
+        repoRoot: '/repo',
+      }),
+    ).toThrow(/declaration names script "scripts\/other.mjs"/);
+  });
+
+  it('fails readably when the declaration names an unknown target', () => {
+    expect(() =>
+      resolveCaptureTargets('screenshots:webkit', [], {
+        scripts: SCRIPTS,
+        spawnSync: fakeSpawnSync({
+          status: 0,
+          stdout: JSON.stringify({
+            script: 'scripts/capture-screenshots.mjs',
+            targets: ['tablet'],
+          }),
+        }),
+        repoRoot: '/repo',
+      }),
+    ).toThrow(/Unknown capture target "tablet"/);
   });
 
   it('uses the preview port each screenshot script starts', () => {
@@ -316,6 +460,7 @@ describe('docker run construction', () => {
       passthrough: ['--allow-historical-overwrite'],
       repoRoot: '/repo',
       image,
+      spawnSync: declarationAwareSpawnSync(),
       containerImage: localCaptureImageName(),
       uid: 1000,
       gid: 1000,
@@ -359,6 +504,7 @@ describe('docker run construction', () => {
       target: 'screenshots',
       repoRoot: '/repo',
       image,
+      spawnSync: declarationAwareSpawnSync(),
       containerImage: localCaptureImageName(),
       previewPort: null,
       env: {},
@@ -374,6 +520,7 @@ describe('docker run construction', () => {
       target: 'screenshots:minesweeper:narrow',
       repoRoot: '/repo',
       image,
+      spawnSync: declarationAwareSpawnSync(),
       containerImage: localCaptureImageName(),
       previewPort: 4186,
       env: {},
@@ -388,6 +535,7 @@ describe('docker run construction', () => {
       target: 'screenshots:minesweeper',
       repoRoot: '/repo',
       image,
+      spawnSync: declarationAwareSpawnSync(),
       containerImage: localCaptureImageName(),
       previewPort: 4186,
       env: {},
@@ -403,6 +551,7 @@ describe('docker run construction', () => {
       passthrough: ['--touch-before'],
       repoRoot: '/repo',
       image,
+      spawnSync: declarationAwareSpawnSync(),
       containerImage: localCaptureImageName(),
       previewPort: 4186,
       env: {},
@@ -429,6 +578,7 @@ describe('docker run construction', () => {
         passthrough,
         repoRoot: '/repo',
         image,
+        spawnSync: declarationAwareSpawnSync(),
         containerImage: localCaptureImageName(),
         previewPort: null,
         env: {},
@@ -453,7 +603,7 @@ describe('docker run construction', () => {
       expect(() =>
         assertContainerCaptureEnvironment({
           env,
-          targets: captureTargetsForScript(target, passthrough),
+          targets: expectedTargets.split(','),
           version: image.version,
         }),
       ).not.toThrow();
@@ -956,7 +1106,7 @@ describe('host container capture run', () => {
       argv,
       env,
       spawn: spawn as unknown as NonNullable<RunContainerCaptureOptions['spawn']>,
-      spawnSync: fakeSpawnSync({ status: 0 }),
+      spawnSync: declarationAwareSpawnSync(),
       readFile: fakeHostReadFile,
       existsSync: () => true,
       repoRoot: '/repo',
