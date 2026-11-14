@@ -140,7 +140,7 @@ describe('flake-watch workflow', () => {
     expect(installIndex).toBeLessThan(stepIndex((step) => (step.run ?? '').trim() === 'npm run build'));
   });
 
-  it('caches WebKit under a distinct key but still restores the shared CI cache', () => {
+  it('caches WebKit under a distinct key while restoring the shared cache prefix', () => {
     const cache = requireStep(isPlaywrightCache, 'a Playwright browser cache step');
     expect(cache.uses).toBe('actions/cache@v4');
     expect(cache.with?.path).toBe(PLAYWRIGHT_CACHE_PATH);
@@ -148,23 +148,24 @@ describe('flake-watch workflow', () => {
       "playwright-webkit-${{ runner.os }}-${{ hashFiles('package-lock.json') }}",
     );
     const restoreKeys = String(cache.with?.['restore-keys'] ?? '');
-    // Own prefix first, then the prefix ci.yml writes its full cache under.
+    // Own prefix first, then the shared prefix a cached verify job would write.
     expect(restoreKeys).toContain('playwright-webkit-${{ runner.os }}-');
     expect(restoreKeys).toContain('playwright-${{ runner.os }}-');
     expect(cache['continue-on-error']).toBeUndefined();
 
-    // This job installs only WebKit. Saving that under ci.yml's exact key
-    // would make the immutable cache permanently miss Chromium, so the two
-    // write keys must differ while the shared prefix stays restorable.
+    // This job installs only WebKit. Writing that under the shared
+    // `playwright-<os>-<lockfile hash>` key would permanently poison the
+    // Chromium + WebKit cache if the cached verify job from Issue #202 is
+    // restored, so the write key stays WebKit-specific while the shared
+    // prefix remains restorable. Issue #213 moved the PR job into the pinned
+    // Playwright image, so verify no longer writes that shared entry itself.
     const ciWorkflow = parse(readFileSync(CI_WORKFLOW_PATH, 'utf8')) as Workflow;
     const ciCache = (ciWorkflow.jobs?.verify?.steps ?? []).find(
       (step) =>
         (step.uses ?? '').startsWith('actions/cache@') &&
         (step.with?.path ?? '') === PLAYWRIGHT_CACHE_PATH,
     );
-    expect(ciCache, 'ci.yml should still cache Playwright browsers').toBeDefined();
-    expect(cache.with?.key).not.toBe(ciCache?.with?.key);
-    expect(String(ciCache?.with?.key ?? '')).toContain('playwright-${{ runner.os }}-');
+    expect(ciCache, 'the pinned-image verify job must not cache browsers').toBeUndefined();
 
     const cacheIndex = stepIndex(isPlaywrightCache);
     const installIndex = stepIndex(isPlaywrightInstall);

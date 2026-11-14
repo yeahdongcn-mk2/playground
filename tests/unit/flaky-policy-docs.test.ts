@@ -3,6 +3,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { resolveCaptureImage } from '../../scripts/lib/capture-env.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (path: string): string => readFileSync(join(ROOT, path), 'utf8');
@@ -24,6 +25,7 @@ interface WorkflowStep {
 
 interface WorkflowJob {
   'timeout-minutes'?: number;
+  container?: string | { image?: string };
   steps?: WorkflowStep[];
 }
 
@@ -44,7 +46,7 @@ function stepNamed(steps: WorkflowStep[], name: string): WorkflowStep | undefine
 function requireStep(steps: WorkflowStep[], name: string): WorkflowStep {
   const step = stepNamed(steps, name);
   if (step === undefined) {
-    throw new Error(`the ci.yml verify job is missing the "${name}" step`);
+    throw new Error(`the workflow is missing the "${name}" step`);
   }
   return step;
 }
@@ -122,11 +124,14 @@ describe('flaky policy docs', () => {
     expect(POLICY).toContain('其他用例的 flaky 仍可能以 success 放行');
   });
 
-  it('documents the browser install cache and bounded failure boundary', () => {
-    const section = policySection('浏览器安装的缓存与失败边界');
-    expect(section, 'the policy should define the browser install cache/failure section').not.toBe(
-      '',
-    );
+  it('documents the pinned image, the fallback install cache and the failure boundary', () => {
+    const section = policySection('Playwright 运行环境：固定镜像与有界安装回退');
+    expect(section, 'the policy should define the pinned image / fallback section').not.toBe('');
+
+    const pinned = resolveCaptureImage();
+    expect(section).toContain(pinned.reference);
+    expect(section).toMatch(/playwright install/);
+    expect(section).toContain('20 分钟');
 
     expect(section).toContain('~/.cache/ms-playwright');
     expect(section).toContain('scripts/install-playwright-ci.mjs');
@@ -141,36 +146,56 @@ describe('flaky policy docs', () => {
     expect(section).toContain('404 Not Found');
     expect(section).toMatch(/非零状态/);
     expect(section).toMatch(/步骤自身的 `timeout-minutes` 内/);
-    expect(section).toMatch(/不会耗尽 job 的 20 分钟/);
+    expect(section).toMatch(/不会耗尽 flake-watch job 的 30 分钟/);
     expect(section).toContain('Issue #202');
     expect(section).toContain('43129697008');
     expect(section).toContain('冷缓存');
     expect(section).toContain('热缓存');
   });
 
-  it('keeps the browser install section aligned with ci.yml and the install wrapper', () => {
-    const section = policySection('浏览器安装的缓存与失败边界');
-    const jobTimeout = ci.jobs?.verify?.['timeout-minutes'];
-    const cache = requireStep(verifySteps, 'Cache Playwright browsers');
-    const apt = requireStep(verifySteps, 'Configure apt Acquire retries and timeouts');
-    const install = requireStep(verifySteps, 'Install Playwright Chromium and WebKit');
+  it('keeps the fallback install section aligned with flake-watch.yml and the install wrapper', () => {
+    const section = policySection('Playwright 运行环境：固定镜像与有界安装回退');
+    const verify = ci.jobs?.verify;
+    const verifyContainer = verify?.container;
+    const verifyImage =
+      typeof verifyContainer === 'string' ? verifyContainer : verifyContainer?.image;
+    const jobTimeout = verify?.['timeout-minutes'];
+    const pinned = resolveCaptureImage();
 
+    // The verify job runs in the pinned image and no longer installs browsers.
+    expect(verifyImage).toBe(pinned.reference);
     expect(jobTimeout).toBe(20);
+    expect(section).toContain(pinned.reference);
+    expect(section).toContain(`${jobTimeout} 分钟`);
+
+    // The bounded install remains the flake-watch fallback.
+    const watchTimeout = flakeWatch.jobs?.['mobile-webkit-first-run']?.['timeout-minutes'];
+    const cache = requireStep(watchSteps, 'Cache Playwright browsers');
+    const apt = requireStep(watchSteps, 'Configure apt Acquire retries and timeouts');
+    const install = requireStep(watchSteps, 'Install Playwright WebKit');
+
+    expect(watchTimeout).toBe(30);
     expect(cache.uses).toBe('actions/cache@v4');
     expect(cache.with?.path).toBe('~/.cache/ms-playwright');
     expect(cache.with?.key).toContain("hashFiles('package-lock.json')");
-    expect(install.run?.trim()).toBe('node scripts/install-playwright-ci.mjs');
+    expect(install.run?.trim()).toBe('node scripts/install-playwright-ci.mjs webkit');
     expect(install['timeout-minutes']).toBe(8);
     expect(install['continue-on-error']).toBeUndefined();
-    expect(install['timeout-minutes'] ?? 0).toBeLessThan(jobTimeout ?? 0);
+    expect(install['timeout-minutes'] ?? 0).toBeLessThan(watchTimeout ?? 0);
 
-    // The doc repeats the workflow's actual cache path/key, step timeout and
-    // job budget, so changing ci.yml without this section fails here.
+    // The doc repeats the fallback workflow's actual cache path/key, step
+    // timeout and job budget, so changing flake-watch.yml without this section
+    // fails here.
     expect(section).toContain(cache.with?.path ?? '');
     expect(section).toContain(cache.with?.key ?? '');
-    expect(section).toContain((cache.with?.['restore-keys'] ?? '').trim());
+    for (const restoreKey of (cache.with?.['restore-keys'] ?? '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)) {
+      expect(section).toContain(restoreKey);
+    }
     expect(section).toContain(`timeout-minutes: ${install['timeout-minutes']}`);
-    expect(section).toContain(`${jobTimeout} 分钟`);
+    expect(section).toContain(`${watchTimeout} 分钟`);
 
     const aptRun = apt.run ?? '';
     const acquire = {

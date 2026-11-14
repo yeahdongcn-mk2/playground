@@ -12,6 +12,21 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Issue #213: run every step in the official Playwright image instead of
+    # installing Chromium, WebKit and their apt dependencies at runtime. The
+    # tag is derived from `@playwright/test` in package-lock.json and the digest
+    # pins the exact multi-arch image; tests/unit/ci-workflow.test.ts fails when
+    # either drifts, so a Playwright bump must update PLAYWRIGHT_IMAGE_PIN, this
+    # image and the capture Dockerfile together.
+    #
+    # Image pull happens during container setup, before any step: a missing
+    # tag/digest or an unreachable registry fails the job there with the Docker
+    # pull error, still inside the unchanged 20-minute budget. The bounded
+    # `scripts/install-playwright-ci.mjs` fallback from Issue #202 stays in the
+    # repository (flake-watch.yml still uses it) so this change can be rolled
+    # back without losing the retry/timeout behavior.
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f
     steps:
       - uses: actions/checkout@v4
 
@@ -41,27 +56,6 @@ jobs:
 
       - name: Run pre-commit checks
         run: pre-commit run --all-files --show-diff-on-failure
-
-      - name: Configure apt Acquire retries and timeouts
-        run: |
-          set -euo pipefail
-          sudo tee /etc/apt/apt.conf.d/99-ci-acquire >/dev/null <<'EOF'
-          Acquire::Retries "1";
-          Acquire::http::Timeout "15";
-          Acquire::https::Timeout "15";
-          EOF
-
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            playwright-${{ runner.os }}-
-
-      - name: Install Playwright Chromium and WebKit
-        run: node scripts/install-playwright-ci.mjs
-        timeout-minutes: 8
 
       - name: Typecheck
         run: npm run typecheck

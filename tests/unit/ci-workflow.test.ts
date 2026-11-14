@@ -1,14 +1,23 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import {
+  PLAYWRIGHT_IMAGE_PIN,
+  PLAYWRIGHT_IMAGE_REPOSITORY,
+  imageTagForPlaywrightVersion,
+  readPlaywrightVersion,
+  resolveCaptureImage,
+} from '../../scripts/lib/capture-env.mjs';
 import { WEBKIT_SCREENSHOT_ARTIFACTS } from '../../scripts/lib/screenshot-artifacts.mjs';
 import type { ScreenshotArtifact } from '../../scripts/lib/screenshot-artifacts.mjs';
 import { DEFAULT_E2E_REPORT_PATH } from '../../scripts/lib/e2e-flakes.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const WORKFLOW_PATH = join(ROOT, '.github', 'workflows', 'ci.yml');
+const FLAKE_WATCH_WORKFLOW_PATH = join(ROOT, '.github', 'workflows', 'flake-watch.yml');
+const INSTALL_WRAPPER_PATH = join(ROOT, 'scripts', 'install-playwright-ci.mjs');
 const NARROW_MANIFEST_PATH = join(ROOT, 'docs', 'screenshots', 'ci-webkit-narrow-manifest.json');
 const NARROW_MANIFEST = 'docs/screenshots/ci-webkit-narrow-manifest.json';
 const NARROW_CAPTURE_COMMAND = 'npm run screenshots:minesweeper:webkit-narrow';
@@ -28,6 +37,7 @@ interface WorkflowStep {
 interface WorkflowJob {
   'runs-on'?: string;
   'timeout-minutes'?: number;
+  container?: string | { image?: string; options?: string };
   steps?: WorkflowStep[];
 }
 
@@ -129,7 +139,6 @@ describe('CI workflow', () => {
 
     const requiredCommands = [
       'npm ci',
-      PLAYWRIGHT_INSTALL_COMMAND,
       'npm run typecheck',
       'npm run lint',
       UNIT_TEST_COMMAND,
@@ -147,65 +156,73 @@ describe('CI workflow', () => {
     }
   });
 
-  it('installs Chromium and WebKit before running the end-to-end tests', () => {
-    const installIndex = stepIndex(isPlaywrightInstall);
+  it('runs the verify job in the pinned official Playwright image', () => {
+    const container = verify?.container;
+    const image = typeof container === 'string' ? container : container?.image;
+    expect(image, 'verify should declare a job-level container image').toBeDefined();
+
+    // `npm ci` installs the @playwright/test version recorded in the lockfile,
+    // so that version must be the one the image ships. `resolveCaptureImage()`
+    // reads the lockfile, rejects a mismatched tag and returns the tag + digest
+    // reference the workflow has to use.
+    const pinned = resolveCaptureImage();
+    expect(pinned.version).toBe(readPlaywrightVersion());
+    expect(PLAYWRIGHT_IMAGE_PIN.version).toBe(pinned.version);
+    expect(PLAYWRIGHT_IMAGE_PIN.tag).toBe(imageTagForPlaywrightVersion(pinned.version));
+    expect(PLAYWRIGHT_IMAGE_PIN.digest).toMatch(/^sha256:[0-9a-f]{64}$/);
+
+    expect(image).toBe(
+      `${PLAYWRIGHT_IMAGE_REPOSITORY}:${PLAYWRIGHT_IMAGE_PIN.tag}@${PLAYWRIGHT_IMAGE_PIN.digest}`,
+    );
+    expect(image).toBe(pinned.reference);
+    // A digest-free tag or a tag for another Playwright version would silently
+    // pull a different browser build.
+    expect(image).toContain(`:${PLAYWRIGHT_IMAGE_PIN.tag}@`);
+    expect(image).toContain(`@${PLAYWRIGHT_IMAGE_PIN.digest}`);
+
+    // The image replaces the runtime install only: the branch-protection check
+    // name (`verify`) and its budget must not change.
+    expect(Object.keys(workflow.jobs ?? {})).toContain('verify');
+    expect(verify?.['runs-on']).toBe('ubuntu-latest');
+    expect(verify?.['timeout-minutes']).toBe(20);
+  });
+
+  it('does not install browsers, cache ~/.cache/ms-playwright or configure apt at runtime', () => {
+    expect(stepIndex(isPlaywrightInstall)).toBe(-1);
+    expect(stepIndex(isPlaywrightCache)).toBe(-1);
+    expect(stepIndex(isAptAcquireConfig)).toBe(-1);
     expect(
-      installIndex,
-      `verify job should install both engines with "${PLAYWRIGHT_INSTALL_COMMAND}"`,
-    ).toBeGreaterThanOrEqual(0);
+      steps.some(
+        (step) =>
+          (step.uses ?? '').startsWith('actions/cache@') &&
+          (step.with?.path ?? '').includes('ms-playwright'),
+      ),
+      'the image already contains the browsers, so verify must not cache them',
+    ).toBe(false);
 
-    const e2eIndex = stepIndex(isE2e);
-    expect(e2eIndex, 'verify job should still run "npm run test:e2e"').toBeGreaterThanOrEqual(0);
-    expect(installIndex).toBeLessThan(e2eIndex);
+    for (const command of steps.flatMap(commandsOf)) {
+      // A browser install would reintroduce the Issue #202 failure mode and
+      // ignore the image pin; apt is part of that install path.
+      expect(command).not.toMatch(/\bplaywright\s+install\b/);
+      expect(command).not.toContain('--with-deps');
+      expect(command).not.toMatch(/\bapt(?:-get)?\s+(?:update|install|get)\b/i);
+      expect(command).not.toContain('/etc/apt/');
+    }
   });
 
-  it('runs the Playwright install through the retry wrapper with an 8-minute step timeout', () => {
-    const install = requireStep(isPlaywrightInstall, 'a Playwright install step');
-    expect(install.name).toBe('Install Playwright Chromium and WebKit');
-    expect((install.run ?? '').trim()).toBe(PLAYWRIGHT_INSTALL_COMMAND);
-    expect(install['timeout-minutes']).toBe(PLAYWRIGHT_INSTALL_TIMEOUT_MINUTES);
-    expect(install['continue-on-error']).toBeUndefined();
+  it('keeps the bounded install wrapper as the flake-watch fallback', () => {
+    // Issue #213 keeps the #202 wrapper so the image change can be rolled back;
+    // the scheduled WebKit watch still depends on it.
+    expect(existsSync(INSTALL_WRAPPER_PATH)).toBe(true);
 
-    const jobTimeout = verify?.['timeout-minutes'];
-    expect(jobTimeout).toBe(20);
-    expect(install['timeout-minutes']).toBeLessThan(jobTimeout ?? 0);
-
-    const installIndex = stepIndex(isPlaywrightInstall);
-    expect(stepIndex(isNpmCi)).toBeLessThan(installIndex);
-    expect(installIndex).toBeLessThan(stepIndex(isE2e));
-  });
-
-  it('caches Playwright browsers under ~/.cache/ms-playwright keyed by package-lock.json', () => {
-    const cache = requireStep(isPlaywrightCache, 'a Playwright browser cache step');
-    expect(cache.uses).toBe('actions/cache@v4');
-    expect(cache.with?.path).toBe(PLAYWRIGHT_CACHE_PATH);
-    expect(cache.with?.key).toContain("hashFiles('package-lock.json')");
-    expect(cache.with?.key).toContain('playwright-');
-    expect(cache.with?.['restore-keys']).toContain('playwright-');
-    expect(cache['continue-on-error']).toBeUndefined();
-
-    const cacheIndex = stepIndex(isPlaywrightCache);
-    const installIndex = stepIndex(isPlaywrightInstall);
-    expect(installIndex).toBeGreaterThanOrEqual(0);
-    expect(cacheIndex).toBeLessThan(installIndex);
-  });
-
-  it('configures apt Acquire retries and timeouts before installing browsers', () => {
-    const apt = requireStep(isAptAcquireConfig, 'an apt Acquire config step');
-    expect(apt.name).toBe('Configure apt Acquire retries and timeouts');
-    expect(apt['continue-on-error']).toBeUndefined();
-
-    const run = apt.run ?? '';
-    expect(run).toContain('sudo');
-    expect(run).toContain(APT_ACQUIRE_CONFIG_PATH);
-    expect(run).toMatch(/Acquire::Retries\s+"1";/);
-    expect(run).toMatch(/Acquire::http::Timeout\s+"15";/);
-    expect(run).toMatch(/Acquire::https::Timeout\s+"15";/);
-
-    const aptIndex = stepIndex(isAptAcquireConfig);
-    const installIndex = stepIndex(isPlaywrightInstall);
-    expect(installIndex).toBeGreaterThanOrEqual(0);
-    expect(aptIndex).toBeLessThan(installIndex);
+    const flakeWatch = parse(readFileSync(FLAKE_WATCH_WORKFLOW_PATH, 'utf8')) as Workflow;
+    const watchSteps = flakeWatch.jobs?.['mobile-webkit-first-run']?.steps ?? [];
+    const install = watchSteps.find(
+      (step) => (step.run ?? '').trim() === 'node scripts/install-playwright-ci.mjs webkit',
+    );
+    expect(install, 'flake-watch should keep using the bounded install wrapper').toBeDefined();
+    expect(install?.['timeout-minutes']).toBe(PLAYWRIGHT_INSTALL_TIMEOUT_MINUTES);
+    expect(install?.['continue-on-error']).toBeUndefined();
   });
 
   it('runs the screenshot doc dimension check between the unit tests and the build', () => {
