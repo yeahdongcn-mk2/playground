@@ -47,11 +47,11 @@ export function renderHub(
     <section class="hub">
       <section class="hero" aria-labelledby="hero-title">
         <div class="hero-copy">
-          <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> SHARED GAME SHELL · ISSUE #11</p>
+          <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> SHARED GAME SHELL · 六款游戏已上线</p>
           <h1 id="hero-title">一块画布，<br /><span>无限种玩法。</span></h1>
           <p class="lede">
             用 Vite 8 + TypeScript 7 + Phaser 4 搭起的共享游戏底座：
-            页面壳、按需引擎、输入、资源与自适应渲染已经接通，贪食蛇、俄罗斯方块、2048、打砖块与扫雷都已跑通。
+            页面壳、按需引擎、输入、资源与自适应渲染已经接通，贪食蛇、俄罗斯方块、2048、打砖块、扫雷与镇煞六款游戏都已跑通。
           </p>
           <div class="hero-actions">
             <a class="button button--primary" href="${gameHref('snake')}" data-testid="enter-snake">
