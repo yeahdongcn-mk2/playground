@@ -79,9 +79,11 @@ import { touchLongPress } from './lib/touch-input.mjs';
  *
  * The After mode (Chromium and WebKit phone states) skips the frozen desktop /
  * mobile / WebKit gameplay PNGs and prints a warning unless
- * `--allow-historical-overwrite` is passed. Hub captures, the dedicated narrow /
- * short / large / restart modes and the `--webkit-narrow` CI matrix keep
- * writing, so current evidence and the CI smoke re-capture still refresh.
+ * `--allow-historical-overwrite` is passed. The shared hub screenshots belong to
+ * `scripts/capture-screenshots.mjs`, so this script no longer writes them; the
+ * dedicated narrow / short / large / restart modes and the `--webkit-narrow` CI
+ * matrix keep writing, so current evidence and the CI smoke re-capture still
+ * refresh.
  */
 
 const ARGS = process.argv.slice(2);
@@ -100,7 +102,8 @@ const SCRIPT_NAME = 'scripts/capture-minesweeper-screenshots.mjs';
  *    `--large` and their `-before` forms) records only the DPR-2 `mobile`
  *    target and takes precedence over `--touch-before`;
  * 3. `--touch-before` records only the Pixel 7 `mobile-touch` target;
- * 4. the After run records desktop, mobile and mobile-touch.
+ * 4. the After run records desktop and mobile-touch (no 390x844 `mobile`
+ *    context; the shared hub capture moved to `capture-screenshots.mjs`).
  *
  * `--before` (removed), `--allow-historical-overwrite` and the target's
  * BASE_URL never change this set.
@@ -115,11 +118,7 @@ function captureTargets(args) {
   if (args.includes(MINESWEEPER_TOUCH_BEFORE_FLAG)) {
     return [CAPTURE_TARGET_IDS.MOBILE_TOUCH];
   }
-  return [
-    CAPTURE_TARGET_IDS.DESKTOP,
-    CAPTURE_TARGET_IDS.MOBILE,
-    CAPTURE_TARGET_IDS.MOBILE_TOUCH,
-  ];
+  return [CAPTURE_TARGET_IDS.DESKTOP, CAPTURE_TARGET_IDS.MOBILE_TOUCH];
 }
 
 const DECLARED_CAPTURE_TARGETS = captureTargets(ARGS);
@@ -312,13 +311,6 @@ async function captureDesktop(browser) {
     reducedMotion: 'reduce',
   });
 
-  const hub = await context.newPage();
-  await hub.goto(`${BASE_URL}/`, { waitUntil: 'networkidle' });
-  await hub.getByTestId('game-card-minesweeper').waitFor();
-  await settle(hub);
-  await capture(hub, 'after-hub-desktop.png', true);
-  await hub.close();
-
   // A fresh page per state avoids a hash-remount race between screenshots.
   const ready = await context.newPage();
   await openReady(ready);
@@ -339,27 +331,6 @@ async function captureDesktop(browser) {
   await openWon(won);
   await capture(won, 'after-minesweeper-won-desktop.png', true);
   await won.close();
-
-  await context.close();
-}
-
-async function captureMobile(browser) {
-  const context = await createMobileContext(browser, {
-    viewport: { width: 390, height: 844 },
-    colorScheme: 'dark',
-    deviceScaleFactor: 2,
-    isMobile: true,
-    hasTouch: true,
-    reducedMotion: 'reduce',
-  });
-
-  // Same full-page framing as the historical Before hub so the new card is comparable.
-  const hub = await context.newPage();
-  await hub.goto(`${BASE_URL}/`, { waitUntil: 'networkidle' });
-  await hub.getByTestId('game-card-minesweeper').waitFor();
-  await settle(hub);
-  await capture(hub, 'after-hub-mobile.png', true);
-  await hub.close();
 
   await context.close();
 }
@@ -643,7 +614,6 @@ try {
   } else {
     if (MODE !== 'touch-before') {
       await captureDesktop(browser);
-      await captureMobile(browser);
     }
     if (MODE === 'after') {
       await captureTouchMobile(browser, 'after');
