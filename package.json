@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Reusable web game shell with lazily loaded 2D games: Snake, Tetris, 2048 and Breakout (Phaser) plus Minesweeper (DOM).",
+  "description": "Reusable web game shell with lazily loaded 2D games: Snake, Tetris, 2048, Breakout (Phaser), Minesweeper and Zhen Sha (DOM), plus a blank canvas example.",
   "engines": {
     "node": "^22.12.0 || ^24.0.0 || >=26.0.0"
   },
