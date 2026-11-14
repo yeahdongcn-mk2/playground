@@ -444,21 +444,28 @@ describe('hub screenshot single owner docs (Issue #221)', () => {
   const SINGLE_GAME_COMMAND =
     /screenshots:(?:2048|breakout|minesweeper|snake)(?::[a-z0-9-]+)*/;
   // The two committed full-page hub captures and the wording that refers to
-  // them. `after-hub-webkit.png` is separate viewport evidence, so a bare
-  // `hub` must not match that filename.
+  // them; `after-hub-*.png` names the shared pair together. `after-hub-webkit.png`
+  // is separate viewport evidence, so a bare `hub` must not match that filename.
   const HUB_EVIDENCE =
-    /after-hub-(?:desktop|mobile)\.png|共享大厅证据|大厅证据|共享证据|共享图|(?<!after-)\bhub\b/i;
+    /after-hub-(?:desktop|mobile|\*)\.png|共享大厅证据|大厅证据|共享证据|共享图|(?<!after-)\bhub\b/i;
   // Commands that may legitimately write the shared hub evidence. The plain
   // `screenshots` command is the owner entry point (`capture-screenshots.mjs`).
   const OWNER_COMMAND =
     /screenshots:container -- screenshots|capture-screenshots\.mjs|npm run screenshots(?!:)/;
   const WRITE_VERB = /写出|写入|写|还原|刷新|重写|覆盖|更新|生成/;
+  // `只由` / `仅由` are ownership assertions, not negations: they are checked
+  // separately by the owner-attribution rule below.
+  const OWNER_ATTRIBUTION_WORDING = /只由|仅由/;
+  // Capture command mentioned by an ownership sentence. Backticks are optional
+  // so prose such as `只由 npm run screenshots:2048 写入` is covered too.
+  const CAPTURE_COMMAND =
+    /`?npm run screenshots(?::[a-z0-9-]+)*(?:\s+--\s+screenshots(?::[a-z0-9-]+)*)?`?/g;
   const NON_REFRESH_WORDING =
-    /不再|不会|不写|不重写|不刷新|不覆盖|不生成|未写|未生成|未刷新|未还原|未重写|未覆盖|不需要|不允许|无需|不必|无关|不由|只由|仅由|禁止|不得/;
+    /不再|不会|不写|不重写|不刷新|不覆盖|不生成|未写|未生成|未刷新|未还原|未重写|未覆盖|不需要|不允许|无需|不必|无关|不由|禁止|不得/;
   // Exact wording removed by Issue #221: single-game capture commands used to
   // "incidentally write out" / "restore" the shared hub files.
   const STALE_HUB_WORDING =
-    /(?:顺带|同时|也|再|会|仍)?\s*(?:写出|写|刷新|重写|覆盖|还原|生成)\s*(?:出\s*)?[`\s]*(?:hub|共享大厅证据|共享证据|大厅证据|共享图|after-hub-(?:desktop|mobile)\.png)/i;
+    /(?:顺带|同时|也|再|会|仍)?\s*(?:写出|写|刷新|重写|覆盖|还原|生成)\s*(?:出\s*)?[`\s]*(?:hub|共享大厅证据|共享证据|大厅证据|共享图|after-hub-(?:desktop|mobile|\*)\.png)/i;
 
   const OLD_2048_PARAGRAPH =
     '  两次运行的 6 个 sha256 应完全一致，且等于已提交产物。本任务只提交这 6 张 playing / gameover 图；' +
@@ -523,9 +530,11 @@ describe('hub screenshot single owner docs (Issue #221)', () => {
   /**
    * Contract for the committed shared-hub evidence:
    * 1. the two hub table rows must name the container owner command;
-   * 2. a single-game screenshot command may only mention hub evidence in its
+   * 2. every `只由 / 仅由 ... 写入` ownership sentence must name the owner
+   *    command (and no single-game command), even inside parentheses;
+   * 3. a single-game screenshot command may only mention hub evidence in its
    *    own paragraph when the clause says it does not write it;
-   * 3. the old "incidentally writes hub / restore hub" wording must never come
+   * 4. the old "incidentally writes hub / restore hub" wording must never come
    *    back, even when it is moved away from its original command block.
    * A clause can break more than one rule, so it may produce more than one
    * message; tests mutate the README and assert the exact contract that broke.
@@ -565,6 +574,30 @@ describe('hub screenshot single owner docs (Issue #221)', () => {
         );
       }
     }
+
+    // A `只由 / 仅由` sentence that names capture commands is an ownership
+    // assertion, not a negation: every such command must be the documented
+    // owner command. Only commands after the attribution are the claim, so a
+    // negated single-game command earlier in the same clause (e.g. 「
+    // `npm run screenshots:2048` 不写共享大厅证据（… 只由 owner 写入）」) is fine.
+    text.split('\n').forEach((lineText, index) => {
+      for (const clause of clausesOf(lineText)) {
+        const attribution = OWNER_ATTRIBUTION_WORDING.exec(clause);
+        if (attribution === null || attribution.index === undefined) continue;
+        if (!HUB_EVIDENCE.test(clause)) continue;
+        const commands = [...clause.slice(attribution.index).matchAll(CAPTURE_COMMAND)].map(
+          (match) => (match[0] ?? '').replaceAll('`', '').replace(/\s+/g, ' ').trim(),
+        );
+        // Prose such as 「只由 Playwright 渲染生成」 is not a capture-command
+        // attribution, and a sentence without a command is not this contract.
+        if (commands.length === 0) continue;
+        if (commands.every((command) => command === HUB_OWNER_COMMAND)) continue;
+        problems.push(
+          `README ${index + 1}: 共享大厅证据的「只由 / 仅由」归属句必须使用 ` +
+            `${HUB_OWNER_COMMAND} 且不得含单游戏命令：${clause}`,
+        );
+      }
+    });
 
     // A clause that also names a single-game command is that command's claim,
     // so an owner command elsewhere in the clause must not whitelist it.
@@ -628,6 +661,114 @@ describe('hub screenshot single owner docs (Issue #221)', () => {
       'npm run screenshots:snake',
     ]) {
       expect(ownership).toContain(`\`${command}\``);
+    }
+  });
+
+  /** Prefix every problem from the owner-attribution rule starts with. */
+  function ownershipProblemPrefix(line: number): string {
+    return (
+      `README ${line}: 共享大厅证据的「只由 / 仅由」归属句必须使用 ` +
+      `${HUB_OWNER_COMMAND} 且不得含单游戏命令`
+    );
+  }
+
+  it('fails when any real owner-attributed hub sentence names a single-game command', () => {
+    const source = readFileSync(README, 'utf8');
+    const lines = source.split('\n');
+    const ownerSentences = [
+      {
+        label: '2048 确定性重截',
+        matches: (line: string) =>
+          line.trimStart().startsWith('两次运行的 6 个 sha256 应完全一致') &&
+          OWNER_ATTRIBUTION_WORDING.test(line),
+      },
+      {
+        label: '扫雷生成 After',
+        matches: (line: string) =>
+          line.startsWith('- 生成 After：`npm run screenshots:minesweeper`') &&
+          OWNER_ATTRIBUTION_WORDING.test(line),
+      },
+      {
+        label: '贪食蛇提交范围',
+        matches: (line: string) =>
+          line.startsWith('- 提交范围：After 守卫会跳过 ready / gameover / mobile 历史图') &&
+          OWNER_ATTRIBUTION_WORDING.test(line),
+      },
+    ];
+
+    for (const { label, matches } of ownerSentences) {
+      const matchesIndex = lines.findIndex(matches);
+      if (matchesIndex < 0) throw new Error(`${label} 缺少 owner 归属句`);
+      const line = lines[matchesIndex]!;
+      expect(line).toContain(HUB_OWNER_COMMAND);
+
+      // Rewrite the owner attribution to a single-game command while keeping
+      // the surrounding negation (「不写 / 不再写」) and parentheses intact.
+      const mutatedLine = line.replace(HUB_OWNER_COMMAND, 'npm run screenshots:2048');
+      expect(mutatedLine).not.toBe(line);
+      const problems = hubCaptureProblems(source.replace(line, mutatedLine));
+
+      const prefix = ownershipProblemPrefix(matchesIndex + 1);
+      expect(
+        problems.some((problem) => problem.startsWith(prefix)),
+        `${label} 改成单游戏命令后未被捕获：${problems.join('；')}`,
+      ).toBe(true);
+    }
+  });
+
+  it('fails when an added 仅由 ownership sentence names a single-game command', () => {
+    const source = readFileSync(README, 'utf8');
+    // Matches the review reproduction, which writes the command without
+    // backticks: the bare `npm run screenshots:2048` must be caught too.
+    const addedLine = '- `after-hub-desktop.png` 仅由 npm run screenshots:2048 写入。';
+    const addedLineNumber = source.split('\n').length + 1;
+
+    const problems = hubCaptureProblems(`${source}\n${addedLine}\n`);
+
+    expect(
+      problems.some((problem) => problem.startsWith(ownershipProblemPrefix(addedLineNumber))),
+      `追加的「仅由」错误归属未被捕获：${problems.join('；')}`,
+    ).toBe(true);
+  });
+
+  it('rejects mixed owner / single-game claims but ignores prose-only attributions', () => {
+    const source = readFileSync(README, 'utf8');
+    const addedLineNumber = source.split('\n').length + 1;
+    const mixed =
+      '- `after-hub-desktop.png` 只由 `npm run screenshots:container -- screenshots` ' +
+      '与 `npm run screenshots:2048` 写入。';
+
+    const mixedProblems = hubCaptureProblems(`${source}\n${mixed}\n`);
+
+    expect(
+      mixedProblems.some((problem) =>
+        problem.startsWith(ownershipProblemPrefix(addedLineNumber)),
+      ),
+      `owner / 单游戏混写未被捕获：${mixedProblems.join('；')}`,
+    ).toBe(true);
+
+    // The write verb may sit in the next clause; the command still belongs to
+    // the attribution and must fail.
+    const commaClaim = '- `after-hub-*.png` 只由 `npm run screenshots:2048`，写入方式同下。';
+    expect(
+      hubCaptureProblems(`${source}\n${commaClaim}\n`).some((problem) =>
+        problem.startsWith(ownershipProblemPrefix(addedLineNumber)),
+      ),
+      '跨逗号的单游戏归属未被捕获',
+    ).toBe(true);
+
+    const legitimate = [
+      // The negation applies to the single-game command before the attribution;
+      // only the commands after 「只由」 are the ownership claim.
+      '- `npm run screenshots:2048` 不写共享大厅证据' +
+        '（`after-hub-*.png` 只由 `npm run screenshots:container -- screenshots` 写入）。',
+      // `只由` may describe what determines a capture without naming a writer.
+      '- `after-hub-desktop.png` 只由 seed 与 tick 数决定。',
+      '- 大厅 hub 图只由 Playwright 渲染生成。',
+      '- hub 路由只由 `npm run test:unit` 覆盖。',
+    ];
+    for (const line of legitimate) {
+      expect(hubCaptureProblems(`${source}\n${line}\n`), line).toEqual([]);
     }
   });
 
@@ -752,11 +893,15 @@ describe('hub screenshot single owner docs (Issue #221)', () => {
 
   it('fails when a game script is described as writing a hub file by name', () => {
     const source = readFileSync(README, 'utf8');
-    const staleWording = '\n- 2048 截图脚本会顺带写出 `after-hub-desktop.png`。\n';
 
-    const problems = hubCaptureProblems(`${source}${staleWording}`);
+    for (const staleWording of [
+      '\n- 2048 截图脚本会顺带写出 `after-hub-desktop.png`。\n',
+      '\n- 2048 截图脚本会顺带写出 `after-hub-*.png`。\n',
+    ]) {
+      const problems = hubCaptureProblems(`${source}${staleWording}`);
 
-    expect(problems.some((problem) => problem.includes('after-hub-desktop.png'))).toBe(true);
+      expect(problems.some((problem) => problem.includes('顺带写出'))).toBe(true);
+    }
   });
 
   it('fails when a hub table row is missing or duplicated', () => {
