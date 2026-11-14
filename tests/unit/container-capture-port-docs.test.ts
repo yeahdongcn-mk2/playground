@@ -72,14 +72,13 @@ describe('container capture host preview port precheck docs (Issue #207)', () =>
   });
 });
 
-describe('container capture passthrough target docs (Issue #208)', () => {
+describe('container capture passthrough target docs (Issue #208 / #209)', () => {
   const WEBKIT_FLAGS = [
     '--webkit',
     '--webkit-narrow',
     '--webkit-narrow-before',
   ] as const;
-  const MINESWEEPER_MOBILE_FLAGS = [
-    '--touch-before',
+  const MINESWEEPER_PHONE_ONLY_FLAGS = [
     '--narrow(-before)',
     '--min(-before)',
     '--restart(-before)',
@@ -94,14 +93,27 @@ describe('container capture passthrough target docs (Issue #208)', () => {
     expect(CONTAINER_COMMAND).toContain('对所有截图脚本生效并注入 `webkit`');
   });
 
-  it('documents that the minesweeper phone modes tighten the target only for screenshots:minesweeper', () => {
-    for (const flag of MINESWEEPER_MOBILE_FLAGS) {
+  it('documents that the narrow / short / large phone modes tighten the target to mobile', () => {
+    for (const flag of MINESWEEPER_PHONE_ONLY_FLAGS) {
       expect(CONTAINER_COMMAND).toContain(`\`${flag}\``);
     }
     expect(CONTAINER_COMMAND).toContain(
-      '只在 target 为 `screenshots:minesweeper` 时把目标收紧为 `mobile`',
+      '只在 target 为 `screenshots:minesweeper` 时把目标收紧为 `mobile` / `2`',
     );
     expect(CONTAINER_COMMAND).toContain('其他 target 会忽略这些参数、目标不变');
+  });
+
+  it('documents that --touch-before selects the Pixel 7 mobile-touch target', () => {
+    expect(CONTAINER_COMMAND).toContain('`--touch-before`');
+    expect(CONTAINER_COMMAND).toContain(
+      '只在 target 为 `screenshots:minesweeper` 时把目标收紧为 `mobile-touch` / `2.625`',
+    );
+    expect(CONTAINER_COMMAND).toContain(
+      '`screenshots:minesweeper` 的 After 会截桌面、390×844 手机与 Pixel 7 触屏，注入 `desktop,mobile,mobile-touch` / `1,2,2.625`',
+    );
+    expect(CONTAINER_COMMAND).toContain(
+      '`screenshots:minesweeper:touch-before` 只截 Pixel 7 触屏，注入 `mobile-touch` / `2.625`',
+    );
   });
 
   it('documents that before, clear and allow-historical-overwrite never change the target', () => {
