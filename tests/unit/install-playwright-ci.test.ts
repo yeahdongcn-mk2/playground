@@ -158,9 +158,18 @@ function readLines(path: string): string[] {
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
-    return true;
   } catch {
     return false;
+  }
+  // An unreaped zombie still accepts signal 0. CI containers may not reap
+  // orphans promptly, so treat a zombie as exited on Linux.
+  if (process.platform !== 'linux') return true;
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const close = stat.lastIndexOf(')');
+    return close === -1 || stat.slice(close + 2, close + 3) !== 'Z';
+  } catch {
+    return true;
   }
 }
 

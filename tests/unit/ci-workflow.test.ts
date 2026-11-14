@@ -1,14 +1,22 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import {
+  PLAYWRIGHT_IMAGE_PIN,
+  PLAYWRIGHT_IMAGE_REPOSITORY,
+  imageTagForPlaywrightVersion,
+  readPlaywrightVersion,
+} from '../../scripts/lib/capture-env.mjs';
 import { WEBKIT_SCREENSHOT_ARTIFACTS } from '../../scripts/lib/screenshot-artifacts.mjs';
 import type { ScreenshotArtifact } from '../../scripts/lib/screenshot-artifacts.mjs';
 import { DEFAULT_E2E_REPORT_PATH } from '../../scripts/lib/e2e-flakes.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const WORKFLOW_PATH = join(ROOT, '.github', 'workflows', 'ci.yml');
+const FLAKE_WATCH_WORKFLOW_PATH = join(ROOT, '.github', 'workflows', 'flake-watch.yml');
+const INSTALL_WRAPPER_PATH = join(ROOT, 'scripts', 'install-playwright-ci.mjs');
 const NARROW_MANIFEST_PATH = join(ROOT, 'docs', 'screenshots', 'ci-webkit-narrow-manifest.json');
 const NARROW_MANIFEST = 'docs/screenshots/ci-webkit-narrow-manifest.json';
 const NARROW_CAPTURE_COMMAND = 'npm run screenshots:minesweeper:webkit-narrow';
@@ -19,6 +27,7 @@ interface WorkflowStep {
   name?: string;
   uses?: string;
   run?: string;
+  shell?: string;
   with?: Record<string, string>;
   env?: Record<string, string>;
   'continue-on-error'?: boolean;
@@ -28,6 +37,7 @@ interface WorkflowStep {
 interface WorkflowJob {
   'runs-on'?: string;
   'timeout-minutes'?: number;
+  container?: string | { image?: string; options?: string };
   steps?: WorkflowStep[];
 }
 
@@ -75,6 +85,12 @@ const PRE_COMMIT_PIN_PATTERN =
   /(?:^|\s)(?:pip|pipx|uv)(?:\s+tool)?\s+install(?:\s+--?[^\s]+)*\s+pre-commit==(\d+\.\d+\.\d+)(?=\s|$)/;
 const isPreCommitInstall = (step: WorkflowStep): boolean =>
   PRE_COMMIT_INSTALL_PATTERN.test(step.run ?? '');
+/** pip's official bootstrap script; required because the image has no pip. */
+const PIP_BOOTSTRAP_URL = 'https://bootstrap.pypa.io/get-pip.py';
+const isPipBootstrap = (command: string): boolean => command.includes(PIP_BOOTSTRAP_URL);
+/** `python3 -m pip install` against the image's own interpreter. */
+const IMAGE_PIP_INSTALL_PATTERN = /(?:^|\s)\/usr\/bin\/python3\s+-m\s+pip\s+install\b/;
+const usesImagePip = (command: string): boolean => IMAGE_PIP_INSTALL_PATTERN.test(command);
 
 /** Exact `x.y.z` version pinned by a pre-commit install command, if any. */
 function pinnedPreCommitVersion(command: string): string | null {
@@ -129,7 +145,6 @@ describe('CI workflow', () => {
 
     const requiredCommands = [
       'npm ci',
-      PLAYWRIGHT_INSTALL_COMMAND,
       'npm run typecheck',
       'npm run lint',
       UNIT_TEST_COMMAND,
@@ -147,65 +162,104 @@ describe('CI workflow', () => {
     }
   });
 
-  it('installs Chromium and WebKit before running the end-to-end tests', () => {
-    const installIndex = stepIndex(isPlaywrightInstall);
+  it('runs the verify job in the pinned official Playwright image', () => {
+    const container = verify?.container;
+    const image = typeof container === 'string' ? container : container?.image;
+    expect(image, 'verify should declare a job-level container image').toBeDefined();
+
+    // `npm ci` installs the @playwright/test version recorded in the lockfile,
+    // so PLAYWRIGHT_IMAGE_PIN must cover that exact version. The tag is derived
+    // from the version and the digest pins the multi-arch image.
+    expect(PLAYWRIGHT_IMAGE_PIN.version).toBe(readPlaywrightVersion());
+    expect(PLAYWRIGHT_IMAGE_PIN.tag).toBe(
+      imageTagForPlaywrightVersion(PLAYWRIGHT_IMAGE_PIN.version),
+    );
+    expect(PLAYWRIGHT_IMAGE_PIN.digest).toMatch(/^sha256:[0-9a-f]{64}$/);
+
+    const expectedImage = `${PLAYWRIGHT_IMAGE_REPOSITORY}:${PLAYWRIGHT_IMAGE_PIN.tag}@${PLAYWRIGHT_IMAGE_PIN.digest}`;
+    expect(image).toBe(expectedImage);
+
+    // The image replaces the runtime install only: the branch-protection check
+    // name (`verify`) and its budget must not change.
+    expect(Object.keys(workflow.jobs ?? {})).toContain('verify');
+    expect(verify?.['runs-on']).toBe('ubuntu-latest');
+    expect(verify?.['timeout-minutes']).toBe(20);
+  });
+
+  it('persists the git safe.directory for git-using container steps', () => {
+    const checkoutIndex = steps.findIndex((step) =>
+      (step.uses ?? '').startsWith('actions/checkout@'),
+    );
+    const safeDirectoryIndex = steps.findIndex((step) =>
+      (step.run ?? '').includes('git config --global --add safe.directory "$GITHUB_WORKSPACE"'),
+    );
+    // actions/checkout writes safe.directory into a temporary HOME, but the
+    // container runs as root over a host-owned mount, so pre-commit's git
+    // calls need the entry persisted in the container's HOME.
+    expect(safeDirectoryIndex).toBeGreaterThan(checkoutIndex);
+    expect(safeDirectoryIndex).toBeLessThan(stepIndex(isPreCommitInstall));
+  });
+
+  it('runs pipefail steps with bash inside the container', () => {
+    // GitHub container jobs default to `sh` (dash), where `set -o pipefail`
+    // is illegal; a `run` step that opts into pipefail must request bash.
+    const pipefailSteps = steps.filter((step) => (step.run ?? '').includes('pipefail'));
+    expect(pipefailSteps.length).toBeGreaterThan(0);
+    for (const step of pipefailSteps) {
+      expect(step.shell, `${step.name ?? 'a step'} should run with bash`).toBe('bash');
+    }
+  });
+
+  it('gives the verify container the host IPC namespace', () => {
+    // GitHub's container jobs default to a 64 MB /dev/shm; Chromium's own
+    // Docker guidance recommends host IPC to avoid shared-memory crashes.
+    // scripts/run-container-capture.mjs uses the same option for its captures.
+    const container = verify?.container;
+    expect(container, 'verify should declare container options').toBeTypeOf('object');
+    expect(container).not.toBeNull();
+    const options =
+      typeof container === 'object' && container !== null ? (container.options ?? '') : '';
+    // Match the token so another legitimate docker option can be added
+    // without breaking the IPC contract.
+    expect(options.split(/\s+/)).toContain('--ipc=host');
+  });
+
+  it('does not install browsers, cache ~/.cache/ms-playwright or configure apt at runtime', () => {
+    expect(stepIndex(isPlaywrightInstall)).toBe(-1);
+    expect(stepIndex(isPlaywrightCache)).toBe(-1);
+    expect(stepIndex(isAptAcquireConfig)).toBe(-1);
     expect(
-      installIndex,
-      `verify job should install both engines with "${PLAYWRIGHT_INSTALL_COMMAND}"`,
-    ).toBeGreaterThanOrEqual(0);
+      steps.some(
+        (step) =>
+          (step.uses ?? '').startsWith('actions/cache@') &&
+          (step.with?.path ?? '').includes('ms-playwright'),
+      ),
+      'the image already contains the browsers, so verify must not cache them',
+    ).toBe(false);
 
-    const e2eIndex = stepIndex(isE2e);
-    expect(e2eIndex, 'verify job should still run "npm run test:e2e"').toBeGreaterThanOrEqual(0);
-    expect(installIndex).toBeLessThan(e2eIndex);
+    for (const command of steps.flatMap(commandsOf)) {
+      // A browser install would reintroduce the Issue #202 failure mode and
+      // ignore the image pin; apt is part of that install path.
+      expect(command).not.toMatch(/\bplaywright\s+install\b/);
+      expect(command).not.toContain('--with-deps');
+      expect(command).not.toMatch(/\bapt(?:-get)?\s+(?:update|install|get)\b/i);
+      expect(command).not.toContain('/etc/apt/');
+    }
   });
 
-  it('runs the Playwright install through the retry wrapper with an 8-minute step timeout', () => {
-    const install = requireStep(isPlaywrightInstall, 'a Playwright install step');
-    expect(install.name).toBe('Install Playwright Chromium and WebKit');
-    expect((install.run ?? '').trim()).toBe(PLAYWRIGHT_INSTALL_COMMAND);
-    expect(install['timeout-minutes']).toBe(PLAYWRIGHT_INSTALL_TIMEOUT_MINUTES);
-    expect(install['continue-on-error']).toBeUndefined();
+  it('keeps the bounded install wrapper as the flake-watch fallback', () => {
+    // Issue #213 keeps the #202 wrapper so the image change can be rolled back;
+    // the scheduled WebKit watch still depends on it.
+    expect(existsSync(INSTALL_WRAPPER_PATH)).toBe(true);
 
-    const jobTimeout = verify?.['timeout-minutes'];
-    expect(jobTimeout).toBe(20);
-    expect(install['timeout-minutes']).toBeLessThan(jobTimeout ?? 0);
-
-    const installIndex = stepIndex(isPlaywrightInstall);
-    expect(stepIndex(isNpmCi)).toBeLessThan(installIndex);
-    expect(installIndex).toBeLessThan(stepIndex(isE2e));
-  });
-
-  it('caches Playwright browsers under ~/.cache/ms-playwright keyed by package-lock.json', () => {
-    const cache = requireStep(isPlaywrightCache, 'a Playwright browser cache step');
-    expect(cache.uses).toBe('actions/cache@v4');
-    expect(cache.with?.path).toBe(PLAYWRIGHT_CACHE_PATH);
-    expect(cache.with?.key).toContain("hashFiles('package-lock.json')");
-    expect(cache.with?.key).toContain('playwright-');
-    expect(cache.with?.['restore-keys']).toContain('playwright-');
-    expect(cache['continue-on-error']).toBeUndefined();
-
-    const cacheIndex = stepIndex(isPlaywrightCache);
-    const installIndex = stepIndex(isPlaywrightInstall);
-    expect(installIndex).toBeGreaterThanOrEqual(0);
-    expect(cacheIndex).toBeLessThan(installIndex);
-  });
-
-  it('configures apt Acquire retries and timeouts before installing browsers', () => {
-    const apt = requireStep(isAptAcquireConfig, 'an apt Acquire config step');
-    expect(apt.name).toBe('Configure apt Acquire retries and timeouts');
-    expect(apt['continue-on-error']).toBeUndefined();
-
-    const run = apt.run ?? '';
-    expect(run).toContain('sudo');
-    expect(run).toContain(APT_ACQUIRE_CONFIG_PATH);
-    expect(run).toMatch(/Acquire::Retries\s+"1";/);
-    expect(run).toMatch(/Acquire::http::Timeout\s+"15";/);
-    expect(run).toMatch(/Acquire::https::Timeout\s+"15";/);
-
-    const aptIndex = stepIndex(isAptAcquireConfig);
-    const installIndex = stepIndex(isPlaywrightInstall);
-    expect(installIndex).toBeGreaterThanOrEqual(0);
-    expect(aptIndex).toBeLessThan(installIndex);
+    const flakeWatch = parse(readFileSync(FLAKE_WATCH_WORKFLOW_PATH, 'utf8')) as Workflow;
+    const watchSteps = flakeWatch.jobs?.['mobile-webkit-first-run']?.steps ?? [];
+    const install = watchSteps.find(
+      (step) => (step.run ?? '').trim() === 'node scripts/install-playwright-ci.mjs webkit',
+    );
+    expect(install, 'flake-watch should keep using the bounded install wrapper').toBeDefined();
+    expect(install?.['timeout-minutes']).toBe(PLAYWRIGHT_INSTALL_TIMEOUT_MINUTES);
+    expect(install?.['continue-on-error']).toBeUndefined();
   });
 
   it('runs the screenshot doc dimension check between the unit tests and the build', () => {
@@ -339,11 +393,12 @@ describe('CI workflow', () => {
     );
   });
 
-  it('sets up Python and installs pre-commit after npm ci', () => {
-    const setupPython = requireStep(isSetupPython, 'an actions/setup-python step');
+  it('installs pre-commit after npm ci without a setup-python step', () => {
     const install = requireStep(isPreCommitInstall, 'a pre-commit install step');
 
-    expect(setupPython.with?.['python-version']).toBeDefined();
+    // The setup-python toolcache CPython cannot load its ssl module inside the
+    // container (run 43560696477), so it cannot install packages from PyPI.
+    expect(steps.some(isSetupPython), 'verify should not rely on actions/setup-python').toBe(false);
     // An installation command such as `pip install pre-commit==4.7.0`,
     // `pip install --upgrade pre-commit`, `pipx install pre-commit` or
     // `uv tool install pre-commit`.
@@ -353,8 +408,40 @@ describe('CI workflow', () => {
 
     const npmCiIndex = stepIndex(isNpmCi);
     expect(npmCiIndex).toBeGreaterThanOrEqual(0);
-    expect(npmCiIndex).toBeLessThan(stepIndex(isSetupPython));
-    expect(stepIndex(isSetupPython)).toBeLessThan(stepIndex(isPreCommitInstall));
+    expect(npmCiIndex).toBeLessThan(stepIndex(isPreCommitInstall));
+  });
+
+  it('bootstraps pip for the image interpreter before installing pre-commit', () => {
+    const install = requireStep(isPreCommitInstall, 'a pre-commit install step');
+    const commands = commandsOf(install);
+    const bootstrapIndex = commands.findIndex(isPipBootstrap);
+    const pipInstallIndex = commands.findIndex(
+      (command) => usesImagePip(command) && pinnedPreCommitVersion(command) !== null,
+    );
+
+    // run 43558572972 failed on a bare `pip: not found`; the image's
+    // /usr/bin/python3 has neither pip nor ensurepip, so pip must be
+    // bootstrapped for that interpreter before the pinned install.
+    expect(bootstrapIndex, 'the install step should fetch get-pip.py').toBeGreaterThanOrEqual(0);
+    expect(commands[bootstrapIndex + 1]).toContain('get-pip.py');
+    expect(commands[bootstrapIndex + 1]).toContain('--break-system-packages');
+    expect(
+      pipInstallIndex,
+      'the install step should run `/usr/bin/python3 -m pip install`',
+    ).toBeGreaterThan(bootstrapIndex);
+    expect(commands[pipInstallIndex]).toContain('--break-system-packages');
+    expect(commands[pipInstallIndex]).toContain('pre-commit==4.7.0');
+    // The interpreter check runs after the install, so a missing console
+    // script fails with a clear error instead of a later command-not-found.
+    expect(commands.indexOf('pre-commit --version')).toBeGreaterThan(pipInstallIndex);
+    expect(
+      commands.some((candidate) => /^\s*pip\s+install\s/.test(candidate)),
+      'installing with a bare `pip` would fail inside the pinned image again',
+    ).toBe(false);
+    expect(
+      commands.some((candidate) => candidate.includes('"$pythonLocation/bin/python"')),
+      'the setup-python toolcache interpreter has no usable ssl module in the container',
+    ).toBe(false);
   });
 
   it('pins one exact pre-commit version and ties the cache key to it', () => {
@@ -372,7 +459,7 @@ describe('CI workflow', () => {
 
     const cache = steps.find(isPreCommitCache);
     expect(cache, 'verify job should cache pre-commit environments with actions/cache').toBeDefined();
-    const cacheKeyPrefix = 'pre-commit-${{ runner.os }}-';
+    const cacheKeyPrefix = 'pre-commit-container-${{ runner.os }}-';
     expect(cache?.with?.key).toContain(`${cacheKeyPrefix}${version}-`);
     expect(cache?.with?.key).toContain("hashFiles('.pre-commit-config.yaml')");
     expect(cache?.with?.['restore-keys']).toContain(`${cacheKeyPrefix}${version}-`);
@@ -390,9 +477,15 @@ describe('CI workflow', () => {
       'pipx install pre-commit',
       'uv tool install pre-commit',
       'pip install pre-commit==4.7.0',
+      '/usr/bin/python3 -m pip install --break-system-packages pre-commit==4.7.0',
     ]) {
       expect(isPreCommitInstall({ run: command }), command).toBe(true);
     }
+    expect(
+      pinnedPreCommitVersion(
+        '/usr/bin/python3 -m pip install --break-system-packages pre-commit==4.7.0',
+      ),
+    ).toBe('4.7.0');
   });
 
   it('caches the pre-commit environments to keep the job fast', () => {

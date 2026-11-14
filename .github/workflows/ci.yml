@@ -12,8 +12,34 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Issue #213: run every step in the official Playwright image instead of
+    # installing Chromium, WebKit and their apt dependencies at runtime. The
+    # tag is derived from `@playwright/test` in package-lock.json and the digest
+    # pins the exact multi-arch image; tests/unit/ci-workflow.test.ts fails when
+    # either drifts, so a Playwright bump must update PLAYWRIGHT_IMAGE_PIN, this
+    # image and the capture Dockerfile together.
+    #
+    # Image pull happens during container setup, before any step: a missing
+    # tag/digest or an unreachable registry fails the job there with the Docker
+    # pull error, still inside the unchanged 20-minute budget. The bounded
+    # `scripts/install-playwright-ci.mjs` fallback from Issue #202 stays in the
+    # repository (flake-watch.yml still uses it) so this change can be rolled
+    # back without losing the retry/timeout behavior.
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f
+      # GitHub container jobs default to a 64 MB /dev/shm. Chromium and WebKit
+      # crash intermittently when it fills, so share the host IPC namespace like
+      # scripts/run-container-capture.mjs does (Issue #213 review).
+      options: --ipc=host
     steps:
       - uses: actions/checkout@v4
+
+      - name: Trust the git workspace in the container
+        # actions/checkout writes safe.directory into a temporary HOME, while
+        # run steps use the container's persistent HOME. The checkout is
+        # host-owned but git runs as root, so pre-commit's git calls would
+        # otherwise fail with "dubious ownership" (run 43561619210).
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - uses: actions/setup-node@v4
         with:
@@ -23,45 +49,38 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Set up Python for pre-commit
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
       - name: Install pre-commit
-        run: pip install pre-commit==4.7.0
+        # Container jobs default to `sh` (dash) where `set -o pipefail` is not
+        # available; bash is present in the image.
+        shell: bash
+        # The image's /usr/bin/python3 has neither pip nor ensurepip, and the
+        # setup-python toolcache CPython could not load its ssl module in this
+        # container (run 43560696477), so `-m pip` could not reach PyPI there.
+        # The image's own Python has working OpenSSL, so bootstrap pip for it
+        # and install the pinned pre-commit from the resulting environment.
+        # The container is ephemeral, so PEP 668's externally-managed guard is
+        # explicitly bypassed with --break-system-packages.
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location --retry 3 --retry-delay 2 \
+            https://bootstrap.pypa.io/get-pip.py --output "$RUNNER_TEMP/get-pip.py"
+          /usr/bin/python3 "$RUNNER_TEMP/get-pip.py" --break-system-packages
+          /usr/bin/python3 -m pip install --break-system-packages --disable-pip-version-check --no-cache-dir pre-commit==4.7.0
+          pre-commit --version
 
       - name: Cache pre-commit environments
+        # Container HOME is /github/home, so host-built entries (whose db.db
+        # stores absolute /home/runner paths) are unusable here. Scope the key
+        # to container runs so a host cache can never be restored into them.
         uses: actions/cache@v4
         with:
           path: ~/.cache/pre-commit
-          key: pre-commit-${{ runner.os }}-4.7.0-${{ hashFiles('.pre-commit-config.yaml') }}
+          key: pre-commit-container-${{ runner.os }}-4.7.0-${{ hashFiles('.pre-commit-config.yaml') }}
           restore-keys: |
-            pre-commit-${{ runner.os }}-4.7.0-
+            pre-commit-container-${{ runner.os }}-4.7.0-
 
       - name: Run pre-commit checks
         run: pre-commit run --all-files --show-diff-on-failure
-
-      - name: Configure apt Acquire retries and timeouts
-        run: |
-          set -euo pipefail
-          sudo tee /etc/apt/apt.conf.d/99-ci-acquire >/dev/null <<'EOF'
-          Acquire::Retries "1";
-          Acquire::http::Timeout "15";
-          Acquire::https::Timeout "15";
-          EOF
-
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            playwright-${{ runner.os }}-
-
-      - name: Install Playwright Chromium and WebKit
-        run: node scripts/install-playwright-ci.mjs
-        timeout-minutes: 8
 
       - name: Typecheck
         run: npm run typecheck
@@ -93,6 +112,9 @@ jobs:
         run: node scripts/check-e2e-flakes.mjs
 
       - name: WebKit narrow screenshot smoke test
+        # Keep the pipeline failure semantics under the container's default
+        # `sh`, which does not support `set -o pipefail`.
+        shell: bash
         run: |
           set -euo pipefail
           rm -f docs/screenshots/after-minesweeper-webkit-narrow-*.png

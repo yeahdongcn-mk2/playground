@@ -51,7 +51,7 @@ pre-commit install
 pre-commit run --all-files
 ```
 
-pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和缓存键保持一致。升级时请同步更新 CI 的安装命令与缓存键、`.pre-commit-config.yaml` 顶部注释以及本节指引，然后运行 `npm run test:unit` 防止版本漂移。
+pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和缓存键保持一致。升级时请同步更新 CI 的安装命令与缓存键、`.pre-commit-config.yaml` 顶部注释、`docs/ci-flaky-policy.md` 的安装说明以及本节指引，然后运行 `npm run test:unit` 防止版本漂移。
 
 ## 贪食蛇玩法
 
@@ -393,7 +393,7 @@ games/<game>/scene → 对应引擎（动态 import）
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过（oxlint 覆盖 src、tests 与 scripts；error 与 warning 都会失败，warning 经 --deny-warnings 升级；另跑 scripts/check-boundaries.mjs，失败返回非 0）
-npm run test:unit    # 939 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
+npm run test:unit    # 942 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
 npm run build        # 通过
 npm run check:budget # 通过（入口 11.16 KB gzip，全部 JS 410.58 KB gzip）
 npm run test:e2e     # 154 passed（桌面 87 + 手机 36 + WebKit 31）

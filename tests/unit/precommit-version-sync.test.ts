@@ -33,8 +33,13 @@ const verifyRunCommands = (workflow.jobs?.verify?.steps ?? []).flatMap((step) =>
     .map((command) => command.trim())
     .filter((command) => command.length > 0),
 );
+// CI installs pre-commit inside the Playwright container as
+// `/usr/bin/python3 -m pip install ...` after bootstrapping pip with
+// get-pip.py (see docs/ci-flaky-policy.md). The matcher intentionally also
+// accepts the local bare `pip` / `pipx` forms documented in README.md and
+// .pre-commit-config.yaml.
 const ciInstallCommands = verifyRunCommands.filter(
-  (command) => /^(?:pip|pipx)\s+install\b/.test(command) && /\bpre-commit\b/.test(command),
+  (command) => /\bpipx?\s+install\b/.test(command) && /\bpre-commit\b/.test(command),
 );
 
 const PINNED_VERSION = /pre-commit==(\d+\.\d+\.\d+)/g;

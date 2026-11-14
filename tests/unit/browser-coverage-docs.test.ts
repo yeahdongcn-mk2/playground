@@ -603,7 +603,7 @@ describe('browser coverage documentation', () => {
     }
   });
 
-  it('documents the browser install and e2e commands that package.json and CI use', () => {
+  it('documents the browser install and e2e commands, and CI no longer installs browsers', () => {
     const scripts = packageJson.scripts ?? {};
     expect(scripts['test:e2e']).toContain('playwright test');
     expect(scripts['test:e2e:webkit']).toContain('playwright test');
@@ -620,7 +620,10 @@ describe('browser coverage documentation', () => {
       );
     }
 
-    expect(ciCommands).toContain('node scripts/install-playwright-ci.mjs');
+    // Issue #213 moved the PR job into the pinned Playwright image, so CI must
+    // not install browsers (or the apt dependencies) at runtime any more.
+    expect(ciCommands.some((command) => command.includes('playwright install'))).toBe(false);
+    expect(ciCommands).not.toContain('node scripts/install-playwright-ci.mjs');
     expect(ciCommands).toContain('npm run test:e2e');
   });
 

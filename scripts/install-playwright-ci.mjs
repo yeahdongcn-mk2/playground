@@ -4,8 +4,12 @@
  *
  * The browsers to install are the CLI arguments (for example `webkit`), so a
  * job that only needs one engine can reuse the same bounded install. With no
- * arguments it installs Chromium and WebKit, which is what the `verify` job
- * needs.
+ * arguments it installs Chromium and WebKit.
+ *
+ * This is the bounded fallback kept by Issue #213. The PR `verify` job now runs
+ * in the pinned official Playwright image and no longer installs browsers, so
+ * the scheduled `.github/workflows/flake-watch.yml` job is the remaining caller
+ * (`webkit`, step-level `timeout-minutes: 8`).
  *
  * GitHub's ubuntu runners intermittently fail inside
  * `npx playwright install --with-deps ...` while apt resolves or fetches from
@@ -20,10 +24,9 @@
  * 5. prints node/npm/Playwright versions, the ~/.cache/ms-playwright
  *    contents and apt DNS/404 hints when an attempt fails.
  *
- * `.github/workflows/ci.yml` and `.github/workflows/flake-watch.yml` add
- * `timeout-minutes: 8` to the install step, so the worst case here
- * (2 * 180s + backoff + kill grace) still exits before the step timeout and
- * long before the job timeout.
+ * The flake-watch install step sets `timeout-minutes: 8`, so the worst case
+ * here (2 * 180s + backoff + kill grace) still exits before the step timeout
+ * and long before the job timeout.
  *
  * The timeout, retry delay, SIGTERM grace, post-SIGKILL group-settle wait and
  * root-kill escalation can be tuned through PLAYWRIGHT_INSTALL_TIMEOUT_MS,
@@ -202,16 +205,47 @@ function sudoKillProcessGroup(pgid, signal) {
   });
 }
 
-/** A group still visible after SIGKILL (EPERM counts as still alive). */
+/**
+ * A group still visible after SIGKILL (EPERM counts as still alive).
+ *
+ * `kill(-pgid, 0)` also reports an unreaped zombie as alive. In a CI container
+ * PID 1 may not reap orphans promptly, so a SIGKILLed group can linger as
+ * zombies for the whole settle window and make the wrapper skip the retry.
+ * On Linux, confirm with /proc that at least one non-zombie process is left.
+ */
 function isProcessGroupAlive(pgid) {
   if (pgid === undefined) return false;
   try {
     process.kill(-pgid, 0);
-    return true;
   } catch (error) {
     const code =
       error !== null && typeof error === 'object' && 'code' in error ? String(error.code) : '';
-    return code === 'EPERM';
+    if (code !== 'EPERM') return false;
+  }
+
+  if (process.platform !== 'linux') return true;
+
+  try {
+    for (const entry of readdirSync('/proc')) {
+      if (!/^\d+$/.test(entry)) continue;
+      let stat;
+      try {
+        stat = readFileSync(`/proc/${entry}/stat`, 'utf8');
+      } catch {
+        continue;
+      }
+      const close = stat.lastIndexOf(')');
+      if (close === -1) continue;
+      // /proc/<pid>/stat after the comm field: state, ppid, pgrp.
+      const fields = stat.slice(close + 2).split(' ');
+      const state = fields[0];
+      const processGroup = Number(fields[2]);
+      if (processGroup === pgid && state !== 'Z') return true;
+    }
+    return false;
+  } catch {
+    // If /proc is unreadable, keep the conservative kill(0) answer.
+    return true;
   }
 }
 
