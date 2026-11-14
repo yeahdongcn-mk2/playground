@@ -22,6 +22,7 @@ const NARROW_MANIFEST = 'docs/screenshots/ci-webkit-narrow-manifest.json';
 const NARROW_CAPTURE_COMMAND = 'npm run screenshots:minesweeper:webkit-narrow';
 const NARROW_ARTIFACT_GLOB = 'docs/screenshots/after-minesweeper-webkit-narrow-*.png';
 const VERIFY_CLI = 'node scripts/verify-screenshot-artifacts.mjs';
+const README_PATH = join(ROOT, 'README.md');
 
 interface WorkflowStep {
   name?: string;
@@ -59,6 +60,19 @@ function commandsOf(step: WorkflowStep): string[] {
     .split('\n')
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
+}
+
+/** The ordered verify steps documented under `### CI 检查顺序` in README.md. */
+function readmeCiCheckOrder(): string[] {
+  const readme = readFileSync(README_PATH, 'utf8');
+  const heading = '### CI 检查顺序';
+  const start = readme.indexOf(heading);
+  if (start < 0) {
+    throw new Error(`README is missing the "${heading}" section`);
+  }
+  const end = readme.indexOf('\n### ', start + heading.length);
+  const section = readme.slice(start, end === -1 ? undefined : end);
+  return [...section.matchAll(/^\d+\. `([^`]+)`$/gm)].map((match) => match[1] ?? '');
 }
 
 function stepIndex(predicate: (step: WorkflowStep) => boolean): number {
@@ -507,5 +521,41 @@ describe('CI workflow', () => {
     expect(installIndex).toBeGreaterThanOrEqual(0);
     expect(runIndex).toBeGreaterThan(installIndex);
     expect(typecheckIndex).toBeGreaterThan(runIndex);
+  });
+
+  it('documents the verify check order in README exactly as the workflow runs it', () => {
+    const expectedOrder = [
+      'Run pre-commit checks',
+      'Typecheck',
+      'Lint and module boundaries',
+      'Unit tests',
+      'Verify doc test counts',
+      'Screenshot doc dimensions',
+      'Production build',
+      'Bundle budget',
+      'End-to-end tests',
+      'Check target e2e flakes',
+      'WebKit narrow screenshot smoke test',
+    ];
+
+    // The README list is the human-facing contract for the verify order.
+    expect(readmeCiCheckOrder()).toEqual(expectedOrder);
+
+    const namedSteps = steps
+      .map((step) => step.name)
+      .filter((name): name is string => name !== undefined);
+    expect(namedSteps.filter((name) => expectedOrder.includes(name))).toEqual(expectedOrder);
+
+    // The local WebKit install stays documented, but CI must no longer claim to
+    // install browsers at runtime after Issue #213 moved verify into the image.
+    const readme = readFileSync(README_PATH, 'utf8');
+    expect(readme).not.toContain('CI 也会在跑 `npm run test:e2e` 前安装这两个引擎');
+    const engineSection = readme.slice(
+      readme.indexOf('首次运行端到端测试前需要安装 Chromium 与 WebKit 两个引擎'),
+      readme.indexOf('## 目录结构'),
+    );
+    expect(engineSection).toContain('npx playwright install chromium webkit');
+    expect(engineSection).toMatch(/CI 的 `verify` job 不再执行这条安装/);
+    expect(engineSection).toContain('官方 Playwright 镜像');
   });
 });

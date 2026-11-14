@@ -11,6 +11,9 @@ const read = (path: string): string => readFileSync(join(ROOT, path), 'utf8');
 const POLICY_PATH = 'docs/ci-flaky-policy.md';
 const POLICY = read(POLICY_PATH);
 const README = read('README.md');
+const SCREENSHOTS_README_PATH = 'docs/screenshots/README.md';
+const SCREENSHOTS_README = read(SCREENSHOTS_README_PATH);
+const CAPTURE_DOCKERFILE = read('docker/capture/Dockerfile');
 const CI_WORKFLOW_PATH = '.github/workflows/ci.yml';
 const FLAKE_WATCH_WORKFLOW_PATH = '.github/workflows/flake-watch.yml';
 
@@ -266,6 +269,73 @@ describe('flaky policy docs', () => {
     expect(section).toContain(`最多尝试 ${maxAttempts} 次`);
     expect(section).toContain(`${Number((attemptTimeoutMs ?? '').replaceAll('_', '')) / 1000} 秒`);
     expect(section).toContain(`${Number((retryDelayMs ?? '').replaceAll('_', '')) / 1000} 秒退避`);
+  });
+
+  it('documents when to fall back and how to revert both jobs', () => {
+    const section = policySection('Playwright 运行环境：固定镜像');
+
+    expect(section).toContain('只有以下情况才启用回退');
+    expect(section).toContain('MCR');
+    expect(section).toContain('verify job 回退');
+    expect(section).toContain('flake-watch job 回退');
+    expect(section).toContain('actions/setup-python@v5');
+    expect(section).toContain('pip install pre-commit==4.7.0');
+    expect(section).toContain(
+      "pre-commit-${{ runner.os }}-4.7.0-${{ hashFiles('.pre-commit-config.yaml') }}",
+    );
+    expect(section).toContain("playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}");
+    expect(section).toContain('playwright-webkit-${{ runner.os }}-');
+    expect(section).toContain('Trust the git workspace in the container');
+    expect(section).toContain('同步撤销契约与文档');
+    expect(section).toContain('Install Playwright Chromium and WebKit');
+    expect(section).toContain('Install Playwright WebKit');
+    expect(section).toContain('node scripts/install-playwright-ci.mjs webkit');
+  });
+
+  it('keeps the screenshot capture upgrade checklist aligned with the same pin', () => {
+    const heading = '## 固定捕获环境（Issue #199）';
+    const start = SCREENSHOTS_README.indexOf(heading);
+    expect(start, `missing ${heading}`).toBeGreaterThanOrEqual(0);
+    const end = SCREENSHOTS_README.indexOf('\n## ', start + heading.length);
+    const section = SCREENSHOTS_README.slice(start, end === -1 ? undefined : end);
+    const pinned = resolveCaptureImage();
+
+    // One Playwright bump must update every participant listed in the checklist.
+    expect(section).toContain(pinned.reference);
+    expect(section).toContain('PLAYWRIGHT_IMAGE_PIN');
+    expect(section).toContain('升级清单');
+    for (const target of [
+      'docker/capture/Dockerfile',
+      '.github/workflows/ci.yml',
+      '.github/workflows/flake-watch.yml',
+      'docs/ci-flaky-policy.md',
+      'README.md',
+      'npm run verify:doc-counts',
+      'npm run verify:screenshots:doc-dims',
+    ]) {
+      expect(section, target).toContain(target);
+    }
+
+    // The Dockerfile and both workflow jobs must consume the same reference.
+    expect(CAPTURE_DOCKERFILE).toContain(`FROM ${pinned.reference}`);
+    const containers = [
+      ci.jobs?.verify?.container,
+      flakeWatch.jobs?.['mobile-webkit-first-run']?.container,
+    ];
+    for (const container of containers) {
+      const image = typeof container === 'string' ? container : container?.image;
+      expect(image).toBe(pinned.reference);
+    }
+
+    // The container-path e2e / screenshot conclusion points at real runs.
+    expect(section).toContain('43563009824');
+    expect(section).toContain('attempts/2');
+    expect(section).toContain('End-to-end tests');
+    expect(section).toContain('Screenshot doc dimensions');
+    expect(section).toContain('WebKit narrow screenshot smoke test');
+    expect(section).toContain('24 行 / 24 文件');
+    expect(section).toContain('640×1280');
+    expect(section).toContain('824×1678');
   });
 
   it('sets triage expectations that do not hide flakiness', () => {
