@@ -2,13 +2,28 @@ import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { CAPTURE_IMAGE_BUILD_LABEL } from '../../scripts/run-container-capture.mjs';
+import { dprForCaptureTarget } from '../../scripts/lib/capture-env.mjs';
+import {
+  CAPTURE_IMAGE_BUILD_LABEL,
+  captureTargetsForScript,
+} from '../../scripts/run-container-capture.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SCREENSHOTS_README = readFileSync(
   join(ROOT, 'docs', 'screenshots', 'README.md'),
   'utf8',
 );
+
+/**
+ * The backticked `targets` / `dprs` contract derived from the capture entry, so
+ * the docs cannot pin a hand-written target list that drifts from the code.
+ */
+function targetContract(script: string, passthrough: readonly string[] = []): string {
+  const targets = captureTargetsForScript(script, passthrough);
+  return `\`${targets.join(',')}\` / \`${targets
+    .map((target) => dprForCaptureTarget(target))
+    .join(',')}\``;
+}
 
 /** The text of one level-2 section, up to the next level-2 heading. */
 function section(heading: string): string {
@@ -93,12 +108,23 @@ describe('container capture passthrough target docs (Issue #208 / #209)', () => 
     expect(CONTAINER_COMMAND).toContain('对所有截图脚本生效并注入 `webkit`');
   });
 
-  it('documents that the narrow / short / large phone modes tighten the target to mobile', () => {
+  it('documents that the narrow / short / large phone modes tighten both minesweeper targets to mobile', () => {
     for (const flag of MINESWEEPER_PHONE_ONLY_FLAGS) {
       expect(CONTAINER_COMMAND).toContain(`\`${flag}\``);
     }
     expect(CONTAINER_COMMAND).toContain(
-      '只在 target 为 `screenshots:minesweeper` 时把目标收紧为 `mobile` / `2`',
+      '对 `screenshots:minesweeper` 与 `screenshots:minesweeper:touch-before` 生效',
+    );
+    expect(CONTAINER_COMMAND).toContain(
+      `先于 \`--touch-before\` 把目标收紧为 ${targetContract('screenshots:minesweeper', [
+        '--narrow',
+      ])}`,
+    );
+    expect(CONTAINER_COMMAND).toContain(
+      `\`screenshots:minesweeper:touch-before --narrow\` 注入 ${targetContract(
+        'screenshots:minesweeper:touch-before',
+        ['--narrow'],
+      )}`,
     );
     expect(CONTAINER_COMMAND).toContain('其他 target 会忽略这些参数、目标不变');
   });
@@ -109,10 +135,14 @@ describe('container capture passthrough target docs (Issue #208 / #209)', () => 
       '只在 target 为 `screenshots:minesweeper` 时把目标收紧为 `mobile-touch` / `2.625`',
     );
     expect(CONTAINER_COMMAND).toContain(
-      '`screenshots:minesweeper` 的 After 会截桌面、390×844 手机与 Pixel 7 触屏，注入 `desktop,mobile,mobile-touch` / `1,2,2.625`',
+      `\`screenshots:minesweeper\` 的 After 会截桌面、390×844 手机与 Pixel 7 触屏，注入 ${targetContract(
+        'screenshots:minesweeper',
+      )}`,
     );
     expect(CONTAINER_COMMAND).toContain(
-      '`screenshots:minesweeper:touch-before` 只截 Pixel 7 触屏，注入 `mobile-touch` / `2.625`',
+      `\`screenshots:minesweeper:touch-before\` 只截 Pixel 7 触屏，注入 ${targetContract(
+        'screenshots:minesweeper:touch-before',
+      )}`,
     );
   });
 

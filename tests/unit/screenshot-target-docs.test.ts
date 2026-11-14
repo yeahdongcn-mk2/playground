@@ -1,7 +1,10 @@
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { dprForCaptureTarget } from '../../scripts/lib/capture-env.mjs';
+import { captureTargetsForScript } from '../../scripts/run-container-capture.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SCREENSHOTS_README = readFileSync(
@@ -9,6 +12,16 @@ const SCREENSHOTS_README = readFileSync(
   'utf8',
 );
 const SCREENSHOT_DIR = join(ROOT, 'docs', 'screenshots');
+
+const require = createRequire(import.meta.url);
+const PLAYWRIGHT_CORE_DIR = dirname(require.resolve('playwright-core/package.json'));
+const PLAYWRIGHT_BROWSERS = require(join(PLAYWRIGHT_CORE_DIR, 'browsers.json')) as {
+  browsers: { name: string; browserVersion?: string }[];
+};
+/** The Chromium build shipped by the pinned Playwright version. */
+const CHROMIUM_VERSION = PLAYWRIGHT_BROWSERS.browsers.find(
+  (browser) => browser.name === 'chromium',
+)?.browserVersion;
 
 const FIXED_ENV_HEADING = '## 固定捕获环境（Issue #199）';
 const TOUCH_SECTION_HEADING = '## t7：扫雷触屏与手机布局（Issue #33 / 子任务 2）';
@@ -47,6 +60,16 @@ function targetRow(text: string, target: string): string {
     throw new Error(`missing capture target table row: ${target}`);
   }
   return row;
+}
+
+/**
+ * The backticked `targets` / `dprs` contract derived from the capture entry, so
+ * the docs cannot pin a hand-written target list that drifts from the code.
+ */
+function targetContract(script: string, passthrough: readonly string[] = []): string {
+  const targets = captureTargetsForScript(script, passthrough);
+  const dprs = targets.map((target) => dprForCaptureTarget(target));
+  return `\`${targets.join(',')}\` / \`${dprs.join(',')}\``;
 }
 
 /** Read the PNG IHDR width / height without decoding the image. */
@@ -92,10 +115,43 @@ describe('capture target docs (Issue #209)', () => {
 
   it('documents the container targets of the minesweeper after run and touch-before', () => {
     const command = lineStartingWith(FIXED_ENV, '- 容器命令：');
+    expect(captureTargetsForScript('screenshots:minesweeper')).toEqual([
+      'desktop',
+      'mobile',
+      'mobile-touch',
+    ]);
+    expect(captureTargetsForScript('screenshots:minesweeper:touch-before')).toEqual([
+      'mobile-touch',
+    ]);
     expect(command).toContain('`screenshots:minesweeper`');
-    expect(command).toContain('`desktop,mobile,mobile-touch` / `1,2,2.625`');
+    expect(command).toContain(targetContract('screenshots:minesweeper'));
     expect(command).toContain('`screenshots:minesweeper:touch-before`');
-    expect(command).toContain('`mobile-touch` / `2.625`');
+    expect(command).toContain(targetContract('screenshots:minesweeper:touch-before'));
+  });
+
+  it('documents that the narrow family wins over touch-before for touch-before runs', () => {
+    const command = lineStartingWith(FIXED_ENV, '- 容器命令：');
+    expect(captureTargetsForScript('screenshots:minesweeper', ['--narrow'])).toEqual([
+      'mobile',
+    ]);
+    expect(
+      captureTargetsForScript('screenshots:minesweeper:touch-before', ['--narrow']),
+    ).toEqual(['mobile']);
+    expect(command).toContain(
+      '对 `screenshots:minesweeper` 与 `screenshots:minesweeper:touch-before` 生效',
+    );
+    expect(command).toContain(
+      `先于 \`--touch-before\` 把目标收紧为 ${targetContract(
+        'screenshots:minesweeper',
+        ['--narrow'],
+      )}`,
+    );
+    expect(command).toContain(
+      `\`screenshots:minesweeper:touch-before --narrow\` 注入 ${targetContract(
+        'screenshots:minesweeper:touch-before',
+        ['--narrow'],
+      )}`,
+    );
   });
 
   it('keeps the phone-only modes and the scores phone part at mobile / 2', () => {
@@ -104,18 +160,32 @@ describe('capture target docs (Issue #209)', () => {
       expect(command).toContain(`\`${flag}\``);
     }
     expect(command).toContain('`mobile` / `2`');
-    expect(command).toContain('成绩榜是桌面 + 手机组合 `desktop,mobile` / `1,2`');
+    expect(command).toContain(
+      `成绩榜是桌面 + 手机组合 ${targetContract('screenshots:minesweeper:scores')}`,
+    );
     expect(command).toContain('其手机图仍为 DPR 2');
   });
 
-  it('records the per-target fingerprint line and the mobile-touch example', () => {
+  it('scopes the three-context Chromium note to the minesweeper after run', () => {
+    expect(FIXED_ENV).toContain(
+      '扫雷 After 的 Chromium 运行会同时创建桌面、390×844 手机与 Pixel 7 触屏上下文',
+    );
+    expect(FIXED_ENV).toContain('其他 Chromium 截图脚本');
+    expect(FIXED_ENV).toContain('不会出现 `mobile-touch` 行');
+  });
+
+  it('records the per-target fingerprint line and a real Chromium example', () => {
     expect(FIXED_ENV).toContain('`target=mobile-touch dpr=2.625`');
     expect(FIXED_ENV).toContain('`target=desktop dpr=1`');
     expect(FIXED_ENV).toContain('`target=mobile dpr=2`');
     expect(FIXED_ENV).toContain('每个目标一行');
-    expect(FIXED_ENV).toMatch(
-      /capture-env: source=container target=mobile-touch dpr=2\.625 /,
+    expect(CHROMIUM_VERSION).toBeDefined();
+    const example = lineStartingWith(
+      FIXED_ENV,
+      '  capture-env: source=container target=mobile-touch dpr=2.625 ',
     );
+    expect(example).toContain(`browser=${CHROMIUM_VERSION}`);
+    expect(example).not.toContain('browser=27.2');
   });
 });
 
@@ -136,8 +206,8 @@ describe('minesweeper touch evidence docs and PNG contract', () => {
     expect(TOUCH_SECTION).toContain(
       'npm run screenshots:container -- screenshots:minesweeper:touch-before',
     );
-    expect(TOUCH_SECTION).toContain('`desktop,mobile,mobile-touch` / `1,2,2.625`');
-    expect(TOUCH_SECTION).toContain('`mobile-touch` / `2.625`');
+    expect(TOUCH_SECTION).toContain(targetContract('screenshots:minesweeper'));
+    expect(TOUCH_SECTION).toContain(targetContract('screenshots:minesweeper:touch-before'));
   });
 
   it('keeps all eight committed before / after touch PNGs at 1082×2202', () => {
