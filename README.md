@@ -379,7 +379,7 @@ games/<game>/scene → 对应引擎（动态 import）
 | 构建 / 开发服务器 | Vite 8 |
 | 页面壳 | 原生 DOM + CSS，无 UI 框架 |
 | 2D 引擎 | Phaser 4（按游戏懒加载） |
-| DOM 游戏 | 原生 DOM + CSS（扫雷，不加载引擎） |
+| DOM 游戏 | 原生 DOM + CSS（扫雷与镇煞，不加载引擎） |
 | 3D 引擎 | Three.js（首个 3D 游戏时接入） |
 | 单元测试 | Vitest |
 | 端到端测试 | Playwright（Chromium + WebKit；桌面、Pixel 7、iPhone SE (3rd gen)） |
@@ -393,7 +393,7 @@ games/<game>/scene → 对应引擎（动态 import）
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过（oxlint 覆盖 src、tests 与 scripts；error 与 warning 都会失败，warning 经 --deny-warnings 升级；另跑 scripts/check-boundaries.mjs，失败返回非 0）
-npm run test:unit    # 1056 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
+npm run test:unit    # 1059 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
 npm run build        # 通过
 npm run check:budget # 通过（入口 11.16 KB gzip，全部 JS 410.58 KB gzip）
 npm run test:e2e     # 154 passed（桌面 87 + 手机 36 + WebKit 31）
