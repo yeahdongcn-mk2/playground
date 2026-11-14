@@ -275,7 +275,7 @@ pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和
 npx playwright install chromium webkit
 ```
 
-`mobile-webkit` 项目使用 WebKit，因此不能只装 Chromium；CI 也会在跑 `npm run test:e2e` 前安装这两个引擎。
+`mobile-webkit` 项目使用 WebKit，因此本机不能只装 Chromium。CI 的 `verify` job 不再执行这条安装：它直接运行在固定 tag + digest 的官方 Playwright 镜像里，Chromium、WebKit 与系统依赖已随镜像预装；本机首次运行仍按上面的命令安装。CI 镜像 pin、升级清单与回退路径见 [docs/screenshots/README.md](docs/screenshots/README.md) 的「固定捕获环境」与 [docs/ci-flaky-policy.md](docs/ci-flaky-policy.md) 第 5 节。
 
 ## 目录结构
 
@@ -393,19 +393,38 @@ games/<game>/scene → 对应引擎（动态 import）
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过（oxlint 覆盖 src、tests 与 scripts；error 与 warning 都会失败，warning 经 --deny-warnings 升级；另跑 scripts/check-boundaries.mjs，失败返回非 0）
-npm run test:unit    # 954 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
+npm run test:unit    # 957 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
 npm run build        # 通过
 npm run check:budget # 通过（入口 11.16 KB gzip，全部 JS 410.58 KB gzip）
 npm run test:e2e     # 154 passed（桌面 87 + 手机 36 + WebKit 31）
 ```
 
-CI 的 passed / flaky / failed 口径、PR 稳定性门禁范围、每日 `flake-watch` 巡检与 triage 步骤见 [docs/ci-flaky-policy.md](docs/ci-flaky-policy.md)；CI 运行环境的固定镜像与回退边界见该文档第 5 节。
+CI 的 passed / flaky / failed 口径、PR 稳定性门禁范围、每日 `flake-watch` 巡检、固定镜像与回退边界见 [docs/ci-flaky-policy.md](docs/ci-flaky-policy.md) 第 2–5 节；截图捕获与 CI 共用的镜像 pin、升级清单见 [docs/screenshots/README.md](docs/screenshots/README.md) 的「固定捕获环境」。
 
 端到端覆盖：大厅与游戏卡片、页面内锚点滚动、进入 / 返回 / 重进、最近游玩时间（进入 → 返回大厅 → 刷新后保留）、未知游戏与未知路径、音效偏好持久化、方向键与 WASD、修饰键快捷键不劫持、鼠标点击与拖动、重置后键盘仍可用、仅容器变化时的缩放、快速切换时丢弃晚到 mount、页面隐藏时离开仍能完整销毁、监听器清理、手机触屏与横向溢出检查；贪食蛇的开始 / 暂停 / 重开、吃果实与增长、撞墙死亡、更高 / 更低最高分、刷新后最高分仍在、P / Esc / R、滑动转向、页面隐藏自动暂停、手机 D-pad 与手机端重开；俄罗斯方块的从大厅进入 / 返回、键盘移动与旋转、硬降消行计分、暂停 / 继续、堆顶结束与重开、R 重开，以及手机端触屏按钮操作与手机端结束 / 重开；2048 的从大厅进入 / 返回、方向键与 WASD 合并计分、固定棋盘无路可走结束 / 重开 / R 重开、READY 时 R 直接开始、URL `seed` 进入引擎后的确定性落子（同 seed 重挂载一致、不同 seed 不同）、canvas 像素确认棋盘与方块确实被绘制，以及就绪定时器与 destroy 后键盘 / 可见性 / 指针监听的清理；手机端滑动合并与横向溢出检查；打砖块的从大厅进入 / 返回、键盘与 A/D 移动挡板、非终砖击中立即计分、固定砖块过关后加速、Space 开始 / 过关继续、R 与侧栏重开、窗口失焦暂停并在恢复焦点后继续、连续三次漏球扣命至 game over 后重开、canvas 像素确认分层砖块 / 挡板 / 球被绘制、destroy 后键盘 / 指针（含 cancel / lostpointercapture）/ 可见性监听与就绪定时器、调试接缝清理，以及手机端触屏拖动挡板与横向溢出检查；扫雷的从大厅进入 / 返回、固定雷盘首开、左键翻开、右键插旗与取消旗（剩余雷数同步变化）、格子可见文本（数字 / ⚑ / ✹ 与重开清空）、踩雷结束并展示全部雷、翻开全部安全格获胜、结束后焦点进入遮罩、重开后焦点回到重开按钮、Enter 翻开聚焦格、畸形调试雷盘回退到固定随机盘、重开后的 data-revealed 清理、遮罩与侧栏重开、用时显示、胜利后最高用时立即出现并在刷新后保留、失败局不写入、空榜时「清空记录」按钮禁用、点击清空后榜单立即回到空态且刷新仍为空（同一存储中的其它游戏 / 设置键保留），以及 destroy 与路由离开后的棋盘监听器、计时器、mountSignal 与调试接缝清理；手机端扫雷的轻点翻开、长按插旗 / 取消（真实 WebKit 触摸形状下 pointerdown / pointerup 用 touch pointerId 2、release click 用 pointerId 1 的 mouse 事件，长按未插旗格只插旗，长按已插旗格只解除一次旗标且不翻开、不改变状态）、移动 / 滚动 / 取消长按、取消后下一次轻点仍可翻开、按住超过 1.2 秒后松手不误翻、按住时重开 / destroy 取消待触发的长按、第二个指针不清除首个指针的 click 抑制、重开后焦点落在首屏可见的重开按钮、触屏踩雷 / 胜利与手机布局无横向溢出、最长自定义最高用时标签不产生横向溢出；手机端扫雷另在 320×640 / 340×700 / 349×700 / 360×640 / 360×740 / 375×667 / 400×700 / 412×839 视口逐一断言 81 格最小尺寸、无横向溢出、HUD / 返回大厅 / touch-hint 在首屏内，并对重开入口断言完整位于首屏（x + width ≤ 视口宽、y + height ≤ 视口高）；边界用例另断言 340×667 / 400×667 收紧，340×668 / 320×640 保持基础短窄间距，401×667 回落到桌面间距。
 
 扫雷难度选择的桌面用例覆盖三档预设的 81 → 256 → 480 格、10 → 40 → 99 雷、棋盘摘要 / HUD / 计时归零与旧棋局清空；合法自定义 12×12/20 重建 144 格，配置等于预设时同步 `aria-pressed`、否则不选中任何预设；非法雷数、首点安全区容量不足、尺寸越界、空值和小数只显示中文 `role=alert` 错误，棋盘、状态、插旗与计时器保持不变；重启会清掉过期错误并把表单恢复为当前配置；Enter 从数字输入提交合法 / 非法配置走同一条校验路径；重复切换用 interval / listener 探针断言无计时器或监听器泄漏；结束遮罩持有焦点时用 `requestSubmit()` 触发重建，分别断言焦点落到当前预设与自定义提交按钮。手机用例在 412×839 与 320×640 视口用触控 tap 输入并提交预设和自定义表单，断言三档预设与提交按钮的 44px 触控目标、无横向溢出，并在 320×640 下切到 16×30 高级棋盘验证最窄格与右下角格子仍可点按。大棋盘提示另在 320×640 / 360×640 下覆盖 16×30 高级棋盘与 10×12 自定义棋盘：提示可见且包含 ≥36px / 横屏 / 更小棋盘文案、格数正确、无横向溢出、右下角格子 tap 后进入「进行中」，切回 9×9 后提示隐藏；桌面 1440×1000 断言 16×16 / 16×30 宽屏下提示隐藏。
 
+### CI 检查顺序
+
+`verify` job 直接运行在固定 tag + digest 的官方 Playwright 镜像里（内置 Chromium、WebKit 与系统依赖，不再在运行时安装浏览器），按以下顺序执行，任一步失败立即中止，`timeout-minutes` 为 20：
+
+1. `Run pre-commit checks`
+2. `Typecheck`
+3. `Lint and module boundaries`
+4. `Unit tests`
+5. `Verify doc test counts`
+6. `Screenshot doc dimensions`
+7. `Production build`
+8. `Bundle budget`
+9. `End-to-end tests`
+10. `Check target e2e flakes`
+11. `WebKit narrow screenshot smoke test`
+
+检查开始前先 checkout、固化容器内 `safe.directory`、`npm ci` 并安装 `pre-commit==4.7.0`。`flake-watch` 是独立的每日巡检（30 分钟预算），不在 PR 关键路径上。
+
 ### 浏览器覆盖范围
+
 
 扫雷窄屏首屏契约与 framework、扫雷触屏手势 / 触屏难度表单、贪食蛇、俄罗斯方块、2048 与打砖块的手机端用例现在由 Chromium 与 WebKit 两套 Playwright 模拟共同验证；这些手机端用例复用同一份共享用例模块，触摸滑动 / 拖动也不再依赖 Chromium 专用的 CDP 注入：
 
