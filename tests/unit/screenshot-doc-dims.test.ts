@@ -38,6 +38,8 @@ afterEach(() => {
   }
 });
 
+const HUB_SCREENSHOTS = ['after-hub-desktop.png', 'after-hub-mobile.png'] as const;
+
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 function pngChunk(type: string, data: Buffer): Buffer {
@@ -344,8 +346,6 @@ describe('parseDocDimensions', () => {
 });
 
 describe('committed hub screenshot full-page docs (Issue #161)', () => {
-  const HUB_SCREENSHOTS = ['after-hub-desktop.png', 'after-hub-mobile.png'] as const;
-
   function documentedSizes(text: string) {
     const documented = new Map<string, { width: number; height: number }>();
     for (const row of parseDocDimensions(text)) {
@@ -436,6 +436,381 @@ describe('committed hub screenshot full-page docs (Issue #161)', () => {
     }
 
     expect(verifyDocDimensions({ readmeText: source, dir: SCREENSHOT_DIR }).problems).toEqual([]);
+  });
+});
+
+describe('hub screenshot single owner docs (Issue #221)', () => {
+  const HUB_OWNER_COMMAND = 'npm run screenshots:container -- screenshots';
+  const SINGLE_GAME_COMMAND =
+    /screenshots:(?:2048|breakout|minesweeper|snake)(?::[a-z0-9-]+)*/;
+  // The two committed full-page hub captures and the wording that refers to
+  // them. `after-hub-webkit.png` is separate viewport evidence, so a bare
+  // `hub` must not match that filename.
+  const HUB_EVIDENCE =
+    /after-hub-(?:desktop|mobile)\.png|共享大厅证据|大厅证据|共享证据|共享图|(?<!after-)\bhub\b/i;
+  // Commands that may legitimately write the shared hub evidence. The plain
+  // `screenshots` command is the owner entry point (`capture-screenshots.mjs`).
+  const OWNER_COMMAND =
+    /screenshots:container -- screenshots|capture-screenshots\.mjs|npm run screenshots(?!:)/;
+  const WRITE_VERB = /写出|写入|写|还原|刷新|重写|覆盖|更新|生成/;
+  const NON_REFRESH_WORDING =
+    /不再|不会|不写|不重写|不刷新|不覆盖|不生成|未写|未生成|未刷新|未还原|未重写|未覆盖|不需要|不允许|无需|不必|无关|不由|只由|仅由|禁止|不得/;
+  // Exact wording removed by Issue #221: single-game capture commands used to
+  // "incidentally write out" / "restore" the shared hub files.
+  const STALE_HUB_WORDING =
+    /(?:顺带|同时|也|再|会|仍)?\s*(?:写出|写|刷新|重写|覆盖|还原|生成)\s*(?:出\s*)?[`\s]*(?:hub|共享大厅证据|共享证据|大厅证据|共享图|after-hub-(?:desktop|mobile)\.png)/i;
+
+  const OLD_2048_PARAGRAPH =
+    '  两次运行的 6 个 sha256 应完全一致，且等于已提交产物。本任务只提交这 6 张 playing / gameover 图；' +
+    'After 守卫现在会跳过 ready 桌面 / 手机 / WebKit 历史图，只顺带写出 hub，提交前用 `git checkout --` ' +
+    '还原 hub，保持未受影响的已提交产物不变。WebKit 产物在官方 Playwright 容器' +
+    '（`mcr.microsoft.com/playwright:v1.64.1-noble`，与仓库的 Playwright 1.64.1 对应）内捕获，' +
+    '避免宿主 EGL / 字体环境差异。';
+  const OLD_SNAKE_BULLET =
+    '- 提交范围：After 守卫会跳过 ready / gameover / mobile 历史图，只顺带写出 hub；' +
+    '提交前用 `git checkout --` 还原 hub，只保留本任务的 `after-snake-playing.png` 与文档 / 测试改动，' +
+    '未受影响的已提交产物保持不变。';
+
+  interface HubRow {
+    line: number;
+    command: string | null;
+  }
+
+  interface LineEntry {
+    line: number;
+    text: string;
+  }
+
+  /** Split a Markdown line into clauses so a negation cannot hide a later claim. */
+  function clausesOf(line: string): string[] {
+    return line
+      .split(/[，。；,;]|但|却/)
+      .map((clause) => clause.trim())
+      .filter((clause) => clause.length > 0);
+  }
+
+  /** Group lines into blank-line separated blocks (a paragraph / list item). */
+  function blankLineBlocks(text: string): LineEntry[][] {
+    const blocks: LineEntry[][] = [];
+    let current: LineEntry[] = [];
+    text.split('\n').forEach((lineText, index) => {
+      if (lineText.trim() === '') {
+        if (current.length > 0) blocks.push(current);
+        current = [];
+        return;
+      }
+      current.push({ line: index + 1, text: lineText });
+    });
+    if (current.length > 0) blocks.push(current);
+    return blocks;
+  }
+
+  /** Group lines into heading-delimited sections, keeping 1-based line numbers. */
+  function markdownSections(text: string): LineEntry[][] {
+    const sections: LineEntry[][] = [];
+    let current: LineEntry[] = [];
+    text.split('\n').forEach((lineText, index) => {
+      if (/^#{1,6} /.test(lineText)) {
+        if (current.length > 0) sections.push(current);
+        current = [];
+      }
+      current.push({ line: index + 1, text: lineText });
+    });
+    if (current.length > 0) sections.push(current);
+    return sections;
+  }
+
+  /**
+   * Contract for the committed shared-hub evidence:
+   * 1. the two hub table rows must name the container owner command;
+   * 2. a single-game screenshot command may only mention hub evidence in its
+   *    own paragraph when the clause says it does not write it;
+   * 3. the old "incidentally writes hub / restore hub" wording must never come
+   *    back, even when it is moved away from its original command block.
+   * A clause can break more than one rule, so it may produce more than one
+   * message; tests mutate the README and assert the exact contract that broke.
+   */
+  function hubCaptureProblems(text: string): string[] {
+    const problems: string[] = [];
+    const rows = new Map<string, HubRow[]>();
+
+    text.split('\n').forEach((line, index) => {
+      if (!line.startsWith('|')) return;
+      const cells = line.split('|');
+      const commandCell = cells[cells.length - 2] ?? '';
+      // Only the authoritative evidence table records a capture command; the
+      // historical sections may still name the same files in their tables.
+      if (!commandCell.includes('npm run ')) return;
+      for (const file of HUB_SCREENSHOTS) {
+        if (!line.includes(`\`${file}\``)) continue;
+        const commands = [...commandCell.matchAll(/`(npm run [^`]+)`/g)].map(
+          (match) => match[1] ?? '',
+        );
+        const row: HubRow = { line: index + 1, command: commands[0] ?? null };
+        rows.set(file, [...(rows.get(file) ?? []), row]);
+      }
+    });
+
+    for (const file of HUB_SCREENSHOTS) {
+      const fileRows = rows.get(file) ?? [];
+      const row = fileRows[0];
+      if (fileRows.length !== 1 || row === undefined) {
+        problems.push(`README 应有且仅有一行 ${file}，实际 ${fileRows.length} 行`);
+        continue;
+      }
+      if (row.command !== HUB_OWNER_COMMAND) {
+        problems.push(
+          `README ${row.line}: ${file} 的捕获命令必须是 ${HUB_OWNER_COMMAND}，` +
+            `实际 ${row.command ?? '缺少命令'}`,
+        );
+      }
+    }
+
+    // A clause that also names a single-game command is that command's claim,
+    // so an owner command elsewhere in the clause must not whitelist it.
+    const isOwnerAttributed = (clause: string): boolean =>
+      OWNER_COMMAND.test(clause) && !SINGLE_GAME_COMMAND.test(clause);
+
+    for (const block of blankLineBlocks(text)) {
+      if (!block.some(({ text: line }) => SINGLE_GAME_COMMAND.test(line))) continue;
+      for (const { line, text: lineText } of block) {
+        for (const clause of clausesOf(lineText)) {
+          if (!HUB_EVIDENCE.test(clause) || !WRITE_VERB.test(clause)) continue;
+          if (NON_REFRESH_WORDING.test(clause) || isOwnerAttributed(clause)) continue;
+          problems.push(
+            `README ${line}: 单游戏截图命令所在段落被描述为写共享大厅证据：${clause}`,
+          );
+        }
+      }
+    }
+
+    for (const section of markdownSections(text)) {
+      for (const { line, text: lineText } of section) {
+        if (!STALE_HUB_WORDING.test(lineText)) continue;
+        for (const clause of clausesOf(lineText)) {
+          if (!STALE_HUB_WORDING.test(clause)) continue;
+          if (NON_REFRESH_WORDING.test(clause) || isOwnerAttributed(clause)) continue;
+          problems.push(`README ${line}: 仍在使用旧的「顺带写出 hub」表述：${clause}`);
+        }
+      }
+    }
+
+    return problems;
+  }
+
+  function replaceLine(
+    source: string,
+    predicate: (line: string) => boolean,
+    replacement: string,
+  ): string {
+    const lines = source.split('\n');
+    const index = lines.findIndex(predicate);
+    expect(index, 'README 缺少待变异的行').toBeGreaterThanOrEqual(0);
+    lines[index] = replacement;
+    return lines.join('\n');
+  }
+
+  it('attributes both hub screenshots to the container owner command only', () => {
+    const readmeText = readFileSync(README, 'utf8');
+    expect(hubCaptureProblems(readmeText)).toEqual([]);
+
+    const ownership = readmeText
+      .split('\n')
+      .find((line) => line.startsWith('- 单一 owner（Issue #221）：'));
+    expect(ownership, 'README 缺少「单一 owner」条目').toBeDefined();
+    expect(ownership).toContain(HUB_OWNER_COMMAND);
+    expect(ownership).toContain('`scripts/capture-screenshots.mjs`');
+    expect(ownership).toContain('不再重写');
+    for (const command of [
+      'npm run screenshots:2048',
+      'npm run screenshots:breakout',
+      'npm run screenshots:minesweeper',
+      'npm run screenshots:snake',
+    ]) {
+      expect(ownership).toContain(`\`${command}\``);
+    }
+  });
+
+  it('fails when a hub table row names a single-game command', () => {
+    const source = readFileSync(README, 'utf8');
+    const mutated = source
+      .split('\n')
+      .map((line) =>
+        line.includes('`after-hub-desktop.png`') && line.includes(HUB_OWNER_COMMAND)
+          ? line.replace(HUB_OWNER_COMMAND, 'npm run screenshots:2048')
+          : line,
+      )
+      .join('\n');
+    expect(mutated).not.toBe(source);
+
+    const problems = hubCaptureProblems(mutated);
+
+    expect(problems.some((problem) => problem.includes('after-hub-desktop.png'))).toBe(true);
+  });
+
+  it('fails when the removed 2048 hub wording is restored in place', () => {
+    const source = readFileSync(README, 'utf8');
+    const mutated = replaceLine(
+      source,
+      (line) => line.trimStart().startsWith('两次运行的 6 个 sha256 应完全一致'),
+      OLD_2048_PARAGRAPH,
+    );
+    expect(mutated).not.toBe(source);
+
+    const problems = hubCaptureProblems(mutated);
+
+    expect(problems.some((problem) => problem.includes('仍在使用旧的'))).toBe(true);
+  });
+
+  it('fails when the removed snake hub wording is restored in place', () => {
+    const source = readFileSync(README, 'utf8');
+    const mutated = replaceLine(
+      source,
+      (line) =>
+        line.startsWith('- 提交范围：After 守卫会跳过 ready / gameover / mobile 历史图'),
+      OLD_SNAKE_BULLET,
+    );
+    expect(mutated).not.toBe(source);
+
+    const problems = hubCaptureProblems(mutated);
+
+    expect(problems.some((problem) => problem.includes('顺带写出 hub'))).toBe(true);
+  });
+
+  it('fails when the exact old hub wording is appended to the README', () => {
+    const source = readFileSync(README, 'utf8');
+
+    const problems = hubCaptureProblems(
+      `${source}\n${OLD_2048_PARAGRAPH}\n${OLD_SNAKE_BULLET}\n`,
+    );
+
+    expect(problems.some((problem) => problem.includes('顺带写出 hub'))).toBe(true);
+  });
+
+  it('fails when a single-game command is described as refreshing hub evidence', () => {
+    const source = readFileSync(README, 'utf8');
+    const staleWording =
+      '\n- `npm run screenshots:snake` 会顺带刷新 `after-hub-desktop.png` 与 `after-hub-mobile.png`。\n';
+
+    const problems = hubCaptureProblems(`${source}${staleWording}`);
+
+    expect(problems.some((problem) => problem.includes('单游戏截图命令'))).toBe(true);
+  });
+
+  it('fails when one hub file is negated but the other is still claimed', () => {
+    const source = readFileSync(README, 'utf8');
+    const staleWording =
+      '\n- `npm run screenshots:2048` 不再写 `after-hub-desktop.png`，但会刷新 `after-hub-mobile.png`。\n';
+
+    const problems = hubCaptureProblems(`${source}${staleWording}`);
+
+    expect(problems.some((problem) => problem.includes('单游戏截图命令'))).toBe(true);
+  });
+
+  it('fails when the old wording is moved into an owner-only section', () => {
+    const source = readFileSync(README, 'utf8');
+    const ownerLine = source
+      .split('\n')
+      .find((line) => line.includes('（owner 命令）仍会写出 hub 图'));
+    expect(ownerLine, 'README 缺少 owner 命令写出 hub 的说明').toBeDefined();
+    const mutated = source.replace(`${ownerLine}\n`, `${ownerLine}\n${OLD_SNAKE_BULLET}\n`);
+    expect(mutated).not.toBe(source);
+
+    const problems = hubCaptureProblems(mutated);
+
+    expect(problems.some((problem) => problem.includes('顺带写出 hub'))).toBe(true);
+  });
+
+  it('fails when a negation shields a coordinated stale claim', () => {
+    const source = readFileSync(README, 'utf8');
+    const staleWording = '\n- `npm run screenshots:2048` 不写历史图但会顺带写出 hub。\n';
+
+    const problems = hubCaptureProblems(`${source}${staleWording}`);
+
+    expect(problems.some((problem) => problem.includes('顺带写出 hub'))).toBe(true);
+  });
+
+  it('fails when a single-game command and the owner command share the claim', () => {
+    const source = readFileSync(README, 'utf8');
+    const staleWording =
+      '\n- `npm run screenshots:2048` 与 `npm run screenshots` 都会顺带写出 hub。\n';
+
+    const problems = hubCaptureProblems(`${source}${staleWording}`);
+
+    expect(problems.some((problem) => problem.includes('顺带写出 hub'))).toBe(true);
+  });
+
+  it('fails when the owner command is used with a single-game capture target', () => {
+    const source = readFileSync(README, 'utf8');
+    const staleWording =
+      '\n- `npm run screenshots:container -- screenshots:2048` 会顺带写出 hub。\n';
+
+    const problems = hubCaptureProblems(`${source}${staleWording}`);
+
+    expect(problems.some((problem) => problem.includes('顺带写出 hub'))).toBe(true);
+  });
+
+  it('fails when a game script is described as writing a hub file by name', () => {
+    const source = readFileSync(README, 'utf8');
+    const staleWording = '\n- 2048 截图脚本会顺带写出 `after-hub-desktop.png`。\n';
+
+    const problems = hubCaptureProblems(`${source}${staleWording}`);
+
+    expect(problems.some((problem) => problem.includes('after-hub-desktop.png'))).toBe(true);
+  });
+
+  it('fails when a hub table row is missing or duplicated', () => {
+    const source = readFileSync(README, 'utf8');
+    const lines = source.split('\n');
+    const desktopRow = lines.find(
+      (line) =>
+        line.startsWith('|') &&
+        line.includes('`after-hub-desktop.png`') &&
+        line.includes(HUB_OWNER_COMMAND),
+    );
+    const mobileRow = lines.find(
+      (line) =>
+        line.startsWith('|') &&
+        line.includes('`after-hub-mobile.png`') &&
+        line.includes(HUB_OWNER_COMMAND),
+    );
+    expect(desktopRow, 'README 缺少 after-hub-desktop.png 的捕获行').toBeDefined();
+    expect(mobileRow, 'README 缺少 after-hub-mobile.png 的捕获行').toBeDefined();
+
+    const withoutDesktop = source.replace(`${desktopRow}\n`, '');
+    expect(withoutDesktop).not.toBe(source);
+    expect(
+      hubCaptureProblems(withoutDesktop).some((problem) =>
+        problem.includes('after-hub-desktop.png，实际 0 行'),
+      ),
+    ).toBe(true);
+
+    const duplicated = source.replace(`${mobileRow}\n`, `${mobileRow}\n${mobileRow}\n`);
+    expect(duplicated).not.toBe(source);
+    expect(
+      hubCaptureProblems(duplicated).some((problem) =>
+        problem.includes('after-hub-mobile.png，实际 2 行'),
+      ),
+    ).toBe(true);
+  });
+
+  it('does not treat after-hub-webkit.png as shared hub evidence', () => {
+    const source = readFileSync(README, 'utf8');
+    const webkitWording =
+      '\n- `npm run screenshots:2048` 会刷新 `after-hub-webkit.png`。\n';
+
+    expect(hubCaptureProblems(`${source}${webkitWording}`)).toEqual([]);
+  });
+
+  it('accepts equivalent negations that do not write hub evidence', () => {
+    const source = readFileSync(README, 'utf8');
+    const legitimate = [
+      '- `npm run screenshots:2048` 不生成共享大厅证据。',
+      '- `npm run screenshots:2048` 本次未写 `after-hub-desktop.png`。',
+      '- `npm run screenshots:2048` 生成的 `after-2048-playing-desktop.png` 与共享大厅证据无关。',
+    ].join('\n');
+
+    expect(hubCaptureProblems(`${source}\n${legitimate}\n`)).toEqual([]);
   });
 });
 
