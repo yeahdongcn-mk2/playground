@@ -288,7 +288,7 @@ npm run test:e2e     # 先 build，再用 vite preview 跑 Chromium 桌面 / Pix
 npm run test:e2e:webkit # 先 build，只跑 mobile-webkit（iPhone SE (3rd gen)）
 ```
 
-当前提交本地通过：`typecheck`、`lint`、`build`、`check:budget` 通过；`npm run test:unit` 930 passed；`npm run test:e2e` 154 passed（桌面 87 + 手机 36 + WebKit 31）。
+当前提交本地通过：`typecheck`、`lint`、`build`、`check:budget` 通过；`npm run test:unit` 934 passed；`npm run test:e2e` 154 passed（桌面 87 + 手机 36 + WebKit 31）。
 
 - 单测只覆盖引擎无关逻辑；不要在 Node 里启动 Phaser。
 - 端到端使用 `data-testid`，覆盖进入 / 返回、最近游玩时间、键盘 / 鼠标 / 触屏、修饰键、重置、容器级缩放、未知路由、快速切换的晚到 mount、休眠时销毁和监听器清理；贪食蛇、俄罗斯方块、2048、打砖块与扫雷另有完整玩法用例（暂停 / 重开、计分 / 结束、窗口失焦暂停与恢复、手机端触屏按钮或拖动、像素绘制与监听器清理，扫雷另有左右键、固定雷盘、难度预设与自定义切换、非法自定义错误、格子可见文本、焦点迁移、畸形调试雷盘回退、胜利 / 踩雷与计时器 / 调试接缝清理）。
@@ -346,7 +346,7 @@ Node.js `^22.12.0 || ^24.0.0 || >=26.0.0`（Vite 8 的要求）。CI（`.github/
 ## 14. 性能与已知限制
 
 - 大厅首屏不包含 Phaser；Phaser 只在进入使用 Phaser 的 2D 游戏时加载（本地构建 chunk 约 1.3 MB / 357 KB gzip），扫雷等 DOM 游戏不加载它。
-- 入口 JS 约 11.16 KB gzip；`check:budget` 断言入口不含引擎且小于 50 KB，全部 JS chunk 小于 450 KB gzip（当前约 410.58 KB gzip）。
+- 入口 JS 约 11.16 KB gzip；`check:budget` 断言入口不含引擎且小于 50 KB，全部 JS chunk 小于 450 KB gzip（当前约 410.59 KB gzip）。
 - 3D 尚未实现，Three.js 只在文档与目录层面预留。
 - 空白示例只演示框架能力；`src/games/snake/`、`src/games/tetris/`、`src/games/2048/`、`src/games/breakout/` 与 `src/games/minesweeper/` 是完整玩法参考（规则引擎、渲染器、响应式视图、测试）。扫雷是纯 DOM 参考，其余四款使用 Phaser 场景。
 - 打砖块固定 480×720 逻辑球场与 10 列砖块，没有道具、多球或在线排行榜；难度曲线由砖块行数与球速控制。

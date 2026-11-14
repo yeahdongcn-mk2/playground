@@ -51,7 +51,7 @@ const VIEW_HTML = `
       </a>
       <div class="game-heading-copy">
         <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> DOM · 动作 · 弹反</p>
-        <h1>真煞 <span>Zhen Sha</span></h1>
+        <h1>镇煞 <span>Zhen Sha</span></h1>
       </div>
       <dl class="zhen-sha-hud" aria-label="游戏数据">
         <div class="zhen-sha-stat">
