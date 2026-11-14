@@ -735,7 +735,7 @@ describe('browser coverage documentation', () => {
     ).not.toMatch(/\d/);
 
     for (const topic of [
-      '五个游戏',
+      '六个游戏',
       '规则',
       '视图',
       '调试',
