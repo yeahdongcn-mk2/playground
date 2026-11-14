@@ -8,9 +8,8 @@ import {
 
 const USAGE = `Usage: node scripts/check-screenshot-doc-dims.mjs [options]
 
-Verify the sizes documented in the screenshot README against the PNG signature
-and IHDR width/height of the committed files. Two table row formats are
-supported:
+Verify the sizes and complete sha256 hashes documented in the screenshot README
+against the committed PNG files. Two table row formats are supported:
 
   - full-page rows: 整页 W×H
   - viewport rows:  CSS 视口 / PNG 尺寸 (e.g. 1440×1000 / 1440×1000)
@@ -19,12 +18,18 @@ For viewport rows only the PNG size after the slash is compared with the IHDR;
 the CSS viewport before the slash is recorded but not compared, because it can
 differ by the device pixel ratio.
 
+A complete backticked 64-character sha256 in a row is compared with the file
+bytes. An unmarked shorter hex value that matches the beginning of the file's
+sha256 is reported as a truncated hash; explicit shorthand such as
+\`7232a897…\` is skipped.
+
 Options:
   --readme <path>    screenshot README (default: ${DEFAULT_README_PATH})
   --dir <path>       screenshot directory (default: ${DEFAULT_SCREENSHOT_DIR})
   -h, --help         show this help
 
-Exit codes: 0 all sizes match, 1 problems found, 2 usage or I/O error.`;
+Exit codes: 0 all sizes and complete sha256 hashes match, 1 problems found,
+            2 usage or I/O error.`;
 
 function parseArgs(argv) {
   const options = { readme: DEFAULT_README_PATH, dir: DEFAULT_SCREENSHOT_DIR };
@@ -53,6 +58,10 @@ function parseArgs(argv) {
 }
 
 function formatProblem(problem) {
+  if (problem.check === 'sha256') {
+    return `README ${problem.readmeLine}: ${problem.file}: sha256 文档 ${problem.docSha256} != 实际 ${problem.actualSha256}（${problem.reason}）`;
+  }
+
   const docSize = `${problem.docWidth}×${problem.docHeight}`;
   const actual =
     problem.actualWidth === null
@@ -104,14 +113,15 @@ function main(argv) {
     return 2;
   }
 
-  const { rows, files, fullPageRows, viewportRows, problems } = verifyDocDimensions({
-    readmeText,
-    dir,
-  });
+  const { rows, files, fullPageRows, viewportRows, sha256Files, problems } =
+    verifyDocDimensions({
+      readmeText,
+      dir,
+    });
 
   if (problems.length > 0) {
     console.log(
-      `FAIL: 发现 ${problems.length} 处尺寸问题（检查了 ${files} 个文件 / ${rows} 行 README，${formatBreakdown(fullPageRows, viewportRows)}）：`,
+      `FAIL: 发现 ${problems.length} 处尺寸 / sha256 问题（检查了 ${files} 个文件 / ${rows} 行 README，${formatBreakdown(fullPageRows, viewportRows)}）：`,
     );
     for (const problem of problems) {
       console.log(`  ${formatProblem(problem)}`);
@@ -120,7 +130,7 @@ function main(argv) {
   }
 
   console.log(
-    `OK: 检查了 ${files} 个文件 / ${rows} 行 README（${formatBreakdown(fullPageRows, viewportRows)}），尺寸全部一致。`,
+    `OK: 检查了 ${files} 个文件 / ${rows} 行 README（${formatBreakdown(fullPageRows, viewportRows)}，sha256 ${sha256Files} 个文件），尺寸与 sha256 全部一致。`,
   );
   return 0;
 }
