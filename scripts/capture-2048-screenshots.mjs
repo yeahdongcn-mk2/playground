@@ -1,6 +1,7 @@
 import { mkdir } from 'node:fs/promises';
 import {
   WEBKIT_ENGINE,
+  assertAllDeclaredCaptureTargets,
   captureScreenshot,
   closeCaptureBrowser,
   createDesktopContext,
@@ -12,6 +13,11 @@ import {
   startPreviewServer,
   stopPreviewServer,
 } from './lib/capture-runtime.mjs';
+import {
+  CAPTURE_TARGET_IDS,
+  isPrintCaptureTargetsRequested,
+  printCaptureTargets,
+} from './lib/capture-targets.mjs';
 import { assertPortAvailable, parsePreviewPort } from './lib/preview-port.mjs';
 import { waitForPreviewServer } from './lib/preview-server.mjs';
 import {
@@ -51,11 +57,34 @@ import {
  * captures still refresh.
  */
 
+const ARGS = process.argv.slice(2);
+
+/** Repository-relative name of this script, used in its target declaration. */
+const SCRIPT_NAME = 'scripts/capture-2048-screenshots.mjs';
+
+/**
+ * Capture targets this script records for one argv (Issue #293).
+ *
+ * WebKit records the three phone states as the `webkit` target. Chromium
+ * records the desktop and 390x844 phone contexts in both modes; `--before` and
+ * `--allow-historical-overwrite` change which PNGs are written, never which
+ * contexts are created.
+ */
+function captureTargets(args) {
+  return parseCaptureEngine(args) === WEBKIT_ENGINE
+    ? [CAPTURE_TARGET_IDS.WEBKIT]
+    : [CAPTURE_TARGET_IDS.DESKTOP, CAPTURE_TARGET_IDS.MOBILE];
+}
+
+const DECLARED_CAPTURE_TARGETS = captureTargets(ARGS);
+if (isPrintCaptureTargetsRequested(ARGS)) {
+  printCaptureTargets(SCRIPT_NAME, DECLARED_CAPTURE_TARGETS);
+}
+
 const HOST = '127.0.0.1';
 const PORT = parsePreviewPort(process.env.PREVIEW_PORT, 4183);
 const ORIGIN = `http://${HOST}:${PORT}`;
 const OUTPUT = 'docs/screenshots';
-const ARGS = process.argv.slice(2);
 const MODE = ARGS.includes('--before') ? 'before' : 'after';
 const ALLOW_HISTORICAL_OVERWRITE = ARGS.includes(HISTORICAL_OVERWRITE_FLAG);
 const ENGINE = parseCaptureEngine(ARGS);
@@ -307,6 +336,9 @@ try {
       await captureDesktop(browser);
       await captureMobile(browser);
     }
+    assertAllDeclaredCaptureTargets(DECLARED_CAPTURE_TARGETS, {
+      source: SCRIPT_NAME,
+    });
     console.log(
       `Captured ${MODE} 2048 screenshots on ${engineLabel(ENGINE)} in ${OUTPUT}`,
     );

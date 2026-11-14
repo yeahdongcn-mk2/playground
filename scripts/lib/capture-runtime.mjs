@@ -7,11 +7,18 @@ import {
   formatCaptureEnvironmentFingerprint,
   normalizeCaptureTargets,
 } from './capture-env.mjs';
+import {
+  WEBKIT_FLAG,
+  WEBKIT_NARROW_BEFORE_FLAG,
+  WEBKIT_NARROW_FLAG,
+} from './capture-targets.mjs';
 
-/** Engine selector shared by every screenshot script. */
-export const WEBKIT_FLAG = '--webkit';
-export const WEBKIT_NARROW_FLAG = '--webkit-narrow';
-export const WEBKIT_NARROW_BEFORE_FLAG = '--webkit-narrow-before';
+/**
+ * The shared WebKit / narrow flag spellings live in `capture-targets.mjs`;
+ * they are re-exported here because every capture script imports its engine
+ * helpers from this runtime.
+ */
+export { WEBKIT_FLAG, WEBKIT_NARROW_FLAG, WEBKIT_NARROW_BEFORE_FLAG };
 export const CHROMIUM_ENGINE = 'chromium';
 export const WEBKIT_ENGINE = 'webkit';
 /** The same device the `mobile-webkit` Playwright project uses. */
@@ -55,6 +62,84 @@ function markTargetLogged(browser, target) {
   }
   logged.add(target);
   return true;
+}
+
+/**
+ * Every capture target the current process has recorded, across browsers.
+ *
+ * A capture script can use more than one browser (a Chromium run records
+ * desktop, mobile and mobile-touch; a dedicated WebKit run records webkit), so
+ * the run-level set is process-wide instead of scoped to a browser. The set
+ * deduplicates by target, which is what the end-of-run declaration assertion
+ * compares against.
+ */
+const recordedTargets = new Set();
+
+/** Targets recorded so far in this process, in first-recording order. */
+export function recordedCaptureTargets() {
+  return [...recordedTargets];
+}
+
+/**
+ * Clear the process-wide recorded set.
+ *
+ * The capture scripts run once per process, so they never need this; unit
+ * tests share one module instance and use it to isolate cases.
+ */
+export function resetRecordedCaptureTargets() {
+  recordedTargets.clear();
+}
+
+function recordCaptureTarget(target) {
+  recordedTargets.add(target);
+}
+
+/**
+ * Fail when the targets a run actually recorded differ from the declaration a
+ * capture script made for its argv (Issue #293).
+ *
+ * The script's `captureTargets(args)` function is the declaration; the runtime
+ * set is the evidence actually produced by the context helpers. Both an extra
+ * recorded target and a declared target that never appeared are errors: the
+ * first would inject a wrong `CAPTURE_TARGET` after the fact, the second would
+ * promise evidence the run does not write. The message names every mismatching
+ * target and the declaration source so the wrong branch or flag is obvious.
+ *
+ * `recorded` is injectable for tests; capture scripts rely on the process-wide
+ * set populated by {@link logCaptureEnvironment}.
+ */
+export function assertAllDeclaredCaptureTargets(
+  declared,
+  { source = 'captureTargets(args)', recorded = recordedCaptureTargets() } = {},
+) {
+  const expected = normalizeCaptureTargets(declared);
+  if (expected === null) {
+    throw new Error(
+      `Capture target declaration from ${source} is empty: a capture script must ` +
+        'declare every target it records.',
+    );
+  }
+
+  const actual = [...new Set(recorded)];
+  const extra = actual.filter((target) => !expected.includes(target));
+  const missing = expected.filter((target) => !actual.includes(target));
+  if (extra.length === 0 && missing.length === 0) {
+    return;
+  }
+
+  const differences = [];
+  if (extra.length > 0) {
+    differences.push(`recorded but not declared: ${extra.join(', ')}`);
+  }
+  if (missing.length > 0) {
+    differences.push(`declared but not recorded: ${missing.join(', ')}`);
+  }
+
+  throw new Error(
+    `Capture target declaration from ${source} does not match this run ` +
+      `(declared: ${expected.join(',')}; recorded: ${actual.join(',') || '(none)'}): ` +
+      `${differences.join('; ')}.`,
+  );
 }
 
 /**
@@ -117,6 +202,7 @@ export function assertContainerCaptureTarget(target, env = process.env) {
  */
 export function logCaptureEnvironment(target, browser, { env, run } = {}) {
   assertContainerCaptureTarget(target, env);
+  recordCaptureTarget(target);
   if (loggedTargetsByBrowser.get(browser)?.has(target)) {
     return;
   }

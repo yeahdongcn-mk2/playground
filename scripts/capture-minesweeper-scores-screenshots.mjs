@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import {
   WEBKIT_ENGINE,
+  assertAllDeclaredCaptureTargets,
   captureScreenshot,
   closeCaptureBrowser,
   createDesktopContext,
@@ -13,6 +14,11 @@ import {
   startPreviewServer,
   stopPreviewServer,
 } from './lib/capture-runtime.mjs';
+import {
+  CAPTURE_TARGET_IDS,
+  isPrintCaptureTargetsRequested,
+  printCaptureTargets,
+} from './lib/capture-targets.mjs';
 import { assertPortAvailable, parsePreviewPort } from './lib/preview-port.mjs';
 import { waitForPreviewServer } from './lib/preview-server.mjs';
 
@@ -56,11 +62,34 @@ import { waitForPreviewServer } from './lib/preview-server.mjs';
  * `--before`, `--clear` and `--webkit` modes never hit this guard.
  */
 
+const ARGS = process.argv.slice(2);
+
+/** Repository-relative name of this script, used in its target declaration. */
+const SCRIPT_NAME = 'scripts/capture-minesweeper-scores-screenshots.mjs';
+
+/**
+ * Capture targets this script records for one argv (Issue #293).
+ *
+ * WebKit records the 320x640 panel as the `webkit` target. Chromium records the
+ * desktop and 320x640 phone contexts for both the plain and clear-records
+ * variants; `--before` and `--allow-historical-overwrite` change the evidence
+ * files, never the targets.
+ */
+function captureTargets(args) {
+  return parseCaptureEngine(args) === WEBKIT_ENGINE
+    ? [CAPTURE_TARGET_IDS.WEBKIT]
+    : [CAPTURE_TARGET_IDS.DESKTOP, CAPTURE_TARGET_IDS.MOBILE];
+}
+
+const DECLARED_CAPTURE_TARGETS = captureTargets(ARGS);
+if (isPrintCaptureTargetsRequested(ARGS)) {
+  printCaptureTargets(SCRIPT_NAME, DECLARED_CAPTURE_TARGETS);
+}
+
 const HOST = '127.0.0.1';
 const PORT = parsePreviewPort();
 const ORIGIN = `http://${HOST}:${PORT}`;
 const OUTPUT = 'docs/screenshots';
-const ARGS = process.argv.slice(2);
 const BEFORE = ARGS.includes('--before');
 const CLEAR = ARGS.includes('--clear');
 const ALLOW_HISTORICAL_OVERWRITE = ARGS.includes('--allow-historical-overwrite');
@@ -280,6 +309,9 @@ try {
   server = null;
 }
 
+assertAllDeclaredCaptureTargets(DECLARED_CAPTURE_TARGETS, {
+  source: SCRIPT_NAME,
+});
 console.log(
   `Saved ${BEFORE ? 'Before' : 'After'} Minesweeper leaderboard screenshots on ${engineLabel(ENGINE)} to ${OUTPUT}/`,
 );

@@ -1,6 +1,7 @@
 import { mkdir } from 'node:fs/promises';
 import {
   WEBKIT_ENGINE,
+  assertAllDeclaredCaptureTargets,
   captureScreenshot,
   closeCaptureBrowser,
   createDesktopContext,
@@ -12,6 +13,11 @@ import {
   startPreviewServer,
   stopPreviewServer,
 } from './lib/capture-runtime.mjs';
+import {
+  CAPTURE_TARGET_IDS,
+  isPrintCaptureTargetsRequested,
+  printCaptureTargets,
+} from './lib/capture-targets.mjs';
 import { waitForBlankSettled } from './lib/blank-settle.mjs';
 import { assertPortAvailable, parsePreviewPort } from './lib/preview-port.mjs';
 import { waitForPreviewServer } from './lib/preview-server.mjs';
@@ -36,12 +42,35 @@ import { waitForPreviewServer } from './lib/preview-server.mjs';
  * orb scale is fixed, so that settled frame is reproducible byte-for-byte.
  */
 
+const ARGS = process.argv.slice(2);
+
+/** Repository-relative name of this script, used in its target declaration. */
+const SCRIPT_NAME = 'scripts/capture-screenshots.mjs';
+
+/**
+ * Capture targets this script records for one argv (Issue #293).
+ *
+ * The declaration mirrors the real branch: WebKit records the `webkit` phone
+ * evidence only, while Chromium records the desktop and 390x844 phone
+ * contexts. `BASE_URL` and the output directory never change the target set.
+ */
+function captureTargets(args) {
+  return parseCaptureEngine(args) === WEBKIT_ENGINE
+    ? [CAPTURE_TARGET_IDS.WEBKIT]
+    : [CAPTURE_TARGET_IDS.DESKTOP, CAPTURE_TARGET_IDS.MOBILE];
+}
+
+const DECLARED_CAPTURE_TARGETS = captureTargets(ARGS);
+if (isPrintCaptureTargetsRequested(ARGS)) {
+  printCaptureTargets(SCRIPT_NAME, DECLARED_CAPTURE_TARGETS);
+}
+
 const HOST = '127.0.0.1';
 const PORT = parsePreviewPort(process.env.PREVIEW_PORT, 4174);
 const ORIGIN = `http://${HOST}:${PORT}`;
 const BASE_URL = process.env.BASE_URL ?? ORIGIN;
 const OUTPUT_DIR = 'docs/screenshots';
-const ARGS = process.argv.slice(2);
+
 const ENGINE = parseCaptureEngine(ARGS);
 const IS_WEBKIT = ENGINE === WEBKIT_ENGINE;
 
@@ -207,6 +236,9 @@ try {
     await closeCaptureBrowser(browser);
   }
 
+  assertAllDeclaredCaptureTargets(DECLARED_CAPTURE_TARGETS, {
+    source: SCRIPT_NAME,
+  });
   console.log(`Screenshots written to ${OUTPUT_DIR}/ on ${engineLabel(ENGINE)}`);
 } finally {
   stopPreviewServer(server);
