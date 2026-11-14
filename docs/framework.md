@@ -247,7 +247,7 @@ const vector = directions.vector(); // 对角线已归一化
    };
    ```
 
-2. **规则与场景分离**：把规则放在 `engine.ts`（无 DOM / 无 Phaser），先为边界写 Vitest；`scene.ts` 只读取状态快照并绘制。完整的拆分示例可参考 `src/games/snake/`、`src/games/tetris/`、`src/games/2048/`、`src/games/breakout/` 与 `src/games/minesweeper/`。
+2. **规则与场景分离**：把规则放在 `engine.ts`（无 DOM / 无 Phaser），先为边界写 Vitest；`scene.ts` 只读取状态快照并绘制。完整的拆分示例可参考 `src/games/snake/`、`src/games/tetris/`、`src/games/2048/`、`src/games/breakout/`、`src/games/minesweeper/` 与 `src/games/zhen-sha/`（镇煞）。
 3. **DOM 外壳** `view.ts`：负责 HUD、覆盖层、按钮、触屏辅助键；2D 游戏用 `createPhaser2DGame()` 创建 2D 运行时，DOM 游戏（如扫雷）直接操作 DOM（见 10.1），返回的 `destroy()` 里释放引擎、监听器与计时器。
 4. **注册**：在 `src/games/registry.ts` 的 `games` 数组加入 `myGame`，大厅自动出现卡片。
 5. **资源**：放到 `public/games/my-game/`，场景 `preload()` 里加载；体积大的资源按需加载。

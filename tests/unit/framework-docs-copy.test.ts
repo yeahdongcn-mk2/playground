@@ -30,15 +30,28 @@ function directoryTree(source: string): string {
   return match[1];
 }
 
-/** The one line that enumerates the complete playable references. */
-function gameplayReference(source: string): string {
-  const line = source
-    .split('\n')
-    .find((candidate) => candidate.includes('是完整玩法参考'));
+/** The only line in the document that contains `marker`. */
+function uniqueLine(source: string, marker: string): string {
+  const matches = source.split('\n').filter((candidate) => candidate.includes(marker));
+  expect(
+    matches,
+    `docs/framework.md should have exactly one line containing ${marker}`,
+  ).toHaveLength(1);
+  const [line] = matches;
   if (line === undefined) {
-    throw new Error('docs/framework.md is missing the complete gameplay reference line');
+    throw new Error(`docs/framework.md is missing the line containing ${marker}`);
   }
   return line;
+}
+
+/** The one line that enumerates the complete playable references (section 14). */
+function gameplayReference(source: string): string {
+  return uniqueLine(source, '是完整玩法参考');
+}
+
+/** The one line that enumerates the complete split examples (section 10). */
+function splitExample(source: string): string {
+  return uniqueLine(source, '完整的拆分示例');
 }
 
 /** The tree line that documents one game directory. */
@@ -63,21 +76,32 @@ describe('framework docs game copy', () => {
   it('lists every complete game in the directory tree and marks both DOM entries', () => {
     const tree = directoryTree(FRAMEWORK);
     for (const game of shippedGames) {
-      expect(treeEntry(tree, game.meta.id)).toContain(`${game.meta.id}/`);
-    }
-    expect(tree).toContain('镇煞');
-    expect(tree).toContain('第六个完整玩法');
-
-    for (const game of domGames) {
       const entry = treeEntry(tree, game.meta.id);
-      expect(entry, `${game.meta.id}/ should be documented as a DOM game`).toContain('DOM');
-      expect(entry, `${game.meta.id}/ should be documented as engine-free`).toContain(
-        '不加载引擎',
-      );
+      if (game.meta.engine === 'dom') {
+        expect(entry, `${game.meta.id}/ should be documented as a DOM game`).toContain('DOM');
+        expect(entry, `${game.meta.id}/ should be documented as engine-free`).toContain(
+          '不加载引擎',
+        );
+      }
     }
+
+    const zhenShaEntry = treeEntry(tree, 'zhen-sha');
+    expect(zhenShaEntry, 'zhen-sha/ should be documented as 镇煞').toContain('镇煞');
+    expect(zhenShaEntry, 'zhen-sha/ should be documented as the sixth complete game').toContain(
+      '第六个完整玩法',
+    );
   });
 
-  it('lists every complete game and the registry engine split in the gameplay reference', () => {
+  it('lists every complete game in the section 10 split example and the gameplay reference', () => {
+    const splitExamples = splitExample(FRAMEWORK);
+    for (const game of shippedGames) {
+      expect(
+        splitExamples,
+        `section 10 split example should list ${game.meta.id}`,
+      ).toContain(`src/games/${game.meta.id}/`);
+    }
+    expect(splitExamples).toContain('镇煞');
+
     const reference = gameplayReference(FRAMEWORK);
     for (const game of shippedGames) {
       expect(
