@@ -184,6 +184,14 @@ describe('flaky policy docs', () => {
     expect(section).toContain('shell: bash');
     expect(section).toContain('safe.directory');
     expect(section).toContain('43561619210');
+    expect(section).toContain('pre-commit-container-');
+    expect(section).toContain('43563009824');
+    expect(section).toContain('attempt 2');
+    expect(section).toContain('npm cache is not found');
+    expect(section).toContain('Cache not found');
+    expect(section).toContain('Cache restored from key: pre-commit-container-');
+    expect(section).toContain('End-to-end tests');
+    expect(section).toContain('WebKit narrow screenshot smoke test');
     const installCommands = (preCommitInstall.run ?? '')
       .split('\n')
       .map((command) => command.trim())
