@@ -60,7 +60,17 @@ export interface BuildDockerRunArgsOptions {
   imageDigest?: string;
   uid?: number;
   gid?: number;
+  /**
+   * Resolved runtime preview port. Omitted means the target script's declared
+   * `previewPort`; an explicit `null` omits the container `PREVIEW_PORT` env.
+   */
   previewPort?: number | null;
+  /**
+   * Declaration already resolved for this target. When supplied, it replaces
+   * the resolver call so a caller that also needs the declared port does not
+   * spawn the target script twice.
+   */
+  declaration?: ResolvedCaptureTargets;
   env?: Record<string, string | undefined>;
   scripts?: Record<string, string>;
   spawnSync?: typeof spawnSync;
@@ -129,10 +139,6 @@ export function resolveCaptureTargets(
   passthrough?: readonly string[],
   options?: ResolveCaptureTargetsOptions,
 ): ResolvedCaptureTargets;
-export function previewPortForTarget(
-  target: string,
-  value?: string,
-): number | null;
 export function parseContainerCaptureArgs(
   argv?: readonly string[],
   options?: ParseContainerCaptureArgsOptions,

@@ -117,6 +117,19 @@ describe('container capture declaration docs (Issue #293)', () => {
     expect(CONTAINER_COMMAND).toContain('`PREVIEW_PORT` 只覆盖运行时端口而不改变声明');
   });
 
+  it('documents that the host precheck and injected PREVIEW_PORT come from the declaration', () => {
+    expect(CONTAINER_COMMAND).toContain('默认值来自目标脚本声明的 `previewPort`');
+    expect(CONTAINER_COMMAND).toContain('宿主预检与容器注入共用这一份声明');
+    expect(CONTAINER_COMMAND).toContain('入口不再维护按 target 名手写端口表');
+    expect(CONTAINER_COMMAND).toContain(
+      '设置 `PREVIEW_PORT` 会覆盖运行时端口但不改变脚本声明',
+    );
+    expect(CONTAINER_COMMAND).toContain(
+      '宿主预检与容器注入的 `PREVIEW_PORT` 都以该声明为默认值',
+    );
+    expect(CONTAINER_COMMAND).not.toContain('默认端口可由 `PREVIEW_PORT` 覆盖');
+  });
+
   it('documents the npm script arguments plus passthrough with validation', () => {
     expect(CONTAINER_COMMAND).toContain('`package.json`');
     expect(CONTAINER_COMMAND).toContain('脚本自带参数');
