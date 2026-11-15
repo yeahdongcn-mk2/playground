@@ -81,6 +81,8 @@ export interface ParsedCaptureScriptCommand {
 export interface ResolvedCaptureTargets {
   script: string;
   targets: string[];
+  /** The script's own default preview port, validated as an integer 1-65535. */
+  previewPort: number;
 }
 
 export interface EnsureContainerDependenciesOptions {
@@ -112,12 +114,15 @@ export function parseCaptureScriptCommand(
   target?: string,
 ): ParsedCaptureScriptCommand;
 /**
- * Capture targets (in DPR order) one container run records, read from the
- * target script's own `--print-capture-targets` declaration.
+ * Capture targets (in DPR order) and default preview port one container run
+ * records, read from the target script's own `--print-capture-targets`
+ * declaration.
  *
  * `passthrough` is the extra argv the container entry forwards to the capture
  * script; it is appended to the npm script's built-in arguments before the
- * declaration is printed, so the script itself decides the target set.
+ * declaration is printed, so the script itself decides the target set. The
+ * declared `previewPort` is the script's own default (not the `PREVIEW_PORT`
+ * runtime override) and must be an integer between 1 and 65535.
  */
 export function resolveCaptureTargets(
   target: string,
