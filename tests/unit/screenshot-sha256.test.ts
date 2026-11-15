@@ -21,6 +21,7 @@ import {
   ScreenshotSha256Error,
   expectedRecaptureCommand,
   manifestEnvironmentMismatches,
+  manifestPlatformMismatch,
   parseCaptureEnvironmentFingerprintLine,
   parseCaptureLogFingerprints,
   parseSha256Manifest,
@@ -327,6 +328,28 @@ const STRUCTURAL_INVALID_MANIFEST_CASES: Array<{
     label: 'an unknown environment source',
     message: 'environment.source must be "container" or "host", got "desktop"',
     build: (base) => withEnvironment(base, { source: 'desktop' }),
+  },
+  {
+    // The platform is recorded evidence: omitting it must reject the manifest
+    // instead of silently verifying against a platform-less contract.
+    label: 'a manifest without environment.platform',
+    message: 'environment.platform must be a non-empty string',
+    build: (base) => withEnvironment(base, { platform: undefined }),
+  },
+  {
+    label: 'an environment.platform without an architecture',
+    message:
+      'environment.platform must be "<os>/<arch>" with an optional variant ' +
+      '(for example "linux/amd64"), got "linux"',
+    build: (base) => withEnvironment(base, { platform: 'linux' }),
+  },
+  {
+    // `unavailable` is the host fingerprint marker, never a manifest platform.
+    label: 'an unavailable environment.platform',
+    message:
+      'environment.platform must be "<os>/<arch>" with an optional variant ' +
+      '(for example "linux/amd64"), got "unavailable"',
+    build: (base) => withEnvironment(base, { platform: 'unavailable' }),
   },
   {
     label: 'a missing environment target',
@@ -674,14 +697,17 @@ describe('capture sha256 manifest', () => {
     }
   });
 
-  it('keeps the image tag / digest, EGL variables and webkit DPR aligned with t1 constants', () => {
+  it('keeps the image tag / digest, platform, EGL variables and webkit DPR aligned with t1 constants', () => {
     const manifest = committedManifest();
 
     expect(manifestEnvironmentMismatches(manifest)).toEqual([]);
+    expect(manifestPlatformMismatch(manifest)).toBeNull();
     expect(manifest.environment.source).toBe('container');
     expect(manifest.environment.target).toBe('webkit');
     expect(manifest.environment.dpr).toBe(2);
     expect(manifest.environment.dpr).toBe(CAPTURE_TARGET_DPRS['webkit']);
+    expect(manifest.environment.platform).toBe(CAPTURE_PLATFORM);
+    expect(manifest.environment.platform).toBe('linux/amd64');
     expect(manifest.environment.image).toEqual({
       repository: PLAYWRIGHT_IMAGE_REPOSITORY,
       tag: PLAYWRIGHT_IMAGE_PIN.tag,
@@ -729,6 +755,7 @@ describe('capture sha256 manifest', () => {
     expect(fingerprint.dpr).toBe(CAPTURE_TARGET_DPRS[fingerprint.target]);
     expect(fingerprint.source).toBe(manifest.environment.source);
     expect(fingerprint.platform).toBe(CAPTURE_PLATFORM);
+    expect(fingerprint.platform).toBe(manifest.environment.platform);
     expect(fingerprint.image).toEqual(manifest.environment.image);
     expect(fingerprint.env).toEqual(manifest.environment.egl);
     expect(fingerprint.fonts).toEqual(manifest.environment.fonts);
@@ -753,6 +780,31 @@ describe('capture sha256 manifest', () => {
     );
     expect(problems.some((problem) => problem.includes('unexpected variable'))).toBe(true);
     expect(problems.some((problem) => problem.includes('environment.fonts'))).toBe(true);
+  });
+
+  it('compares the manifest platform against the fixed capture contract', () => {
+    const manifest = committedManifest();
+    manifest.environment.platform = 'linux/arm64';
+
+    expect(manifestEnvironmentMismatches(manifest)).toContain(
+      'environment.platform is "linux/arm64", expected "linux/amd64"',
+    );
+    expect(manifestPlatformMismatch(manifest)).toEqual({
+      source: 'manifest',
+      expected: 'linux/amd64',
+      actual: 'linux/arm64',
+      image: manifest.environment.image,
+      message: 'environment.platform is "linux/arm64", expected "linux/amd64"',
+    });
+  });
+
+  it('accepts a platform variant and still reports it as a platform difference', () => {
+    const manifest = committedManifest();
+    manifest.environment.platform = 'linux/arm64/v8';
+    const parsed = parseSha256Manifest(JSON.stringify(manifest));
+
+    expect(parsed.environment.platform).toBe('linux/arm64/v8');
+    expect(manifestPlatformMismatch(parsed)?.actual).toBe('linux/arm64/v8');
   });
 
   it.each(MANIFEST_ENVIRONMENT_DRIFT_CASES)(
@@ -942,6 +994,31 @@ describe('capture environment fingerprint', () => {
     expect(verification.problems).toContain(
       'capture environment platform is "linux/arm64", expected "linux/amd64"',
     );
+    expect(verification.platformMismatches).toEqual([
+      {
+        source: 'log',
+        expected: 'linux/amd64',
+        actual: 'linux/arm64',
+        image: manifest.environment.image,
+        actualImage: manifest.environment.image,
+        message: 'capture environment platform is "linux/arm64", expected "linux/amd64"',
+      },
+    ]);
+  });
+
+  it('compares the log platform with the manifest platform, not the global constant', () => {
+    const manifest = committedManifest();
+    manifest.environment.platform = 'linux/arm64';
+    const verification = verifyCaptureEnvironment({
+      logText: `${CONTAINER_LOG_LINE.replace(
+        'platform=linux/amd64',
+        'platform=linux/arm64',
+      )}\n`,
+      environment: manifest.environment,
+    });
+
+    expect(verification.platformMismatches).toEqual([]);
+    expect(verification.ok).toBe(true);
   });
 
   it('verifies the container image, EGL variables, DPR and recorded fonts', () => {
@@ -1281,6 +1358,68 @@ describe('verifyScreenshotSha256', () => {
       'npm run screenshots:container -- screenshots:webkit',
     );
     expect(result.stderr).toContain(CONTAINER_LOG_LINE.replace('dpr=2', 'dpr=1'));
+  });
+
+  it('exits 1 for a manifest platform drift even though every PNG hash matches', () => {
+    const dir = makeTempDir();
+    const bytes = makePng();
+    writePng(dir, EXPECTED_FILES[0] as string, bytes);
+    const manifest = fixtureManifest(bytes);
+    manifest.environment.platform = 'linux/arm64';
+    const manifestPath = writeManifest(dir, manifest);
+
+    // The committed bytes still hash to the manifest value; only the platform
+    // the evidence was captured on is outside the fixed contract.
+    expect(verifyScreenshotSha256({ dir, manifest }).hashProblems).toEqual([]);
+
+    const result = runCli(['--dir', dir, '--manifest', manifestPath]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Platform mismatch (1)');
+    expect(result.stderr).toContain('source:            sha256 manifest');
+    expect(result.stderr).toContain('expected platform: linux/amd64');
+    expect(result.stderr).toContain('actual platform:   linux/arm64');
+    expect(result.stderr).toContain(
+      `expected image:    ${PLAYWRIGHT_IMAGE_REPOSITORY}:${PLAYWRIGHT_IMAGE_PIN.tag}@${PLAYWRIGHT_IMAGE_PIN.digest}`,
+    );
+    expect(result.stderr).toContain(
+      'after-blank-webkit.png: npm run screenshots:container -- screenshots:webkit',
+    );
+    expect(result.stderr).not.toContain('does not match the fixed capture environment');
+  });
+
+  it('reports a log platform drift as its own section and exits 1', () => {
+    const dir = makeTempDir();
+    const bytes = makePng();
+    writePng(dir, EXPECTED_FILES[0] as string, bytes);
+    const manifestPath = writeManifest(dir, fixtureManifest(bytes));
+    const logPath = join(dir, 'capture.log');
+    writeFileSync(
+      logPath,
+      `${CONTAINER_LOG_LINE.replace('platform=linux/amd64', 'platform=linux/arm64')}\n`,
+    );
+
+    const result = runCli([
+      '--dir',
+      dir,
+      '--manifest',
+      manifestPath,
+      '--log',
+      logPath,
+    ]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Platform mismatch (1)');
+    expect(result.stderr).toContain('source:            capture log fingerprint');
+    expect(result.stderr).toContain('expected platform: linux/amd64');
+    expect(result.stderr).toContain('actual platform:   linux/arm64');
+    expect(result.stderr).toContain(
+      `expected image:    ${PLAYWRIGHT_IMAGE_REPOSITORY}:${PLAYWRIGHT_IMAGE_PIN.tag}@${PLAYWRIGHT_IMAGE_PIN.digest}`,
+    );
+    expect(result.stderr).toContain(
+      'after-blank-webkit.png: npm run screenshots:container -- screenshots:webkit',
+    );
+    // Platform drift is not repeated in the generic environment block.
+    expect(result.stderr).not.toContain('Environment fingerprint mismatch');
+    expect(result.stderr).toContain('committed PNG hashes still match the manifest');
   });
 
   it('exits 1 and reports hash drift together with environment drift', () => {

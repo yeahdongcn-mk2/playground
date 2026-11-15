@@ -5,7 +5,10 @@ import {
   DEFAULT_MANIFEST_PATH,
   DEFAULT_SCREENSHOT_DIR,
   ScreenshotSha256Error,
+  expectedRecaptureCommand,
+  imageReference,
   manifestEnvironmentMismatches,
+  manifestPlatformMismatch,
   parseSha256Manifest,
   verifyScreenshotSha256,
 } from './lib/screenshot-sha256.mjs';
@@ -24,9 +27,10 @@ Options:
   --log <path>       capture log with capture-env fingerprint line(s)
   -h, --help         show this help
 
-Exit codes: 0 all checks pass, 1 hash or environment mismatch,
+Exit codes: 0 all checks pass, 1 hash, environment or platform mismatch,
             2 usage, invalid manifest, unreadable manifest/log or malformed
-              capture-env line. A missing or changed PNG is a hash failure (1).`;
+              capture-env line. A missing or changed PNG is a hash failure (1);
+              a platform difference is printed as its own section and exits 1.`;
 
 function parseArgs(argv) {
   const options = {
@@ -103,6 +107,29 @@ function printHashProblems(hashProblems, captureByFile, entries, dir) {
   }
 }
 
+function printPlatformMismatches(mismatches, manifest) {
+  const labels = {
+    manifest: 'sha256 manifest',
+    log: 'capture log fingerprint',
+  };
+  console.error(`Platform mismatch (${mismatches.length}):`);
+  for (const mismatch of mismatches) {
+    console.error(`  source:            ${labels[mismatch.source] ?? mismatch.source}`);
+    console.error(`  expected platform: ${mismatch.expected}`);
+    console.error(`  actual platform:   ${mismatch.actual}`);
+    if (mismatch.image !== null) {
+      console.error(`  expected image:    ${imageReference(mismatch.image)}`);
+    }
+    if (mismatch.actualImage !== undefined && mismatch.actualImage !== null) {
+      console.error(`  actual image:      ${imageReference(mismatch.actualImage)}`);
+    }
+  }
+  console.error('Recapture in the fixed container after an explicit evidence refresh:');
+  for (const capture of manifest.captures) {
+    console.error(`  ${capture.file}: ${expectedRecaptureCommand(capture.file)}`);
+  }
+}
+
 function main(argv) {
   let options;
   try {
@@ -132,7 +159,13 @@ function main(argv) {
     return 2;
   }
 
-  const environmentMismatches = manifestEnvironmentMismatches(manifest);
+  // A platform recorded on another CPU architecture is evidence drift (exit 1),
+  // not a malformed manifest; every other fixed-contract difference is still
+  // invalid manifest input (exit 2).
+  const manifestPlatform = manifestPlatformMismatch(manifest);
+  const environmentMismatches = manifestEnvironmentMismatches(manifest).filter(
+    (problem) => problem !== manifestPlatform?.message,
+  );
   if (environmentMismatches.length > 0) {
     console.error(
       `error: sha256 manifest ${manifestPath} does not match the fixed capture environment:`,
@@ -140,10 +173,17 @@ function main(argv) {
     for (const problem of environmentMismatches) {
       console.error(`  - ${problem}`);
     }
+    if (manifestPlatform !== null) {
+      printPlatformMismatches([manifestPlatform], manifest);
+    }
     console.error(
       'hint: update docs/screenshots/README.md and the manifest when the fixed capture environment changes.',
     );
     return 2;
+  }
+  if (manifestPlatform !== null) {
+    printPlatformMismatches([manifestPlatform], manifest);
+    return 1;
   }
 
   let logText;
@@ -190,17 +230,32 @@ function main(argv) {
     return 0;
   }
 
-  if (!environment.ok) {
+  // Platform drift is its own failure class: keep it out of the generic
+  // environment block so the expected / actual platform and image are not
+  // buried next to DPR / EGL / font messages.
+  const platformProblems = new Set(
+    environment.platformMismatches.map((mismatch) => mismatch.message),
+  );
+  const environmentProblems = environment.problems.filter(
+    (problem) => !platformProblems.has(problem),
+  );
+
+  if (environmentProblems.length > 0) {
     console.error(
       `Environment fingerprint mismatch${logPath === null ? '' : ` (${logPath})`}:`,
     );
-    for (const problem of environment.problems) {
+    for (const problem of environmentProblems) {
       console.error(`  ${problem}`);
     }
   }
+  if (environment.platformMismatches.length > 0) {
+    printPlatformMismatches(environment.platformMismatches, manifest);
+  }
 
   printActualEnvironment(environment);
-  if (!environment.ok) {
+  // The platform section already lists the fixed-container recapture commands,
+  // so only print the generic block when no platform difference was reported.
+  if (environmentProblems.length > 0 && environment.platformMismatches.length === 0) {
     console.error('Recapture in the fixed container after an explicit evidence refresh:');
     for (const capture of manifest.captures) {
       console.error(`  ${capture.file}: ${capture.command}`);

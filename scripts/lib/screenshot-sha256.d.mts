@@ -10,9 +10,19 @@ export interface ScreenshotSha256Environment {
   source: CaptureSource;
   target: string;
   dpr: number;
+  platform: string;
   image: ScreenshotSha256Image;
   egl: Record<string, string>;
   fonts: CaptureFontPackage[];
+}
+
+export interface ScreenshotSha256PlatformMismatch {
+  source: 'manifest' | 'log';
+  expected: string;
+  actual: string;
+  image: ScreenshotSha256Image | null;
+  actualImage?: ScreenshotSha256Image | null;
+  message: string;
 }
 
 export interface ScreenshotSha256Provenance {
@@ -51,7 +61,10 @@ export interface CaptureEnvironmentVerification {
   /** True when a capture-env: line exists but cannot be parsed. */
   invalid: boolean;
   ok: boolean;
+  /** Every environment problem, including platform drift. */
   problems: string[];
+  /** The platform subset, structured for the CLI's separate report. */
+  platformMismatches: ScreenshotSha256PlatformMismatch[];
   fingerprints: CaptureEnvironmentFingerprintRecord[];
 }
 
@@ -90,6 +103,7 @@ export const SHA256_PATTERN: RegExp;
 export const IMAGE_DIGEST_PATTERN: RegExp;
 export const CAPTURE_COMMIT_PATTERN: RegExp;
 export const FILE_NAME_PATTERN: RegExp;
+export const PLATFORM_PATTERN: RegExp;
 
 export class ScreenshotSha256Error extends Error {}
 
@@ -100,6 +114,9 @@ export function parseSha256Manifest(
 export function manifestEnvironmentMismatches(
   manifest: ScreenshotSha256Manifest,
 ): string[];
+export function manifestPlatformMismatch(
+  manifest: ScreenshotSha256Manifest,
+): ScreenshotSha256PlatformMismatch | null;
 export function imageReference(image: ScreenshotSha256Image): string;
 export function expectedRecaptureCommand(file: string): string;
 export function parseImageReference(value: string): ScreenshotSha256Image | null;
