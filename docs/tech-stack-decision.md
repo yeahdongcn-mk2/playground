@@ -179,7 +179,7 @@ npm run preview                     # 本地预览生产构建
 npm run test:e2e                    # 先 build；webServer 只拉起 preview
 ```
 
-上述 npm scripts（含 `lint`、`check:budget`）由 t2 落地时写入 `package.json`；`test:e2e` 前需先 `build`，Playwright `webServer` 只启动 `preview`。端到端最低覆盖：进入/退出、暂停/重开、最高分持久化、快速切换不残留 canvas/RAF、触屏/移动视口、基本可访问性、用可控延迟的假 `GameModule` 覆盖 abort 后晚到 mount；WebKit/Firefox 暂不纳入 v1。
+上述 npm scripts（含 `lint`、`check:budget`）由 t2 落地时写入 `package.json`；`test:e2e` 前需先 `build`，Playwright `webServer` 只启动 `preview`。端到端最低覆盖：进入/退出、暂停/重开、最高分持久化、快速切换不残留 canvas/RAF、触屏/移动视口、基本可访问性、用可控延迟的假 `GameModule` 覆盖 abort 后晚到 mount；e2e 覆盖 Chromium 桌面、Pixel 7 手机视口与 mobile-webkit（iPhone SE (3rd gen)），Firefox 暂不纳入 v1。
 
 TypeScript 7 为原生编译器，`tsc --noEmit` 是唯一类型门禁；Vite/Vitest 只转译，不做类型检查。CI 的检查顺序不在本文维护第三份副本：以 [README.md](../README.md) 的「### CI 检查顺序」为单一事实源，该列表与 `.github/workflows/ci.yml` 的 `verify` 步骤逐项对应；`npm ci` 在这个检查序列之前执行，当前 workflow 没有归档构建产物的步骤。
 
