@@ -8,6 +8,7 @@ import { crc32, deflateSync } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   CAPTURE_EGL_ENV,
+  CAPTURE_EGL_VARS,
   CAPTURE_FONT_PACKAGES,
   CAPTURE_TARGET_DPRS,
   PLAYWRIGHT_IMAGE_PIN,
@@ -25,7 +26,10 @@ import {
   verifyCaptureEnvironment,
   verifyScreenshotSha256,
 } from '../../scripts/lib/screenshot-sha256.mjs';
-import type { ScreenshotSha256Manifest } from '../../scripts/lib/screenshot-sha256.mjs';
+import type {
+  ScreenshotSha256Capture,
+  ScreenshotSha256Manifest,
+} from '../../scripts/lib/screenshot-sha256.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const MANIFEST = join(ROOT, DEFAULT_MANIFEST_PATH);
@@ -149,18 +153,53 @@ const IMAGE_DRIFT_CASES: Array<{ label: string; logLine: string; actual: string 
   },
 ];
 
+/** A structurally mutated manifest, as an untyped JSON value. */
+type MutatedManifest = Record<string, unknown>;
+
+function withEnvironment(
+  base: ScreenshotSha256Manifest,
+  patch: Record<string, unknown>,
+): MutatedManifest {
+  return { ...base, environment: { ...base.environment, ...patch } };
+}
+
+function withFirstCapture(
+  base: ScreenshotSha256Manifest,
+  patch: (capture: ScreenshotSha256Capture) => Record<string, unknown>,
+): MutatedManifest {
+  const [first, ...rest] = base.captures;
+  if (first === undefined) {
+    throw new Error('the committed manifest has no captures');
+  }
+  return { ...base, captures: [{ ...first, ...patch(first) }, ...rest] };
+}
+
 /**
  * Structurally invalid manifests: each missing / malformed structural field is
  * invalid input (exit 2), never a valid empty manifest or an uncaught error.
- * These cases pin the structural guards in `parseSha256Manifest`, so deleting
- * one of those guards makes a test fail instead of silently accepting the
- * manifest.
+ * These cases pin the structural field guards in `parseSha256Manifest`, so
+ * deleting one of those guards makes a test fail instead of silently accepting
+ * the manifest. Value-format guards (sha256 hex, plain file name, capture
+ * commit, DPR, duplicate files, invalid JSON) stay pinned by the entry-level
+ * tests below.
  */
 const STRUCTURAL_INVALID_MANIFEST_CASES: Array<{
   label: string;
   message: string;
   build: (base: ScreenshotSha256Manifest) => unknown;
 }> = [
+  // The top-level document itself.
+  {
+    label: 'a top-level null manifest',
+    message: 'top level must be an object',
+    build: () => null,
+  },
+  {
+    label: 'a top-level array manifest',
+    message: 'top level must be an object',
+    build: () => [],
+  },
+  // `captures`.
   {
     label: 'an empty captures list',
     message: '"captures" must be a non-empty array of screenshot entries',
@@ -172,27 +211,6 @@ const STRUCTURAL_INVALID_MANIFEST_CASES: Array<{
     build: (base) => ({ ...base, captures: {} }),
   },
   {
-    label: 'a manifest without environment',
-    message: '"environment" must be an object',
-    build: (base) => {
-      const copy: Record<string, unknown> = { ...base };
-      delete copy.environment;
-      return copy;
-    },
-  },
-  {
-    label: 'a capture without provenance',
-    message: 'captures[0].provenance must be an object',
-    build: (base) => ({
-      ...base,
-      captures: base.captures.map((capture) => {
-        const copy: Record<string, unknown> = { ...capture };
-        delete copy.provenance;
-        return copy;
-      }),
-    }),
-  },
-  {
     label: 'a null capture entry',
     message: 'captures[0] must be an object',
     build: (base) => ({ ...base, captures: [null] }),
@@ -201,6 +219,257 @@ const STRUCTURAL_INVALID_MANIFEST_CASES: Array<{
     label: 'a non-object capture entry',
     message: 'captures[0] must be an object',
     build: (base) => ({ ...base, captures: [['after-blank-webkit.png']] }),
+  },
+  {
+    label: 'a primitive capture entry',
+    message: 'captures[0] must be an object',
+    build: (base) => ({ ...base, captures: ['after-blank-webkit.png'] }),
+  },
+  // `environment`.
+  {
+    label: 'a manifest without environment',
+    message: '"environment" must be an object',
+    build: (base) => {
+      const copy: MutatedManifest = { ...base };
+      delete copy.environment;
+      return copy;
+    },
+  },
+  {
+    label: 'an environment that is null',
+    message: '"environment" must be an object',
+    build: (base) => ({ ...base, environment: null }),
+  },
+  {
+    label: 'a missing environment source',
+    message: 'environment.source must be a non-empty string',
+    build: (base) => withEnvironment(base, { source: '' }),
+  },
+  {
+    label: 'an unknown environment source',
+    message: 'environment.source must be "container" or "host", got "desktop"',
+    build: (base) => withEnvironment(base, { source: 'desktop' }),
+  },
+  {
+    label: 'a missing environment target',
+    message: 'environment.target must be a non-empty string',
+    build: (base) => withEnvironment(base, { target: '' }),
+  },
+  {
+    label: 'a non-string environment target',
+    message: 'environment.target must be a non-empty string',
+    build: (base) => withEnvironment(base, { target: 42 }),
+  },
+  {
+    label: 'a whitespace-only environment target',
+    message: 'environment.target must be a non-empty string',
+    build: (base) => withEnvironment(base, { target: '   ' }),
+  },
+  // `environment.image`.
+  {
+    label: 'an environment image that is null',
+    message: 'environment.image must be an object',
+    build: (base) => withEnvironment(base, { image: null }),
+  },
+  {
+    label: 'a missing image repository',
+    message: 'environment.image.repository must be a non-empty string',
+    build: (base) =>
+      withEnvironment(base, {
+        image: { ...base.environment.image, repository: '' },
+      }),
+  },
+  {
+    label: 'a missing image tag',
+    message: 'environment.image.tag must be a non-empty string',
+    build: (base) =>
+      withEnvironment(base, {
+        image: { ...base.environment.image, tag: '' },
+      }),
+  },
+  {
+    label: 'a missing image digest',
+    message: 'environment.image.digest must be a non-empty string',
+    build: (base) =>
+      withEnvironment(base, {
+        image: { ...base.environment.image, digest: '' },
+      }),
+  },
+  {
+    label: 'a malformed image digest',
+    message:
+      'environment.image.digest must be "sha256:" plus 64 lower-case hex ' +
+      'characters, got "sha256:nope"',
+    build: (base) =>
+      withEnvironment(base, {
+        image: { ...base.environment.image, digest: 'sha256:nope' },
+      }),
+  },
+  // `environment.egl`.
+  {
+    label: 'an environment egl that is null',
+    message: 'environment.egl must be an object',
+    build: (base) => withEnvironment(base, { egl: null }),
+  },
+  {
+    label: 'an empty EGL variable',
+    message: 'environment.egl.EGL_PLATFORM must be a non-empty string',
+    build: (base) =>
+      withEnvironment(base, {
+        egl: { ...base.environment.egl, EGL_PLATFORM: '' },
+      }),
+  },
+  {
+    label: 'a non-string EGL variable',
+    message: 'environment.egl.EGL_PLATFORM must be a non-empty string',
+    build: (base) =>
+      withEnvironment(base, {
+        egl: { ...base.environment.egl, EGL_PLATFORM: 7 },
+      }),
+  },
+  {
+    label: 'an EGL environment missing a fixed variable',
+    message: `environment.egl is missing one of ${CAPTURE_EGL_VARS.join(', ')}`,
+    build: (base) => {
+      const egl = { ...base.environment.egl };
+      delete egl.EGL_PLATFORM;
+      return withEnvironment(base, { egl });
+    },
+  },
+  // `environment.fonts`.
+  {
+    label: 'an empty font package list',
+    message: 'environment.fonts must be a non-empty array of font packages',
+    build: (base) => withEnvironment(base, { fonts: [] }),
+  },
+  {
+    label: 'a non-array font package list',
+    message: 'environment.fonts must be a non-empty array of font packages',
+    build: (base) => withEnvironment(base, { fonts: {} }),
+  },
+  {
+    label: 'a non-object font entry',
+    message: 'environment.fonts[0] must be an object',
+    build: (base) => withEnvironment(base, { fonts: [null] }),
+  },
+  {
+    label: 'a font entry without a name',
+    message: 'environment.fonts[0].name must be a non-empty string',
+    build: (base) =>
+      withEnvironment(base, {
+        fonts: base.environment.fonts.map((font, index) =>
+          index === 0 ? { ...font, name: '' } : font,
+        ),
+      }),
+  },
+  {
+    label: 'a font entry without a version',
+    message: 'environment.fonts[0].version must be a non-empty string',
+    build: (base) =>
+      withEnvironment(base, {
+        fonts: base.environment.fonts.map((font, index) =>
+          index === 0 ? { ...font, version: '' } : font,
+        ),
+      }),
+  },
+  {
+    label: 'a duplicate font package',
+    message: 'duplicate font package "fonts-freefont-ttf"',
+    build: (base) => {
+      const [first] = base.environment.fonts;
+      if (first === undefined) {
+        throw new Error('the committed manifest has no fonts');
+      }
+      return withEnvironment(base, {
+        fonts: [...base.environment.fonts, { ...first }],
+      });
+    },
+  },
+  // Per-capture fields.
+  {
+    label: 'a capture without a file name',
+    message: 'captures[0].file must be a non-empty string',
+    build: (base) => withFirstCapture(base, () => ({ file: '' })),
+  },
+  {
+    label: 'a capture file without the .png suffix',
+    message: 'captures[0].file must be a .png file name, got "after-blank-webkit.jpg"',
+    build: (base) =>
+      withFirstCapture(base, () => ({ file: 'after-blank-webkit.jpg' })),
+  },
+  {
+    label: 'a capture file with a backslash separator',
+    message:
+      'captures[0].file must be a plain file name below the screenshot directory, ' +
+      'got "nested\\after-blank-webkit.png"',
+    build: (base) =>
+      withFirstCapture(base, () => ({ file: 'nested\\after-blank-webkit.png' })),
+  },
+  {
+    label: 'a Unicode-normalized duplicate capture file',
+    message: 'duplicate capture file "café.png"',
+    build: (base) => {
+      const [first] = base.captures;
+      if (first === undefined) {
+        throw new Error('the committed manifest has no captures');
+      }
+      return {
+        ...base,
+        captures: [
+          { ...first, file: 'cafe\u0301.png' },
+          { ...first, file: 'café.png' },
+        ],
+      };
+    },
+  },
+  {
+    label: 'a capture without a sha256',
+    message: 'captures[0].sha256 must be a non-empty string',
+    build: (base) => withFirstCapture(base, () => ({ sha256: '' })),
+  },
+  {
+    label: 'a capture without a recapture command',
+    message: 'captures[0].command must be a non-empty string',
+    build: (base) => withFirstCapture(base, () => ({ command: '' })),
+  },
+  // `provenance`.
+  {
+    label: 'a capture without a provenance object',
+    message: 'captures[0].provenance must be an object',
+    build: (base) => ({
+      ...base,
+      captures: base.captures.map((capture) => {
+        const copy: MutatedManifest = { ...capture };
+        delete copy.provenance;
+        return copy;
+      }),
+    }),
+  },
+  {
+    label: 'a capture without a provenance container',
+    message: 'captures[0].provenance.container must be a non-empty string',
+    build: (base) =>
+      withFirstCapture(base, (capture) => ({
+        provenance: { ...capture.provenance, container: '' },
+      })),
+  },
+  {
+    label: 'a malformed provenance container',
+    message:
+      'captures[0].provenance.container must be ' +
+      '"<repository>:<tag>@sha256:<digest>", got "not-a-ref"',
+    build: (base) =>
+      withFirstCapture(base, (capture) => ({
+        provenance: { ...capture.provenance, container: 'not-a-ref' },
+      })),
+  },
+  {
+    label: 'a capture without a provenance commit',
+    message: 'captures[0].provenance.captureCommit must be a non-empty string',
+    build: (base) =>
+      withFirstCapture(base, (capture) => ({
+        provenance: { ...capture.provenance, captureCommit: '' },
+      })),
   },
 ];
 
