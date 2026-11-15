@@ -1,6 +1,7 @@
 import { devices, type Browser } from '@playwright/test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  CAPTURE_PLATFORM,
   PLAYWRIGHT_IMAGE_PIN,
   PLAYWRIGHT_IMAGE_REPOSITORY,
 } from '../../scripts/lib/capture-env.mjs';
@@ -21,6 +22,7 @@ function containerEnv(overrides: Record<string, string> = {}): Record<string, st
     CAPTURE_CONTAINER: '1',
     CAPTURE_IMAGE_TAG: PLAYWRIGHT_IMAGE_PIN.tag,
     CAPTURE_IMAGE_DIGEST: PLAYWRIGHT_IMAGE_PIN.digest,
+    CAPTURE_PLATFORM: CAPTURE_PLATFORM,
     CAPTURE_TARGET: 'desktop,mobile',
     CAPTURE_TARGET_DPR: '1,2',
     EGL_PLATFORM: 'surfaceless',
@@ -62,7 +64,7 @@ describe('capture environment fingerprint in the capture runtime', () => {
     });
 
     expect(loggedLines(log)).toEqual([
-      'capture-env: source=host target=desktop dpr=1 image=unavailable ' +
+      'capture-env: source=host target=desktop dpr=1 platform=unavailable image=unavailable ' +
         `node=${process.version} playwright=${PLAYWRIGHT_IMAGE_PIN.version} ` +
         `browser=${BROWSER_VERSION} fonts=unavailable env=unavailable`,
     ]);
@@ -81,7 +83,7 @@ describe('capture environment fingerprint in the capture runtime', () => {
 
     expect(context).toEqual({ close: expect.any(Function) });
     expect(loggedLines(log)).toEqual([
-      'capture-env: source=host target=mobile dpr=2 image=unavailable ' +
+      'capture-env: source=host target=mobile dpr=2 platform=unavailable image=unavailable ' +
         `node=${process.version} playwright=${PLAYWRIGHT_IMAGE_PIN.version} ` +
         `browser=${BROWSER_VERSION} fonts=unavailable env=unavailable`,
     ]);
@@ -115,7 +117,7 @@ describe('capture environment fingerprint in the capture runtime', () => {
     });
     expect(device.deviceScaleFactor).toBe(2.625);
     expect(loggedLines(log)).toEqual([
-      'capture-env: source=host target=mobile-touch dpr=2.625 image=unavailable ' +
+      'capture-env: source=host target=mobile-touch dpr=2.625 platform=unavailable image=unavailable ' +
         `node=${process.version} playwright=${PLAYWRIGHT_IMAGE_PIN.version} ` +
         `browser=${BROWSER_VERSION} fonts=unavailable env=unavailable`,
     ]);
@@ -142,7 +144,7 @@ describe('capture environment fingerprint in the capture runtime', () => {
       }),
     );
     expect(loggedLines(log)).toEqual([
-      'capture-env: source=host target=mobile-touch dpr=2.625 image=unavailable ' +
+      'capture-env: source=host target=mobile-touch dpr=2.625 platform=unavailable image=unavailable ' +
         `node=${process.version} playwright=${PLAYWRIGHT_IMAGE_PIN.version} ` +
         `browser=${BROWSER_VERSION} fonts=unavailable env=unavailable`,
     ]);
@@ -184,6 +186,7 @@ describe('capture environment fingerprint in the capture runtime', () => {
 
     const [line] = loggedLines(log);
     expect(line).toContain('source=container target=mobile dpr=2');
+    expect(line).toContain(`platform=${CAPTURE_PLATFORM}`);
     expect(line).toContain(
       `image=${PLAYWRIGHT_IMAGE_REPOSITORY}:${PLAYWRIGHT_IMAGE_PIN.tag}@${PLAYWRIGHT_IMAGE_PIN.digest}`,
     );

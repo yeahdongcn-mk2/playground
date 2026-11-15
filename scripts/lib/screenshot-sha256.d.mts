@@ -36,6 +36,7 @@ export interface CaptureEnvironmentFingerprintRecord {
   source: CaptureSource;
   target: string;
   dpr: number;
+  platform: string;
   image: ScreenshotSha256Image | null;
   node: string;
   playwright: string;

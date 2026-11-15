@@ -16,6 +16,8 @@ import {
   CAPTURE_EGL_VARS,
   CAPTURE_IMAGE_DIGEST_VAR,
   CAPTURE_IMAGE_TAG_VAR,
+  CAPTURE_PLATFORM,
+  CAPTURE_PLATFORM_VAR,
   CAPTURE_REPO_ROOT,
   CAPTURE_TARGET_DPR_VAR,
   CAPTURE_TARGET_VAR,
@@ -40,12 +42,15 @@ import { assertPortAvailable, parsePreviewPort } from './lib/preview-port.mjs';
  * from the target script's `--print-capture-targets` declaration, builds the
  * local capture image from docker/capture/Dockerfile when needed, then runs the
  * existing `npm run <target>` command inside the fixed Playwright container.
- * The repository is mounted at /work, so the PNGs and the build output are
- * written back to the host; the combined output is also saved under
- * test-results/capture-container/.
+ * Both `docker build` and `docker run` request the fixed `linux/amd64`
+ * platform, and the built or reused image is inspected so a wrong platform is
+ * rejected before a capture starts. The repository is mounted at /work, so the
+ * PNGs and the build output are written back to the host; the combined output
+ * is also saved under test-results/capture-container/.
  *
  * Container side (the same script, CAPTURE_CONTAINER=1):
- *   It re-validates the image tag, EGL variables and target DPR, re-resolves the
+ *   It re-validates the image tag, fixed platform, EGL variables and target
+ *   DPR, re-resolves the
  *   same script declaration to check the injected targets, installs
  *   dependencies on demand (`npm ci`) and runs the capture command. The shared
  *   capture runtime logs the environment fingerprint once the browser launches.
@@ -300,18 +305,75 @@ export function localCaptureImageName(tag = PLAYWRIGHT_IMAGE_PIN.tag) {
   return `${CONTAINER_CAPTURE_IMAGE}:${tag}`;
 }
 
+/** Format that prints an image's OS / architecture from `docker image inspect`. */
+const CAPTURE_IMAGE_PLATFORM_FORMAT = '{{.Os}}/{{.Architecture}}';
+
+/** The fixed container command a human re-runs after fixing the capture platform. */
+function recaptureCommand(target) {
+  return `npm run screenshots:container -- ${target ?? '<target>'}`;
+}
+
+/**
+ * Fail unless the local image's `Os` / `Architecture` is the fixed platform.
+ *
+ * `docker build --platform` and `docker run --platform` request the platform,
+ * but the image actually produced or reused is what decides the browser bytes,
+ * so the entry inspects it. The pinned digest is included in the error because
+ * the same multi-arch digest resolves to another image on another platform;
+ * the recapture command keeps the remediation concrete.
+ */
+function assertCaptureImagePlatform({
+  spawnSync = defaultSpawnSync,
+  localImage,
+  digest,
+  target,
+}) {
+  const inspected = spawnSync(
+    'docker',
+    ['image', 'inspect', '--format', CAPTURE_IMAGE_PLATFORM_FORMAT, localImage],
+    { encoding: 'utf8' },
+  );
+  const command = recaptureCommand(target);
+  if (inspected?.error) {
+    throw new Error(
+      `Cannot inspect ${localImage} for the fixed capture platform "${CAPTURE_PLATFORM}" ` +
+        `(image digest ${digest}): ${inspected.error.message}. Re-capture with: ${command}`,
+    );
+  }
+  if (inspected.status !== 0) {
+    const detail = String(inspected.stderr ?? '').trim() || 'no detail';
+    throw new Error(
+      `Cannot inspect ${localImage} for the fixed capture platform "${CAPTURE_PLATFORM}" ` +
+        `(image digest ${digest}, exit ${inspected.status}): ${detail}. ` +
+        `Re-capture with: ${command}`,
+    );
+  }
+
+  const actual = String(inspected.stdout ?? '').trim();
+  if (actual === CAPTURE_PLATFORM) {
+    return;
+  }
+  throw new Error(
+    `Capture image ${localImage} is platform "${actual === '' ? 'unavailable' : actual}", ` +
+      `but the fixed capture platform is "${CAPTURE_PLATFORM}" (image digest ${digest}). ` +
+      `The host cannot provide the ${CAPTURE_PLATFORM} capture image; run the capture on ` +
+      `an amd64 host or enable amd64 emulation, then re-capture with: ${command}`,
+  );
+}
+
 /**
  * Stable sha256 of every input that changes the local capture image.
  *
  * A local `playground-capture:<tag>` image is only reusable when it was built
- * from the same Playwright pin (tag + digest) and the same
- * `docker/capture/Dockerfile` contents. Changing either input changes the
+ * from the same Playwright pin (tag + digest), the same fixed platform and the
+ * same `docker/capture/Dockerfile` contents. Changing either input changes the
  * fingerprint, so the image is rebuilt instead of silently reusing an image
  * that no longer describes the injected `CAPTURE_IMAGE_DIGEST`.
  */
 export function captureImageBuildInputFingerprint({
   tag = PLAYWRIGHT_IMAGE_PIN.tag,
   digest = PLAYWRIGHT_IMAGE_PIN.digest,
+  platform = CAPTURE_PLATFORM,
   dockerfile,
 } = {}) {
   if (typeof dockerfile !== 'string') {
@@ -320,7 +382,7 @@ export function captureImageBuildInputFingerprint({
     );
   }
   return createHash('sha256')
-    .update(JSON.stringify({ tag, digest, dockerfile }))
+    .update(JSON.stringify({ tag, digest, platform, dockerfile }))
     .digest('hex');
 }
 
@@ -383,6 +445,7 @@ export function ensureCaptureImage({
   repoRoot = CAPTURE_REPO_ROOT,
   tag = PLAYWRIGHT_IMAGE_PIN.tag,
   digest = PLAYWRIGHT_IMAGE_PIN.digest,
+  target,
   readFile = defaultReadFile,
 } = {}) {
   const localImage = localCaptureImageName(tag);
@@ -414,6 +477,7 @@ export function ensureCaptureImage({
     inspect.status === 0 &&
     String(inspect.stdout ?? '').trim() === fingerprint
   ) {
+    assertCaptureImagePlatform({ spawnSync, localImage, digest, target });
     return localImage;
   }
 
@@ -423,6 +487,8 @@ export function ensureCaptureImage({
     'docker',
     [
       'build',
+      '--platform',
+      CAPTURE_PLATFORM,
       '--label',
       `${CAPTURE_IMAGE_BUILD_LABEL}=${fingerprint}`,
       '--file',
@@ -434,14 +500,20 @@ export function ensureCaptureImage({
     { encoding: 'utf8' },
   );
   if (built?.error) {
-    throw new Error(`Cannot build ${localImage}: ${built.error.message}`);
+    throw new Error(
+      `Cannot build ${localImage} for platform ${CAPTURE_PLATFORM}: ${built.error.message}`,
+    );
   }
   if (built.status !== 0) {
     const detail = String(built.stderr ?? '').trim() || 'no detail';
     throw new Error(
-      `Docker build for ${localImage} failed (exit ${built.status}): ${detail}`,
+      `Docker build for ${localImage} (platform ${CAPTURE_PLATFORM}, image digest ` +
+        `${digest}) failed (exit ${built.status}): ${detail}. ` +
+        `The host could not provide the ${CAPTURE_PLATFORM} capture image; re-capture ` +
+        `with: ${recaptureCommand(target)}`,
     );
   }
+  assertCaptureImagePlatform({ spawnSync, localImage, digest, target });
   return localImage;
 }
 
@@ -481,6 +553,8 @@ export function buildDockerRunArgs({
   const args = [
     'run',
     '--rm',
+    '--platform',
+    CAPTURE_PLATFORM,
     '--init',
     '--ipc',
     'host',
@@ -500,6 +574,8 @@ export function buildDockerRunArgs({
     `${CAPTURE_IMAGE_TAG_VAR}=${imageTag}`,
     '--env',
     `${CAPTURE_IMAGE_DIGEST_VAR}=${imageDigest}`,
+    '--env',
+    `${CAPTURE_PLATFORM_VAR}=${CAPTURE_PLATFORM}`,
     '--env',
     `${CAPTURE_TARGET_VAR}=${declaredTargets.join(',')}`,
     '--env',
@@ -680,6 +756,7 @@ export async function runContainerCapture({
     repoRoot,
     tag: image.tag,
     digest: image.digest,
+    target,
     readFile,
   });
   const args = buildDockerRunArgs({

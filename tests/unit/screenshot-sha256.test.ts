@@ -10,6 +10,7 @@ import {
   CAPTURE_EGL_ENV,
   CAPTURE_EGL_VARS,
   CAPTURE_FONT_PACKAGES,
+  CAPTURE_PLATFORM,
   CAPTURE_TARGET_DPRS,
   PLAYWRIGHT_IMAGE_PIN,
   PLAYWRIGHT_IMAGE_REPOSITORY,
@@ -62,7 +63,7 @@ const EXPECTED_FONT_LIST = EXPECTED_FONT_VERSIONS.map(
 
 /** A container-format fingerprint fixture; the browser version is synthetic. */
 const CONTAINER_LOG_LINE =
-  'capture-env: source=container target=webkit dpr=2 ' +
+  'capture-env: source=container target=webkit dpr=2 platform=linux/amd64 ' +
   `image=${PLAYWRIGHT_IMAGE_REPOSITORY}:${PLAYWRIGHT_IMAGE_PIN.tag}@${PLAYWRIGHT_IMAGE_PIN.digest} ` +
   'node=v26.13.0 playwright=1.64.1 browser=27.2 ' +
   `fonts=${EXPECTED_FONT_LIST} ` +
@@ -74,7 +75,7 @@ const CONTAINER_LOG_LINE =
  * are unavailable by design, and the source is not the fixed container.
  */
 const HOST_LOG_LINE =
-  'capture-env: source=host target=webkit dpr=2 image=unavailable ' +
+  'capture-env: source=host target=webkit dpr=2 platform=unavailable image=unavailable ' +
   'node=v26.13.0 playwright=1.64.1 browser=unavailable fonts=unavailable env=unavailable';
 
 /** Manifest environment drifts that must be rejected and exit 2 through the CLI. */
@@ -217,6 +218,11 @@ const MALFORMED_CAPTURE_ENV_FIELD_CASES: Array<{
       'fonts=@1.2',
     ),
     message: 'invalid capture-env font entry "@1.2"',
+  },
+  {
+    label: 'a line without the platform field',
+    logLine: CONTAINER_LOG_LINE.replace(' platform=linux/amd64', ''),
+    message: 'capture-env line is missing "platform"',
   },
   {
     label: 'an image reference that is not repo:tag@digest',
@@ -722,6 +728,7 @@ describe('capture sha256 manifest', () => {
     expect(Object.keys(CAPTURE_TARGET_DPRS)).toContain(fingerprint.target);
     expect(fingerprint.dpr).toBe(CAPTURE_TARGET_DPRS[fingerprint.target]);
     expect(fingerprint.source).toBe(manifest.environment.source);
+    expect(fingerprint.platform).toBe(CAPTURE_PLATFORM);
     expect(fingerprint.image).toEqual(manifest.environment.image);
     expect(fingerprint.env).toEqual(manifest.environment.egl);
     expect(fingerprint.fonts).toEqual(manifest.environment.fonts);
@@ -911,6 +918,32 @@ describe('capture sha256 manifest', () => {
 });
 
 describe('capture environment fingerprint', () => {
+  it('parses the fixed container platform and the host unavailable marker', () => {
+    expect(parseCaptureEnvironmentFingerprintLine(CONTAINER_LOG_LINE).platform).toBe(
+      CAPTURE_PLATFORM,
+    );
+    expect(parseCaptureEnvironmentFingerprintLine(HOST_LOG_LINE).platform).toBe(
+      'unavailable',
+    );
+  });
+
+  it('reports a container platform drift against the fixed contract', () => {
+    const manifest = committedManifest();
+    const drifted = CONTAINER_LOG_LINE.replace(
+      'platform=linux/amd64',
+      'platform=linux/arm64',
+    );
+    const verification = verifyCaptureEnvironment({
+      logText: `${drifted}\n`,
+      environment: manifest.environment,
+    });
+
+    expect(verification.ok).toBe(false);
+    expect(verification.problems).toContain(
+      'capture environment platform is "linux/arm64", expected "linux/amd64"',
+    );
+  });
+
   it('verifies the container image, EGL variables, DPR and recorded fonts', () => {
     const manifest = committedManifest();
     const verification = verifyCaptureEnvironment({
@@ -1340,7 +1373,10 @@ describe('verifyScreenshotSha256', () => {
     writePng(dir, EXPECTED_FILES[0] as string, bytes);
     const manifestPath = writeManifest(dir, fixtureManifest(bytes));
     const logPath = join(dir, 'capture.log');
-    writeFileSync(logPath, 'capture-env: source=container target=webkit dpr=2\n');
+    writeFileSync(
+      logPath,
+      'capture-env: source=container target=webkit dpr=2 platform=linux/amd64\n',
+    );
 
     const result = runCli([
       '--dir',
