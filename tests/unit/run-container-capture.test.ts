@@ -1420,8 +1420,10 @@ describe('host container capture run', () => {
     // 5001 is no script's default and appeared in no hand-written port table,
     // so only a declaration-sourced port can pass these assertions.
     const sentinelPort = 5001;
+    const nodeSpawns: string[][] = [];
     const sentinelSpawnSync = ((command: string, args: readonly string[]) => {
       if (command === process.execPath) {
+        nodeSpawns.push([command, ...args]);
         return spawnSyncResult({
           stdout: JSON.stringify({
             script: args[0],
@@ -1454,6 +1456,11 @@ describe('host container capture run', () => {
     const envArgs = envArgsOf(harness.calls[0]?.args ?? []);
     expect(envArgs).toContain(`PREVIEW_PORT=${sentinelPort}`);
     expect(envArgs).toContain('CAPTURE_TARGET=desktop,mobile');
+    // The declaration is resolved once on the host and then reused by the
+    // docker-run argument builder: dropping that reuse spawns the target script
+    // a second time, which this assertion makes observable.
+    expect(nodeSpawns).toHaveLength(1);
+    expect(nodeSpawns[0]?.at(-1)).toBe('--print-capture-targets');
     await flushLog(harness.logPath);
 
     const overrideCheck = vi.fn(async () => {});
@@ -1468,6 +1475,8 @@ describe('host container capture run', () => {
     expect(envArgsOf(overrideHarness.calls[0]?.args ?? [])).toContain(
       'PREVIEW_PORT=5002',
     );
+    // One resolution per host run; the override must not add a second spawn.
+    expect(nodeSpawns).toHaveLength(2);
     await flushLog(overrideHarness.logPath);
   });
 
