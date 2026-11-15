@@ -73,9 +73,13 @@ function parseEnvironment(source, environment) {
   }
 
   const target = requireNonEmptyString(environment.target, `${source}: environment.target`);
-  if (!Number.isInteger(environment.dpr) || environment.dpr <= 0) {
+  if (
+    typeof environment.dpr !== 'number' ||
+    !Number.isFinite(environment.dpr) ||
+    environment.dpr <= 0
+  ) {
     throw new ScreenshotSha256Error(
-      `${source}: environment.dpr must be a positive integer, got ${String(environment.dpr)}`,
+      `${source}: environment.dpr must be a positive number, got ${String(environment.dpr)}`,
     );
   }
 
@@ -480,9 +484,12 @@ export function parseCaptureEnvironmentFingerprintLine(line) {
   }
 
   const rawDpr = fields.get('dpr') ?? '';
-  if (!/^[1-9][0-9]*$/.test(rawDpr)) {
+  // The fixed contract has both integer and fractional targets (`mobile-touch`
+  // is DPR 2.625), so the log may record a fraction. Keep the canonical decimal
+  // form: `2.625` is valid, while `2.0`, `2.` and `+2` still are not.
+  if (!/^[1-9][0-9]*(?:\.[0-9]*[1-9])?$/.test(rawDpr)) {
     throw new ScreenshotSha256Error(
-      `capture-env dpr is "${rawDpr}", expected a positive integer`,
+      `capture-env dpr is "${rawDpr}", expected a positive decimal number`,
     );
   }
   const dpr = Number(rawDpr);

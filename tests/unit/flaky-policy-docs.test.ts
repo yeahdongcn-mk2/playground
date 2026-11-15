@@ -312,6 +312,7 @@ describe('flaky policy docs', () => {
       'README.md',
       'npm run verify:doc-counts',
       'npm run verify:screenshots:doc-dims',
+      'npm run verify:screenshots:sha256',
     ]) {
       expect(section, target).toContain(target);
     }

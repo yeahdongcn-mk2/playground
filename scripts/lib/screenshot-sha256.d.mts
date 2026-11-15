@@ -1,6 +1,4 @@
-import type { CaptureFontPackage } from './capture-env.mjs';
-
-export type CaptureSource = 'container' | 'host';
+import type { CaptureFontPackage, CaptureSource } from './capture-env.mjs';
 
 export interface ScreenshotSha256Image {
   repository: string;
@@ -35,7 +33,8 @@ export interface ScreenshotSha256Manifest {
 }
 
 export interface CaptureEnvironmentFingerprintRecord {
-  source: CaptureSource;  target: string;
+  source: CaptureSource;
+  target: string;
   dpr: number;
   image: ScreenshotSha256Image | null;
   node: string;

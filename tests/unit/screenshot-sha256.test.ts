@@ -56,7 +56,7 @@ const EXPECTED_FONT_LIST = EXPECTED_FONT_VERSIONS.map(
   ({ name, version }) => `${name}@${version}`,
 ).join(',');
 
-/** One real container log line from docs/screenshots/README.md. */
+/** A container-format fingerprint fixture; the browser version is synthetic. */
 const CONTAINER_LOG_LINE =
   'capture-env: source=container target=webkit dpr=2 ' +
   `image=${PLAYWRIGHT_IMAGE_REPOSITORY}:${PLAYWRIGHT_IMAGE_PIN.tag}@${PLAYWRIGHT_IMAGE_PIN.digest} ` +
@@ -292,7 +292,18 @@ describe('capture sha256 manifest', () => {
     expect(manifest.environment.fonts).toEqual(EXPECTED_FONT_VERSIONS);
   });
 
-  it('keeps the documented container fingerprint sample aligned with the manifest', () => {
+  it('accepts the fractional DPR of a mobile-touch manifest environment', () => {
+    const manifest = committedManifest();
+    manifest.environment.target = 'mobile-touch';
+    manifest.environment.dpr = CAPTURE_TARGET_DPRS['mobile-touch'] as number;
+
+    const parsed = parseSha256Manifest(JSON.stringify(manifest));
+
+    expect(parsed.environment.dpr).toBe(2.625);
+    expect(manifestEnvironmentMismatches(parsed)).toEqual([]);
+  });
+
+  it('keeps the documented container fingerprint sample aligned with the fixed environment', () => {
     const readme = readFileSync(
       join(ROOT, 'docs', 'screenshots', 'README.md'),
       'utf8',
@@ -309,9 +320,12 @@ describe('capture sha256 manifest', () => {
       documentedLine as string,
     );
     const manifest = committedManifest();
+    // The README sample may demonstrate another fixed target (for example the
+    // Pixel 7 touch context, DPR 2.625), so compare the shared environment and
+    // require the sample's DPR to match its declared target.
+    expect(Object.keys(CAPTURE_TARGET_DPRS)).toContain(fingerprint.target);
+    expect(fingerprint.dpr).toBe(CAPTURE_TARGET_DPRS[fingerprint.target]);
     expect(fingerprint.source).toBe(manifest.environment.source);
-    expect(fingerprint.target).toBe(manifest.environment.target);
-    expect(fingerprint.dpr).toBe(manifest.environment.dpr);
     expect(fingerprint.image).toEqual(manifest.environment.image);
     expect(fingerprint.env).toEqual(manifest.environment.egl);
     expect(fingerprint.fonts).toEqual(manifest.environment.fonts);
@@ -453,6 +467,22 @@ describe('capture sha256 manifest', () => {
       /captureCommit/,
     );
 
+    // The environment DPR was relaxed from an integer to a positive number for
+    // fractional targets, but every non-number / non-positive value is still
+    // invalid input. JSON has no Infinity, so `1e400` parses to Infinity and is
+    // covered through a raw manifest edit below.
+    for (const badDpr of [0, -1, '2', null]) {
+      const invalid = clone();
+      invalid.environment.dpr = badDpr as number;
+      expect(
+        () => parseSha256Manifest(JSON.stringify(invalid)),
+        String(badDpr),
+      ).toThrow(/environment.dpr/);
+    }
+    expect(() =>
+      parseSha256Manifest(MANIFEST_TEXT.replace('"dpr": 2', '"dpr": 1e400')),
+    ).toThrow(/environment.dpr/);
+
     expect(() => parseSha256Manifest('{not json}')).toThrow(/not valid JSON/);
   });
 });
@@ -525,6 +555,7 @@ describe('capture environment fingerprint', () => {
       `${CONTAINER_LOG_LINE} extra=1`,
       CONTAINER_LOG_LINE.replace('dpr=2', 'dpr=2.0'),
       CONTAINER_LOG_LINE.replace('dpr=2', 'dpr=+2'),
+      CONTAINER_LOG_LINE.replace('dpr=2', 'dpr=2.'),
       CONTAINER_LOG_LINE.replace(' playwright=1.64.1', ''),
     ];
 
@@ -536,6 +567,15 @@ describe('capture environment fingerprint', () => {
       expect(verification.invalid, logText).toBe(true);
       expect(verification.problems.length, logText).toBeGreaterThan(0);
     }
+  });
+
+  it('accepts the fractional DPR used by the mobile-touch target', () => {
+    const fingerprint = parseCaptureEnvironmentFingerprintLine(
+      CONTAINER_LOG_LINE.replace('target=webkit dpr=2', 'target=mobile-touch dpr=2.625'),
+    );
+
+    expect(fingerprint.target).toBe('mobile-touch');
+    expect(fingerprint.dpr).toBe(CAPTURE_TARGET_DPRS['mobile-touch']);
   });
 
   it('reports environment drift separately from the hash check', () => {

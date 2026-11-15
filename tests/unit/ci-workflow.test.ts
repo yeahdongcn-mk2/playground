@@ -36,6 +36,7 @@ const VERIFY_CHECK_ORDER = [
   'Unit tests',
   'Verify doc test counts',
   'Screenshot doc dimensions',
+  'Screenshot evidence sha256 manifest',
   'Production build',
   'Bundle budget',
   'End-to-end tests',
