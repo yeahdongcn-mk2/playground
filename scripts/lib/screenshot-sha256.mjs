@@ -18,14 +18,17 @@ import {
  * evidence that is byte-for-byte reproducible inside the pinned Playwright
  * container: the file name, expected sha256, capture command and provenance
  * (container image and capture commit), plus the expected capture environment
- * fingerprint (image tag / digest, EGL variables, target DPR and font package
- * versions recorded from the container).
+ * fingerprint (image tag / digest, platform, EGL variables, target DPR and font
+ * package versions recorded from the container).
  *
  * The hash check only reads committed files. Passing a capture log additionally
  * verifies the environment fingerprint printed by the capture runtime, and the
  * failure classes stay separate: a changed PNG is a hash mismatch, a different
- * image / EGL / DPR / font stack is an environment mismatch, and a malformed
- * manifest or capture-env log line is invalid input for the CLI to reject.
+ * image / platform / EGL / DPR / font stack is an environment mismatch, and a
+ * malformed manifest or capture-env log line is invalid input for the CLI to
+ * reject. A platform difference is also returned separately because the same
+ * multi-arch image digest resolves to another browser build on the wrong CPU
+ * architecture.
  */
 
 export const DEFAULT_SCREENSHOT_DIR = 'docs/screenshots';
@@ -39,6 +42,11 @@ export const IMAGE_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 export const CAPTURE_COMMIT_PATTERN = /^[0-9a-f]{40}$/;
 /** A plain PNG file name: no separators, control characters or `..` segments. */
 export const FILE_NAME_PATTERN = /^[^\p{Cc}/\\]+\.png$/u;
+/**
+ * A Docker-style capture platform: `<os>/<architecture>` with an optional
+ * variant, for example `linux/amd64` or `linux/arm64/v8`.
+ */
+export const PLATFORM_PATTERN = /^[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)?$/;
 
 const IMAGE_REFERENCE_PATTERN = /^(?<repository>.+):(?<tag>[^:@]+)@(?<digest>sha256:[0-9a-f]{64})$/;
 
@@ -81,6 +89,17 @@ function parseEnvironment(source, environment) {
   ) {
     throw new ScreenshotSha256Error(
       `${source}: environment.dpr must be a positive number, got ${String(environment.dpr)}`,
+    );
+  }
+
+  const platform = requireNonEmptyString(
+    environment.platform,
+    `${source}: environment.platform`,
+  );
+  if (!PLATFORM_PATTERN.test(platform)) {
+    throw new ScreenshotSha256Error(
+      `${source}: environment.platform must be "<os>/<arch>" with an optional variant ` +
+        `(for example "linux/amd64"), got "${platform}"`,
     );
   }
 
@@ -146,6 +165,7 @@ function parseEnvironment(source, environment) {
     source: kind,
     target,
     dpr: environment.dpr,
+    platform,
     image: { repository, tag, digest },
     egl,
     fonts,
@@ -257,10 +277,15 @@ export function parseSha256Manifest(text, { source = 'manifest' } = {}) {
  * Compare the manifest environment with the fixed capture contract.
  *
  * The manifest is data, so a test and the CLI both re-check that its image tag
- * / digest, EGL variables, target DPR, font package names, per-capture
- * `provenance.container` and recapture `command` still match
+ * / digest, platform, EGL variables, target DPR, font package names,
+ * per-capture `provenance.container` and recapture `command` still match
  * `scripts/lib/capture-env.mjs` (the t1 contract). Font versions are recorded
  * values from the container and are not compared here.
+ *
+ * The platform message is also available through
+ * {@link manifestPlatformMismatch}; the CLI reports it as its own failure
+ * class (the sha256s were recorded on another CPU architecture) instead of a
+ * generic invalid-manifest problem.
  *
  * @returns {string[]} one message per mismatch; empty when the manifest follows
  *   the fixed contract.
@@ -273,6 +298,10 @@ export function manifestEnvironmentMismatches(manifest) {
     problems.push(
       `environment.source is "${environment.source}", expected "container" for fixed-environment evidence`,
     );
+  }
+
+  if (environment.platform !== CAPTURE_PLATFORM) {
+    problems.push(manifestPlatformMessage(environment.platform));
   }
 
   const expectedDpr = CAPTURE_TARGET_DPRS[environment.target];
@@ -348,6 +377,42 @@ export function manifestEnvironmentMismatches(manifest) {
   });
 
   return problems;
+}
+
+function manifestPlatformMessage(actual) {
+  return `environment.platform is "${actual}", expected "${CAPTURE_PLATFORM}"`;
+}
+
+/**
+ * Describe a manifest platform that differs from the fixed capture contract.
+ *
+ * The manifest records the CPU architecture the committed PNG bytes were
+ * captured on. The pinned image digest is a multi-arch manifest list, so a
+ * manifest recorded on another platform (for example `linux/arm64`) explains a
+ * hash or rendering difference instead of silently passing as a valid
+ * contract. The CLI reports this separately from other environment drift and
+ * exits 1 because the evidence is not from the fixed environment.
+ *
+ * @returns {{
+ *   source: 'manifest',
+ *   expected: string,
+ *   actual: string,
+ *   image: { repository: string, tag: string, digest: string },
+ *   message: string,
+ * } | null} `null` when the manifest platform matches `CAPTURE_PLATFORM`.
+ */
+export function manifestPlatformMismatch(manifest) {
+  const { environment } = manifest;
+  if (environment.platform === CAPTURE_PLATFORM) {
+    return null;
+  }
+  return {
+    source: 'manifest',
+    expected: CAPTURE_PLATFORM,
+    actual: environment.platform,
+    image: environment.image,
+    message: manifestPlatformMessage(environment.platform),
+  };
 }
 
 /**
@@ -544,20 +609,40 @@ function formatFonts(fonts) {
  * `capture-env:` but cannot be parsed sets `invalid` instead of being reported
  * as environment drift, so the CLI can reject malformed input.
  *
+ * A platform difference is also returned in `platformMismatches` (and remains
+ * in `problems`), so the CLI can print the expected / actual platform with the
+ * pinned image separately from DPR / EGL / font drift.
+ *
  * @returns {{
  *   checked: boolean,
  *   invalid: boolean,
  *   ok: boolean,
  *   problems: string[],
+ *   platformMismatches: Array<{
+ *     source: 'log',
+ *     expected: string,
+ *     actual: string,
+ *     image: { repository: string, tag: string, digest: string },
+ *     actualImage: { repository: string, tag: string, digest: string } | null,
+ *     message: string,
+ *   }>,
  *   fingerprints: ReturnType<typeof parseCaptureEnvironmentFingerprintLine>[],
  * }}
  */
 export function verifyCaptureEnvironment({ logText, environment } = {}) {
   if (logText === undefined || logText === null) {
-    return { checked: false, invalid: false, ok: true, problems: [], fingerprints: [] };
+    return {
+      checked: false,
+      invalid: false,
+      ok: true,
+      problems: [],
+      platformMismatches: [],
+      fingerprints: [],
+    };
   }
 
   const problems = [];
+  const platformMismatches = [];
   let fingerprints;
   try {
     fingerprints = parseCaptureLogFingerprints(logText);
@@ -567,6 +652,7 @@ export function verifyCaptureEnvironment({ logText, environment } = {}) {
       invalid: true,
       ok: false,
       problems: [error instanceof Error ? error.message : String(error)],
+      platformMismatches: [],
       fingerprints: [],
     };
   }
@@ -584,6 +670,7 @@ export function verifyCaptureEnvironment({ logText, environment } = {}) {
           ? 'capture environment fingerprint is unavailable (the capture runtime could not probe it)'
           : 'capture log has no "capture-env:" fingerprint line',
       ],
+      platformMismatches: [],
       fingerprints: [],
     };
   }
@@ -610,11 +697,22 @@ export function verifyCaptureEnvironment({ logText, environment } = {}) {
       );
     }
 
-    if (fingerprint.source === 'container' && fingerprint.platform !== CAPTURE_PLATFORM) {
-      problems.push(
+    if (fingerprint.source === 'container' && fingerprint.platform !== environment.platform) {
+      const message =
         `capture environment platform is "${fingerprint.platform}", ` +
-          `expected "${CAPTURE_PLATFORM}"`,
-      );
+        `expected "${environment.platform}"`;
+      platformMismatches.push({
+        source: 'log',
+        expected: environment.platform,
+        actual: fingerprint.platform,
+        image: environment.image,
+        actualImage: fingerprint.image,
+        message,
+      });
+      // Keep the message in the flat list as well: callers that only consume
+      // `problems` still see the drift, while `platformMismatches` gives the
+      // CLI the structured expected / actual values.
+      problems.push(message);
     }
 
     if (fingerprint.image === null) {
@@ -655,6 +753,7 @@ export function verifyCaptureEnvironment({ logText, environment } = {}) {
     invalid: false,
     ok: problems.length === 0,
     problems,
+    platformMismatches,
     fingerprints: matching,
   };
 }

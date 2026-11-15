@@ -3,6 +3,7 @@
     "source": "container",
     "target": "webkit",
     "dpr": 2,
+    "platform": "linux/amd64",
     "image": {
       "repository": "mcr.microsoft.com/playwright",
       "tag": "v1.64.1-noble",
