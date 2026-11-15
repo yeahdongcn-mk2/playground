@@ -149,6 +149,61 @@ const IMAGE_DRIFT_CASES: Array<{ label: string; logLine: string; actual: string 
   },
 ];
 
+/**
+ * Structurally invalid manifests: each missing / malformed structural field is
+ * invalid input (exit 2), never a valid empty manifest or an uncaught error.
+ * These cases pin the structural guards in `parseSha256Manifest`, so deleting
+ * one of those guards makes a test fail instead of silently accepting the
+ * manifest.
+ */
+const STRUCTURAL_INVALID_MANIFEST_CASES: Array<{
+  label: string;
+  message: string;
+  build: (base: ScreenshotSha256Manifest) => unknown;
+}> = [
+  {
+    label: 'an empty captures list',
+    message: '"captures" must be a non-empty array of screenshot entries',
+    build: (base) => ({ ...base, captures: [] }),
+  },
+  {
+    label: 'a non-array captures value',
+    message: '"captures" must be a non-empty array of screenshot entries',
+    build: (base) => ({ ...base, captures: {} }),
+  },
+  {
+    label: 'a manifest without environment',
+    message: '"environment" must be an object',
+    build: (base) => {
+      const copy: Record<string, unknown> = { ...base };
+      delete copy.environment;
+      return copy;
+    },
+  },
+  {
+    label: 'a capture without provenance',
+    message: 'captures[0].provenance must be an object',
+    build: (base) => ({
+      ...base,
+      captures: base.captures.map((capture) => {
+        const copy: Record<string, unknown> = { ...capture };
+        delete copy.provenance;
+        return copy;
+      }),
+    }),
+  },
+  {
+    label: 'a null capture entry',
+    message: 'captures[0] must be an object',
+    build: (base) => ({ ...base, captures: [null] }),
+  },
+  {
+    label: 'a non-object capture entry',
+    message: 'captures[0] must be an object',
+    build: (base) => ({ ...base, captures: [['after-blank-webkit.png']] }),
+  },
+];
+
 const tempDirs: string[] = [];
 
 function makeTempDir(): string {
@@ -485,6 +540,29 @@ describe('capture sha256 manifest', () => {
 
     expect(() => parseSha256Manifest('{not json}')).toThrow(/not valid JSON/);
   });
+
+  it.each(STRUCTURAL_INVALID_MANIFEST_CASES)(
+    'rejects $label as invalid manifest input and exits 2 through the CLI',
+    ({ message, build }) => {
+      const invalidText = JSON.stringify(build(committedManifest()));
+
+      expect(() => parseSha256Manifest(invalidText)).toThrow(ScreenshotSha256Error);
+      expect(() => parseSha256Manifest(invalidText)).toThrow(message);
+
+      const dir = makeTempDir();
+      const manifestPath = join(dir, 'invalid-manifest.json');
+      writeFileSync(manifestPath, invalidText);
+      const result = runCli(['--manifest', manifestPath]);
+
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain('error: invalid sha256 manifest:');
+      expect(result.stderr).toContain(message);
+      // A rejected manifest must be reported as invalid input, not as an
+      // uncaught TypeError whose stack trace exits 1.
+      expect(result.stderr).not.toContain('TypeError');
+      expect(result.stderr).not.toMatch(/^\s+at /m);
+    },
+  );
 });
 
 describe('capture environment fingerprint', () => {
