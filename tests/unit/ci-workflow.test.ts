@@ -619,4 +619,32 @@ describe('CI workflow', () => {
     expect(section).toContain('`npm ci`');
     expect(section).toContain('`.github/workflows/ci.yml`');
   });
+
+  it('documents the same browser coverage the Playwright projects run', () => {
+    const section = techStackDecisionSectionSeven();
+
+    // playwright.config.ts runs chromium, mobile (Pixel 7) and mobile-webkit
+    // (iPhone SE (3rd gen)); README documents the WebKit suite as part of v1.
+    // §7 must not fall back to claiming WebKit is out of scope.
+    for (const stale of [
+      'WebKit/Firefox 暂不纳入 v1',
+      'WebKit 暂不纳入 v1',
+      'WebKit 不纳入 v1',
+      '不含 WebKit',
+    ]) {
+      expect(
+        section,
+        `tech stack ADR §7 must not claim WebKit is excluded from v1: ${stale}`,
+      ).not.toContain(stale);
+    }
+
+    // The replacement names every Playwright project it covers, so a future
+    // project change that is not reflected here fails this contract.
+    expect(section).toContain('Chromium 桌面');
+    expect(section).toContain('Pixel 7');
+    expect(section).toContain('mobile-webkit');
+    expect(section).toContain('iPhone SE (3rd gen)');
+    // Firefox is still out of scope for v1; that exclusion must stay explicit.
+    expect(section).toContain('Firefox 暂不纳入 v1');
+  });
 });
