@@ -47,6 +47,17 @@ export const CAPTURE_CONTAINER_FLAG = 'CAPTURE_CONTAINER';
 export const CAPTURE_IMAGE_TAG_VAR = 'CAPTURE_IMAGE_TAG';
 export const CAPTURE_IMAGE_DIGEST_VAR = 'CAPTURE_IMAGE_DIGEST';
 /**
+ * The CPU platform every container capture is pinned to.
+ *
+ * The pinned Playwright digest is a multi-arch manifest list, so the same tag /
+ * digest resolves to a different browser build on an arm64 host. Fixing the
+ * platform keeps the container image, and therefore the PNG bytes, identical
+ * across hosts; the host records `unavailable` because a host run is not pinned.
+ */
+export const CAPTURE_PLATFORM = 'linux/amd64';
+/** Environment variable the entry injects so the container re-checks the platform. */
+export const CAPTURE_PLATFORM_VAR = 'CAPTURE_PLATFORM';
+/**
  * Comma-separated list of every capture target the run records. A Chromium run
  * can capture desktop, phone and Pixel 7 touch evidence, so a single target
  * would misdescribe it.
@@ -299,10 +310,11 @@ export function probeFontPackages({
  * Build the environment fingerprint for one capture run.
  *
  * On the host (`source=host`) nothing is available to probe: the image, font
- * package versions and EGL variables are reported as unavailable and no error
- * is raised. Inside the container (`CAPTURE_CONTAINER=1`) the fingerprint
- * records the pinned image, Node / Playwright / browser versions, the installed
- * font package versions, the EGL variables and the target DPR.
+ * package versions, platform and EGL variables are reported as unavailable and
+ * no error is raised. Inside the container (`CAPTURE_CONTAINER=1`) the
+ * fingerprint records the pinned image, platform, Node / Playwright / browser
+ * versions, the installed font package versions, the EGL variables and the
+ * target DPR.
  */
 export function captureEnvironmentFingerprint({
   target = 'desktop',
@@ -327,6 +339,10 @@ export function captureEnvironmentFingerprint({
     source,
     target,
     dpr,
+    platform:
+      source === 'container'
+        ? env[CAPTURE_PLATFORM_VAR] ?? CAPTURE_PLATFORM
+        : 'unavailable',
     image:
       source === 'container'
         ? {
@@ -372,6 +388,7 @@ export function formatCaptureEnvironmentFingerprint(fingerprint) {
     `source=${fingerprint.source}`,
     `target=${fingerprint.target}`,
     `dpr=${fingerprint.dpr}`,
+    `platform=${fingerprint.platform}`,
     `image=${image}`,
     `node=${fingerprint.node}`,
     `playwright=${fingerprint.playwright}`,
@@ -384,10 +401,10 @@ export function formatCaptureEnvironmentFingerprint(fingerprint) {
 /**
  * Strict environment validation for the container entry.
  *
- * The host entry sets the marker, image tag, target and target DPR before
- * `docker run`; the same script then re-validates them inside the container.
- * Missing or mismatched variables name the exact variable so a misconfigured
- * container fails before it writes a single PNG.
+ * The host entry sets the marker, image tag, target, target DPR and the fixed
+ * platform before `docker run`; the same script then re-validates them inside
+ * the container. Missing or mismatched variables name the exact variable so a
+ * misconfigured container fails before it writes a single PNG.
  */
 export function assertContainerCaptureEnvironment({
   env = process.env,
@@ -417,6 +434,20 @@ export function assertContainerCaptureEnvironment({
         `Capture environment variable "${name}" is "${actual}": expected "${expected}".`,
       );
     }
+  }
+
+  const platform = env[CAPTURE_PLATFORM_VAR];
+  if (platform === undefined || platform === '') {
+    throw new Error(
+      `Missing required capture environment variable "${CAPTURE_PLATFORM_VAR}": ` +
+        `expected "${CAPTURE_PLATFORM}".`,
+    );
+  }
+  if (platform !== CAPTURE_PLATFORM) {
+    throw new Error(
+      `Capture environment variable "${CAPTURE_PLATFORM_VAR}" is "${platform}": ` +
+        `expected "${CAPTURE_PLATFORM}".`,
+    );
   }
 
   const envTargets = normalizeCaptureTargets(env[CAPTURE_TARGET_VAR]);
@@ -479,5 +510,6 @@ export function assertContainerCaptureEnvironment({
     dprs: actualDprs,
     imageTag,
     version: playwrightVersion,
+    platform,
   };
 }

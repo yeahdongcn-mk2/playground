@@ -47,6 +47,8 @@ export interface EnsureCaptureImageOptions {
   repoRoot?: string;
   tag?: string;
   digest?: string;
+  /** Capture target, used only to print the recapture command in platform errors. */
+  target?: string;
   readFile?: (path: string, encoding?: 'utf8') => string;
 }
 
@@ -150,6 +152,7 @@ export function localCaptureImageName(tag?: string): string;
 export function captureImageBuildInputFingerprint(options: {
   tag?: string;
   digest?: string;
+  platform?: string;
   dockerfile: string;
 }): string;
 export function ensureCaptureImage(

@@ -30,6 +30,7 @@ export interface CaptureEnvironmentFingerprint {
   source: CaptureSource;
   target: CaptureTarget;
   dpr: number;
+  platform: string;
   image: CaptureEnvironmentImage | null;
   node: string;
   playwright: string;
@@ -85,6 +86,7 @@ export interface ContainerCaptureEnvironment {
   dprs: number[];
   imageTag: string;
   version: string;
+  platform: string;
 }
 
 export const CAPTURE_REPO_ROOT: string;
@@ -93,6 +95,8 @@ export const PLAYWRIGHT_IMAGE_PIN: Readonly<CaptureImagePin>;
 export const CAPTURE_CONTAINER_FLAG: string;
 export const CAPTURE_IMAGE_TAG_VAR: string;
 export const CAPTURE_IMAGE_DIGEST_VAR: string;
+export const CAPTURE_PLATFORM: string;
+export const CAPTURE_PLATFORM_VAR: string;
 export const CAPTURE_TARGET_VAR: string;
 export const CAPTURE_TARGET_DPR_VAR: string;
 export const CAPTURE_EGL_ENV: Readonly<Record<string, string>>;

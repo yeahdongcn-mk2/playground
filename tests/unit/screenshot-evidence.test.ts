@@ -14,6 +14,7 @@ import {
   CAPTURE_EGL_ENV,
   CAPTURE_IMAGE_DIGEST_VAR,
   CAPTURE_IMAGE_TAG_VAR,
+  CAPTURE_PLATFORM,
   PLAYWRIGHT_IMAGE_PIN,
 } from '../../scripts/lib/capture-env.mjs';
 import {
@@ -435,6 +436,7 @@ describe('guardHistoricalAfterEvidence', () => {
       source: 'container' as const,
       target: 'desktop' as const,
       dpr: 1,
+      platform: CAPTURE_PLATFORM,
       image: {
         repository: 'ghcr.io/example/playwright',
         tag: PLAYWRIGHT_IMAGE_PIN.tag,

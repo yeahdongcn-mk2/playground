@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   CAPTURE_EGL_ENV,
   CAPTURE_EGL_VARS,
+  CAPTURE_PLATFORM,
   PLAYWRIGHT_IMAGE_PIN,
   PLAYWRIGHT_IMAGE_REPOSITORY,
   assertContainerCaptureEnvironment,
@@ -61,6 +62,7 @@ const CONTAINER_ENV: Env = {
   CAPTURE_CONTAINER: '1',
   CAPTURE_IMAGE_TAG: PLAYWRIGHT_IMAGE_PIN.tag,
   CAPTURE_IMAGE_DIGEST: PLAYWRIGHT_IMAGE_PIN.digest,
+  CAPTURE_PLATFORM: CAPTURE_PLATFORM,
   CAPTURE_TARGET: 'webkit',
   CAPTURE_TARGET_DPR: '2',
   ...CAPTURE_EGL_ENV,
@@ -87,6 +89,21 @@ function fakeSpawnSync(result: FakeSpawnSyncResult): typeof spawnSync {
   return (() => spawnSyncResult(result)) as unknown as typeof spawnSync;
 }
 
+/** True for the `docker image inspect --format {{.Os}}/{{.Architecture}}` call. */
+function isPlatformInspect(args: readonly string[]): boolean {
+  return (
+    args[0] === 'image' &&
+    args[1] === 'inspect' &&
+    args[2] === '--format' &&
+    args[3] === '{{.Os}}/{{.Architecture}}'
+  );
+}
+
+/** Answer the platform inspect as the fixed amd64 image unless overridden. */
+function dockerPlatformResult(platform = CAPTURE_PLATFORM): FakeSpawnSyncResult {
+  return spawnSyncResult({ stdout: `${platform}\n` });
+}
+
 /**
  * Let the real capture scripts answer `--print-capture-targets` even when a
  * test uses a fake repository root for the Docker arguments; Docker commands
@@ -102,6 +119,9 @@ function declarationAwareSpawnSync(
         cwd: ROOT,
         encoding: 'utf8',
       });
+    }
+    if (isPlatformInspect(args)) {
+      return dockerPlatformResult();
     }
     return spawnSyncResult(dockerResult);
   }) as unknown as typeof spawnSync;
@@ -158,6 +178,9 @@ function declaredPortSpawnSync(
       return spawnSyncResult({
         stdout: JSON.stringify({ script, targets: ['webkit'], previewPort }),
       });
+    }
+    if (isPlatformInspect(args)) {
+      return dockerPlatformResult();
     }
     return spawnSyncResult();
   }) as unknown as typeof spawnSync;
@@ -622,6 +645,8 @@ describe('docker run construction', () => {
     });
 
     expect(args.slice(0, 2)).toEqual(['run', '--rm']);
+    expect(args).toContain('--platform');
+    expect(args[args.indexOf('--platform') + 1]).toBe(CAPTURE_PLATFORM);
     expect(args).toContain('--network');
     expect(args[args.indexOf('--network') + 1]).toBe('host');
     expect(args).toContain('--volume');
@@ -634,6 +659,7 @@ describe('docker run construction', () => {
     expect(envArgs).toContain('CAPTURE_CONTAINER=1');
     expect(envArgs).toContain(`CAPTURE_IMAGE_TAG=${PLAYWRIGHT_IMAGE_PIN.tag}`);
     expect(envArgs).toContain(`CAPTURE_IMAGE_DIGEST=${PLAYWRIGHT_IMAGE_PIN.digest}`);
+    expect(envArgs).toContain(`CAPTURE_PLATFORM=${CAPTURE_PLATFORM}`);
     expect(envArgs).toContain('CAPTURE_TARGET=webkit');
     expect(envArgs).toContain('CAPTURE_TARGET_DPR=2');
     for (const name of CAPTURE_EGL_VARS) {
@@ -839,8 +865,9 @@ describe('capture image build input', () => {
     dockerfile = PINNED_DOCKERFILE,
     tag = PLAYWRIGHT_IMAGE_PIN.tag,
     digest = PLAYWRIGHT_IMAGE_PIN.digest,
+    platform = CAPTURE_PLATFORM,
   ): string {
-    return captureImageBuildInputFingerprint({ tag, digest, dockerfile });
+    return captureImageBuildInputFingerprint({ tag, digest, platform, dockerfile });
   }
 
   function inspectCall(localImage = localCaptureImageName()): string[] {
@@ -854,6 +881,17 @@ describe('capture image build input', () => {
     ];
   }
 
+  function platformInspectCall(localImage = localCaptureImageName()): string[] {
+    return [
+      'docker',
+      'image',
+      'inspect',
+      '--format',
+      '{{.Os}}/{{.Architecture}}',
+      localImage,
+    ];
+  }
+
   function buildCall(
     fingerprint: string,
     localImage = localCaptureImageName(),
@@ -861,6 +899,8 @@ describe('capture image build input', () => {
     return [
       'docker',
       'build',
+      '--platform',
+      CAPTURE_PLATFORM,
       '--label',
       `${CAPTURE_IMAGE_BUILD_LABEL}=${fingerprint}`,
       '--file',
@@ -892,12 +932,16 @@ describe('capture image build input', () => {
         dockerfile: PINNED_DOCKERFILE,
       }),
     ).not.toBe(base);
+    expect(fingerprintOf(PINNED_DOCKERFILE, undefined, undefined, 'linux/arm64')).not.toBe(
+      base,
+    );
   });
 
-  it('builds with the fingerprint label when the image is missing', () => {
+  it('builds with the fingerprint label and amd64 platform when the image is missing', () => {
     const { calls, spawnSync: spawnSyncFake } = recordingSpawnSync([
       { status: 1, stderr: 'No such image' },
       { status: 0 },
+      { status: 0, stdout: `${CAPTURE_PLATFORM}\n` },
     ]);
 
     expect(
@@ -910,12 +954,14 @@ describe('capture image build input', () => {
     expect(calls).toEqual([
       inspectCall(),
       buildCall(fingerprintOf()),
+      platformInspectCall(),
     ]);
   });
 
   it('reuses the image only when its build label matches the fingerprint', () => {
     const { calls, spawnSync: spawnSyncFake } = recordingSpawnSync([
       { status: 0, stdout: `${fingerprintOf()}\n` },
+      { status: 0, stdout: `${CAPTURE_PLATFORM}\n` },
     ]);
 
     expect(
@@ -925,13 +971,42 @@ describe('capture image build input', () => {
         repoRoot: '/repo',
       }),
     ).toBe(localCaptureImageName());
-    expect(calls).toEqual([inspectCall()]);
+    expect(calls).toEqual([inspectCall(), platformInspectCall()]);
+  });
+
+  it('rejects an existing image whose inspected platform is not linux/amd64', () => {
+    const { calls, spawnSync: spawnSyncFake } = recordingSpawnSync([
+      { status: 0, stdout: `${fingerprintOf()}\n` },
+      { status: 0, stdout: 'linux/arm64\n' },
+    ]);
+
+    let error: Error | undefined;
+    try {
+      ensureCaptureImage({
+        spawnSync: spawnSyncFake,
+        readFile: readDockerfile(),
+        repoRoot: '/repo',
+        target: 'screenshots:webkit',
+      });
+    } catch (caught) {
+      error = caught as Error;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error?.message).toContain('platform "linux/arm64"');
+    expect(error?.message).toContain(`"${CAPTURE_PLATFORM}"`);
+    expect(error?.message).toContain(PLAYWRIGHT_IMAGE_PIN.digest);
+    expect(error?.message).toContain(
+      'npm run screenshots:container -- screenshots:webkit',
+    );
+    expect(calls).toEqual([inspectCall(), platformInspectCall()]);
   });
 
   it('validates the runtime (last) FROM of a multi-stage Dockerfile', () => {
     const multiStageDockerfile = `FROM busybox:1 AS build\n${PINNED_FROM}\n`;
     const { calls, spawnSync: spawnSyncFake } = recordingSpawnSync([
       { status: 0, stdout: `${fingerprintOf(multiStageDockerfile)}\n` },
+      { status: 0, stdout: `${CAPTURE_PLATFORM}\n` },
     ]);
 
     expect(
@@ -941,7 +1016,7 @@ describe('capture image build input', () => {
         repoRoot: '/repo',
       }),
     ).toBe(localCaptureImageName());
-    expect(calls).toEqual([inspectCall()]);
+    expect(calls).toEqual([inspectCall(), platformInspectCall()]);
   });
 
   it('rebuilds when the pinned tag/digest changes', () => {
@@ -951,6 +1026,7 @@ describe('capture image build input', () => {
     const { calls, spawnSync: spawnSyncFake } = recordingSpawnSync([
       { status: 0, stdout: `${fingerprintOf()}\n` },
       { status: 0 },
+      { status: 0, stdout: `${CAPTURE_PLATFORM}\n` },
     ]);
 
     expect(
@@ -969,6 +1045,7 @@ describe('capture image build input', () => {
         fingerprintOf(changedDockerfile, changedTag, changedDigest),
         changedImage,
       ),
+      platformInspectCall(changedImage),
     ]);
   });
 
@@ -977,6 +1054,7 @@ describe('capture image build input', () => {
     const { calls, spawnSync: spawnSyncFake } = recordingSpawnSync([
       { status: 0, stdout: `${fingerprintOf()}\n` },
       { status: 0 },
+      { status: 0, stdout: `${CAPTURE_PLATFORM}\n` },
     ]);
 
     expect(
@@ -986,7 +1064,11 @@ describe('capture image build input', () => {
         repoRoot: '/repo',
       }),
     ).toBe(localCaptureImageName());
-    expect(calls).toEqual([inspectCall(), buildCall(fingerprintOf(changedDockerfile))]);
+    expect(calls).toEqual([
+      inspectCall(),
+      buildCall(fingerprintOf(changedDockerfile)),
+      platformInspectCall(),
+    ]);
   });
 
   it.each(['', '<no value>\n'])(
@@ -995,6 +1077,7 @@ describe('capture image build input', () => {
       const { calls, spawnSync: spawnSyncFake } = recordingSpawnSync([
         { status: 0, stdout },
         { status: 0 },
+        { status: 0, stdout: `${CAPTURE_PLATFORM}\n` },
       ]);
 
       expect(
@@ -1004,7 +1087,11 @@ describe('capture image build input', () => {
           repoRoot: '/repo',
         }),
       ).toBe(localCaptureImageName());
-      expect(calls).toEqual([inspectCall(), buildCall(fingerprintOf())]);
+      expect(calls).toEqual([
+        inspectCall(),
+        buildCall(fingerprintOf()),
+        platformInspectCall(),
+      ]);
     },
   );
 
@@ -1061,20 +1148,31 @@ describe('capture image build input', () => {
     expect(calls).toEqual([]);
   });
 
-  it('keeps the readable error when docker build fails', () => {
+  it('keeps the readable error and platform context when docker build fails', () => {
     const { spawnSync: spawnSyncFake } = recordingSpawnSync([
       { status: 1, stderr: 'No such image' },
       { status: 1, stderr: 'base image pull failed' },
     ]);
 
-    expect(() =>
+    let error: Error | undefined;
+    try {
       ensureCaptureImage({
         spawnSync: spawnSyncFake,
         readFile: readDockerfile(),
         repoRoot: '/repo',
-      }),
-    ).toThrow(
-      `Docker build for ${localCaptureImageName()} failed (exit 1): base image pull failed`,
+        target: 'screenshots:webkit',
+      });
+    } catch (caught) {
+      error = caught as Error;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error?.message).toContain(`Docker build for ${localCaptureImageName()}`);
+    expect(error?.message).toContain(`platform ${CAPTURE_PLATFORM}`);
+    expect(error?.message).toContain(PLAYWRIGHT_IMAGE_PIN.digest);
+    expect(error?.message).toContain('failed (exit 1): base image pull failed');
+    expect(error?.message).toContain(
+      'npm run screenshots:container -- screenshots:webkit',
     );
   });
 });
@@ -1195,6 +1293,26 @@ describe('in-container capture run', () => {
     expect(calls).toEqual([]);
   });
 
+  it('fails before running npm when the injected platform is missing or not amd64', async () => {
+    const missing: Env = { ...CONTAINER_ENV };
+    delete missing.CAPTURE_PLATFORM;
+    const mismatched: Env = { ...CONTAINER_ENV, CAPTURE_PLATFORM: 'linux/arm64' };
+
+    for (const env of [missing, mismatched]) {
+      const calls: string[] = [];
+      await expect(
+        runContainerCapture({
+          argv: ['screenshots:webkit'],
+          env,
+          spawn: fakeSpawn((command) => calls.push(command)),
+          ensureDependencies: async () => false,
+          logger: { log: () => {} },
+        }),
+      ).rejects.toThrow(/CAPTURE_PLATFORM/);
+      expect(calls).toEqual([]);
+    }
+  });
+
   it('validates the targets derived from the passthrough flags', async () => {
     const calls: Array<{ command: string; args: readonly string[] }> = [];
     const code = await runContainerCapture({
@@ -1310,6 +1428,9 @@ describe('host container capture run', () => {
     expect(call?.command).toBe('docker');
     expect(call?.args.slice(0, 2)).toEqual(['run', '--rm']);
     expect(call?.args).toContain(localCaptureImageName());
+    expect(call?.args).toContain('--platform');
+    expect(call?.args[call.args.indexOf('--platform') + 1]).toBe(CAPTURE_PLATFORM);
+    expect(envArgsOf(call?.args ?? [])).toContain(`CAPTURE_PLATFORM=${CAPTURE_PLATFORM}`);
     expect(envArgsOf(call?.args ?? [])).toContain('CAPTURE_TARGET=webkit');
     expect(envArgsOf(call?.args ?? [])).toContain('CAPTURE_TARGET_DPR=2');
     expect(call?.args.slice(-1)).toEqual(['screenshots:webkit']);
@@ -1330,6 +1451,34 @@ describe('host container capture run', () => {
 
     stdout.mockRestore();
     stderr.mockRestore();
+  });
+
+  it('rejects a non-amd64 image before spawning docker run or writing evidence', async () => {
+    const declarationAware = declarationAwareSpawnSync();
+    const spawnSyncFake = ((command: string, args: readonly string[]) => {
+      if (command === process.execPath) {
+        return declarationAware(command, args);
+      }
+      if (isPlatformInspect(args)) {
+        return dockerPlatformResult('linux/arm64');
+      }
+      return spawnSyncResult();
+    }) as unknown as typeof spawnSync;
+    const harness = hostHarness({ spawnSync: spawnSyncFake });
+
+    const error = await runContainerCapture(harness.options).catch(
+      (reason: unknown) => reason,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('platform "linux/arm64"');
+    expect((error as Error).message).toContain(`"${CAPTURE_PLATFORM}"`);
+    expect((error as Error).message).toContain(PLAYWRIGHT_IMAGE_PIN.digest);
+    expect((error as Error).message).toContain(
+      'npm run screenshots:container -- screenshots:webkit',
+    );
+    expect(harness.spawn).not.toHaveBeenCalled();
+    expect(harness.logger.log).not.toHaveBeenCalled();
   });
 
   it('injects the passthrough-derived capture targets on the host path', async () => {
@@ -1431,6 +1580,9 @@ describe('host container capture run', () => {
             previewPort: sentinelPort,
           }),
         });
+      }
+      if (isPlatformInspect(args)) {
+        return dockerPlatformResult();
       }
       return spawnSyncResult();
     }) as unknown as typeof spawnSync;

@@ -3,6 +3,7 @@ import {
   CAPTURE_EGL_ENV,
   CAPTURE_EGL_VARS,
   CAPTURE_FONT_PACKAGES,
+  CAPTURE_PLATFORM,
   CAPTURE_TARGETS,
   PLAYWRIGHT_IMAGE_REPOSITORY,
   PLAYWRIGHT_IMAGE_PIN,
@@ -24,6 +25,7 @@ const CONTAINER_ENV: Env = {
   CAPTURE_CONTAINER: '1',
   CAPTURE_IMAGE_TAG: PLAYWRIGHT_IMAGE_PIN.tag,
   CAPTURE_IMAGE_DIGEST: PLAYWRIGHT_IMAGE_PIN.digest,
+  CAPTURE_PLATFORM: CAPTURE_PLATFORM,
   CAPTURE_TARGET: 'webkit',
   CAPTURE_TARGET_DPR: '2',
   ...CAPTURE_EGL_ENV,
@@ -33,6 +35,7 @@ const FINGERPRINT_FIELDS = [
   'source',
   'target',
   'dpr',
+  'platform',
   'image',
   'node',
   'playwright',
@@ -164,6 +167,7 @@ describe('captureEnvironmentFingerprint', () => {
       source: 'host',
       target: 'desktop',
       dpr: 1,
+      platform: 'unavailable',
       image: null,
       node: 'v24.22.0',
       playwright: '1.64.1',
@@ -172,7 +176,7 @@ describe('captureEnvironmentFingerprint', () => {
       env: null,
     });
     expect(formatCaptureEnvironmentFingerprint(fingerprint)).toBe(
-      'capture-env: source=host target=desktop dpr=1 image=unavailable ' +
+      'capture-env: source=host target=desktop dpr=1 platform=unavailable image=unavailable ' +
         'node=v24.22.0 playwright=1.64.1 browser=144.0.1 fonts=unavailable env=unavailable',
     );
   });
@@ -218,6 +222,23 @@ describe('captureEnvironmentFingerprint', () => {
     expect(container.dpr).toBe(2.625);
   });
 
+  it('records the injected container platform instead of assuming the contract', () => {
+    const fingerprint = captureEnvironmentFingerprint({
+      target: 'desktop',
+      run: { playwrightVersion: '1.64.1', fontPackages: 'unavailable' },
+      env: {
+        ...CONTAINER_ENV,
+        CAPTURE_TARGET: 'desktop',
+        CAPTURE_TARGET_DPR: '1',
+        CAPTURE_PLATFORM: 'linux/arm64',
+      },
+    });
+    expect(fingerprint.platform).toBe('linux/arm64');
+    expect(formatCaptureEnvironmentFingerprint(fingerprint)).toContain(
+      'platform=linux/arm64',
+    );
+  });
+
   it('records the container image, fonts, EGL variables and target DPR', () => {
     const fingerprint = captureEnvironmentFingerprint({
       target: 'webkit',
@@ -233,6 +254,7 @@ describe('captureEnvironmentFingerprint', () => {
     expect(Object.keys(fingerprint)).toEqual(FINGERPRINT_FIELDS);
     expect(fingerprint.source).toBe('container');
     expect(fingerprint.dpr).toBe(2);
+    expect(fingerprint.platform).toBe(CAPTURE_PLATFORM);
     expect(fingerprint.image).toEqual({
       repository: PLAYWRIGHT_IMAGE_REPOSITORY,
       tag: PLAYWRIGHT_IMAGE_PIN.tag,
@@ -245,6 +267,7 @@ describe('captureEnvironmentFingerprint', () => {
     expect(fingerprint.env).not.toBe(CAPTURE_EGL_ENV);
 
     const line = formatCaptureEnvironmentFingerprint(fingerprint);
+    expect(line).toContain('platform=linux/amd64');
     expect(line).toContain(
       `image=${PLAYWRIGHT_IMAGE_REPOSITORY}:${PLAYWRIGHT_IMAGE_PIN.tag}@${PLAYWRIGHT_IMAGE_PIN.digest}`,
     );
@@ -269,6 +292,7 @@ describe('assertContainerCaptureEnvironment', () => {
       dprs: [2],
       imageTag: PLAYWRIGHT_IMAGE_PIN.tag,
       version: '1.64.1',
+      platform: CAPTURE_PLATFORM,
     });
   });
 
@@ -288,6 +312,7 @@ describe('assertContainerCaptureEnvironment', () => {
       dprs: [1, 2],
       imageTag: PLAYWRIGHT_IMAGE_PIN.tag,
       version: '1.64.1',
+      platform: CAPTURE_PLATFORM,
     });
   });
 
@@ -307,6 +332,7 @@ describe('assertContainerCaptureEnvironment', () => {
       dprs: [1, 2, 2.625],
       imageTag: PLAYWRIGHT_IMAGE_PIN.tag,
       version: '1.64.1',
+      platform: CAPTURE_PLATFORM,
     });
   });
 
@@ -356,6 +382,28 @@ describe('assertContainerCaptureEnvironment', () => {
         version: '1.64.1',
       }),
     ).toThrow(/"LIBGL_ALWAYS_SOFTWARE" is "0": expected "1"/);
+  });
+
+  it('rejects a missing injected capture platform', () => {
+    const env: Env = { ...CONTAINER_ENV };
+    delete env.CAPTURE_PLATFORM;
+    expect(() =>
+      assertContainerCaptureEnvironment({ env, target: 'webkit', version: '1.64.1' }),
+    ).toThrow(
+      /Missing required capture environment variable "CAPTURE_PLATFORM": expected "linux\/amd64"/,
+    );
+  });
+
+  it('rejects a capture platform that is not linux/amd64 with expected and actual', () => {
+    expect(() =>
+      assertContainerCaptureEnvironment({
+        env: { ...CONTAINER_ENV, CAPTURE_PLATFORM: 'linux/arm64' },
+        target: 'webkit',
+        version: '1.64.1',
+      }),
+    ).toThrow(
+      /Capture environment variable "CAPTURE_PLATFORM" is "linux\/arm64": expected "linux\/amd64"/,
+    );
   });
 
   it('rejects a missing container marker', () => {

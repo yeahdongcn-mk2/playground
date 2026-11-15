@@ -5,6 +5,7 @@ import {
   CAPTURE_EGL_ENV,
   CAPTURE_EGL_VARS,
   CAPTURE_FONT_PACKAGES,
+  CAPTURE_PLATFORM,
   CAPTURE_TARGET_DPRS,
   PLAYWRIGHT_IMAGE_PIN,
   PLAYWRIGHT_IMAGE_REPOSITORY,
@@ -429,6 +430,7 @@ const CAPTURE_ENV_FIELDS = new Set([
   'source',
   'target',
   'dpr',
+  'platform',
   'image',
   'node',
   'playwright',
@@ -499,6 +501,7 @@ export function parseCaptureEnvironmentFingerprintLine(line) {
     source: fields.get('source'),
     target: fields.get('target'),
     dpr,
+    platform: fields.get('platform'),
     image: parseImageReference(fields.get('image')),
     node: fields.get('node'),
     playwright: fields.get('playwright'),
@@ -604,6 +607,13 @@ export function verifyCaptureEnvironment({ logText, environment } = {}) {
     if (fingerprint.dpr !== environment.dpr) {
       problems.push(
         `capture environment dpr is ${fingerprint.dpr}, expected ${environment.dpr}`,
+      );
+    }
+
+    if (fingerprint.source === 'container' && fingerprint.platform !== CAPTURE_PLATFORM) {
+      problems.push(
+        `capture environment platform is "${fingerprint.platform}", ` +
+          `expected "${CAPTURE_PLATFORM}"`,
       );
     }
 
