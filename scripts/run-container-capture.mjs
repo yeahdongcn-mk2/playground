@@ -68,16 +68,6 @@ export const CAPTURE_IMAGE_BUILD_LABEL = 'playground.capture.build-input';
 /** npm scripts that can be run through the container entry. */
 const EXCLUDED_TARGETS = new Set(['screenshots:container', 'screenshots:baseline']);
 
-/** Preview ports the target capture scripts start by default. */
-const PREVIEW_PORT_FALLBACKS = Object.freeze([
-  [/^screenshots:minesweeper:scores/, 4192],
-  [/^screenshots:minesweeper/, 4186],
-  [/^screenshots:snake/, 5188],
-  [/^screenshots:2048/, 4183],
-  [/^screenshots:breakout/, 4185],
-  [/^screenshots$|^screenshots:webkit$/, 4174],
-]);
-
 export function readPackageScripts({
   packagePath = resolve(CAPTURE_REPO_ROOT, 'package.json'),
   readFile = defaultReadFile,
@@ -126,10 +116,10 @@ export function parseCaptureScriptCommand(command, target = '') {
  *
  * `parsePreviewPort` treats a missing or empty environment value as "use the
  * fallback", but a declaration must always name the script's own default: a
- * missing value would otherwise silently fall back to a second target-name /
- * port table. The accepted values and the 1-65535 range stay owned by
- * `preview-port.mjs`, so the resolver reuses its semantics instead of keeping
- * another range check.
+ * missing value would otherwise silently fall back to a shared default and hide
+ * a script that forgot to declare the port it starts. The accepted values and
+ * the 1-65535 range stay owned by `preview-port.mjs`, so the resolver reuses
+ * its semantics instead of keeping another range check.
  */
 function validateDeclaredPreviewPort(target, script, value) {
   const missing =
@@ -260,15 +250,6 @@ export function resolveCaptureTargets(
   );
 
   return { script, targets: declaredTargets, previewPort };
-}
-
-/** The preview port a target starts, or null when it does not start one. */
-export function previewPortForTarget(target, value = process.env.PREVIEW_PORT) {
-  const match = PREVIEW_PORT_FALLBACKS.find(([pattern]) => pattern.test(target));
-  if (match === undefined) {
-    return null;
-  }
-  return parsePreviewPort(value, match[1]);
 }
 
 /** Parse `<target> [passthrough...]` from the npm wrapper. */
@@ -475,7 +456,12 @@ export function buildDockerRunArgs({
   imageDigest = image?.digest ?? PLAYWRIGHT_IMAGE_PIN.digest,
   uid = typeof process.getuid === 'function' ? process.getuid() : 1000,
   gid = typeof process.getgid === 'function' ? process.getgid() : 1000,
-  previewPort = null,
+  // Resolved runtime port: omitted means the port the target script declared;
+  // an explicit null omits the PREVIEW_PORT injection.
+  previewPort,
+  // Declaration already resolved for this target; when supplied, the entry
+  // reuses it instead of spawning the target script a second time.
+  declaration,
   env = process.env,
   scripts = readPackageScripts(),
   spawnSync = defaultSpawnSync,
@@ -483,11 +469,15 @@ export function buildDockerRunArgs({
   if (image === undefined || containerImage === undefined) {
     throw new Error('buildDockerRunArgs needs the resolved capture image.');
   }
-  const { targets: captureTargets } = resolveCaptureTargets(target, passthrough, {
-    scripts,
-    spawnSync,
-    repoRoot,
-  });
+  const { targets: declaredTargets, previewPort: declaredPreviewPort } =
+    declaration ??
+    resolveCaptureTargets(target, passthrough, {
+      scripts,
+      spawnSync,
+      repoRoot,
+    });
+  const resolvedPreviewPort =
+    previewPort === undefined ? declaredPreviewPort : previewPort;
   const args = [
     'run',
     '--rm',
@@ -511,16 +501,16 @@ export function buildDockerRunArgs({
     '--env',
     `${CAPTURE_IMAGE_DIGEST_VAR}=${imageDigest}`,
     '--env',
-    `${CAPTURE_TARGET_VAR}=${captureTargets.join(',')}`,
+    `${CAPTURE_TARGET_VAR}=${declaredTargets.join(',')}`,
     '--env',
-    `${CAPTURE_TARGET_DPR_VAR}=${captureTargets.map((captureTarget) => dprForCaptureTarget(captureTarget)).join(',')}`,
+    `${CAPTURE_TARGET_DPR_VAR}=${declaredTargets.map((captureTarget) => dprForCaptureTarget(captureTarget)).join(',')}`,
   ];
 
   for (const name of CAPTURE_EGL_VARS) {
     args.push('--env', `${name}=${CAPTURE_EGL_ENV[name]}`);
   }
-  if (previewPort !== null) {
-    args.push('--env', `PREVIEW_PORT=${previewPort}`);
+  if (resolvedPreviewPort !== null) {
+    args.push('--env', `PREVIEW_PORT=${resolvedPreviewPort}`);
   }
   if (env.BASE_URL !== undefined && env.BASE_URL !== '') {
     args.push('--env', `BASE_URL=${env.BASE_URL}`);
@@ -662,12 +652,21 @@ export async function runContainerCapture({
   }
 
   preflightDocker({ spawnSync });
-  const previewPort = previewPortForTarget(target, env.PREVIEW_PORT);
+  // The default port comes from the target script's own declaration; the entry
+  // no longer keeps a target-name / port table. PREVIEW_PORT only overrides the
+  // runtime port and leaves the declaration unchanged in the container.
+  const declaration = resolveCaptureTargets(target, passthrough, {
+    scripts,
+    spawnSync,
+    repoRoot,
+    env,
+  });
+  const previewPort = parsePreviewPort(env.PREVIEW_PORT, declaration.previewPort);
   // A non-empty BASE_URL points the capture at an external preview, so the
   // target never starts its own port (the `before` modes). Probing that port
   // would reject a shared host because of an unrelated listener.
   const usesExternalPreview = env.BASE_URL !== undefined && env.BASE_URL !== '';
-  if (previewPort !== null && !usesExternalPreview) {
+  if (!usesExternalPreview) {
     try {
       await checkPort(previewPort);
     } catch (error) {
@@ -692,6 +691,7 @@ export async function runContainerCapture({
     imageTag: image.tag,
     imageDigest: image.digest,
     previewPort,
+    declaration,
     env,
     uid,
     gid,

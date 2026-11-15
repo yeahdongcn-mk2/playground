@@ -29,7 +29,6 @@ import {
   parseCaptureScriptCommand,
   parseContainerCaptureArgs,
   preflightDocker,
-  previewPortForTarget,
   readPackageScripts,
   resolveCaptureTargets,
   runContainerCapture,
@@ -119,6 +118,51 @@ function fakeSpawn(
   }) as unknown as NonNullable<RunContainerCaptureOptions['spawn']>;
 }
 
+/**
+ * The preview port each capture script really declares, resolved once per
+ * script; every container target of one script starts the same port. The
+ * argument-independence of that declaration is pinned per target in
+ * `tests/unit/capture-targets.test.ts`.
+ */
+function declaredPreviewPorts(): Map<string, number> {
+  const ports = new Map<string, number>();
+  for (const target of captureTargets(SCRIPTS)) {
+    const { script } = parseCaptureScriptCommand(SCRIPTS[target]!, target);
+    if (!ports.has(script)) {
+      ports.set(
+        script,
+        resolveCaptureTargets(target, [], { scripts: SCRIPTS }).previewPort,
+      );
+    }
+  }
+  return ports;
+}
+
+/**
+ * Answer the target-script declaration from the supplied ports instead of
+ * spawning the real scripts; Docker calls keep returning success. The target
+ * list is a valid fixed one because these assertions only cover the port.
+ */
+function declaredPortSpawnSync(
+  previewPortForScript: ReadonlyMap<string, number>,
+): typeof spawnSync {
+  return ((command: string, args: readonly string[]) => {
+    if (command === process.execPath) {
+      const [script] = args;
+      const previewPort = previewPortForScript.get(String(script));
+      if (previewPort === undefined) {
+        throw new Error(
+          `unexpected declaration request for ${String(script)}`,
+        );
+      }
+      return spawnSyncResult({
+        stdout: JSON.stringify({ script, targets: ['webkit'], previewPort }),
+      });
+    }
+    return spawnSyncResult();
+  }) as unknown as typeof spawnSync;
+}
+
 function envArgsOf(args: readonly string[]): string[] {
   return args.flatMap((arg, index) => (arg === '--env' ? [args[index + 1] ?? ''] : []));
 }
@@ -147,6 +191,17 @@ function fakeHostReadFile(path: string): string {
     return PINNED_DOCKERFILE;
   }
   throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+}
+
+/** Host readFile that serves the real screenshot scripts for contract loops. */
+function fullScriptsHostReadFile(): (path: string) => string {
+  const scripts = JSON.stringify({ scripts: SCRIPTS });
+  return (path: string): string => {
+    if (path.endsWith('package.json')) {
+      return scripts;
+    }
+    return fakeHostReadFile(path);
+  };
 }
 
 interface FakeDockerRunChild extends EventEmitter {
@@ -521,16 +576,31 @@ describe('container capture target declaration', () => {
     }
   });
 
-  it('uses the preview port each screenshot script starts', () => {
-    expect(previewPortForTarget('screenshots', '')).toBe(4174);
-    expect(previewPortForTarget('screenshots:webkit', '')).toBe(4174);
-    expect(previewPortForTarget('screenshots:snake', '')).toBe(5188);
-    expect(previewPortForTarget('screenshots:2048', '')).toBe(4183);
-    expect(previewPortForTarget('screenshots:breakout', '')).toBe(4185);
-    expect(previewPortForTarget('screenshots:minesweeper', '')).toBe(4186);
-    expect(previewPortForTarget('screenshots:minesweeper:scores', '')).toBe(4192);
-    expect(previewPortForTarget('screenshots:baseline', '')).toBeNull();
-    expect(previewPortForTarget('screenshots:webkit', '4999')).toBe(4999);
+  it('derives the preview port from the script declaration, not a hand-written table', () => {
+    const source = readFileSync(
+      join(ROOT, 'scripts', 'run-container-capture.mjs'),
+      'utf8',
+    );
+    expect(source).not.toContain('PREVIEW_PORT_FALLBACKS');
+    // No target-name / port mapping table may come back under another name,
+    // including one that reuses the scripts' historical default ports.
+    expect(source).not.toMatch(/\[\s*\/\^screenshots[^\]]*,\s*\d{4}\s*\]/);
+    expect(source).not.toMatch(
+      /screenshots[^\n]*\b(4174|4183|4185|4186|4192|5188)\b/,
+    );
+  });
+
+  it('keeps the declared preview port when PREVIEW_PORT overrides the runtime port', () => {
+    expect(
+      resolveCaptureTargets('screenshots:2048', [], {
+        scripts: SCRIPTS,
+        env: { PREVIEW_PORT: '4999' },
+      }),
+    ).toEqual({
+      script: 'scripts/capture-2048-screenshots.mjs',
+      targets: ['desktop', 'mobile'],
+      previewPort: 4183,
+    });
   });
 });
 
@@ -692,6 +762,26 @@ describe('docker run construction', () => {
       ).not.toThrow();
     },
   );
+
+  it('injects every container target declared preview port by default', () => {
+    const declaredPorts = declaredPreviewPorts();
+    const spawnSync = declaredPortSpawnSync(declaredPorts);
+
+    for (const target of captureTargets(SCRIPTS)) {
+      const { script } = parseCaptureScriptCommand(SCRIPTS[target]!, target);
+      const declared = declaredPorts.get(script);
+      expect(declared, target).toBeTypeOf('number');
+      const args = buildDockerRunArgs({
+        target,
+        repoRoot: '/repo',
+        image,
+        spawnSync,
+        containerImage: localCaptureImageName(),
+        env: {},
+      });
+      expect(envArgsOf(args), target).toContain(`PREVIEW_PORT=${declared}`);
+    }
+  });
 });
 
 describe('container entry preflight', () => {
@@ -1158,12 +1248,16 @@ describe('host container capture run', () => {
     target = 'screenshots:webkit',
     passthrough = [],
     checkPort = vi.fn(async () => {}),
+    readFile = fakeHostReadFile,
+    spawnSync: declarationSpawnSync = declarationAwareSpawnSync(),
   }: {
     exitCode?: number;
     env?: Env;
     target?: string;
     passthrough?: string[];
     checkPort?: (port: number, host?: string) => Promise<void>;
+    readFile?: (path: string) => string;
+    spawnSync?: typeof spawnSync;
   } = {}) {
     const argv = [target, ...passthrough];
     const logDir = mkdtempSync(join(tmpdir(), 'capture-container-'));
@@ -1189,8 +1283,8 @@ describe('host container capture run', () => {
       argv,
       env,
       spawn: spawn as unknown as NonNullable<RunContainerCaptureOptions['spawn']>,
-      spawnSync: declarationAwareSpawnSync(),
-      readFile: fakeHostReadFile,
+      spawnSync: declarationSpawnSync,
+      readFile,
       existsSync: () => true,
       repoRoot: '/repo',
       logDir,
@@ -1262,6 +1356,128 @@ describe('host container capture run', () => {
       },
       { timeout: 5000 },
     );
+  });
+
+  it('prechecks and injects every container target declared preview port', async () => {
+    const declaredPorts = declaredPreviewPorts();
+    const spawnSync = declaredPortSpawnSync(declaredPorts);
+    const readFile = fullScriptsHostReadFile();
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    const declaredFor = (target: string): number => {
+      const { script } = parseCaptureScriptCommand(SCRIPTS[target]!, target);
+      return declaredPorts.get(script)!;
+    };
+    const flushLog = (logPath: string) =>
+      vi.waitFor(
+        () => {
+          expect(readFileSync(logPath, 'utf8')).toContain('container stdout\n');
+        },
+        { timeout: 5000 },
+      );
+
+    for (const target of captureTargets(SCRIPTS)) {
+      const declared = declaredFor(target);
+
+      const declaredCheck = vi.fn(async () => {});
+      const declaredRun = hostHarness({
+        target,
+        env: {},
+        checkPort: declaredCheck,
+        readFile,
+        spawnSync,
+      });
+      await expect(runContainerCapture(declaredRun.options)).resolves.toBe(0);
+      expect(declaredCheck, target).toHaveBeenCalledWith(declared);
+      expect(
+        envArgsOf(declaredRun.calls[0]?.args ?? []),
+        target,
+      ).toContain(`PREVIEW_PORT=${declared}`);
+      await flushLog(declaredRun.logPath);
+
+      const overrideCheck = vi.fn(async () => {});
+      const overrideRun = hostHarness({
+        target,
+        env: { PREVIEW_PORT: '4999' },
+        checkPort: overrideCheck,
+        readFile,
+        spawnSync,
+      });
+      await expect(runContainerCapture(overrideRun.options)).resolves.toBe(0);
+      expect(overrideCheck, target).toHaveBeenCalledWith(4999);
+      expect(
+        envArgsOf(overrideRun.calls[0]?.args ?? []),
+        target,
+      ).toContain('PREVIEW_PORT=4999');
+      // The override changes the runtime port only; the declaration stays put.
+      expect(declaredFor(target), target).toBe(declared);
+      await flushLog(overrideRun.logPath);
+    }
+  });
+
+  it('uses the port the declaration reports, not a target-name table', async () => {
+    // 5001 is no script's default and appeared in no hand-written port table,
+    // so only a declaration-sourced port can pass these assertions.
+    const sentinelPort = 5001;
+    const nodeSpawns: string[][] = [];
+    const sentinelSpawnSync = ((command: string, args: readonly string[]) => {
+      if (command === process.execPath) {
+        nodeSpawns.push([command, ...args]);
+        return spawnSyncResult({
+          stdout: JSON.stringify({
+            script: args[0],
+            targets: ['desktop', 'mobile'],
+            previewPort: sentinelPort,
+          }),
+        });
+      }
+      return spawnSyncResult();
+    }) as unknown as typeof spawnSync;
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const flushLog = (logPath: string) =>
+      vi.waitFor(
+        () => {
+          expect(readFileSync(logPath, 'utf8')).toContain('container stdout\n');
+        },
+        { timeout: 5000 },
+      );
+
+    const checkPort = vi.fn(async () => {});
+    const harness = hostHarness({
+      target: 'screenshots:webkit',
+      env: {},
+      checkPort,
+      spawnSync: sentinelSpawnSync,
+    });
+    await expect(runContainerCapture(harness.options)).resolves.toBe(0);
+    expect(checkPort).toHaveBeenCalledWith(sentinelPort);
+    const envArgs = envArgsOf(harness.calls[0]?.args ?? []);
+    expect(envArgs).toContain(`PREVIEW_PORT=${sentinelPort}`);
+    expect(envArgs).toContain('CAPTURE_TARGET=desktop,mobile');
+    // The declaration is resolved once on the host and then reused by the
+    // docker-run argument builder: dropping that reuse spawns the target script
+    // a second time, which this assertion makes observable.
+    expect(nodeSpawns).toHaveLength(1);
+    expect(nodeSpawns[0]?.at(-1)).toBe('--print-capture-targets');
+    await flushLog(harness.logPath);
+
+    const overrideCheck = vi.fn(async () => {});
+    const overrideHarness = hostHarness({
+      target: 'screenshots:webkit',
+      env: { PREVIEW_PORT: '5002' },
+      checkPort: overrideCheck,
+      spawnSync: sentinelSpawnSync,
+    });
+    await expect(runContainerCapture(overrideHarness.options)).resolves.toBe(0);
+    expect(overrideCheck).toHaveBeenCalledWith(5002);
+    expect(envArgsOf(overrideHarness.calls[0]?.args ?? [])).toContain(
+      'PREVIEW_PORT=5002',
+    );
+    // One resolution per host run; the override must not add a second spawn.
+    expect(nodeSpawns).toHaveLength(2);
+    await flushLog(overrideHarness.logPath);
   });
 
   it('skips the host port probe when BASE_URL points at an external preview', async () => {
