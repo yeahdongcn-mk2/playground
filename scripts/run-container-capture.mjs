@@ -122,8 +122,42 @@ export function parseCaptureScriptCommand(command, target = '') {
 }
 
 /**
- * Capture targets (Issue #293) one container run records, read from the target
- * script's own `--print-capture-targets` declaration.
+ * Validate the default preview port a capture script declares.
+ *
+ * `parsePreviewPort` treats a missing or empty environment value as "use the
+ * fallback", but a declaration must always name the script's own default: a
+ * missing value would otherwise silently fall back to a second target-name /
+ * port table. The accepted values and the 1-65535 range stay owned by
+ * `preview-port.mjs`, so the resolver reuses its semantics instead of keeping
+ * another range check.
+ */
+function validateDeclaredPreviewPort(target, script, value) {
+  const missing =
+    value === undefined ||
+    value === null ||
+    !['number', 'string'].includes(typeof value) ||
+    String(value).trim() === '';
+  if (missing) {
+    throw new Error(
+      `Cannot resolve capture targets for "${target}": "${script}" declared no ` +
+        'previewPort (expected the script\'s default port, 1-65535).',
+    );
+  }
+
+  try {
+    return parsePreviewPort(value);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Cannot resolve capture targets for "${target}": "${script}" declared an ` +
+        `invalid previewPort ${JSON.stringify(value)} (${detail}).`,
+    );
+  }
+}
+
+/**
+ * Capture targets and preview port (Issue #293) one container run records, read
+ * from the target script's own `--print-capture-targets` declaration.
  *
  * The container entry does not keep a script-name / flag mapping. It parses the
  * target's npm command for the node script and the script's built-in arguments,
@@ -134,8 +168,9 @@ export function parseCaptureScriptCommand(command, target = '') {
  *
  * The printed one-line JSON is the only source of truth. The script path must
  * match the npm command, the targets must be a non-empty subset of the fixed
- * capture-env DPR contract, and a missing declaration / non-zero exit / invalid
- * JSON fails with a readable error before a container is started.
+ * capture-env DPR contract, and the script's default preview port must be a
+ * 1-65535 integer. A missing declaration / non-zero exit / invalid JSON / bad
+ * port fails with a readable error before a container is started.
  */
 export function resolveCaptureTargets(
   target,
@@ -218,7 +253,13 @@ export function resolveCaptureTargets(
     );
   }
 
-  return { script, targets: declaredTargets };
+  const previewPort = validateDeclaredPreviewPort(
+    target,
+    script,
+    declaration.previewPort,
+  );
+
+  return { script, targets: declaredTargets, previewPort };
 }
 
 /** The preview port a target starts, or null when it does not start one. */

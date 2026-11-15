@@ -16,6 +16,7 @@ import {
   assertContainerCaptureEnvironment,
   resolveCaptureImage,
 } from '../../scripts/lib/capture-env.mjs';
+import { DEFAULT_PREVIEW_PORT as SHARED_DEFAULT_PREVIEW_PORT } from '../../scripts/lib/preview-port.mjs';
 import {
   CAPTURE_IMAGE_BUILD_LABEL,
   CAPTURE_LOCK_HASH_FILE,
@@ -40,6 +41,20 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 // Playwright), so several cases together exceed the default 5s.
 vi.setConfig({ testTimeout: 30_000 });
 const SCRIPTS = readPackageScripts();
+
+/**
+ * The `DEFAULT_PREVIEW_PORT` one capture script passes to its declaration.
+ *
+ * Five scripts redeclare the constant next to `SCRIPT_NAME`; the scores script
+ * imports the shared default from `preview-port.mjs`.
+ */
+function previewPortInScript(script: string): number {
+  const source = readFileSync(join(ROOT, script), 'utf8');
+  const declared = /const DEFAULT_PREVIEW_PORT = (\d+);/.exec(source);
+  return declared === null
+    ? SHARED_DEFAULT_PREVIEW_PORT
+    : Number(declared[1]);
+}
 
 type Env = Record<string, string | undefined>;
 
@@ -332,6 +347,7 @@ describe('container capture target declaration', () => {
         stdout: JSON.stringify({
           script: args[0],
           targets: ['webkit'],
+          previewPort: 4183,
         }),
       });
     }) as unknown as typeof spawnSync;
@@ -342,7 +358,11 @@ describe('container capture target declaration', () => {
         spawnSync: declarationSpawnSync,
         repoRoot: '/repo',
       }),
-    ).toEqual({ script: 'scripts/capture-2048-screenshots.mjs', targets: ['webkit'] });
+    ).toEqual({
+      script: 'scripts/capture-2048-screenshots.mjs',
+      targets: ['webkit'],
+      previewPort: 4183,
+    });
     expect(calls).toEqual([
       [
         process.execPath,
@@ -403,7 +423,7 @@ describe('container capture target declaration', () => {
         scripts: SCRIPTS,
         spawnSync: fakeSpawnSync({
           status: 0,
-          stdout: JSON.stringify({ script, targets: [] }),
+          stdout: JSON.stringify({ script, targets: [], previewPort: 4174 }),
         }),
         repoRoot: '/repo',
       }),
@@ -413,7 +433,11 @@ describe('container capture target declaration', () => {
         scripts: SCRIPTS,
         spawnSync: fakeSpawnSync({
           status: 0,
-          stdout: JSON.stringify({ script: 'scripts/other.mjs', targets: ['webkit'] }),
+          stdout: JSON.stringify({
+            script: 'scripts/other.mjs',
+            targets: ['webkit'],
+            previewPort: 4174,
+          }),
         }),
         repoRoot: '/repo',
       }),
@@ -429,11 +453,72 @@ describe('container capture target declaration', () => {
           stdout: JSON.stringify({
             script: 'scripts/capture-screenshots.mjs',
             targets: ['tablet'],
+            previewPort: 4174,
           }),
         }),
         repoRoot: '/repo',
       }),
     ).toThrow(/Unknown capture target "tablet"/);
+  });
+
+  it('returns the previewPort declared by each of the six capture scripts', () => {
+    const cases = [
+      ['screenshots', 'scripts/capture-screenshots.mjs', 4174],
+      ['screenshots:snake', 'scripts/capture-snake-screenshots.mjs', 5188],
+      ['screenshots:2048', 'scripts/capture-2048-screenshots.mjs', 4183],
+      ['screenshots:breakout', 'scripts/capture-breakout-screenshots.mjs', 4185],
+      ['screenshots:minesweeper', 'scripts/capture-minesweeper-screenshots.mjs', 4186],
+      [
+        'screenshots:minesweeper:scores',
+        'scripts/capture-minesweeper-scores-screenshots.mjs',
+        4192,
+      ],
+    ] as const;
+
+    for (const [target, script, previewPort] of cases) {
+      const resolved = resolveCaptureTargets(target, [], { scripts: SCRIPTS });
+      expect(resolved.script, target).toBe(script);
+      expect(resolved.previewPort, target).toBe(previewPort);
+      // The resolver reports the script's own DEFAULT_PREVIEW_PORT constant.
+      expect(resolved.previewPort, script).toBe(previewPortInScript(script));
+    }
+  });
+
+  it('fails readably when the declared previewPort is missing or invalid', () => {
+    const script = 'scripts/capture-screenshots.mjs';
+    const cases: Array<[string, unknown, RegExp]> = [
+      ['missing', undefined, /declared no previewPort/],
+      ['empty', '', /declared no previewPort/],
+      ['blank', '   ', /declared no previewPort/],
+      ['non-integer', '4174.5', /invalid previewPort "4174\.5"/],
+      ['zero', 0, /invalid previewPort 0.*between 1 and 65535/],
+      ['out of range', 65536, /invalid previewPort 65536.*between 1 and 65535/],
+    ];
+
+    for (const [label, previewPort, expected] of cases) {
+      const declaration =
+        previewPort === undefined
+          ? { script, targets: ['webkit'] }
+          : { script, targets: ['webkit'], previewPort };
+      let message = '';
+      try {
+        resolveCaptureTargets('screenshots:webkit', [], {
+          scripts: SCRIPTS,
+          spawnSync: fakeSpawnSync({
+            status: 0,
+            stdout: JSON.stringify(declaration),
+          }),
+          repoRoot: '/repo',
+        });
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+      expect(message, label).toMatch(expected);
+      // The failure names both the npm target and the declaring script path.
+      expect(message, label).toContain(
+        'Cannot resolve capture targets for "screenshots:webkit": "scripts/capture-screenshots.mjs"',
+      );
+    }
   });
 
   it('uses the preview port each screenshot script starts', () => {
