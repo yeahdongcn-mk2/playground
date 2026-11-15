@@ -163,15 +163,27 @@ const IMAGE_DRIFT_CASES: Array<{ label: string; logLine: string; actual: string 
 ];
 
 /**
- * Log lines whose `env` / `fonts` / `image` subfield is malformed. These are
- * invalid input (exit 2), never environment drift (exit 1) and never an
- * uncaught TypeError from the parser.
+ * Log lines with a malformed field token or a malformed `env` / `fonts` /
+ * `image` subfield. These are invalid input (exit 2), never environment drift
+ * (exit 1) and never an uncaught TypeError from the parser.
  */
 const MALFORMED_CAPTURE_ENV_FIELD_CASES: Array<{
   label: string;
   logLine: string;
   message: string;
 }> = [
+  {
+    // Pins the token-level `key=value` guard, which runs before field lookup.
+    label: 'a field token without "="',
+    logLine: CONTAINER_LOG_LINE.replace('source=container', 'sourceX'),
+    message: 'capture-env field "sourceX" is not key=value',
+  },
+  {
+    // Pins the `equals === 0` half of the guard (an empty field key).
+    label: 'a field token with an empty key',
+    logLine: CONTAINER_LOG_LINE.replace('source=container', '=container'),
+    message: 'capture-env field "=container" is not key=value',
+  },
   {
     label: 'an EGL variable entry without "="',
     logLine: CONTAINER_LOG_LINE.replace('EGL_PLATFORM=surfaceless', 'BAD'),
@@ -196,6 +208,15 @@ const MALFORMED_CAPTURE_ENV_FIELD_CASES: Array<{
       'fonts=fonts-liberation@',
     ),
     message: 'invalid capture-env font entry "fonts-liberation@"',
+  },
+  {
+    // Pins the `at === 0` half of the guard (an empty package name).
+    label: 'a font entry with an empty package name',
+    logLine: CONTAINER_LOG_LINE.replace(
+      `fonts=${EXPECTED_FONT_LIST}`,
+      'fonts=@1.2',
+    ),
+    message: 'invalid capture-env font entry "@1.2"',
   },
   {
     label: 'an image reference that is not repo:tag@digest',
@@ -1414,6 +1435,19 @@ describe('verifyScreenshotSha256', () => {
     expect(missingDirValue.stderr).toContain(
       'Usage: node scripts/verify-screenshot-sha256.mjs',
     );
+
+    // A following flag is not accepted as the option's value: it would
+    // otherwise be treated as a path. For --dir that turns the usage error into
+    // an exit-1 hash failure; for --manifest/--log it becomes a confusing read
+    // error (still exit 2), so the exact message below pins the guard.
+    for (const option of ['--dir', '--manifest', '--log']) {
+      const flagValue = runCli([option, '--help']);
+      expect(flagValue.status, option).toBe(2);
+      expect(flagValue.stderr, option).toContain(`${option} needs a value`);
+      expect(flagValue.stderr, option).toContain(
+        'Usage: node scripts/verify-screenshot-sha256.mjs',
+      );
+    }
 
     const dir = makeTempDir();
     const unreadableManifest = runCli([
