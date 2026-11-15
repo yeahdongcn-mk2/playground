@@ -207,7 +207,11 @@ describe('capture target docs (Issue #209)', () => {
     expect(FIXED_ENV).toContain(
       '扫雷 After 的 Chromium 运行会同时创建桌面与 Pixel 7 触屏上下文',
     );
-    expect(FIXED_ENV).toContain('大厅证据统一由 `npm run screenshots` 生成');
+    expect(FIXED_ENV).toContain(
+      '大厅证据只由 `npm run screenshots:container -- screenshots`',
+    );
+    expect(FIXED_ENV).toContain('不再由各游戏脚本顺带写出');
+    expect(FIXED_ENV).not.toContain('大厅证据统一由 `npm run screenshots` 生成');
     expect(FIXED_ENV).toContain('其他 Chromium 截图脚本');
     expect(FIXED_ENV).toContain('不会出现 `mobile-touch` 行');
   });
