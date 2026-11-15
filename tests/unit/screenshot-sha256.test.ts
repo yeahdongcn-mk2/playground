@@ -114,6 +114,15 @@ const MANIFEST_ENVIRONMENT_DRIFT_CASES: Array<{
     problem: `environment.image.tag is "v9.9.9-noble", expected "${PLAYWRIGHT_IMAGE_PIN.tag}"`,
   },
   {
+    // Only the value changes: adding an unknown variable would also produce an
+    // "unexpected variable(s)" message, so this case pins the value comparison.
+    label: 'a drifted EGL variable value',
+    drift: (manifest) => {
+      manifest.environment.egl.EGL_PLATFORM = 'x11';
+    },
+    problem: `environment.egl.EGL_PLATFORM is "x11", expected "${CAPTURE_EGL_ENV.EGL_PLATFORM}"`,
+  },
+  {
     label: 'a stale capture provenance container',
     drift: (manifest) => {
       const first = manifest.captures[0];
@@ -150,6 +159,48 @@ const IMAGE_DRIFT_CASES: Array<{ label: string; logLine: string; actual: string 
       `sha256:${'0'.repeat(64)}`,
     ),
     actual: `${PLAYWRIGHT_IMAGE_REPOSITORY}:${PLAYWRIGHT_IMAGE_PIN.tag}@sha256:${'0'.repeat(64)}`,
+  },
+];
+
+/**
+ * Log lines whose `env` / `fonts` / `image` subfield is malformed. These are
+ * invalid input (exit 2), never environment drift (exit 1) and never an
+ * uncaught TypeError from the parser.
+ */
+const MALFORMED_CAPTURE_ENV_FIELD_CASES: Array<{
+  label: string;
+  logLine: string;
+  message: string;
+}> = [
+  {
+    label: 'an EGL variable entry without "="',
+    logLine: CONTAINER_LOG_LINE.replace('EGL_PLATFORM=surfaceless', 'BAD'),
+    message: 'invalid capture-env variable entry "BAD"',
+  },
+  {
+    // Pins the `equals === 0` half of the guard (an empty variable name).
+    label: 'an EGL variable entry with an empty name',
+    logLine: CONTAINER_LOG_LINE.replace('EGL_PLATFORM=surfaceless', '=value'),
+    message: 'invalid capture-env variable entry "=value"',
+  },
+  {
+    label: 'a font entry without "@"',
+    logLine: CONTAINER_LOG_LINE.replace(`fonts=${EXPECTED_FONT_LIST}`, 'fonts=garbage'),
+    message: 'invalid capture-env font entry "garbage"',
+  },
+  {
+    // Pins the `at === entry.length - 1` half of the guard (empty version).
+    label: 'a font entry with an empty version',
+    logLine: CONTAINER_LOG_LINE.replace(
+      `fonts=${EXPECTED_FONT_LIST}`,
+      'fonts=fonts-liberation@',
+    ),
+    message: 'invalid capture-env font entry "fonts-liberation@"',
+  },
+  {
+    label: 'an image reference that is not repo:tag@digest',
+    logLine: CONTAINER_LOG_LINE.replace(/image=\S+/, 'image=garbage'),
+    message: 'invalid capture-env image reference "garbage"',
   },
 ];
 
@@ -667,7 +718,11 @@ describe('capture sha256 manifest', () => {
     const problems = manifestEnvironmentMismatches(manifest);
     expect(problems.some((problem) => problem.includes('image.digest'))).toBe(true);
     expect(problems.some((problem) => problem.includes('environment.dpr'))).toBe(true);
-    expect(problems.some((problem) => problem.includes('EGL_PLATFORM'))).toBe(true);
+    // Exact message while an unexpected variable is present as well; the
+    // dedicated drift case below pins the value comparison on its own.
+    expect(problems).toContain(
+      `environment.egl.EGL_PLATFORM is "x11", expected "${CAPTURE_EGL_ENV.EGL_PLATFORM}"`,
+    );
     expect(problems.some((problem) => problem.includes('unexpected variable'))).toBe(true);
     expect(problems.some((problem) => problem.includes('environment.fonts'))).toBe(true);
   });
@@ -915,6 +970,52 @@ describe('capture environment fingerprint', () => {
       expect(verification.problems.length, logText).toBeGreaterThan(0);
     }
   });
+
+  it.each(MALFORMED_CAPTURE_ENV_FIELD_CASES)(
+    'rejects $label as invalid capture-env input and exits 2 through the CLI',
+    ({ logLine, message }) => {
+      const manifest = committedManifest();
+
+      // The library classifies the line as malformed input, not drift.
+      const verification = verifyCaptureEnvironment({
+        logText: `${logLine}\n`,
+        environment: manifest.environment,
+      });
+      expect(verification.invalid).toBe(true);
+      expect(verification.ok).toBe(false);
+      expect(verification.problems).toEqual([message]);
+
+      // The parser itself throws the documented error type, not a TypeError.
+      expect(() => parseCaptureEnvironmentFingerprintLine(logLine)).toThrow(
+        ScreenshotSha256Error,
+      );
+      expect(() => parseCaptureEnvironmentFingerprintLine(logLine)).toThrow(message);
+
+      // Through the CLI this is invalid input: exit 2 with a readable message.
+      const dir = makeTempDir();
+      const bytes = makePng();
+      writePng(dir, EXPECTED_FILES[0] as string, bytes);
+      const manifestPath = writeManifest(dir, fixtureManifest(bytes));
+      const logPath = join(dir, 'capture.log');
+      writeFileSync(logPath, `${logLine}\n`);
+      const result = runCli([
+        '--dir',
+        dir,
+        '--manifest',
+        manifestPath,
+        '--log',
+        logPath,
+      ]);
+
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain('invalid capture log');
+      expect(result.stderr).toContain(message);
+      // The image parser's TypeError message would not contain "TypeError", so
+      // also reject its actual wording.
+      expect(result.stderr).not.toContain('TypeError');
+      expect(result.stderr).not.toContain('Cannot read properties of undefined');
+    },
+  );
 
   it('accepts the fractional DPR used by the mobile-touch target', () => {
     const fingerprint = parseCaptureEnvironmentFingerprintLine(
@@ -1299,5 +1400,41 @@ describe('verifyScreenshotSha256', () => {
     expect(driftedResult.stderr).toContain(
       'hint: update docs/screenshots/README.md',
     );
+  });
+
+  it('returns the documented exit codes for help, usage errors and unreadable inputs', () => {
+    const help = runCli(['--help']);
+    expect(help.status).toBe(0);
+    expect(help.stdout).toContain('Usage: node scripts/verify-screenshot-sha256.mjs');
+    expect(help.stderr).toBe('');
+
+    const missingDirValue = runCli(['--dir']);
+    expect(missingDirValue.status).toBe(2);
+    expect(missingDirValue.stderr).toContain('--dir needs a value');
+    expect(missingDirValue.stderr).toContain(
+      'Usage: node scripts/verify-screenshot-sha256.mjs',
+    );
+
+    const dir = makeTempDir();
+    const unreadableManifest = runCli([
+      '--manifest',
+      join(dir, 'missing-manifest.json'),
+    ]);
+    expect(unreadableManifest.status).toBe(2);
+    expect(unreadableManifest.stderr).toContain('cannot read manifest');
+
+    const bytes = makePng();
+    writePng(dir, EXPECTED_FILES[0] as string, bytes);
+    const manifestPath = writeManifest(dir, fixtureManifest(bytes));
+    const unreadableLog = runCli([
+      '--dir',
+      dir,
+      '--manifest',
+      manifestPath,
+      '--log',
+      join(dir, 'missing-capture.log'),
+    ]);
+    expect(unreadableLog.status).toBe(2);
+    expect(unreadableLog.stderr).toContain('cannot read capture log');
   });
 });
