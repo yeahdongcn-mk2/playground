@@ -150,13 +150,13 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
   it('lists the drifted minesweeper and webkit-narrow artifacts', () => {
     for (const file of DRIFTED) {
       expect(WEBKIT_HISTORICAL).toContain(file);
-      expect(driftBullets(WEBKIT_HISTORICAL)).toContain(file);
+      expect(childBullets(WEBKIT_HISTORICAL, '已报告的漂移产物')).toContain(file);
     }
     expect(WEBKIT_HISTORICAL).toContain('已报告的漂移产物');
     // The breakout READY / levelclear / gameover re-shots are collected, so they
     // must leave the drift list instead of being reported twice.
     for (const file of BREAKOUT_COLLECTED) {
-      expect(driftBullets(WEBKIT_HISTORICAL)).not.toContain(file);
+      expect(childBullets(WEBKIT_HISTORICAL, '已报告的漂移产物')).not.toContain(file);
     }
   });
 

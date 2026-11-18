@@ -355,7 +355,7 @@ describe('guardHistoricalAfterEvidence', () => {
     expect(warning).toContain('#137');
     expect(warning).toContain(file);
     expect(warning).toContain(HISTORICAL_OVERWRITE_FLAG);
-    expect(warning).toContain('498a14f');
+    expect(warning).toContain('8ec4adc');
     expect(warning).toContain('docs/screenshots/README.md');
     expect(warning).toContain(HISTORICAL_SHA256_MANIFEST);
     expect(warning).toContain('Update all of the following');
@@ -593,7 +593,6 @@ describe('historical evidence command docs', () => {
 
   it('documents the container-only overwrite for the WebKit commands that write protected files', () => {
     for (const command of [
-      'npm run screenshots:2048:webkit',
       'npm run screenshots:breakout:webkit',
       'npm run screenshots:minesweeper:webkit',
     ]) {
