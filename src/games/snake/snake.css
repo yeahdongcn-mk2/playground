@@ -113,9 +113,17 @@
 
 .snake-overlay-card h2 {
   margin: 10px 0 8px;
+  color: var(--text);
   font-size: 1.6rem;
   font-weight: 800;
   letter-spacing: -0.03em;
+  /* Issue #318 t3: the reduced-motion rule sets `transition-duration` on every
+     element, which turned this inherited color into a color transition from
+     the pre-CSS black start point. WebKit could keep that transition at its
+     start, so the READY title painted black on some runs and `--text` on
+     others. Pin the final color and opt the title out of transitions so the
+     first paint is already the captured state. */
+  transition: none;
 }
 
 .snake-overlay-body {
