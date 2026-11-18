@@ -427,7 +427,7 @@ function normalizeScreenshotBytes(bytes) {
  * With the default `stableFrames === 1` this is the previous single-shot
  * capture, so existing callers and their bytes stay unchanged.
  */
-async function captureStableBytes(
+async function captureStableFramesBytes(
   page,
   {
     name,
@@ -488,6 +488,76 @@ async function captureStableBytes(
   );
 }
 
+/** Screenshots the stable-capture loop may take before it gives up. */
+export const CAPTURE_STABLE_ATTEMPTS = 4;
+
+/** Coerce a Playwright screenshot result to a Buffer. */
+function screenshotBuffer(bytes) {
+  return Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+}
+
+/**
+ * Capture until two consecutive screenshots are byte-identical (Issue #199).
+ *
+ * A single screenshot can run ahead of WebKit's compositor under concurrent
+ * host load: the sticky header seam removes the first-paint header drift, but
+ * the READY overlay's blurred backdrop and card text can still be rasterised
+ * on a later paint. Taking one screenshot is therefore unprovable; this seam
+ * settles and re-captures until the pixels stop changing, so the bytes written
+ * to disk are a stable raster rather than a sample of an in-flight one. It
+ * throws instead of writing an unstable image when the page never settles.
+ *
+ * The initial screenshot is taken after a settle, and every later screenshot
+ * follows another settle, so a caller that has not pre-settled still starts
+ * from a painted frame. Two consecutive identical frames are treated as
+ * stable: a raster that genuinely persists across a whole settle window is
+ * indistinguishable from a finished one at this layer.
+ *
+ * The loop is opt-in per capture: existing call sites keep their single
+ * screenshot (and therefore their byte-identical evidence) unchanged.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {{
+ *   fullPage?: boolean,
+ *   animations?: 'allow' | 'disabled',
+ *   attempts?: number,
+ *   settle?: (page: import('@playwright/test').Page) => Promise<void>,
+ * }} [options]
+ * @returns {Promise<Buffer>}
+ */
+export async function captureStableBytes(
+  page,
+  {
+    fullPage = false,
+    animations = 'disabled',
+    attempts = CAPTURE_STABLE_ATTEMPTS,
+    settle = settleCapturePaint,
+  } = {},
+) {
+  if (!Number.isInteger(attempts) || attempts < 2) {
+    throw new RangeError(
+      `captureStableBytes needs at least two screenshots; got ${String(attempts)}.`,
+    );
+  }
+
+  await settle(page);
+  let previous = screenshotBuffer(await page.screenshot({ fullPage, animations }));
+  for (let taken = 2; taken <= attempts; taken += 1) {
+    await settle(page);
+    const next = screenshotBuffer(await page.screenshot({ fullPage, animations }));
+    if (next.equals(previous)) {
+      return next;
+    }
+    previous = next;
+  }
+
+  throw new Error(
+    `The capture did not stabilise after ${attempts} screenshots: no two consecutive ` +
+      'screenshots were byte-identical. The page was still repainting; re-run the capture ' +
+      'on an idle machine instead of committing an unstable image.',
+  );
+}
+
 /**
  * Take one screenshot and log the engine / viewport / theme record. Callers
  * pass the same options as `page.screenshot`, so the Chromium bytes stay
@@ -502,12 +572,19 @@ async function captureStableBytes(
  * from the manifest, prints the manifest / docs checklist while leaving the
  * manifest untouched so `npm run verify:screenshots:sha256` keeps failing.
  * Files the manifest does not record keep the previous single-shot
- * `page.screenshot` write path when `stableFrames` is 1; asking for
- * `stableFrames > 1` uses the same stable-frame check and atomic write as a
- * manifested file (the WebKit READY capture relies on that).
+ * `page.screenshot` write path when neither `stable` nor `stableFrames > 1`
+ * is set; either opt-in uses the same stable buffer + atomic write as a
+ * manifested file.
  *
- * `stableFrames` opts into the whole-image stability check above; the WebKit
- * READY capture passes {@link READY_CAPTURE_STABLE_FRAMES} so two consecutive
+ * `stable: true` (Issue #199) replaces the single screenshot with
+ * {@link captureStableBytes}: two consecutive byte-identical screenshots after
+ * {@link settleCapturePaint}, for the 2048 WebKit READY overlay that can still
+ * be mid-raster under concurrent host load. Every other call site keeps the
+ * single-screenshot path and therefore its existing bytes.
+ *
+ * `stableFrames > 1` (Issue #318) uses the interval-based
+ * {@link captureStableFramesBytes} instead; the minesweeper WebKit READY
+ * capture passes {@link READY_CAPTURE_STABLE_FRAMES} so two consecutive
  * identical frames are required before the PNG is written.
  */
 export async function captureScreenshot(
@@ -520,6 +597,7 @@ export async function captureScreenshot(
     colorScheme = 'dark',
     reducedMotion = 'reduce',
     animations = 'disabled',
+    stable = false,
     stableFrames = 1,
     stableIntervalMs = READY_CAPTURE_STABLE_INTERVAL_MS,
     stableAttempts = READY_CAPTURE_STABLE_ATTEMPTS,
@@ -541,11 +619,12 @@ export async function captureScreenshot(
 
   if (capture === null) {
     // Unrecorded evidence: keep the existing path byte-for-byte unless the
-    // caller explicitly asks for a stable-frame check.
-    if (stableFrames === 1) {
-      await page.screenshot({ path, fullPage, animations });
-    } else {
-      const buffer = await captureStableBytes(page, {
+    // caller explicitly asks for a stability check.
+    if (stable) {
+      const buffer = await captureStableBytes(page, { fullPage, animations });
+      writeFileAtomically(path, buffer, fileOperations);
+    } else if (stableFrames !== 1) {
+      const buffer = await captureStableFramesBytes(page, {
         name,
         fullPage,
         animations,
@@ -554,6 +633,8 @@ export async function captureScreenshot(
         stableAttempts,
       });
       writeFileAtomically(path, buffer, fileOperations);
+    } else {
+      await page.screenshot({ path, fullPage, animations });
     }
     console.log(captureRecord(name, engine, page.viewportSize(), colorScheme, reducedMotion));
     return;
@@ -582,14 +663,18 @@ export async function captureScreenshot(
 
   // The guard passed: capture to memory first, so a failing screenshot never
   // replaces the committed PNG, then write it atomically in the same directory.
-  const buffer = await captureStableBytes(page, {
-    name,
-    fullPage,
-    animations,
-    stableFrames,
-    stableIntervalMs,
-    stableAttempts,
-  });
+  const buffer = stable
+    ? await captureStableBytes(page, { fullPage, animations })
+    : stableFrames !== 1
+      ? await captureStableFramesBytes(page, {
+          name,
+          fullPage,
+          animations,
+          stableFrames,
+          stableIntervalMs,
+          stableAttempts,
+        })
+      : normalizeScreenshotBytes(await page.screenshot({ fullPage, animations }));
   writeFileAtomically(path, buffer, fileOperations);
 
   const actualSha256 = createHash('sha256').update(buffer).digest('hex');
@@ -795,19 +880,20 @@ export async function settleCapturePaint(page) {
 }
 
 /**
- * Deterministic first-paint seam for the WebKit READY capture (Issue #318).
+ * Deterministic first-paint seam for the WebKit READY captures (Issue #199 /
+ * #318).
  *
  * A fresh browser can rasterise the sticky site header in two subtly different
  * ways: the same DOM boxes and board differ by a small number of pixels with a
  * per-channel difference of one. A scroll round-trip drives the sticky header
- * through its normal repaint path and settles that header half. It is not
- * enough on its own for the board variant: the caller must first load a
- * throwaway warm-up page so the committed READY page is not the browser's
- * first page. The position is restored to 0 so the screenshot still shows the
- * top of the page; {@link settleCapturePaint} then waits for fonts and frames.
+ * through its normal repaint path and converges on one rasterisation. The
+ * position is restored to 0 so the screenshot still shows the top of the page;
+ * {@link settleCapturePaint} then waits for fonts and frames.
  *
- * Only the READY capture uses this seam: the playing / lost / won evidence is
- * already deterministic and its committed bytes must not change.
+ * Both the 2048 and minesweeper READY captures use this seam. The minesweeper
+ * caller additionally loads a throwaway warm-up page so the committed READY
+ * page is not the browser's first page. The playing / lost / won (or gameover)
+ * evidence is already deterministic and must never be wired into those scenes.
  */
 export async function settleWebkitReadyPaint(page, { offset = 200 } = {}) {
   await page.evaluate((distance) => window.scrollTo(0, distance), offset);
@@ -815,4 +901,35 @@ export async function settleWebkitReadyPaint(page, { offset = 200 } = {}) {
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.waitForFunction(() => window.scrollY === 0);
   await settleCapturePaint(page);
+}
+
+/**
+ * Force the WebKit READY overlay and its blurred backdrop through a fresh
+ * paint (Issue #199).
+ *
+ * The header seam fixes the sticky header, but under concurrent host load the
+ * READY card can still be composited from two subtly different rasters: about
+ * 8895 pixels differ by at most two channel values, all inside the card, and
+ * two consecutive screenshots of that wrong composite still agree. Hiding the
+ * overlay for two frames and restoring it makes the card repaint on the
+ * canonical path. The overlay is hidden only between frames, never in a
+ * captured image.
+ *
+ * Only the 2048 READY capture uses this seam; playing / gameover bytes must not
+ * change.
+ */
+export async function repaintWebkitReadyOverlay(
+  page,
+  { settle = settleCapturePaint } = {},
+) {
+  await page.evaluate(async () => {
+    const overlay = document.querySelector('[data-testid="overlay"]');
+    if (!(overlay instanceof HTMLElement)) return;
+    overlay.style.display = 'none';
+    await new Promise((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve(undefined)));
+    });
+    overlay.style.display = '';
+  });
+  await settle(page);
 }

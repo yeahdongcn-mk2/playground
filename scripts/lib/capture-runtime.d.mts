@@ -144,6 +144,8 @@ export interface CaptureScreenshotOptions {
   colorScheme?: string;
   reducedMotion?: string;
   animations?: 'allow' | 'disabled';
+  /** Use the settle-based stable-capture loop (Issue #199); default false. */
+  stable?: boolean;
   /**
    * Require this many consecutive byte-identical whole-image frames before
    * writing (default 1 keeps the previous single-shot capture).
@@ -188,6 +190,27 @@ export const READY_CAPTURE_STABLE_ATTEMPTS: number;
 
 /** Animation frames the shared capture settle seam waits for. */
 export const CAPTURE_SETTLE_FRAMES: number;
+/** Screenshots the settle-based stable-capture loop may take before giving up. */
+export const CAPTURE_STABLE_ATTEMPTS: number;
+
+export interface CaptureStableBytesOptions {
+  fullPage?: boolean;
+  animations?: 'allow' | 'disabled';
+  /** Total screenshots allowed; at least 2 (default {@link CAPTURE_STABLE_ATTEMPTS}). */
+  attempts?: number;
+  /** Settle seam run between screenshots; defaults to {@link settleCapturePaint}. */
+  settle?: (page: Page) => Promise<void>;
+}
+
+/**
+ * Capture until two consecutive screenshots are byte-identical; throws if the
+ * page never settles within `attempts` screenshots.
+ */
+export function captureStableBytes(
+  page: Page,
+  options?: CaptureStableBytesOptions,
+): Promise<Buffer>;
+
 
 /** Fallback wait after those frames, in milliseconds. */
 export const CAPTURE_SETTLE_TIMEOUT_MS: number;
@@ -195,11 +218,30 @@ export const CAPTURE_SETTLE_TIMEOUT_MS: number;
 /** Wait until fonts, two animation frames and a short fallback timeout settle. */
 export function settleCapturePaint(page: Page): Promise<void>;
 
+export interface SettleWebkitReadyPaintOptions {
+  /** Scroll distance used to force the sticky header repaint; defaults to 200. */
+  offset?: number;
+}
+
 /**
  * Repaint the sticky site header with a scroll round-trip, then settle fonts
- * and frames before a WebKit READY capture.
+ * and frames before a WebKit READY capture (2048 and minesweeper).
  */
 export function settleWebkitReadyPaint(
   page: Page,
-  options?: { offset?: number },
+  options?: SettleWebkitReadyPaintOptions,
+): Promise<void>;
+
+export interface RepaintWebkitReadyOverlayOptions {
+  /** Settle seam run after the repaint; defaults to {@link settleCapturePaint}. */
+  settle?: (page: Page) => Promise<void>;
+}
+
+/**
+ * Hide the READY overlay for two frames and restore it, then settle, so the
+ * card is painted on the canonical path instead of a load-dependent composite.
+ */
+export function repaintWebkitReadyOverlay(
+  page: Page,
+  options?: RepaintWebkitReadyOverlayOptions,
 ): Promise<void>;

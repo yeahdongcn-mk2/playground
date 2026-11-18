@@ -231,7 +231,7 @@ pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和
 | `npm run verify:doc-counts` | 校验三份文档记录的单测计数与 Vitest 实测 `numTotalTests` 一致 |
 | `npm run score` | 运行 score 时先执行 `npm run build`（`check:budget` 读取 `dist/`，因此干净检出上无需手动预构建），再汇总六条校验并与 `docs/score-baseline.json` 对比：默认打印「指标 / 当前值 / 基线值 / 差值」表格，并在末尾输出一行 `SCORE_JSON <json>`；任一指标退化时退出 1，指标变好只报差值、不自动更新基线；`npm run score -- --update` 用当前值重建基线（快照不完整时拒绝写入并退出 2） |
 | `npm run test:e2e` | 先构建，再用 `vite preview` 跑全部 Playwright 项目（Chromium 桌面 / Pixel 7 + `mobile-webkit`） |
-| `npm run test:e2e:webkit` | 先构建，再只跑 `mobile-webkit` 项目（iPhone SE (3rd gen)）：framework 手机端、扫雷 WebKit 冒烟、触屏手势 / 触屏难度表单、贪食蛇 / 俄罗斯方块 / 2048 / 打砖块的手机端用例，以及 320×640 / 360×640 / 375×667 / 412×839 窄屏契约 |
+| `npm run test:e2e:webkit` | 先构建，再只跑 `mobile-webkit` 项目（iPhone SE (3rd gen)）：framework 手机端、扫雷 WebKit 冒烟、触屏手势 / 触屏难度表单、贪食蛇 / 俄罗斯方块 / 2048 / 打砖块的手机端用例，2048 READY 两跑字节守卫，以及 320×640 / 360×640 / 375×667 / 412×839 窄屏契约 |
 | `npm run lint` | oxlint（覆盖 `src`、`tests` 与 `scripts`；error 与 warning 都会失败，warning 经 `--deny-warnings` 升级）+ `scripts/check-boundaries.mjs` 模块依赖方向检查（失败同样返回非 0） |
 | `npm run check:budget` | 检查入口无引擎、gzip 体积预算 |
 | `npm run screenshots` | 构建后生成 `docs/screenshots/` 中的界面截图 |
@@ -240,7 +240,7 @@ pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和
 | `npm run screenshots:snake:webkit` | 用开发服务器 + WebKit 生成贪食蛇手机 ready 截图（READY 标题固定 `--text` 并关闭过渡，截图前等待标题计算色与零动画）；该图已被固定环境 sha256 清单收录，宿主命令会在写出前被拒绝，重拍用 `npm run screenshots:container -- screenshots:snake:webkit` |
 | `npm run screenshots:2048` | 构建后生成 2048 大厅与 ready / playing / gameover 截图；ready 桌面整页图与手机图为历史证据，脚本默认跳过并警告，确需重建时只能在固定容器内用 `npm run screenshots:container -- screenshots:2048 --allow-historical-overwrite`，并同步 `capture-sha256-manifest.json` 条目（若收录）；对照口径见 `docs/screenshots/README.md` 的「历史 After 证据与当前构建不一致（Issue #137）」 |
 | `npm run screenshots:2048:before` | 用 `BASE_URL` 指定的 main 预览生成 2048 Before 截图 |
-| `npm run screenshots:2048:webkit` | 构建后用 WebKit 生成 2048 ready / playing / gameover 手机截图；ready 历史图默认跳过并警告，确需重建时只能在固定容器内用 `npm run screenshots:container -- screenshots:2048:webkit --allow-historical-overwrite`，并同步 `capture-sha256-manifest.json` 条目（若收录） |
+| `npm run screenshots:2048:webkit` | 构建后用 WebKit 生成 2048 ready / playing / gameover 手机截图；三张图均已被固定环境 sha256 清单收录（ready 走滚动往返 + overlay 重绘接缝与稳定截图循环），宿主命令会在 ready 前被写前护栏拒绝，重拍用 `npm run screenshots:container -- screenshots:2048:webkit` |
 | `npm run screenshots:breakout` | 构建后生成打砖块大厅与 ready / playing / levelclear / gameover 截图；ready / levelclear / gameover 桌面整页图与 ready / gameover 手机图为历史证据，脚本默认跳过并警告，确需重建时只能在固定容器内用 `npm run screenshots:container -- screenshots:breakout --allow-historical-overwrite`，并同步 `capture-sha256-manifest.json` 条目（若收录）；对照口径见 `docs/screenshots/README.md` 的「历史 After 证据与当前构建不一致（Issue #137）」 |
 | `npm run screenshots:breakout:before` | 用 `BASE_URL` 指定的 main 预览生成打砖块 Before 截图 |
 | `npm run screenshots:breakout:webkit` | 构建后用 WebKit 生成打砖块 ready / playing / levelclear / gameover 手机截图；四张均已收录固定环境 sha256 清单（ready 走首屏重绘接缝），宿主命令会在 ready 前被写前护栏拒绝，重拍用 `npm run screenshots:container -- screenshots:breakout:webkit` |
@@ -268,7 +268,7 @@ pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和
 
 扫雷截图脚本不再提供通用 `--before` 模式：显式传入会报错并以非零状态退出；`touch-before` / `narrow-before` / `min-before` / `restart-before` / `large-before` 等模式保留，分别指向各自的历史基线。
 
-游戏与界面截图脚本新增了 `--webkit` 家族的命令（`capture-baseline.mjs` 仍只用于基线仓库状态）；Chromium 模式的命令、文件名与输出保持不变。WebKit 模式使用 `iPhone SE (3rd gen)` 设备模拟（375×667，DPR 2，深色，`reducedMotion: reduce`；成绩榜为 320×640），窄屏矩阵按 320×640 / 360×640 / 375×667 / 412×839 显式覆盖视口。脚本日志会为每张图打印 `engine / viewport / theme` 记录，来源表见 [docs/screenshots/README.md](docs/screenshots/README.md)。注意：`screenshots:webkit` / `screenshots:snake:webkit` / `screenshots:2048:webkit` / `screenshots:breakout:webkit` / `screenshots:minesweeper:webkit` 在宿主上会在清单收录的 `after-hub-webkit.png` / `after-snake-webkit.png` / `after-blank-webkit.png` / `after-2048-playing-webkit.png` / `after-breakout-playing-webkit.png` / `after-breakout-ready-webkit.png` / `after-breakout-levelclear-webkit.png` / `after-breakout-gameover-webkit.png` / `after-minesweeper-ready-webkit.png` 前被写前护栏拒绝；刷新这些已收录证据必须用 `npm run screenshots:container -- <target>`（见下一段）。
+游戏与界面截图脚本新增了 `--webkit` 家族的命令（`capture-baseline.mjs` 仍只用于基线仓库状态）；Chromium 模式的命令、文件名与输出保持不变。WebKit 模式使用 `iPhone SE (3rd gen)` 设备模拟（375×667，DPR 2，深色，`reducedMotion: reduce`；成绩榜为 320×640），窄屏矩阵按 320×640 / 360×640 / 375×667 / 412×839 显式覆盖视口。脚本日志会为每张图打印 `engine / viewport / theme` 记录，来源表见 [docs/screenshots/README.md](docs/screenshots/README.md)。注意：`screenshots:webkit` / `screenshots:snake:webkit` / `screenshots:2048:webkit` / `screenshots:breakout:webkit` / `screenshots:minesweeper:webkit` / `screenshots:minesweeper:scores:webkit` 在宿主上会在清单收录的 `after-hub-webkit.png` / `after-snake-webkit.png` / `after-blank-webkit.png` / `after-2048-ready-webkit.png` / `after-2048-playing-webkit.png` / `after-2048-gameover-webkit.png` / `after-breakout-playing-webkit.png` / `after-breakout-ready-webkit.png` / `after-breakout-levelclear-webkit.png` / `after-breakout-gameover-webkit.png` / `after-minesweeper-ready-webkit.png` / `after-minesweeper-playing-webkit.png` / `after-minesweeper-lost-webkit.png` / `after-minesweeper-won-webkit.png` / `after-minesweeper-scores-webkit.png` 前被写前护栏拒绝；刷新这些已收录证据必须用 `npm run screenshots:container -- <target>`（见下一段）。
 
 清单收录的 WebKit 证据（`docs/screenshots/capture-sha256-manifest.json`）在写盘前还有环境护栏：`captureScreenshot` 会先用产生该图的上下文目标比对清单里的 source / target / DPR / 平台 / 镜像 tag+digest / EGL 变量 / 字体包版本；宿主重跑或指纹不一致时在写出任何字节前非零退出，并给出期望 / 实际指纹与固定容器重拍命令，目标 PNG 保持不变。确需刷新时只能用 `npm run screenshots:container -- <target>`；固定容器内指纹一致但新哈希与清单不同时，捕获会打印必须同步清单 `sha256` / `provenance` 与 `docs/screenshots/README.md` 的 checklist，并在清单更新前让 `npm run verify:screenshots:sha256` 继续失败。未收录的截图不受影响。详见 [docs/screenshots/README.md](docs/screenshots/README.md) 的「已提交证据 sha256 清单与校验」。
 
@@ -396,11 +396,11 @@ games/<game>/scene → 对应引擎（动态 import）
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过（oxlint 覆盖 src、tests 与 scripts；error 与 warning 都会失败，warning 经 --deny-warnings 升级；另跑 scripts/check-boundaries.mjs，失败返回非 0）
-npm run test:unit    # 1356 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
+npm run test:unit    # 1370 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
 npm run build        # 通过
 npm run check:budget # 通过（入口 11.16 KB gzip，全部 JS 410.58 KB gzip）
 npm run score        # 通过（打印「指标 / 当前值 / 基线值 / 差值」表与末行 SCORE_JSON；退化退出 1，变好只报差值）
-npm run test:e2e     # 154 passed（桌面 87 + 手机 36 + WebKit 31）
+npm run test:e2e     # 155 passed（桌面 87 + 手机 36 + WebKit 32）
 ```
 
 CI 的 `verify` job 会在 `Bundle budget` 之后、`End-to-end tests` 之前运行 `npm run score`（见上文「CI 检查顺序」）。该步骤只与 `docs/score-baseline.json` 对比：不会运行 `npm run score -- --update`，因此 CI 不会改写基线；基线退化或损坏时 job 直接失败，新基线仍由人显式运行 `--update` 后提交。score 内部的 `verify:doc-counts` 默认会再跑一次单测（见 [docs/framework.md](docs/framework.md) 第 13 节），这是它现有的采集语义。

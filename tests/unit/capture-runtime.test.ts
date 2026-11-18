@@ -1,4 +1,4 @@
-import { devices, type Browser } from '@playwright/test';
+import { devices, type Browser, type Page } from '@playwright/test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   CAPTURE_PLATFORM,
@@ -6,12 +6,19 @@ import {
   PLAYWRIGHT_IMAGE_REPOSITORY,
 } from '../../scripts/lib/capture-env.mjs';
 import {
+  CAPTURE_SETTLE_FRAMES,
+  CAPTURE_SETTLE_TIMEOUT_MS,
+  CAPTURE_STABLE_ATTEMPTS,
   TOUCH_MOBILE_DEVICE,
+  captureStableBytes,
   createDesktopContext,
   createMobileContext,
   createPhoneContext,
   createTouchMobileContext,
   logCaptureEnvironment,
+  repaintWebkitReadyOverlay,
+  settleCapturePaint,
+  settleWebkitReadyPaint,
 } from '../../scripts/lib/capture-runtime.mjs';
 
 const BROWSER_VERSION = '144.0.1';
@@ -286,5 +293,183 @@ describe('container runtime target assertion', () => {
       'target=desktop',
       'target=mobile',
     ]);
+  });
+});
+
+describe('2048 WebKit READY paint seam (Issue #199)', () => {
+  /** A Page double that records the seam's calls without running callbacks. */
+  function recordingPage(): {
+    page: Page;
+    calls: string[];
+    evaluate: ReturnType<typeof vi.fn>;
+    waitForFunction: ReturnType<typeof vi.fn>;
+    waitForTimeout: ReturnType<typeof vi.fn>;
+  } {
+    const calls: string[] = [];
+    const evaluate = vi.fn(async (_callback: unknown, arg?: unknown) => {
+      calls.push(`evaluate:${arg === undefined ? '' : String(arg)}`);
+    });
+    const waitForFunction = vi.fn(async () => {
+      calls.push('waitForFunction');
+    });
+    const waitForTimeout = vi.fn(async () => {
+      calls.push('waitForTimeout');
+    });
+    return {
+      page: { evaluate, waitForFunction, waitForTimeout } as unknown as Page,
+      calls,
+      evaluate,
+      waitForFunction,
+      waitForTimeout,
+    };
+  }
+
+  it('settles fonts, two animation frames and the 300 ms fallback', async () => {
+    const { page, evaluate, waitForTimeout } = recordingPage();
+
+    await settleCapturePaint(page);
+
+    expect(CAPTURE_SETTLE_FRAMES).toBe(2);
+    expect(CAPTURE_SETTLE_TIMEOUT_MS).toBe(300);
+    expect(evaluate).toHaveBeenCalledTimes(2);
+    expect(evaluate.mock.calls[1]?.[1]).toBe(2);
+    expect(waitForTimeout).toHaveBeenCalledWith(300);
+  });
+
+  it('scrolls away, waits for the repaint, returns to the top and settles', async () => {
+    const { page, calls, evaluate, waitForFunction } = recordingPage();
+
+    await settleWebkitReadyPaint(page);
+
+    expect(calls).toEqual([
+      'evaluate:200',
+      'waitForFunction',
+      'evaluate:',
+      'waitForFunction',
+      'evaluate:',
+      'evaluate:2',
+      'waitForTimeout',
+    ]);
+    // The first and third evaluates are the scroll-away and scroll-back calls;
+    // the fourth is the two-frame settle shared with playing / gameover.
+    expect(evaluate).toHaveBeenCalledTimes(4);
+    expect(waitForFunction).toHaveBeenCalledTimes(2);
+  });
+
+  it('accepts an explicit scroll offset for a different viewport', async () => {
+    const { page, calls } = recordingPage();
+
+    await settleWebkitReadyPaint(page, { offset: 320 });
+
+    expect(calls[0]).toBe('evaluate:320');
+  });
+});
+
+describe('stable capture loop (Issue #199)', () => {
+  /** A Page double whose screenshots come from a fixed buffer sequence. */
+  function screenshotPage(buffers: Buffer[]): {
+    page: Page;
+    screenshot: ReturnType<typeof vi.fn>;
+  } {
+    let index = 0;
+    const screenshot = vi.fn(async () => {
+      const buffer = buffers[Math.min(index, buffers.length - 1)];
+      index += 1;
+      if (buffer === undefined) {
+        throw new Error('screenshot sequence is empty');
+      }
+      return buffer;
+    });
+    return { page: { screenshot } as unknown as Page, screenshot };
+  }
+
+  it('retries until two consecutive screenshots are byte-identical', async () => {
+    const first = Buffer.from('in-flight frame');
+    const stable = Buffer.from('settled frame');
+    const { page, screenshot } = screenshotPage([first, stable, stable]);
+    const settle = vi.fn(async () => {});
+
+    const bytes = await captureStableBytes(page, { settle });
+
+    expect(bytes.equals(stable)).toBe(true);
+    expect(screenshot).toHaveBeenCalledTimes(3);
+    // One settle before the first screenshot and one between each pair.
+    expect(settle).toHaveBeenCalledTimes(3);
+  });
+
+  it('returns as soon as two consecutive frames match', async () => {
+    const first = Buffer.from('settled frame');
+    const { page, screenshot } = screenshotPage([first, first]);
+    const settle = vi.fn(async () => {});
+
+    const bytes = await captureStableBytes(page, { settle });
+
+    expect(bytes.equals(first)).toBe(true);
+    expect(screenshot).toHaveBeenCalledTimes(2);
+    expect(settle).toHaveBeenCalledTimes(2);
+  });
+
+  it('fails instead of returning an unstable image when the page never settles', async () => {
+    const { page } = screenshotPage([
+      Buffer.from('frame 1'),
+      Buffer.from('frame 2'),
+      Buffer.from('frame 3'),
+      Buffer.from('frame 4'),
+    ]);
+
+    await expect(captureStableBytes(page, { settle: async () => {} })).rejects.toThrow(
+      `did not stabilise after ${CAPTURE_STABLE_ATTEMPTS} screenshots`,
+    );
+  });
+
+  it('requires at least two screenshots', async () => {
+    const { page } = screenshotPage([Buffer.from('only frame')]);
+
+    await expect(captureStableBytes(page, { attempts: 1 })).rejects.toThrow(RangeError);
+  });
+});
+
+describe('WebKit READY overlay repaint (Issue #199)', () => {
+  it('runs the evaluate callback and hides, then restores, the overlay for two frames', async () => {
+    const overlay = { style: { display: '' } };
+    class FakeHTMLElement {}
+    Object.setPrototypeOf(overlay, FakeHTMLElement.prototype);
+    const frames: Array<(time: number) => void> = [];
+    // Run the callback the runtime hands to Playwright instead of asserting
+    // only that evaluate was called: the hide / restore is the seam that fixes
+    // the load-dependent raster, so deleting it must turn this test red.
+    const evaluate = vi.fn((callback: () => Promise<void>) => callback());
+    const settle = vi.fn(async () => {});
+    const page = { evaluate } as unknown as Page;
+
+    vi.stubGlobal('HTMLElement', FakeHTMLElement);
+    vi.stubGlobal('document', { querySelector: () => overlay });
+    vi.stubGlobal('requestAnimationFrame', (callback: (time: number) => void) => {
+      frames.push(callback);
+      return frames.length;
+    });
+
+    try {
+      const repaint = repaintWebkitReadyOverlay(page, { settle });
+
+      // The callback runs synchronously up to its first frame wait.
+      expect(evaluate).toHaveBeenCalledTimes(1);
+      expect(overlay.style.display).toBe('none');
+      expect(frames).toHaveLength(1);
+
+      frames[0]?.(0);
+      expect(frames, 'two animation frames must pass before the overlay returns').toHaveLength(2);
+      expect(overlay.style.display, 'the overlay stays hidden during the second frame').toBe(
+        'none',
+      );
+
+      frames[1]?.(0);
+      await repaint;
+
+      expect(overlay.style.display, 'the overlay must be restored before capture').toBe('');
+      expect(settle).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

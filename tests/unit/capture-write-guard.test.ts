@@ -672,3 +672,65 @@ describe('captureScreenshot stable frames for unrecorded files', () => {
     expect(screenshotSpy).not.toHaveBeenCalled();
   });
 });
+
+describe('captureScreenshot stable capture (Issue #199)', () => {
+  /** A page double whose screenshot always returns the same bytes. */
+  function stablePage(bytes: Buffer) {
+    const screenshot = vi.fn(async () => bytes);
+    return {
+      page: {
+        context: () => ({}),
+        viewportSize: () => ({ width: 375, height: 667 }),
+        evaluate: vi.fn(async () => {}),
+        waitForTimeout: vi.fn(async () => {}),
+        screenshot,
+      } as never,
+      screenshot,
+    };
+  }
+
+  it('waits for two identical screenshots before writing an unrecorded PNG', async () => {
+    const dir = tempScreenshotDir();
+    const bytes = Buffer.from('stable png bytes');
+    const { page, screenshot } = stablePage(bytes);
+
+    await captureScreenshot(page, 'after-hub-webkit.png', {
+      engine: 'webkit',
+      outputDir: dir,
+      manifest: sampleManifest(),
+      fingerprint: hostFingerprint() as never,
+      stable: true,
+      fullPage: true,
+      animations: 'allow',
+    });
+
+    expect(screenshot).toHaveBeenCalledTimes(2);
+    expect(screenshot).toHaveBeenNthCalledWith(1, { fullPage: true, animations: 'allow' });
+    expect(screenshot).toHaveBeenNthCalledWith(2, { fullPage: true, animations: 'allow' });
+    expect(readFileSync(join(dir, 'after-hub-webkit.png'))).toEqual(bytes);
+  });
+
+  it('writes the stable buffer atomically for a manifested PNG', async () => {
+    const dir = tempScreenshotDir();
+    const target = join(dir, FILE);
+    writeFileSync(target, 'old committed bytes');
+    const bytes = Buffer.from('captured png bytes');
+    const { page, screenshot } = stablePage(bytes);
+    const log = { warn: vi.fn() };
+
+    await captureScreenshot(page, FILE, {
+      engine: 'webkit',
+      target: 'webkit',
+      outputDir: dir,
+      manifest: sampleManifest(),
+      fingerprint: containerFingerprint() as never,
+      stable: true,
+      log,
+    });
+
+    expect(screenshot).toHaveBeenCalledTimes(2);
+    expect(readFileSync(target)).toEqual(bytes);
+    expect(readdirSync(dir)).toEqual([FILE]);
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+});

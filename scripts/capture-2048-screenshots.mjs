@@ -10,6 +10,9 @@ import {
   engineLabel,
   launchCaptureBrowser,
   parseCaptureEngine,
+  repaintWebkitReadyOverlay,
+  settleCapturePaint,
+  settleWebkitReadyPaint,
   startPreviewServer,
   stopPreviewServer,
 } from './lib/capture-runtime.mjs';
@@ -48,8 +51,15 @@ import {
  * It is an After-only mode; the desktop and hub evidence stay Chromium.
  *
  * Playing and gameover pin `seed=135` in addition to the board, so the tile
- * spawned after ArrowLeft is deterministic. See docs/screenshots/README.md for
- * the reproducible sha256 procedure and its conditions.
+ * spawned after ArrowLeft is deterministic. The WebKit ready scene additionally
+ * runs two repaint seams before its capture: a scroll round-trip repaints the
+ * sticky site header, and hiding the READY overlay for two frames repaints the
+ * card and its blurred backdrop. Either can otherwise rasterise in two subtly
+ * different ways and break fixed-container byte equality. The ready capture
+ * then waits for two byte-identical consecutive screenshots, so a blurred
+ * overlay frame still mid-raster under concurrent host load is not written.
+ * See docs/screenshots/README.md for the reproducible sha256 procedure and its
+ * conditions.
  *
  * The After mode skips the frozen `after-2048-ready-desktop.png` and
  * `after-2048-ready-mobile.png` historical evidence and prints a warning unless
@@ -112,27 +122,18 @@ function gameUrl(board) {
 }
 
 async function settle(page) {
-  await page.evaluate(() => document.fonts.ready);
-  // Two animation frames commit the canvas paint triggered by the last state
-  // change; the timeout only keeps the Phaser loop as a fallback, so the
-  // deterministic result does not depend on a fixed wall-clock delay alone.
-  await page.evaluate(
-    () =>
-      new Promise((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(resolve));
-      }),
-  );
-  await page.waitForTimeout(300);
+  // Shared settle contract: fonts, two animation frames and a short fallback.
+  await settleCapturePaint(page);
 }
 
-async function capture(page, name, fullPage) {
+async function capture(page, name, fullPage, options) {
   const write = guardHistoricalAfterEvidence({
     file: name,
     mode: MODE,
     allowHistoricalOverwrite: ALLOW_HISTORICAL_OVERWRITE,
   });
   if (!write) return;
-  await captureScreenshot(page, name, { engine: ENGINE, fullPage });
+  await captureScreenshot(page, name, { engine: ENGINE, fullPage, ...options });
 }
 
 async function open2048(page, board) {
@@ -264,7 +265,18 @@ async function captureWebkitMobile(browser) {
 
   const ready = await context.newPage();
   await open2048(ready, COLOR_BOARD);
-  await capture(ready, 'after-2048-ready-webkit.png', false);
+  // WebKit's first paint of the sticky site header can settle in two subtly
+  // different rasters (Issue #199). The ready scene is the first page of this
+  // run; a scroll round-trip repaints the header deterministically before the
+  // capture. The READY card and its blurred backdrop can still composite from
+  // two different rasters under concurrent host load, so the overlay also goes
+  // through a hide / restore repaint. The capture itself waits for two
+  // byte-identical consecutive screenshots instead of writing a single
+  // in-flight frame. playing / gameover keep their existing byte-identical
+  // path.
+  await settleWebkitReadyPaint(ready);
+  await repaintWebkitReadyOverlay(ready);
+  await capture(ready, 'after-2048-ready-webkit.png', false, { stable: true });
   await ready.close();
 
   const playing = await context.newPage();
