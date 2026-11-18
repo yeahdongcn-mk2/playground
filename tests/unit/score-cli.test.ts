@@ -176,6 +176,24 @@ describeCli('score CLI', () => {
     expect(result.stdout).toContain('SCORE_JSON');
   });
 
+  it('exits 0 and reports better metrics without updating the baseline', () => {
+    const dir = makeProject({
+      baseline: baseline({ unitTests: CURRENT_UNIT_TESTS - 1 }),
+    });
+
+    const result = runScoreCli(dir);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('结论: 指标变好（未自动更新基线）');
+    expect(result.stdout).toContain(
+      `unitTests: 当前 ${CURRENT_UNIT_TESTS}，基线 ${CURRENT_UNIT_TESTS - 1}，差 +1`,
+    );
+    // A better run only reports; the baseline keeps its old value.
+    expect(
+      parseBaseline(readFileSync(join(dir, BASELINE_RELATIVE_PATH), 'utf8')),
+    ).toEqual(baseline({ unitTests: CURRENT_UNIT_TESTS - 1 }));
+  });
+
   it('exits 1 and names a unit test regression with its delta', () => {
     const dir = makeProject({
       baseline: baseline({ unitTests: CURRENT_UNIT_TESTS + 1 }),
@@ -239,6 +257,53 @@ describeCli('score CLI', () => {
     expect(result.stderr).toContain('unknown option: --bogus');
     expect(result.stderr).toContain('Usage: npm run score');
     expect(result.stderr).not.toContain('Running npm run');
+  });
+
+  it('exits 2 and reports the read error when the baseline path is not a file', () => {
+    const dir = makeProject({ baseline: null });
+    mkdirSync(join(dir, BASELINE_RELATIVE_PATH));
+
+    const result = runScoreCli(dir);
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain(
+      `无法读取基线文件 ${join('docs', 'score-baseline.json')}`,
+    );
+    expect(result.stderr).toContain('请先运行 npm run score -- --update 生成基线');
+    expect(result.stderr).not.toContain('Running npm run');
+  });
+
+  it('exits 2 when --update cannot write the baseline', () => {
+    const dir = makeProject({ baseline: null });
+    // A directory at the baseline path makes writeFileSync fail with EISDIR,
+    // even for root in this container.
+    mkdirSync(join(dir, BASELINE_RELATIVE_PATH));
+
+    const result = runScoreCli(dir, ['--update']);
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain(`无法写入 ${join('docs', 'score-baseline.json')}`);
+    expect(result.stdout).not.toContain('基线已更新');
+    // The same broken path also exercises the non-ENOENT read error on the
+    // default command, which must fail before starting the capture.
+    const readResult = runScoreCli(dir);
+    expect(readResult.status).toBe(2);
+    expect(readResult.stderr).toContain(
+      `无法读取基线文件 ${join('docs', 'score-baseline.json')}`,
+    );
+  });
+
+  it.each(['--help', '-h'])('prints usage and skips capture for %s', (flag) => {
+    const dir = makeProject({ baseline: null });
+
+    const result = runScoreCli(dir, [flag]);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('Usage: npm run score');
+    expect(result.stdout).toContain('-h, --help show this help');
+    expect(result.stderr).not.toContain('Running npm run');
+    expect(result.stdout).not.toContain('SCORE_JSON');
+    expect(existsSync(join(dir, BASELINE_RELATIVE_PATH))).toBe(false);
   });
 
   it('writes the new baseline with --update and prints old → new values', () => {
