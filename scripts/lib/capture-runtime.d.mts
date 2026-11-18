@@ -167,3 +167,19 @@ export function captureScreenshot(
   name: string,
   options: CaptureScreenshotOptions,
 ): Promise<void>;
+
+/** Animation frames the shared capture settle seam waits for. */
+export const CAPTURE_SETTLE_FRAMES: number;
+/** Fallback wait after those frames, in milliseconds. */
+export const CAPTURE_SETTLE_TIMEOUT_MS: number;
+export function settleCapturePaint(page: Page): Promise<void>;
+
+export interface SettleWebkitReadyPaintOptions {
+  /** Scroll distance used to force the sticky header repaint; defaults to 200. */
+  offset?: number;
+}
+
+export function settleWebkitReadyPaint(
+  page: Page,
+  options?: SettleWebkitReadyPaintOptions,
+): Promise<void>;

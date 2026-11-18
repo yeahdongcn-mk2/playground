@@ -83,6 +83,7 @@ const NARROW_DRIFT = [
 const DRIFTED = [...MINESWEEPER_DRIFT, ...NARROW_DRIFT];
 const DETERMINISTIC = [
   'after-breakout-playing-webkit.png',
+  'after-2048-ready-webkit.png',
   'after-2048-playing-webkit.png',
   'after-2048-gameover-webkit.png',
   'after-hub-webkit.png',
@@ -150,15 +151,22 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(WEBKIT_HISTORICAL).toContain('bf7548b7');
   });
 
-  it('records the 2048 ready cross-run difference without fixing a sample hash', () => {
+  it('records the fixed 2048 ready drift and its dedicated paint seam', () => {
+    expect(WEBKIT_HISTORICAL).toContain('已修复的漂移');
     expect(WEBKIT_HISTORICAL).toContain('after-2048-ready-webkit.png');
-    expect(WEBKIT_HISTORICAL).toContain('同一捕获提交');
     expect(WEBKIT_HISTORICAL).toContain('4f488a3e');
-    expect(WEBKIT_HISTORICAL).toContain('两次 sha256 不同');
-    expect(WEBKIT_HISTORICAL).toContain('672285de');
-    expect(WEBKIT_HISTORICAL).toContain('0ea38c8d');
-    expect(WEBKIT_HISTORICAL).toContain('不能把单次采样的 0.22% 当作稳定结论');
-    expect(driftBullets(WEBKIT_HISTORICAL)).toContain('after-2048-ready-webkit.png');
+    expect(WEBKIT_HISTORICAL).toContain('1833 像素');
+    expect(WEBKIT_HISTORICAL).toContain('每通道最大 1');
+    expect(WEBKIT_HISTORICAL).toContain('sticky 站点页眉文字带');
+    expect(WEBKIT_HISTORICAL).toContain('滚动往返');
+    expect(WEBKIT_HISTORICAL).toContain(
+      '0ea38c8d6a1ff580c695cedc6f5165ad4299a7612dd3da32d3c62c06e73b4856',
+    );
+    expect(WEBKIT_HISTORICAL).toContain('capture-sha256-manifest.json');
+    expect(WEBKIT_HISTORICAL).toContain('不再是历史漂移证据');
+    expect(driftBullets(WEBKIT_HISTORICAL)).not.toContain(
+      'after-2048-ready-webkit.png',
+    );
   });
 
   it('documents the local EGL requirement and the Playwright container recheck', () => {
@@ -180,7 +188,9 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(WEBKIT_HISTORICAL).toContain('playing / lost / won 在容器内两跑 sha256 相同');
     expect(WEBKIT_HISTORICAL).toContain('ready 的相邻两跑则可能不同');
     expect(WEBKIT_HISTORICAL).not.toContain('扫雷这 4 张在容器内两跑 sha256 相同');
-    expect(WEBKIT_HISTORICAL).toContain('2048 ready 在同一容器两跑不同');
+    expect(WEBKIT_HISTORICAL).toContain(
+      '2048 ready 的连续两跑漂移已由 #199 t1 的页眉重绘接缝消除',
+    );
   });
 
   it('records the reviewed minesweeper scores capture in the fixed manifest', () => {

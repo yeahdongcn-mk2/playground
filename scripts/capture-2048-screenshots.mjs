@@ -10,6 +10,8 @@ import {
   engineLabel,
   launchCaptureBrowser,
   parseCaptureEngine,
+  settleCapturePaint,
+  settleWebkitReadyPaint,
   startPreviewServer,
   stopPreviewServer,
 } from './lib/capture-runtime.mjs';
@@ -48,8 +50,12 @@ import {
  * It is an After-only mode; the desktop and hub evidence stay Chromium.
  *
  * Playing and gameover pin `seed=135` in addition to the board, so the tile
- * spawned after ArrowLeft is deterministic. See docs/screenshots/README.md for
- * the reproducible sha256 procedure and its conditions.
+ * spawned after ArrowLeft is deterministic. The WebKit ready scene additionally
+ * runs a scroll-paint seam before its capture: WebKit can rasterise the sticky
+ * site header in two subtly different ways on the first paint, and repainting
+ * it makes consecutive fixed-container runs byte-identical. See
+ * docs/screenshots/README.md for the reproducible sha256 procedure and its
+ * conditions.
  *
  * The After mode skips the frozen `after-2048-ready-desktop.png` and
  * `after-2048-ready-mobile.png` historical evidence and prints a warning unless
@@ -112,17 +118,8 @@ function gameUrl(board) {
 }
 
 async function settle(page) {
-  await page.evaluate(() => document.fonts.ready);
-  // Two animation frames commit the canvas paint triggered by the last state
-  // change; the timeout only keeps the Phaser loop as a fallback, so the
-  // deterministic result does not depend on a fixed wall-clock delay alone.
-  await page.evaluate(
-    () =>
-      new Promise((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(resolve));
-      }),
-  );
-  await page.waitForTimeout(300);
+  // Shared settle contract: fonts, two animation frames and a short fallback.
+  await settleCapturePaint(page);
 }
 
 async function capture(page, name, fullPage) {
@@ -264,6 +261,11 @@ async function captureWebkitMobile(browser) {
 
   const ready = await context.newPage();
   await open2048(ready, COLOR_BOARD);
+  // WebKit's first paint of the sticky site header can settle in two subtly
+  // different rasters (Issue #199). The ready scene is the first page of this
+  // run; a scroll round-trip repaints the header deterministically before the
+  // capture. playing / gameover keep their existing byte-identical path.
+  await settleWebkitReadyPaint(ready);
   await capture(ready, 'after-2048-ready-webkit.png', false);
   await ready.close();
 

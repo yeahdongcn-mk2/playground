@@ -74,6 +74,15 @@
       }
     },
     {
+      "file": "after-2048-ready-webkit.png",
+      "sha256": "0ea38c8d6a1ff580c695cedc6f5165ad4299a7612dd3da32d3c62c06e73b4856",
+      "command": "npm run screenshots:container -- screenshots:2048:webkit",
+      "provenance": {
+        "container": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
+        "captureCommit": "a916e3977be2101d7d5d195091fd09850b864617"
+      }
+    },
+    {
       "file": "after-2048-playing-webkit.png",
       "sha256": "4173dce84c814f2573fa506360f95bab477c985b37a2dfe2d5b0d1c2c5992a91",
       "command": "npm run screenshots:container -- screenshots:2048:webkit",

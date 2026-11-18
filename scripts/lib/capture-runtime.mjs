@@ -645,3 +645,63 @@ function writeFileAtomically(path, bytes, { renameSync: replaceTarget = renameSy
     throw error;
   }
 }
+
+/** Animation frames the shared capture settle seam waits for. */
+export const CAPTURE_SETTLE_FRAMES = 2;
+
+/** Fallback wait after those frames, in milliseconds. */
+export const CAPTURE_SETTLE_TIMEOUT_MS = 300;
+
+/**
+ * Wait until fonts, two animation frames and a short fallback timeout settle.
+ *
+ * The deterministic READY seam below and the existing 2048 plays share this
+ * contract, so their deterministic conditions are identical. The timeout only
+ * keeps the Phaser loop as a fallback; the frames commit the paint triggered by
+ * the last state change, so the result does not depend on a fixed wall-clock
+ * delay alone.
+ */
+export async function settleCapturePaint(page) {
+  await page.evaluate(() => document.fonts.ready);
+  await page.evaluate(
+    (frames) =>
+      new Promise((resolve) => {
+        let remaining = frames;
+        const frame = () => {
+          remaining -= 1;
+          if (remaining <= 0) {
+            resolve();
+          } else {
+            requestAnimationFrame(frame);
+          }
+        };
+        requestAnimationFrame(frame);
+      }),
+    CAPTURE_SETTLE_FRAMES,
+  );
+  await page.waitForTimeout(CAPTURE_SETTLE_TIMEOUT_MS);
+}
+
+/**
+ * Deterministic first-paint seam for the WebKit 2048 READY capture (Issue #199).
+ *
+ * A fresh WebKit browser can rasterise the sticky site header in two subtly
+ * different ways on its first paint: about 1833 pixels across the header band
+ * differ by at most one channel value, while the DOM boxes and the board stay
+ * identical. A scroll round-trip drives the sticky header through its normal
+ * repaint path and converges on one rasterisation, after which consecutive
+ * fixed-container runs are byte-identical. The position is restored to 0 so the
+ * screenshot still shows the top of the page; {@link settleCapturePaint} then
+ * waits for fonts and frames.
+ *
+ * Only the READY capture uses this seam. The playing / gameover evidence is
+ * already deterministic and its committed bytes must not change, so this
+ * function must never be wired into those scenes.
+ */
+export async function settleWebkitReadyPaint(page, { offset = 200 } = {}) {
+  await page.evaluate((distance) => window.scrollTo(0, distance), offset);
+  await page.waitForFunction(() => window.scrollY > 0);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForFunction(() => window.scrollY === 0);
+  await settleCapturePaint(page);
+}

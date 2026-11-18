@@ -1,4 +1,4 @@
-import { devices, type Browser } from '@playwright/test';
+import { devices, type Browser, type Page } from '@playwright/test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   CAPTURE_PLATFORM,
@@ -6,12 +6,16 @@ import {
   PLAYWRIGHT_IMAGE_REPOSITORY,
 } from '../../scripts/lib/capture-env.mjs';
 import {
+  CAPTURE_SETTLE_FRAMES,
+  CAPTURE_SETTLE_TIMEOUT_MS,
   TOUCH_MOBILE_DEVICE,
   createDesktopContext,
   createMobileContext,
   createPhoneContext,
   createTouchMobileContext,
   logCaptureEnvironment,
+  settleCapturePaint,
+  settleWebkitReadyPaint,
 } from '../../scripts/lib/capture-runtime.mjs';
 
 const BROWSER_VERSION = '144.0.1';
@@ -286,5 +290,74 @@ describe('container runtime target assertion', () => {
       'target=desktop',
       'target=mobile',
     ]);
+  });
+});
+
+describe('2048 WebKit READY paint seam (Issue #199)', () => {
+  /** A Page double that records the seam's calls without running callbacks. */
+  function recordingPage(): {
+    page: Page;
+    calls: string[];
+    evaluate: ReturnType<typeof vi.fn>;
+    waitForFunction: ReturnType<typeof vi.fn>;
+    waitForTimeout: ReturnType<typeof vi.fn>;
+  } {
+    const calls: string[] = [];
+    const evaluate = vi.fn(async (_callback: unknown, arg?: unknown) => {
+      calls.push(`evaluate:${arg === undefined ? '' : String(arg)}`);
+    });
+    const waitForFunction = vi.fn(async () => {
+      calls.push('waitForFunction');
+    });
+    const waitForTimeout = vi.fn(async () => {
+      calls.push('waitForTimeout');
+    });
+    return {
+      page: { evaluate, waitForFunction, waitForTimeout } as unknown as Page,
+      calls,
+      evaluate,
+      waitForFunction,
+      waitForTimeout,
+    };
+  }
+
+  it('settles fonts, two animation frames and the 300 ms fallback', async () => {
+    const { page, evaluate, waitForTimeout } = recordingPage();
+
+    await settleCapturePaint(page);
+
+    expect(CAPTURE_SETTLE_FRAMES).toBe(2);
+    expect(CAPTURE_SETTLE_TIMEOUT_MS).toBe(300);
+    expect(evaluate).toHaveBeenCalledTimes(2);
+    expect(evaluate.mock.calls[1]?.[1]).toBe(2);
+    expect(waitForTimeout).toHaveBeenCalledWith(300);
+  });
+
+  it('scrolls away, waits for the repaint, returns to the top and settles', async () => {
+    const { page, calls, evaluate, waitForFunction } = recordingPage();
+
+    await settleWebkitReadyPaint(page);
+
+    expect(calls).toEqual([
+      'evaluate:200',
+      'waitForFunction',
+      'evaluate:',
+      'waitForFunction',
+      'evaluate:',
+      'evaluate:2',
+      'waitForTimeout',
+    ]);
+    // The first and third evaluates are the scroll-away and scroll-back calls;
+    // the fourth is the two-frame settle shared with playing / gameover.
+    expect(evaluate).toHaveBeenCalledTimes(4);
+    expect(waitForFunction).toHaveBeenCalledTimes(2);
+  });
+
+  it('accepts an explicit scroll offset for a different viewport', async () => {
+    const { page, calls } = recordingPage();
+
+    await settleWebkitReadyPaint(page, { offset: 320 });
+
+    expect(calls[0]).toBe('evaluate:320');
   });
 });
