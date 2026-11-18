@@ -125,9 +125,25 @@ async function capture(page, name, fullPage = true) {
   await captureScreenshot(page, name, { engine: ENGINE, fullPage });
 }
 
-/** Capture the stable snake phone frame on the WebKit engine. */
+/**
+ * Capture the stable snake phone frame on the WebKit engine.
+ *
+ * The dev server injects CSS after `#view` already exists, so inherited text
+ * (the READY overlay title) can start a reduced-motion `color` transition from
+ * the initial black. On the browser's first page WebKit can keep that
+ * transition at its start point, which paints the title black on one run and
+ * `--text` on a slower one. Loading a throwaway page first lets the committed
+ * page settle on the inherited color, so the captured frame is the state a
+ * player actually sees and two runs stay byte-identical (Issue #318 t3, the
+ * same first-page seam used for the WebKit READY capture).
+ */
 async function captureWebkitMobile(browser) {
   const mobile = await createPhoneContext(browser, ENGINE);
+  const warmup = await mobile.newPage();
+  await warmup.goto(ORIGIN, { waitUntil: 'networkidle' });
+  await settle(warmup);
+  await warmup.close();
+
   const mobileGame = await mobile.newPage();
   await mobileGame.goto(`${ORIGIN}/#/games/snake?debug=1&food=11,10`, { waitUntil: 'networkidle' });
   await waitForSnakeReady(mobileGame);
