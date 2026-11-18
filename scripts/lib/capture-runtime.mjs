@@ -128,11 +128,6 @@ export function resetRecordedCaptureTargets() {
   fingerprintsByTarget.clear();
 }
 
-/** The most recent fingerprint recorded for one target, if any. */
-export function recordedCaptureEnvironmentFingerprint(target) {
-  return fingerprintsByTarget.get(target) ?? null;
-}
-
 function recordCaptureTarget(target) {
   recordedTargets.add(target);
 }
@@ -436,6 +431,7 @@ export async function captureScreenshot(
     manifest,
     manifestPath = resolve(CAPTURE_REPO_ROOT, DEFAULT_MANIFEST_PATH),
     readFile = readFileSync,
+    fileOperations = {},
     env,
     run,
     fingerprint,
@@ -479,7 +475,7 @@ export async function captureScreenshot(
   // replaces the committed PNG, then write it atomically in the same directory.
   const bytes = await page.screenshot({ fullPage, animations });
   const buffer = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
-  writeFileAtomically(path, buffer);
+  writeFileAtomically(path, buffer, fileOperations);
 
   const actualSha256 = createHash('sha256').update(buffer).digest('hex');
   if (actualSha256 !== capture.sha256) {
@@ -625,17 +621,30 @@ function manifestHashDriftChecklist({ file, path, manifest, capture, actualSha25
 /** Monotonic suffix so two writes in the same millisecond cannot collide. */
 let tempFileCounter = 0;
 
-/** Write a PNG through a temporary sibling and rename it into place. */
-function writeFileAtomically(path, bytes) {
-  mkdirSync(dirname(path), { recursive: true });
+/**
+ * Write a PNG through a temporary sibling and rename it into place.
+ *
+ * The fs primitives are replaceable so unit tests can fail the rename after the
+ * temporary file exists. That is the only way to prove the committed PNG is
+ * replaced by the rename rather than overwritten in place, and that a failed
+ * rename removes the temporary file.
+ */
+function writeFileAtomically(path, bytes, fileOperations = {}) {
+  const {
+    mkdirSync: makeDir = mkdirSync,
+    writeFileSync: writeTemp = writeFileSync,
+    renameSync: replaceTarget = renameSync,
+    unlinkSync: removeTemp = unlinkSync,
+  } = fileOperations;
+  makeDir(dirname(path), { recursive: true });
   tempFileCounter += 1;
   const tempPath = `${path}.tmp-${process.pid}-${tempFileCounter}`;
   try {
-    writeFileSync(tempPath, bytes);
-    renameSync(tempPath, path);
+    writeTemp(tempPath, bytes);
+    replaceTarget(tempPath, path);
   } catch (error) {
     try {
-      unlinkSync(tempPath);
+      removeTemp(tempPath);
     } catch {
       // The temporary file may not exist; the original error is what matters.
     }

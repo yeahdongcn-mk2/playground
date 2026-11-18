@@ -181,6 +181,36 @@ describe('captureScreenshot write-time environment guard', () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
+  it('replaces the committed PNG only through the atomic rename and cleans up when rename fails', async () => {
+    const dir = tempScreenshotDir();
+    const target = join(dir, FILE);
+    writeFileSync(target, 'old committed bytes');
+    const { page } = fakePage();
+    const renameCalls: Array<[string, string]> = [];
+    const renameSync = vi.fn((tempPath: string, finalPath: string) => {
+      renameCalls.push([tempPath, finalPath]);
+      throw new Error('simulated rename failure');
+    });
+
+    await expect(
+      captureScreenshot(page, FILE, {
+        engine: 'webkit',
+        outputDir: dir,
+        manifest: sampleManifest(),
+        fingerprint: containerFingerprint() as never,
+        fileOperations: { renameSync },
+      }),
+    ).rejects.toThrow('simulated rename failure');
+
+    expect(renameCalls).toHaveLength(1);
+    expect(renameCalls[0]?.[0]).toContain(`${target}.tmp-`);
+    expect(renameCalls[0]?.[1]).toBe(target);
+    // The failed rename must leave the previously committed bytes intact and
+    // must not leave the temporary sibling behind.
+    expect(readFileSync(target, 'utf8')).toBe('old committed bytes');
+    expect(readdirSync(dir)).toEqual([FILE]);
+  });
+
   it('refuses a mismatched fingerprint before writing and names file, both fingerprints and the recapture command', async () => {
     const dir = tempScreenshotDir();
     const target = join(dir, FILE);
@@ -399,13 +429,37 @@ describe('captureScreenshot write-time environment guard', () => {
     expect(screenshotSpy).not.toHaveBeenCalled();
   });
 
+  it('fails closed when the manifest exists but cannot be read', async () => {
+    const dir = tempScreenshotDir();
+    const manifestPath = join(dir, 'unreadable-manifest.json');
+    const { page, screenshotSpy } = fakePage();
+    const readFile = (path: string): string => {
+      const error = new Error(`EACCES: permission denied, open '${path}'`) as NodeJS.ErrnoException;
+      error.code = 'EACCES';
+      throw error;
+    };
+
+    await expect(
+      captureScreenshot(page, FILE, {
+        engine: 'webkit',
+        outputDir: dir,
+        manifestPath,
+        readFile,
+      }),
+    ).rejects.toThrow(/Cannot read the screenshot sha256 manifest .*EACCES/s);
+    expect(readdirSync(dir)).toEqual([]);
+    expect(screenshotSpy).not.toHaveBeenCalled();
+  });
+
   it('uses the default manifest path for the repo when none is passed', async () => {
+    const dir = tempScreenshotDir();
+    const { page, screenshotSpy } = fakePage();
     // The committed manifest is parseable and tracks the file; a host capture
     // must be refused without touching the committed PNG.
-    const { page, screenshotSpy } = fakePage();
     await expect(
-      captureScreenshot(page, FILE, { engine: 'webkit' }),
+      captureScreenshot(page, FILE, { engine: 'webkit', outputDir: dir }),
     ).rejects.toThrow(new RegExp(`tracked by ${DEFAULT_MANIFEST_PATH.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
     expect(screenshotSpy).not.toHaveBeenCalled();
+    expect(readdirSync(dir)).toEqual([]);
   });
 });

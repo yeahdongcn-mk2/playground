@@ -50,10 +50,6 @@ export function logCaptureEnvironment(
 
 /** Capture targets recorded so far in this process, in first-recording order. */
 export function recordedCaptureTargets(): CaptureTarget[];
-/** The latest fingerprint logged for one target; used by the write-time guard. */
-export function recordedCaptureEnvironmentFingerprint(
-  target: CaptureTarget,
-): CaptureEnvironmentFingerprint | null;
 /** Clear the process-wide recorded set; used by unit tests. */
 export function resetRecordedCaptureTargets(): void;
 
@@ -136,6 +132,14 @@ export function captureRecord(
   reducedMotion?: string,
 ): string;
 
+/** Replaceable fs primitives for the atomic write path; tests inject failures. */
+export interface CaptureAtomicWriteOperations {
+  mkdirSync?: (path: string, options?: { recursive?: boolean }) => unknown;
+  writeFileSync?: (path: string, data: Buffer) => void;
+  renameSync?: (oldPath: string, newPath: string) => void;
+  unlinkSync?: (path: string) => void;
+}
+
 export interface CaptureScreenshotOptions {
   engine: CaptureEngine;
   fullPage?: boolean;
@@ -149,6 +153,8 @@ export interface CaptureScreenshotOptions {
   manifest?: ScreenshotSha256Manifest | null;
   manifestPath?: string;
   readFile?: (path: string, encoding: 'utf8') => string;
+  /** Replaceable fs primitives for the atomic write path (unit tests). */
+  fileOperations?: CaptureAtomicWriteOperations;
   /** Environment used when no context fingerprint is available; defaults to `process.env`. */
   env?: Record<string, string | undefined>;
   /** Extra fingerprint inputs (browser version, font packages) for tests. */
