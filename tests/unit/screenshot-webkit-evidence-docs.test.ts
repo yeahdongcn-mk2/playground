@@ -426,6 +426,7 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
       ['after-blank-webkit.png', 'screenshots:container -- screenshots:webkit'],
       [HUB, 'screenshots:container -- screenshots:webkit'],
       [SNAKE, 'screenshots:container -- screenshots:snake:webkit'],
+      ['after-2048-ready-webkit.png', 'screenshots:container -- screenshots:2048:webkit'],
       ['after-2048-playing-webkit.png', 'screenshots:container -- screenshots:2048:webkit'],
       ['after-2048-gameover-webkit.png', 'screenshots:container -- screenshots:2048:webkit'],
       ['after-breakout-playing-webkit.png', 'screenshots:container -- screenshots:breakout:webkit'],

@@ -592,12 +592,15 @@ describe('historical evidence command docs', () => {
   });
 
   it('documents the container-only overwrite for the WebKit commands that write protected files', () => {
-    for (const command of [
-      'npm run screenshots:breakout:webkit',
-      'npm run screenshots:minesweeper:webkit',
-    ]) {
-      expect(SCREENSHOTS_README).toContain(containerCommand(command));
-    }
+    expect(SCREENSHOTS_README).toContain(
+      containerCommand('npm run screenshots:minesweeper:webkit'),
+    );
+    // The 2048 WebKit captures are all collected in the fixed manifest, so
+    // they must not be documented as still needing the historical overwrite
+    // flag.
+    expect(SCREENSHOTS_README).not.toContain(
+      containerCommand('npm run screenshots:2048:webkit'),
+    );
   });
 
   it('explains the default skip, the fixed environment and the update checklist', () => {

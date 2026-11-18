@@ -15,10 +15,10 @@ import {
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const CLI = join(ROOT, 'scripts', 'check-doc-counts.mjs');
 
-const README_LINE = 'npm run test:unit    # 1272 passed（含贪食蛇 27（引擎 23 + 调试 4））';
+const README_LINE = 'npm run test:unit    # 1347 passed（含贪食蛇 27（引擎 23 + 调试 4））';
 const FRAMEWORK_LINE =
-  '当前提交本地通过：`typecheck`、`lint`、`build`、`check:budget` 通过；`npm run test:unit` 1272 passed；`npm run test:e2e` 155 passed（桌面 87 + 手机 36 + WebKit 32）。';
-const SNAKE_LINE = '运行：`npm run test:unit`（全仓 1272 个用例）。';
+  '当前提交本地通过：`typecheck`、`lint`、`build`、`check:budget` 通过；`npm run test:unit` 1347 passed；`npm run test:e2e` 155 passed（桌面 87 + 手机 36 + WebKit 32）。';
+const SNAKE_LINE = '运行：`npm run test:unit`（全仓 1347 个用例）。';
 
 const tempDirs: string[] = [];
 
@@ -91,20 +91,20 @@ function committedCount(): number {
 
 describe('parseDocumentedCount', () => {
   it('parses the README "N passed" form', () => {
-    expect(parseDocumentedCount(README_LINE, 'README.md')).toEqual({ line: 1, count: 1272 });
+    expect(parseDocumentedCount(README_LINE, 'README.md')).toEqual({ line: 1, count: 1347 });
   });
 
   it('parses the framework "N passed" form with surrounding backticks', () => {
     expect(parseDocumentedCount(FRAMEWORK_LINE, 'docs/framework.md')).toEqual({
       line: 1,
-      count: 1272,
+      count: 1347,
     });
   });
 
   it('parses the snake design "全仓 N 个用例" form', () => {
     expect(parseDocumentedCount(SNAKE_LINE, 'docs/snake-design.md')).toEqual({
       line: 1,
-      count: 1272,
+      count: 1347,
     });
   });
 
@@ -113,7 +113,7 @@ describe('parseDocumentedCount', () => {
       '\n',
     );
 
-    expect(parseDocumentedCount(text, 'README.md')).toEqual({ line: 3, count: 1272 });
+    expect(parseDocumentedCount(text, 'README.md')).toEqual({ line: 3, count: 1347 });
   });
 
   it('throws a DocCountsError naming the file when the count is missing', () => {
