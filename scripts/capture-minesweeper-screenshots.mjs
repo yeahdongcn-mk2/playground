@@ -14,6 +14,7 @@ import {
   engineLabel,
   launchCaptureBrowser,
   parseCaptureEngine,
+  repaintWebkitReadyOverlay,
   settleWebkitReadyPaint,
   startPreviewServer,
   stopPreviewServer,
@@ -457,7 +458,13 @@ async function captureTouchMobile(browser, prefix) {
     await lost.getByTestId('cell-0-0').click();
   }
   await lost.getByTestId('overlay-title').filter({ hasText: '踩到地雷' }).waitFor();
-  await settle(lost);
+  if (IS_WEBKIT && prefix === 'after') {
+    // The loss overlay's translucent backdrop can keep a 1-LSB variant of the
+    // board behind it; hiding and restoring the overlay forces a fresh snapshot.
+    await repaintWebkitReadyOverlay(lost);
+  } else {
+    await settle(lost);
+  }
   await capture(lost, touchMobileName(prefix, 'lost'), false);
   await lost.close();
 

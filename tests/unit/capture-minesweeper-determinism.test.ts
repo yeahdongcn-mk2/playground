@@ -143,8 +143,8 @@ function subsection(text: string, heading: string): string {
  * first loads a throwaway page, then repaints the header with a scroll
  * round-trip and requires two consecutive identical whole-image frames before
  * writing. This test pins that seam to the ready scene and keeps playing /
- * lost / won on their existing path so a refactor cannot silently restore the
- * non-deterministic capture.
+ * won on their existing path, and pins the loss overlay backdrop repaint so a
+ * refactor cannot silently restore the non-deterministic capture.
  */
 describe('minesweeper WebKit READY determinism guard', () => {
   it('warms the first-page paint path before the committed ready page', () => {
@@ -271,6 +271,23 @@ describe('minesweeper WebKit READY determinism guard', () => {
     expect(readyPageOpen).toBeGreaterThan(warmUpGuardEnd);
     expect(seam).toBeGreaterThan(seamGuard);
     expect(seam).toBeLessThan(seamGuardEnd);
+  });
+
+  it('repaints the loss overlay backdrop only for the WebKit after capture', () => {
+    const lostOpen = indexOfOrFail(SCRIPT, 'const lost = await context.newPage()');
+    const lostCapture = indexOfOrFail(
+      SCRIPT,
+      "await capture(lost, touchMobileName(prefix, 'lost'), false)",
+    );
+    const seam = indexOfOrFail(SCRIPT, 'await repaintWebkitReadyOverlay(lost)');
+    expect(seam).toBeGreaterThan(lostOpen);
+    expect(seam).toBeLessThan(lostCapture);
+    // The loss overlay's translucent backdrop can keep a 1-LSB variant of the
+    // board; hiding and restoring it forces a fresh snapshot. Only the WebKit
+    // After capture is affected, so the seam must stay behind that guard.
+    expect(SCRIPT).toMatch(
+      /if \(IS_WEBKIT && prefix === 'after'\) \{\s*\/\/[^\n]*\n\s*\/\/[^\n]*\n\s*await repaintWebkitReadyOverlay\(lost\);\s*\}/,
+    );
   });
 
   it('keeps the seam on the shared runtime contract', () => {
