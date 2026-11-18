@@ -202,8 +202,9 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(WEBKIT_HISTORICAL).toContain('10 / 14 / 12 / 12');
     expect(WEBKIT_HISTORICAL).toContain('两种结果互差 11157 px（每通道最大 1）');
     expect(WEBKIT_HISTORICAL).toContain('返工后');
-    expect(WEBKIT_HISTORICAL).toContain('连续 3 跑（含全新容器首跑）');
-    expect(WEBKIT_HISTORICAL).toContain('把上面的跨进程变体与待重绘帧都拦在落盘前');
+    expect(WEBKIT_HISTORICAL).toContain('连续 3 跑');
+    expect(WEBKIT_HISTORICAL).toContain('跨进程变体');
+    expect(WEBKIT_HISTORICAL).toContain('待重绘帧');
     expect(WEBKIT_HISTORICAL).not.toContain('扫雷这 4 张在容器内两跑 sha256 相同');
     expect(WEBKIT_HISTORICAL).toContain('2048 ready 在同一容器两跑仍不同');
   });

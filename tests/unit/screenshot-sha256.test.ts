@@ -889,6 +889,9 @@ describe('capture sha256 manifest', () => {
       'npm run screenshots:container -- screenshots:minesweeper:webkit',
     );
     expect(
+      expectedRecaptureCommand('after-minesweeper-ready-desktop.png'),
+    ).toBe('npm run screenshots:container -- screenshots:minesweeper');
+    expect(
       expectedRecaptureCommand('after-minesweeper-webkit-narrow-320x640.png'),
     ).toBe(
       'npm run screenshots:container -- screenshots:minesweeper:webkit-narrow',

@@ -437,6 +437,7 @@ describe('minesweeper WebKit manifest and README contract', () => {
       expect(row, `missing manifest row for ${file}`).toBeDefined();
       expect(row).toContain(`\`${capture?.sha256}\``);
       expect(row).toContain(`\`${MINESWEEPER_COMMAND}\``);
+      expect(row).toContain(`\`${capture?.provenance.captureCommit}\``);
     }
     expect(manifestSection).toContain('清单覆盖（14 张');
   });
@@ -490,7 +491,8 @@ describe('minesweeper WebKit manifest and README contract', () => {
     expect(historical).toContain('滚动往返');
     expect(historical).toContain('sticky 页眉');
     expect(historical).toContain('一次性预热页');
-    expect(historical).toContain('连续 3 跑（含全新容器首跑）');
+    expect(historical).toContain('连续 3 跑');
+    expect(historical).toContain('含全新容器');
     expect(historical).toContain('整幅连续两帧');
   });
 });

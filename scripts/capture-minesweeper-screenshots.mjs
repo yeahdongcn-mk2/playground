@@ -56,7 +56,7 @@ import { touchLongPress } from './lib/touch-input.mjs';
  * `after-minesweeper-<state>-webkit.png`. The ready scene first loads a
  * throwaway page: WebKit's first page in a fresh browser can rasterise the
  * sticky header and board gradients in a subtly different 1-LSB variant, while
- * later pages use the settled paint path. The committed capture then runs a
+ * later pages use the settled paint path. The committed READY capture then runs a
  * scroll-paint seam and requires two consecutive byte-identical whole-image
  * frames before writing. The dedicated
  * `--webkit-narrow` / `--webkit-narrow-before` modes capture the Issue #83
