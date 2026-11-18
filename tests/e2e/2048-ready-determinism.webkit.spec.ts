@@ -17,11 +17,12 @@ import { expect, test } from './fixtures';
  * fail a normal PR when the capture runtime stops producing a stable raster.
  * This spec runs the real built page on WebKit twice, in two separate browser
  * processes like the two container runs, applies the same READY seams as
- * `scripts/capture-2048-screenshots.mjs`, and fails unless each run produces
- * two byte-identical consecutive screenshots and both runs agree on the
- * sha256. Manifest fidelity is a separate concern: `verify:screenshots:sha256`
- * and the nightly `verify:screenshots:repro` workflow compare every fixed-
- * container target, on every manifest target and under concurrent host load.
+ * `scripts/capture-2048-screenshots.mjs`, and fails unless each run observes
+ * the overlay hide / restore seam, produces two byte-identical consecutive
+ * screenshots and both runs agree on the sha256. Manifest fidelity is a
+ * separate concern: `verify:screenshots:sha256` and the nightly
+ * `verify:screenshots:repro` workflow compare every fixed-container target, on
+ * every manifest target and under concurrent host load.
  */
 
 /** Deliberate copy of the capture script's COLOR_BOARD for the committed READY evidence. */
