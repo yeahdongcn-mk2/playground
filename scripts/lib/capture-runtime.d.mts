@@ -132,12 +132,9 @@ export function captureRecord(
   reducedMotion?: string,
 ): string;
 
-/** Replaceable fs primitives for the atomic write path; tests inject failures. */
+/** Replaceable final rename for the atomic write path; unit tests inject a failure. */
 export interface CaptureAtomicWriteOperations {
-  mkdirSync?: (path: string, options?: { recursive?: boolean }) => unknown;
-  writeFileSync?: (path: string, data: Buffer) => void;
   renameSync?: (oldPath: string, newPath: string) => void;
-  unlinkSync?: (path: string) => void;
 }
 
 export interface CaptureScreenshotOptions {
@@ -153,7 +150,7 @@ export interface CaptureScreenshotOptions {
   manifest?: ScreenshotSha256Manifest | null;
   manifestPath?: string;
   readFile?: (path: string, encoding: 'utf8') => string;
-  /** Replaceable fs primitives for the atomic write path (unit tests). */
+  /** Replaceable atomic rename (unit tests inject a failure). */
   fileOperations?: CaptureAtomicWriteOperations;
   /** Environment used when no context fingerprint is available; defaults to `process.env`. */
   env?: Record<string, string | undefined>;

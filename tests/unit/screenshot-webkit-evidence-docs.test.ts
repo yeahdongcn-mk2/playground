@@ -176,7 +176,7 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(HISTORICAL).toContain('#199');
   });
 
-  it('keeps the webkit-phone and webkit-narrow tables intact for the documented artifacts', () => {
+  it('keeps the webkit-phone and webkit-narrow tables and their commands intact', () => {
     for (const file of [
       ...BREAKOUT_DRIFT,
       ...MINESWEEPER_DRIFT,
@@ -194,5 +194,22 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
       );
       expect(row, `missing webkit-narrow table row for ${file}`).toBeDefined();
     }
+    // The manifest-recorded rows must advertise the container command; a host
+    // command would be refused by the write-time guard.
+    const containerCommands = new Map([
+      ['after-blank-webkit.png', 'screenshots:container -- screenshots:webkit'],
+      ['after-2048-playing-webkit.png', 'screenshots:container -- screenshots:2048:webkit'],
+      ['after-2048-gameover-webkit.png', 'screenshots:container -- screenshots:2048:webkit'],
+      ['after-breakout-playing-webkit.png', 'screenshots:container -- screenshots:breakout:webkit'],
+    ]);
+    for (const [file, command] of containerCommands) {
+      const row = WEBKIT_PHONE.split('\n').find(
+        (line) => line.startsWith('|') && line.includes(`\`${file}\``),
+      );
+      expect(row, `missing webkit-phone table row for ${file}`).toContain(
+        `\`npm run ${command}\``,
+      );
+    }
+    expect(WEBKIT_PHONE).toContain('会在写出这些文件前被写前护栏拒绝');
   });
 });

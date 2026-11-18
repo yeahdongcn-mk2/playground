@@ -624,27 +624,21 @@ let tempFileCounter = 0;
 /**
  * Write a PNG through a temporary sibling and rename it into place.
  *
- * The fs primitives are replaceable so unit tests can fail the rename after the
- * temporary file exists. That is the only way to prove the committed PNG is
- * replaced by the rename rather than overwritten in place, and that a failed
- * rename removes the temporary file.
+ * `fileOperations.renameSync` is replaceable so unit tests can fail the swap
+ * after the temporary file exists, proving the committed PNG is not replaced
+ * and the temporary sibling is removed. The successful path (same bytes, no
+ * leftover temporary file) is covered by the normal write test.
  */
-function writeFileAtomically(path, bytes, fileOperations = {}) {
-  const {
-    mkdirSync: makeDir = mkdirSync,
-    writeFileSync: writeTemp = writeFileSync,
-    renameSync: replaceTarget = renameSync,
-    unlinkSync: removeTemp = unlinkSync,
-  } = fileOperations;
-  makeDir(dirname(path), { recursive: true });
+function writeFileAtomically(path, bytes, { renameSync: replaceTarget = renameSync } = {}) {
+  mkdirSync(dirname(path), { recursive: true });
   tempFileCounter += 1;
   const tempPath = `${path}.tmp-${process.pid}-${tempFileCounter}`;
   try {
-    writeTemp(tempPath, bytes);
+    writeFileSync(tempPath, bytes);
     replaceTarget(tempPath, path);
   } catch (error) {
     try {
-      removeTemp(tempPath);
+      unlinkSync(tempPath);
     } catch {
       // The temporary file may not exist; the original error is what matters.
     }

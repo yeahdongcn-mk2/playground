@@ -181,7 +181,7 @@ describe('captureScreenshot write-time environment guard', () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
-  it('replaces the committed PNG only through the atomic rename and cleans up when rename fails', async () => {
+  it('keeps the committed PNG and removes the temporary sibling when the atomic rename fails', async () => {
     const dir = tempScreenshotDir();
     const target = join(dir, FILE);
     writeFileSync(target, 'old committed bytes');
@@ -429,15 +429,16 @@ describe('captureScreenshot write-time environment guard', () => {
     expect(screenshotSpy).not.toHaveBeenCalled();
   });
 
-  it('fails closed when the manifest exists but cannot be read', async () => {
+  it('fails closed when the existing manifest cannot be read', async () => {
     const dir = tempScreenshotDir();
-    const manifestPath = join(dir, 'unreadable-manifest.json');
+    const manifestPath = join(dir, 'manifest.json');
+    writeFileSync(manifestPath, JSON.stringify(sampleManifest()));
     const { page, screenshotSpy } = fakePage();
-    const readFile = (path: string): string => {
+    const readFile = vi.fn((path: string): string => {
       const error = new Error(`EACCES: permission denied, open '${path}'`) as NodeJS.ErrnoException;
       error.code = 'EACCES';
       throw error;
-    };
+    });
 
     await expect(
       captureScreenshot(page, FILE, {
@@ -447,7 +448,8 @@ describe('captureScreenshot write-time environment guard', () => {
         readFile,
       }),
     ).rejects.toThrow(/Cannot read the screenshot sha256 manifest .*EACCES/s);
-    expect(readdirSync(dir)).toEqual([]);
+    expect(readFile).toHaveBeenCalledWith(manifestPath, 'utf8');
+    expect(readdirSync(dir)).toEqual(['manifest.json']);
     expect(screenshotSpy).not.toHaveBeenCalled();
   });
 
@@ -455,9 +457,10 @@ describe('captureScreenshot write-time environment guard', () => {
     const dir = tempScreenshotDir();
     const { page, screenshotSpy } = fakePage();
     // The committed manifest is parseable and tracks the file; a host capture
-    // must be refused without touching the committed PNG.
+    // must be refused without touching the committed PNG. Injecting an empty
+    // env keeps the host fingerprint independent of the caller's environment.
     await expect(
-      captureScreenshot(page, FILE, { engine: 'webkit', outputDir: dir }),
+      captureScreenshot(page, FILE, { engine: 'webkit', outputDir: dir, env: {} }),
     ).rejects.toThrow(new RegExp(`tracked by ${DEFAULT_MANIFEST_PATH.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
     expect(screenshotSpy).not.toHaveBeenCalled();
     expect(readdirSync(dir)).toEqual([]);
