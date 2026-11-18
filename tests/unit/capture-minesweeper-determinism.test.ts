@@ -105,11 +105,26 @@ describe('minesweeper WebKit READY determinism guard', () => {
   });
 
   it('requires two identical whole-image frames for the ready capture', () => {
-    expect(SCRIPT).toContain('stableFrames: READY_CAPTURE_STABLE_FRAMES,');
-    expect(SCRIPT).toContain(
+    const optionsStart = indexOfOrFail(
+      SCRIPT,
+      'const readyCaptureOptions =',
+    );
+    const readyCapture = indexOfOrFail(
+      SCRIPT,
+      "await capture(ready, touchMobileName(prefix, 'ready'), false, readyCaptureOptions)",
+    );
+    const readyOptions = SCRIPT.slice(optionsStart, readyCapture);
+    expect(readyOptions).toContain(
+      "IS_WEBKIT && prefix === 'after'",
+    );
+    expect(readyOptions).toContain('stableFrames: READY_CAPTURE_STABLE_FRAMES,');
+    expect(readyOptions).toContain(
       'stableIntervalMs: READY_CAPTURE_STABLE_INTERVAL_MS,',
     );
-    expect(SCRIPT).toContain('stableAttempts: READY_CAPTURE_STABLE_ATTEMPTS,');
+    expect(readyOptions).toContain(
+      'stableAttempts: READY_CAPTURE_STABLE_ATTEMPTS,',
+    );
+    expect(readyOptions).toContain(': {};');
     expect(READY_CAPTURE_STABLE_FRAMES).toBe(2);
     expect(READY_CAPTURE_STABLE_INTERVAL_MS).toBe(250);
     expect(READY_CAPTURE_STABLE_ATTEMPTS).toBe(5);
@@ -134,11 +149,21 @@ describe('minesweeper WebKit READY determinism guard', () => {
     const seam = indexOfOrFail(SCRIPT, 'await settleWebkitReadyPaint(ready)');
     const readyCapture = indexOfOrFail(
       SCRIPT,
-      "await capture(ready, touchMobileName(prefix, 'ready'), false, {",
+      "await capture(ready, touchMobileName(prefix, 'ready'), false, readyCaptureOptions)",
     );
     expect(seam).toBeGreaterThan(readyOpen);
     expect(readyCapture).toBeGreaterThan(seam);
     expect(SCRIPT).toContain("if (IS_WEBKIT && prefix === 'after') {");
+    // The warm-up and the seam must be inside the after-mode guard, not just
+    // present as strings elsewhere in the script.
+    const afterGuard = indexOfOrFail(
+      SCRIPT,
+      "if (IS_WEBKIT && prefix === 'after') {",
+    );
+    expect(indexOfOrFail(SCRIPT, 'const warmUp = await context.newPage()')).toBeGreaterThan(
+      afterGuard,
+    );
+    expect(seam).toBeGreaterThan(afterGuard);
   });
 
   it('keeps the seam on the shared runtime contract', () => {
@@ -357,6 +382,7 @@ describe('minesweeper WebKit manifest and README contract', () => {
     }
     expect(historical).toContain('滚动往返');
     expect(historical).toContain('sticky 页眉');
-    expect(historical).toContain('连续两跑 sha256 相同');
+    expect(historical).toContain('一次性预热页');
+    expect(historical).toContain('ready 7/7 均为');
   });
 });

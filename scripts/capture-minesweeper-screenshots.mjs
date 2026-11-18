@@ -273,7 +273,7 @@ async function capture(page, name, fullPage, options = {}) {
     allowHistoricalOverwrite: ALLOW_HISTORICAL_OVERWRITE,
   });
   if (!write) return;
-  await captureScreenshot(page, name, { engine: ENGINE, fullPage, ...options });
+  await captureScreenshot(page, name, { ...options, engine: ENGINE, fullPage });
 }
 
 function debugUrl(mines) {
@@ -403,23 +403,30 @@ async function captureTouchMobile(browser, prefix) {
     // the next page, which uses the settled paint path. playing / lost / won
     // already run after that page and keep their existing byte-identical path.
     const warmUp = await context.newPage();
-    await openTouchGame(warmUp, WIN_MINES);
-    await warmUp.close();
+    try {
+      await openTouchGame(warmUp, WIN_MINES);
+    } finally {
+      await warmUp.close();
+    }
   }
 
   const ready = await context.newPage();
   await openTouchGame(ready, WIN_MINES);
   if (IS_WEBKIT && prefix === 'after') {
-    // The scroll round-trip repaints the sticky header; the whole-image
-    // stability check then proves no repaint is still pending before the PNG
-    // is written.
+    // The scroll round-trip settles the sticky header; the whole-image
+    // stability check then detects a sampled frame change before the PNG is
+    // written (the throwaway page above handles the cross-run board variant).
     await settleWebkitReadyPaint(ready);
   }
-  await capture(ready, touchMobileName(prefix, 'ready'), false, {
-    stableFrames: READY_CAPTURE_STABLE_FRAMES,
-    stableIntervalMs: READY_CAPTURE_STABLE_INTERVAL_MS,
-    stableAttempts: READY_CAPTURE_STABLE_ATTEMPTS,
-  });
+  const readyCaptureOptions =
+    IS_WEBKIT && prefix === 'after'
+      ? {
+          stableFrames: READY_CAPTURE_STABLE_FRAMES,
+          stableIntervalMs: READY_CAPTURE_STABLE_INTERVAL_MS,
+          stableAttempts: READY_CAPTURE_STABLE_ATTEMPTS,
+        }
+      : {};
+  await capture(ready, touchMobileName(prefix, 'ready'), false, readyCaptureOptions);
   await ready.close();
 
   const playing = await context.newPage();

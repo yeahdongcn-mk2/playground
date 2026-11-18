@@ -421,9 +421,11 @@ function normalizeScreenshotBytes(bytes) {
  * A single screenshot can race a pending repaint: the same settled page then
  * exposes two byte-identical frames, while a capture taken mid-repaint differs
  * by a handful of 1-LSB pixels. Capturing through this check makes that race
- * fail loudly instead of committing a transient frame as evidence. With the
- * default `stableFrames === 1` it is the previous single-shot capture, so
- * existing callers and their bytes stay unchanged.
+ * fail loudly instead of committing a transient frame as evidence. It detects
+ * a sampled frame change within this run only; the caller's throwaway warm-up
+ * page is what settles the first-page raster variant across runs.
+ * With the default `stableFrames === 1` this is the previous single-shot
+ * capture, so existing callers and their bytes stay unchanged.
  */
 async function captureStableBytes(
   page,
@@ -441,16 +443,25 @@ async function captureStableBytes(
       `captureScreenshot(${name}): stableFrames must be a positive integer, got ${String(stableFrames)}.`,
     );
   }
-  const first = normalizeScreenshotBytes(
+  if (!Number.isInteger(stableAttempts) || stableAttempts < 0) {
+    throw new TypeError(
+      `captureScreenshot(${name}): stableAttempts must be a non-negative integer, got ${String(stableAttempts)}.`,
+    );
+  }
+  if (!Number.isInteger(stableIntervalMs) || stableIntervalMs <= 0) {
+    throw new TypeError(
+      `captureScreenshot(${name}): stableIntervalMs must be a positive integer, got ${String(stableIntervalMs)}.`,
+    );
+  }
+  let bytes = normalizeScreenshotBytes(
     await page.screenshot({ fullPage, animations }),
   );
   if (stableFrames === 1) {
-    return first;
+    return bytes;
   }
 
-  let bytes = first;
   let identical = 1;
-  const observed = [createHash('sha256').update(first).digest('hex')];
+  const observed = [createHash('sha256').update(bytes).digest('hex')];
   for (let attempt = 0; attempt < stableAttempts; attempt += 1) {
     await page.waitForTimeout(stableIntervalMs);
     const next = normalizeScreenshotBytes(
@@ -470,7 +481,8 @@ async function captureStableBytes(
 
   throw new Error(
     `Screenshot ${name} did not produce ${stableFrames} consecutive byte-identical ` +
-      `frames after ${stableAttempts + 1} captures (sha256: ${observed.join(', ')}). ` +
+      `frames after ${stableAttempts + 1} capture${stableAttempts === 0 ? '' : 's'} ` +
+      `(sha256: ${observed.join(', ')}). ` +
       'No file was written; wait for the pending repaint or widen the stability window ' +
       'instead of committing a transient frame.',
   );
@@ -786,10 +798,11 @@ export async function settleCapturePaint(page) {
  * A fresh browser can rasterise the sticky site header in two subtly different
  * ways: the same DOM boxes and board differ by a small number of pixels with a
  * per-channel difference of one. A scroll round-trip drives the sticky header
- * through its normal repaint path and converges on one rasterisation, after
- * which consecutive fixed-container runs are byte identical. The position is
- * restored to 0 so the screenshot still shows the top of the page;
- * {@link settleCapturePaint} then waits for fonts and frames.
+ * through its normal repaint path and settles that header half. It is not
+ * enough on its own for the board variant: the caller must first load a
+ * throwaway warm-up page so the committed READY page is not the browser's
+ * first page. The position is restored to 0 so the screenshot still shows the
+ * top of the page; {@link settleCapturePaint} then waits for fonts and frames.
  *
  * Only the READY capture uses this seam: the playing / lost / won evidence is
  * already deterministic and its committed bytes must not change.

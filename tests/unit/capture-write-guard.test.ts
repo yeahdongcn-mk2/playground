@@ -585,3 +585,90 @@ describe('captureScreenshot whole-image stability check', () => {
     expect(screenshotSpy).not.toHaveBeenCalled();
   });
 });
+
+describe('captureScreenshot stable frames for unrecorded files', () => {
+  it('writes an unrecorded file only after two identical frames', async () => {
+    const dir = tempScreenshotDir();
+    const file = 'after-hub-webkit.png';
+    const target = join(dir, file);
+    writeFileSync(target, 'old unrecorded bytes');
+    const frame = Buffer.from('stable frame');
+    const queue = [frame, frame];
+    const { page, screenshotSpy, waitForTimeoutSpy } = fakePage({
+      screenshot: async () => queue.shift() as Buffer,
+    });
+
+    await captureScreenshot(page, file, {
+      engine: 'webkit',
+      outputDir: dir,
+      manifest: null,
+      stableFrames: 2,
+      stableIntervalMs: 250,
+    });
+
+    expect(readFileSync(target)).toEqual(frame);
+    expect(screenshotSpy).toHaveBeenCalledTimes(2);
+    expect(waitForTimeoutSpy).toHaveBeenCalledWith(250);
+    expect(readdirSync(dir)).toEqual([file]);
+  });
+
+  it('keeps an unrecorded file when no stable pair appears', async () => {
+    const dir = tempScreenshotDir();
+    const file = 'after-hub-webkit.png';
+    const target = join(dir, file);
+    writeFileSync(target, 'old unrecorded bytes');
+    const queue = [Buffer.from('frame-a'), Buffer.from('frame-b')];
+    const { page, screenshotSpy } = fakePage({
+      screenshot: async () => queue.shift() as Buffer,
+    });
+
+    await expect(
+      captureScreenshot(page, file, {
+        engine: 'webkit',
+        outputDir: dir,
+        manifest: null,
+        stableFrames: 2,
+        stableIntervalMs: 250,
+        stableAttempts: 1,
+      }),
+    ).rejects.toThrow(/did not produce 2 consecutive byte-identical frames/);
+
+    expect(readFileSync(target, 'utf8')).toBe('old unrecorded bytes');
+    expect(readdirSync(dir)).toEqual([file]);
+    expect(screenshotSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects a negative stableAttempts before taking a screenshot', async () => {
+    const dir = tempScreenshotDir();
+    const { page, screenshotSpy } = fakePage();
+
+    await expect(
+      captureScreenshot(page, FILE, {
+        engine: 'webkit',
+        outputDir: dir,
+        manifest: sampleManifest(),
+        fingerprint: containerFingerprint() as never,
+        stableFrames: 2,
+        stableAttempts: -1,
+      }),
+    ).rejects.toThrow(/stableAttempts must be a non-negative integer/);
+    expect(screenshotSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects a zero stableIntervalMs before taking a screenshot', async () => {
+    const dir = tempScreenshotDir();
+    const { page, screenshotSpy } = fakePage();
+
+    await expect(
+      captureScreenshot(page, FILE, {
+        engine: 'webkit',
+        outputDir: dir,
+        manifest: sampleManifest(),
+        fingerprint: containerFingerprint() as never,
+        stableFrames: 2,
+        stableIntervalMs: 0,
+      }),
+    ).rejects.toThrow(/stableIntervalMs must be a positive integer/);
+    expect(screenshotSpy).not.toHaveBeenCalled();
+  });
+});

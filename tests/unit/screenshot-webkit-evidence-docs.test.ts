@@ -116,7 +116,8 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
   it('records the minesweeper ready paint seam and its manifest coverage', () => {
     expect(WEBKIT_HISTORICAL).toContain('滚动往返');
     expect(WEBKIT_HISTORICAL).toContain('sticky 页眉');
-    expect(WEBKIT_HISTORICAL).toContain('连续两跑 sha256 相同');
+    expect(WEBKIT_HISTORICAL).toContain('一次性预热页');
+    expect(WEBKIT_HISTORICAL).toContain('ready 7/7 均为');
     expect(WEBKIT_HISTORICAL).toContain('capture-sha256-manifest.json');
     expect(WEBKIT_HISTORICAL).toContain('#318');
     expect(WEBKIT_HISTORICAL).not.toContain('扫雷 ready 的相邻两跑则可能不同');
