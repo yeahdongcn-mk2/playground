@@ -17,7 +17,7 @@
  * environment.
  *
  * The capture scripts that only refresh current evidence (2048 playing /
- * gameover, the four breakout WebKit phone states, breakout playing, the four
+ * gameover, the four breakout WebKit phone states, the four
  * minesweeper WebKit phone states and the dedicated minesweeper viewports, plus
  * the `after-minesweeper-webkit-narrow-*` CI smoke matrix) must stay out of
  * this list so their runs keep writing files.

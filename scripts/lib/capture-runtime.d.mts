@@ -238,8 +238,9 @@ export interface RepaintWebkitReadyOverlayOptions {
 }
 
 /**
- * Hide the READY overlay for two frames and restore it, then settle, so the
- * card is painted on the canonical path instead of a load-dependent composite.
+ * Hide the overlay (the READY card or the minesweeper loss panel) for two
+ * frames and restore it, then settle, so its backdrop is painted on the
+ * canonical path instead of a load-dependent composite.
  */
 export function repaintWebkitReadyOverlay(
   page: Page,

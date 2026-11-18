@@ -915,8 +915,8 @@ export async function settleWebkitReadyPaint(page, { offset = 200 } = {}) {
  * canonical path. The overlay is hidden only between frames, never in a
  * captured image.
  *
- * Only the 2048 READY capture uses this seam; playing / gameover bytes must not
- * change.
+ * The 2048 READY capture and the minesweeper lost WebKit capture use this
+ * seam; playing / gameover bytes must not change.
  */
 export async function repaintWebkitReadyOverlay(
   page,

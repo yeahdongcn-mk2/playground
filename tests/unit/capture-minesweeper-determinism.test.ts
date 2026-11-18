@@ -279,9 +279,17 @@ describe('minesweeper WebKit READY determinism guard', () => {
       SCRIPT,
       "await capture(lost, touchMobileName(prefix, 'lost'), false)",
     );
+    const overlayWait = indexOfOrFail(
+      SCRIPT,
+      "await lost.getByTestId('overlay-title').filter({ hasText: '踩到地雷' }).waitFor()",
+    );
     const seam = indexOfOrFail(SCRIPT, 'await repaintWebkitReadyOverlay(lost)');
     expect(seam).toBeGreaterThan(lostOpen);
+    // Repainting before the loss overlay exists would be a silent no-op.
+    expect(seam).toBeGreaterThan(overlayWait);
     expect(seam).toBeLessThan(lostCapture);
+    // The pre-existing settle must stay on the Chromium / before path.
+    expect(SCRIPT).toMatch(/} else \{\s*await settle\(lost\);\s*\}/);
     // The loss overlay's translucent backdrop can keep a 1-LSB variant of the
     // board; hiding and restoring it forces a fresh snapshot. Only the WebKit
     // After capture is affected, so the seam must stay behind that guard.
