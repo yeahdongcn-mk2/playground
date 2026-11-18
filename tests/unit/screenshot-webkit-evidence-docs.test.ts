@@ -48,11 +48,26 @@ const WEBKIT_PHONE = section(SCREENSHOTS_README, WEBKIT_PHONE_HEADING);
 const WEBKIT_NARROW = section(SCREENSHOTS_README, WEBKIT_NARROW_HEADING);
 const WEBKIT_HISTORICAL = subsection(WEBKIT_PHONE, WEBKIT_HISTORICAL_HEADING);
 
-const BREAKOUT_DRIFT = [
+const BREAKOUT_COLLECTED = [
   'after-breakout-ready-webkit.png',
   'after-breakout-levelclear-webkit.png',
   'after-breakout-gameover-webkit.png',
 ];
+const BREAKOUT_COLLECTED_SHA256 = new Map([
+  [
+    'after-breakout-ready-webkit.png',
+    '372a320ab27d94e2881484047adb358ef222391c00c1c4bfb6a636ab6f3e5f65',
+  ],
+  [
+    'after-breakout-levelclear-webkit.png',
+    'c1edf10ec9b483db6a022fa26998438286220d88d0be614a0ead09fe046ddf2d',
+  ],
+  [
+    'after-breakout-gameover-webkit.png',
+    'ea78b118f6a50374e2949affae4fca410eeedf057c4e316afad0cd1eae7b8d13',
+  ],
+]);
+const BREAKOUT_CAPTURE_COMMIT = 'd3f0f30437b69022f29f6c7677f117f84ffc09f1';
 const MINESWEEPER_DRIFT = [
   'after-minesweeper-ready-webkit.png',
   'after-minesweeper-playing-webkit.png',
@@ -65,7 +80,7 @@ const NARROW_DRIFT = [
   'after-minesweeper-webkit-narrow-375x667.png',
   'after-minesweeper-webkit-narrow-412x839.png',
 ];
-const DRIFTED = [...BREAKOUT_DRIFT, ...MINESWEEPER_DRIFT, ...NARROW_DRIFT];
+const DRIFTED = [...MINESWEEPER_DRIFT, ...NARROW_DRIFT];
 const DETERMINISTIC = [
   'after-breakout-playing-webkit.png',
   'after-2048-playing-webkit.png',
@@ -96,7 +111,7 @@ function driftBullets(text: string): string {
 }
 
 describe('WebKit historical evidence docs (Issue #137)', () => {
-  it('records the #120 capture commit and the reviewed t2/t3 re-shots', () => {
+  it('records the #120 capture commit and the reviewed t2/t3/t4 re-shots', () => {
     expect(WEBKIT_HISTORICAL).toContain(CAPTURE_COMMIT);
     expect(WEBKIT_HISTORICAL).toContain('#120');
     expect(WEBKIT_HISTORICAL).toContain(
@@ -106,16 +121,22 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(WEBKIT_HISTORICAL).toContain('重新捕获');
     expect(WEBKIT_HISTORICAL).toContain('只重拍扫雷最高用时榜');
     expect(WEBKIT_HISTORICAL).toContain('t3 只重拍大厅与贪食蛇');
+    expect(WEBKIT_HISTORICAL).toContain('t4 只重拍打砖块');
+    expect(WEBKIT_HISTORICAL).toContain('ready 增加首屏重绘接缝');
     expect(WEBKIT_HISTORICAL).toContain('其余已提交 PNG 不改动');
   });
 
-  it('lists the drifted breakout, minesweeper and webkit-narrow artifacts', () => {
+  it('lists the drifted minesweeper and webkit-narrow artifacts', () => {
     for (const file of DRIFTED) {
       expect(WEBKIT_HISTORICAL).toContain(file);
       expect(driftBullets(WEBKIT_HISTORICAL)).toContain(file);
     }
-    expect(WEBKIT_HISTORICAL).toContain('044a02a');
-    expect(WEBKIT_HISTORICAL).toContain('单次测量值');
+    expect(WEBKIT_HISTORICAL).toContain('已报告的漂移产物');
+    // The breakout READY / levelclear / gameover re-shots are collected, so they
+    // must leave the drift list instead of being reported twice.
+    for (const file of BREAKOUT_COLLECTED) {
+      expect(driftBullets(WEBKIT_HISTORICAL)).not.toContain(file);
+    }
   });
 
   it('keeps the same-environment deterministic WebKit captures out of the drift list', () => {
@@ -257,6 +278,49 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     }
   });
 
+  it('records the reviewed breakout ready / levelclear / gameover captures', () => {
+    expect(WEBKIT_HISTORICAL).toContain('#318 t4');
+    expect(WEBKIT_HISTORICAL).toContain('settleReadyBackdrop');
+    expect(WEBKIT_HISTORICAL).toContain('首屏重绘接缝');
+    expect(WEBKIT_HISTORICAL).toContain('d094461d');
+    expect(WEBKIT_HISTORICAL).toContain('443830');
+    expect(WEBKIT_HISTORICAL).toContain('44.3608%');
+    expect(WEBKIT_HISTORICAL).toContain('1782');
+    expect(WEBKIT_HISTORICAL).toContain('0.1781%');
+    expect(WEBKIT_HISTORICAL).toContain('278');
+    expect(WEBKIT_HISTORICAL).toContain('0.0278%');
+    expect(WEBKIT_HISTORICAL).toContain('310');
+    expect(WEBKIT_HISTORICAL).toContain('0.0310%');
+    expect(WEBKIT_HISTORICAL).toContain('字节未变');
+    // The three files must leave the #137 protected set once collected.
+    expect(WEBKIT_HISTORICAL).not.toMatch(
+      /本轮未复核[^。]*after-breakout-(?:ready|levelclear|gameover)-webkit/,
+    );
+
+    const manifest = JSON.parse(
+      readFileSync(
+        join(ROOT, 'docs', 'screenshots', 'capture-sha256-manifest.json'),
+        'utf8',
+      ),
+    ) as {
+      captures: Array<{
+        file: string;
+        sha256: string;
+        command: string;
+        provenance: { captureCommit: string };
+      }>;
+    };
+    for (const file of BREAKOUT_COLLECTED) {
+      const capture = manifest.captures.find((entry) => entry.file === file);
+      expect(capture, `missing manifest entry for ${file}`).toBeDefined();
+      expect(capture?.sha256).toBe(BREAKOUT_COLLECTED_SHA256.get(file));
+      expect(capture?.command).toBe(
+        'npm run screenshots:container -- screenshots:breakout:webkit',
+      );
+      expect(capture?.provenance.captureCommit).toBe(BREAKOUT_CAPTURE_COMMIT);
+    }
+  });
+
   it('makes the CI manifest, not sha256, the authoritative webkit-narrow check', () => {
     expect(WEBKIT_HISTORICAL).toContain('不是 sha256');
     expect(WEBKIT_HISTORICAL).toContain('ci-webkit-narrow-manifest.json');
@@ -289,7 +353,7 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
 
   it('keeps the webkit-phone and webkit-narrow tables and their commands intact', () => {
     for (const file of [
-      ...BREAKOUT_DRIFT,
+      ...BREAKOUT_COLLECTED,
       ...MINESWEEPER_DRIFT,
       'after-2048-ready-webkit.png',
       ...DETERMINISTIC,
@@ -314,6 +378,9 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
       ['after-2048-playing-webkit.png', 'screenshots:container -- screenshots:2048:webkit'],
       ['after-2048-gameover-webkit.png', 'screenshots:container -- screenshots:2048:webkit'],
       ['after-breakout-playing-webkit.png', 'screenshots:container -- screenshots:breakout:webkit'],
+      ['after-breakout-ready-webkit.png', 'screenshots:container -- screenshots:breakout:webkit'],
+      ['after-breakout-levelclear-webkit.png', 'screenshots:container -- screenshots:breakout:webkit'],
+      ['after-breakout-gameover-webkit.png', 'screenshots:container -- screenshots:breakout:webkit'],
       [
         MINESWEEPER_SCORES,
         'screenshots:container -- screenshots:minesweeper:scores:webkit',

@@ -46,6 +46,9 @@ const EXPECTED_FILES = [
   'after-2048-playing-webkit.png',
   'after-2048-gameover-webkit.png',
   'after-breakout-playing-webkit.png',
+  'after-breakout-ready-webkit.png',
+  'after-breakout-levelclear-webkit.png',
+  'after-breakout-gameover-webkit.png',
   'after-minesweeper-scores-webkit.png',
 ];
 
@@ -675,7 +678,7 @@ function runCli(args: string[]): { status: number | null; stdout: string; stderr
 }
 
 describe('capture sha256 manifest', () => {
-  it('lists exactly the seven fixed-environment WebKit captures with committed hashes', () => {
+  it('lists exactly the ten fixed-environment WebKit captures with committed hashes', () => {
     const manifest = committedManifest();
     expect(manifest.captures.map((capture) => capture.file)).toEqual(EXPECTED_FILES);
 

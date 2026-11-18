@@ -101,6 +101,33 @@
       }
     },
     {
+      "file": "after-breakout-ready-webkit.png",
+      "sha256": "372a320ab27d94e2881484047adb358ef222391c00c1c4bfb6a636ab6f3e5f65",
+      "command": "npm run screenshots:container -- screenshots:breakout:webkit",
+      "provenance": {
+        "container": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
+        "captureCommit": "d3f0f30437b69022f29f6c7677f117f84ffc09f1"
+      }
+    },
+    {
+      "file": "after-breakout-levelclear-webkit.png",
+      "sha256": "c1edf10ec9b483db6a022fa26998438286220d88d0be614a0ead09fe046ddf2d",
+      "command": "npm run screenshots:container -- screenshots:breakout:webkit",
+      "provenance": {
+        "container": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
+        "captureCommit": "d3f0f30437b69022f29f6c7677f117f84ffc09f1"
+      }
+    },
+    {
+      "file": "after-breakout-gameover-webkit.png",
+      "sha256": "ea78b118f6a50374e2949affae4fca410eeedf057c4e316afad0cd1eae7b8d13",
+      "command": "npm run screenshots:container -- screenshots:breakout:webkit",
+      "provenance": {
+        "container": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
+        "captureCommit": "d3f0f30437b69022f29f6c7677f117f84ffc09f1"
+      }
+    },
+    {
       "file": "after-minesweeper-scores-webkit.png",
       "sha256": "44768a977454b98f4526033e96c3cdf60012f6278b10912cf7a11071419674fe",
       "command": "npm run screenshots:container -- screenshots:minesweeper:scores:webkit",

@@ -148,24 +148,6 @@ const EXPECTED_EVIDENCE = [
     commit: '498a14f',
   },
   {
-    file: 'after-breakout-ready-webkit.png',
-    game: 'breakout',
-    issue: '#120',
-    commit: '498a14f',
-  },
-  {
-    file: 'after-breakout-levelclear-webkit.png',
-    game: 'breakout',
-    issue: '#120',
-    commit: '498a14f',
-  },
-  {
-    file: 'after-breakout-gameover-webkit.png',
-    game: 'breakout',
-    issue: '#120',
-    commit: '498a14f',
-  },
-  {
     file: 'after-minesweeper-ready-webkit.png',
     game: 'minesweeper',
     issue: '#120',
@@ -262,7 +244,7 @@ describe('historical After evidence list (Issue #137)', () => {
     expect(files.slice().sort()).toEqual(
       EXPECTED_EVIDENCE.map((entry) => entry.file).slice().sort(),
     );
-    expect(files).toHaveLength(26);
+    expect(files).toHaveLength(23);
 
     for (const expected of EXPECTED_EVIDENCE) {
       const entry = findHistoricalAfterEvidence(expected.file);
@@ -359,7 +341,9 @@ describe('guardHistoricalAfterEvidence', () => {
   });
 
   it('allows the explicit overwrite only inside the fixed capture environment', () => {
-    const file = 'after-breakout-ready-webkit.png';
+    // A still-protected WebKit historical file; the three breakout WebKit
+    // repshots from Issue #318 t4 were collected and are no longer frozen.
+    const file = 'after-2048-ready-webkit.png';
     const logger = recordingLogger();
 
     const write = guardHistoricalAfterEvidence({
