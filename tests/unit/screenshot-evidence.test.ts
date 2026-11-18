@@ -207,8 +207,26 @@ function functionBody(source: string, name: string): string {
   if (start < 0) {
     throw new Error(`missing function: ${name}`);
   }
-  const open = source.indexOf('{', start);
+  // Find the brace after the parameter list, not the first brace in it: a
+  // default such as `options = {}` is part of the signature.
+  const parameters = source.indexOf('(', start);
   let depth = 0;
+  let parametersEnd = -1;
+  for (let index = parameters; index < source.length; index += 1) {
+    if (source[index] === '(') depth += 1;
+    if (source[index] === ')') {
+      depth -= 1;
+      if (depth === 0) {
+        parametersEnd = index;
+        break;
+      }
+    }
+  }
+  if (parametersEnd < 0) {
+    throw new Error(`unterminated parameter list: ${name}`);
+  }
+  const open = source.indexOf('{', parametersEnd);
+  depth = 0;
   for (let index = open; index < source.length; index += 1) {
     if (source[index] === '{') depth += 1;
     if (source[index] === '}') {

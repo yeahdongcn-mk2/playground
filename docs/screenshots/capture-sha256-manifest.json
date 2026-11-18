@@ -88,7 +88,7 @@
       "command": "npm run screenshots:container -- screenshots:minesweeper:webkit",
       "provenance": {
         "container": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
-        "captureCommit": "7a4a705a02d5e20509d92b351f179b87a755fa40"
+        "captureCommit": "20d78f189392d1a1cb312ddb3ced86301239e2bf"
       }
     },
     {
@@ -97,7 +97,7 @@
       "command": "npm run screenshots:container -- screenshots:minesweeper:webkit",
       "provenance": {
         "container": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
-        "captureCommit": "7a4a705a02d5e20509d92b351f179b87a755fa40"
+        "captureCommit": "20d78f189392d1a1cb312ddb3ced86301239e2bf"
       }
     },
     {
@@ -106,7 +106,7 @@
       "command": "npm run screenshots:container -- screenshots:minesweeper:webkit",
       "provenance": {
         "container": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
-        "captureCommit": "7a4a705a02d5e20509d92b351f179b87a755fa40"
+        "captureCommit": "20d78f189392d1a1cb312ddb3ced86301239e2bf"
       }
     },
     {
@@ -115,7 +115,7 @@
       "command": "npm run screenshots:container -- screenshots:minesweeper:webkit",
       "provenance": {
         "container": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
-        "captureCommit": "7a4a705a02d5e20509d92b351f179b87a755fa40"
+        "captureCommit": "20d78f189392d1a1cb312ddb3ced86301239e2bf"
       }
     }
   ]
