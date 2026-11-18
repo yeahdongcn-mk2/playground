@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { createWriteStream, mkdirSync, readFileSync } from 'node:fs';
+import { createWriteStream, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { CAPTURE_REPO_ROOT } from './capture-env.mjs';
 import {
@@ -146,12 +146,24 @@ export function sha256VerifierArgs({ logPath, dir, manifestPath, repoRoot }) {
   ];
 }
 
-/** Run one target through the existing fixed-container entry. */
-function spawnContainerCapture({ target, logPath, repoRoot, env }) {
+/**
+ * Run one target through the existing fixed-container entry.
+ *
+ * `spawn` is injectable so tests can supply a fake child process instead of
+ * launching npm (and therefore Docker).
+ */
+export function spawnContainerCapture({
+  target,
+  logPath,
+  repoRoot,
+  env,
+  spawn: spawnChild = spawn,
+}) {
   mkdirSync(dirname(logPath), { recursive: true });
   return new Promise((resolvePromise) => {
     let settled = false;
     let streamFailed = false;
+    let childExitCode = null;
     const settle = (code) => {
       if (settled) return;
       settled = true;
@@ -163,13 +175,21 @@ function spawnContainerCapture({ target, logPath, repoRoot, env }) {
     };
     stream.once('error', (error) => {
       // An unwritable log must fail the run, not crash with an unhandled
-      // 'error' event or silently continue without the transcript.
+      // 'error' event or silently continue without the transcript. Do not
+      // settle here: the capture may still be writing the shared evidence
+      // paths, and a following run must not overlap with it.
       streamFailed = true;
       process.stderr.write(`cannot write capture log ${logPath}: ${errorMessage(error)}\n`);
-      settle(1);
+      if (childExitCode !== null) {
+        settle(childExitCode);
+      }
     });
     const finish = (code) => {
       if (settled) return;
+      if (streamFailed) {
+        settle(code);
+        return;
+      }
       // Wait for the log stream's queued writes to reach the filesystem before
       // the caller reads the log and runs the sha256 verifier against it.
       stream.end(() => settle(code));
@@ -177,13 +197,14 @@ function spawnContainerCapture({ target, logPath, repoRoot, env }) {
 
     let child;
     try {
-      child = spawn(npmCommand(), captureCommandArgs(target), {
+      child = spawnChild(npmCommand(), captureCommandArgs(target), {
         cwd: repoRoot,
         env,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
     } catch (error) {
       writeLog(`${errorMessage(error)}\n`);
+      childExitCode = 1;
       finish(1);
       return;
     }
@@ -200,17 +221,30 @@ function spawnContainerCapture({ target, logPath, repoRoot, env }) {
     });
     child.once('error', (error) => {
       writeLog(`${errorMessage(error)}\n`);
+      childExitCode = 1;
       finish(1);
     });
     child.once('close', (code) => {
-      finish(code ?? 1);
+      childExitCode = code ?? 1;
+      finish(childExitCode);
     });
   });
 }
 
-/** Verify one run log with the existing hash + environment verifier. */
-function spawnSha256Verifier({ logPath, dir, manifestPath, repoRoot }) {
-  const result = spawnSync(
+/**
+ * Verify one run log with the existing hash + environment verifier.
+ *
+ * `spawnSync` is injectable so tests can assert a non-zero verifier exit is
+ * mapped to `verifyFailures` without running the real sha256 script.
+ */
+export function spawnSha256Verifier({
+  logPath,
+  dir,
+  manifestPath,
+  repoRoot,
+  spawnSync: spawnSyncVerifier = spawnSync,
+}) {
+  const result = spawnSyncVerifier(
     process.execPath,
     sha256VerifierArgs({ logPath, dir, manifestPath, repoRoot }),
     { cwd: repoRoot, encoding: 'utf8' },
@@ -295,8 +329,12 @@ function formatFailureReport(result) {
   if (result.captureFailures.length > 0) {
     lines.push('', 'Capture failures:');
     for (const failure of result.captureFailures) {
+      const reason =
+        typeof failure.failureReason === 'string' && failure.failureReason !== ''
+          ? `: ${failure.failureReason}`
+          : '';
       lines.push(
-        `  ${failure.target} run ${failure.run}: exit ${failure.exitCode} (log: ${failure.logPath})`,
+        `  ${failure.target} run ${failure.run}: exit ${failure.exitCode}${reason} (log: ${failure.logPath})`,
       );
     }
   }
@@ -390,9 +428,11 @@ function formatSuccessReport(result) {
 /**
  * Run every manifest target twice and report whether both runs match.
  *
- * `runCapture`, `verifyLog`, `hashFile`, `readText` and `mkdir` are injectable
- * so unit tests can use temporary fixtures instead of Docker, a browser and the
- * real four-minute captures.
+ * `runCapture`, `verifyLog`, `spawn`, `spawnSync`, `hashFile`, `readText`,
+ * `mkdir` and `removeFile` are injectable so unit tests can use temporary
+ * fixtures instead of Docker, a browser and the real four-minute captures.
+ * The real defaults are used by the CLI entry; `spawn` / `spawnSync` feed the
+ * default `runCapture` / `verifyLog` and are ignored when those are supplied.
  *
  * @returns {Promise<{
  *   ok: boolean,
@@ -446,8 +486,11 @@ export async function runScreenshotRepro({
   readText = (path) => readFileSync(path, 'utf8'),
   hashFile = sha256File,
   mkdir = mkdirSync,
-  runCapture = spawnContainerCapture,
-  verifyLog = spawnSha256Verifier,
+  removeFile = (path) => rmSync(path, { force: true }),
+  spawn: spawnChild = spawn,
+  spawnSync: spawnSyncVerifier = spawnSync,
+  runCapture = (options) => spawnContainerCapture({ ...options, spawn: spawnChild }),
+  verifyLog = (options) => spawnSha256Verifier({ ...options, spawnSync: spawnSyncVerifier }),
 } = {}) {
   let manifest;
   try {
@@ -474,26 +517,47 @@ export async function runScreenshotRepro({
   for (const plan of plans) {
     for (let run = 1; run <= REPRO_RUN_COUNT; run += 1) {
       const logPath = reproLogPath(logDir, plan.target, run);
-      let exitCode;
-      try {
-        exitCode = await runCapture({ target: plan.target, run, logPath, repoRoot, env, logger });
-      } catch (error) {
-        logger.error?.(`${plan.target} run ${run}: ${errorMessage(error)}`);
-        exitCode = 1;
+
+      // The CI workspace is disposable, so remove the target's manifested
+      // files before every run. A capture that silently skips a frozen
+      // historical file (the "Refusing to overwrite historical" write guard)
+      // then fails with an unavailable hash instead of matching the committed
+      // bytes it never refreshed. A local run deletes the same tracked files,
+      // so reproduce on a temp copy and use `git restore docs/screenshots`
+      // after a failure (docs/screenshots/README.md documents this).
+      const removalFailures = [];
+      for (const capture of plan.captures) {
+        try {
+          removeFile(resolve(dir, capture.file));
+        } catch (error) {
+          removalFailures.push(`${capture.file}: ${errorMessage(error)}`);
+        }
       }
-      if (typeof exitCode !== 'number') {
+
+      let exitCode;
+      let failureReason = null;
+      if (removalFailures.length > 0) {
+        failureReason =
+          'cannot remove stale evidence before the capture: ' + removalFailures.join('; ');
+        logger.error?.(`${plan.target} run ${run}: ${failureReason}`);
+        exitCode = 1;
+      } else {
+        try {
+          exitCode = await runCapture({ target: plan.target, run, logPath, repoRoot, env, logger });
+        } catch (error) {
+          logger.error?.(`${plan.target} run ${run}: ${errorMessage(error)}`);
+          exitCode = 1;
+        }
+      }
+      if (!Number.isFinite(exitCode)) {
         exitCode = 1;
       }
       const logText = readOptionalText(logPath, readText);
 
       if (exitCode !== 0) {
-        captureFailures.push({ target: plan.target, run, exitCode, logPath });
+        captureFailures.push({ target: plan.target, run, exitCode, logPath, failureReason });
       }
 
-      // Assumption: the capture script rewrites the plan's manifested files.
-      // A script that intentionally skips a historical file would leave the
-      // committed bytes in place and pass; keep such entries out of the repro
-      // manifest (the write guard already refuses cross-environment writes).
       const hashes = [];
       for (const capture of plan.captures) {
         try {

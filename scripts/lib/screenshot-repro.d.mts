@@ -1,3 +1,8 @@
+import type {
+  ChildProcess,
+  SpawnOptions,
+  spawnSync,
+} from 'node:child_process';
 import type { ScreenshotSha256Capture, ScreenshotSha256Manifest } from './screenshot-sha256.mjs';
 
 export interface ReproPlan {
@@ -35,6 +40,8 @@ export interface ReproCaptureFailure {
   run: number;
   exitCode: number;
   logPath: string;
+  /** Why the run failed before a capture could happen, e.g. a removal error. */
+  failureReason: string | null;
 }
 
 export interface ReproVerifyFailure {
@@ -95,6 +102,25 @@ export interface ReproVerification {
   stderr: string;
 }
 
+/** The child_process.spawn seam used by the default capture runner. */
+export type ReproSpawn = (
+  command: string,
+  args: readonly string[],
+  options: SpawnOptions,
+) => ChildProcess;
+
+export interface SpawnContainerCaptureOptions {
+  target: string;
+  logPath: string;
+  repoRoot: string;
+  env: NodeJS.ProcessEnv;
+  spawn?: ReproSpawn;
+}
+
+export interface SpawnSha256VerifierOptions extends ReproVerifyLogOptions {
+  spawnSync?: typeof spawnSync;
+}
+
 export interface RunScreenshotReproOptions {
   manifestPath?: string;
   dir?: string;
@@ -105,6 +131,9 @@ export interface RunScreenshotReproOptions {
   readText?: (path: string) => string;
   hashFile?: (path: string) => string;
   mkdir?: (path: string, options: { recursive: true }) => void;
+  removeFile?: (path: string) => void;
+  spawn?: ReproSpawn;
+  spawnSync?: typeof spawnSync;
   runCapture?: (
     options: ReproRunCaptureOptions,
   ) => number | Promise<number>;
@@ -124,6 +153,8 @@ export function sha256VerifierArgs(options: ReproVerifyLogOptions): string[];
 export function parseCaptureTarget(command: string): string;
 export function deriveReproPlans(manifest: ScreenshotSha256Manifest): ReproPlan[];
 export function reproLogPath(logDir: string, target: string, run: number): string;
+export function spawnContainerCapture(options: SpawnContainerCaptureOptions): Promise<number>;
+export function spawnSha256Verifier(options: SpawnSha256VerifierOptions): ReproVerification;
 export function runScreenshotRepro(
   options?: RunScreenshotReproOptions,
 ): Promise<ReproResult>;

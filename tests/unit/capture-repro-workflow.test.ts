@@ -200,6 +200,13 @@ describe('nightly screenshot repro docs (Issue #199)', () => {
     expect(reproDocs).toContain('verify:screenshots:sha256');
   });
 
+  it('documents the pre-run removal and the unavailable hash on a skipped write', () => {
+    expect(reproDocs).toContain('每跑开始前');
+    expect(reproDocs).toContain('删除');
+    expect(reproDocs).toContain('unavailable');
+    expect(reproDocs).toContain('git restore docs/screenshots');
+  });
+
   it('documents the failure summary, troubleshooting and re-capture steps', () => {
     expect(reproDocs).toContain('GITHUB_STEP_SUMMARY');
     expect(reproDocs).toContain('期望');

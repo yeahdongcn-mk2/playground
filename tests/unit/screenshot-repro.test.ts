@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
+import { spawnSync as nodeSpawnSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import {
   appendFileSync,
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -9,6 +12,8 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { PassThrough } from 'node:stream';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   CAPTURE_EGL_ENV,
@@ -25,13 +30,19 @@ import {
   runScreenshotRepro,
   ScreenshotReproError,
   sha256VerifierArgs,
+  spawnContainerCapture,
 } from '../../scripts/lib/screenshot-repro.mjs';
 import type {
   ReproRunCaptureOptions,
+  ReproSpawn,
   ReproVerification,
 } from '../../scripts/lib/screenshot-repro.mjs';
 import type { ScreenshotSha256Manifest } from '../../scripts/lib/screenshot-sha256.mjs';
 import { main, parseArgs } from '../../scripts/verify-screenshot-repro.mjs';
+
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const REPRO_SCRIPT = join(ROOT, 'scripts', 'verify-screenshot-repro.mjs');
+const REAL_MANIFEST = join(ROOT, 'docs', 'screenshots', 'capture-sha256-manifest.json');
 
 const tempDirs: string[] = [];
 
@@ -108,7 +119,10 @@ interface Fixture {
   manifestPath: string;
 }
 
-function fixture(captures: CaptureSpec[] = CAPTURES): Fixture {
+function fixture(
+  captures: CaptureSpec[] = CAPTURES,
+  { prewrite = 'none' }: { prewrite?: 'none' | 'manifest' } = {},
+): Fixture {
   const root = mkdtempSync(join(tmpdir(), 'screenshot-repro-'));
   tempDirs.push(root);
   const dir = join(root, 'docs', 'screenshots');
@@ -116,10 +130,73 @@ function fixture(captures: CaptureSpec[] = CAPTURES): Fixture {
   mkdirSync(dir, { recursive: true });
   const manifestPath = join(dir, 'capture-sha256-manifest.json');
   writeFileSync(manifestPath, `${JSON.stringify(manifestFor(captures), null, 2)}\n`);
-  for (const capture of captures) {
-    writeFileSync(join(dir, capture.file), capture.content);
+  if (prewrite === 'manifest') {
+    // Simulate committed evidence that already matches the manifest, as the
+    // write guard leaves it when it skips a frozen historical file.
+    for (const capture of captures) {
+      writeFileSync(join(dir, capture.file), capture.content);
+    }
   }
   return { root, dir, logDir, manifestPath };
+}
+
+/**
+ * Put a fake `npm` executable on PATH. It prints to both streams and exits
+ * with `code`, so the real spawn path can be exercised without Docker.
+ */
+function fakeNpmBin(code: number): NodeJS.ProcessEnv {
+  const binDir = mkdtempSync(join(tmpdir(), 'screenshot-repro-npm-'));
+  tempDirs.push(binDir);
+  const npmPath = join(binDir, 'npm');
+  writeFileSync(
+    npmPath,
+    `#!/bin/sh\necho "fake npm stdout $*"\necho "fake npm stderr $*" >&2\nexit ${code}\n`,
+  );
+  chmodSync(npmPath, 0o755);
+  return { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ''}` };
+}
+
+function runCli(
+  args: string[],
+  env: NodeJS.ProcessEnv = {},
+): { status: number | null; stdout: string; stderr: string } {
+  const result = nodeSpawnSync(process.execPath, [REPRO_SCRIPT, ...args], {
+    cwd: ROOT,
+    // The real CI step exports a summary file; keep these direct-entry tests
+    // from appending their synthetic failures to the job summary.
+    env: { ...process.env, ...env, GITHUB_STEP_SUMMARY: '' },
+    encoding: 'utf8',
+    timeout: 30_000,
+  });
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
+type FakeChild = EventEmitter & { stdout: PassThrough; stderr: PassThrough };
+
+/** A cross-platform child_process.spawn seam for the default capture runner. */
+function fakeChildSpawn({
+  exitCode = 9,
+  closeDelayMs = 0,
+  calls,
+}: {
+  exitCode?: number;
+  closeDelayMs?: number;
+  calls?: string[][];
+} = {}): ReproSpawn {
+  return ((command: string, args: readonly string[]) => {
+    calls?.push([command, ...args]);
+    const child = new EventEmitter() as FakeChild;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    setTimeout(() => {
+      child.stdout.write('injected stdout\n');
+      child.stderr.write('injected stderr\n');
+      child.stdout.end();
+      child.stderr.end();
+      child.emit('close', exitCode);
+    }, closeDelayMs);
+    return child;
+  }) as unknown as ReproSpawn;
 }
 
 interface RunnerOptions {
@@ -128,6 +205,10 @@ interface RunnerOptions {
   order?: string[];
   /** Per file and run override of the bytes the capture "writes". */
   writes?: Record<string, Partial<Record<number, string>>>;
+  /** When false, the capture exits 0 but never writes a manifested file. */
+  writeFiles?: boolean;
+  /** Runs that exit 0 without writing a manifested file. */
+  skipWriteRuns?: number[];
   exitCodes?: Record<string, number>;
   platforms?: Record<number, string>;
 }
@@ -137,6 +218,8 @@ function fakeRunner({
   captures,
   order,
   writes = {},
+  writeFiles = true,
+  skipWriteRuns = [],
   exitCodes = {},
   platforms = {},
 }: RunnerOptions) {
@@ -151,9 +234,11 @@ function fakeRunner({
     mkdirSync(dirname(logPath), { recursive: true });
     writeFileSync(logPath, `${target} run ${run}\n${fingerprint(platforms[run])}\n`);
     order?.push(`${target}:${run}`);
-    for (const capture of byTarget.get(target) ?? []) {
-      const content = writes[capture.file]?.[run] ?? capture.content;
-      writeFileSync(join(dir, capture.file), content);
+    if (writeFiles && !skipWriteRuns.includes(run)) {
+      for (const capture of byTarget.get(target) ?? []) {
+        const content = writes[capture.file]?.[run] ?? capture.content;
+        writeFileSync(join(dir, capture.file), content);
+      }
     }
     return exitCodes[`${target}:${run}`] ?? 0;
   };
@@ -240,6 +325,11 @@ describe('screenshot repro target derivation', () => {
 describe('screenshot repro two-run check', () => {
   it('passes when both runs match the manifest and each log verifies', async () => {
     const setup = fixture();
+    // The fixture only writes the manifest: the manifested files must come from
+    // the capture runner, otherwise this success case could not tell a real
+    // re-capture from a run that never wrote anything.
+    expect(() => readFileSync(join(setup.dir, 'after-blank-webkit.png'))).toThrow();
+
     const order: string[] = [];
     const result = await runScreenshotRepro({
       ...setup,
@@ -248,6 +338,9 @@ describe('screenshot repro two-run check', () => {
     });
 
     expect(result.ok).toBe(true);
+    for (const capture of CAPTURES) {
+      expect(readFileSync(join(setup.dir, capture.file), 'utf8')).toBe(capture.content);
+    }
     expect(result.report).toContain('OK: screenshot repro passed');
     expect(result.report).toContain('3 file(s) matched');
     expect(result.runs.map((run) => `${run.target}:${run.run}`)).toEqual([
@@ -359,6 +452,72 @@ describe('screenshot repro two-run check', () => {
     expect(result.report).toContain('Environment fingerprint mismatch (fixture)');
   });
 
+  it('fails when a successful capture never writes and the committed bytes already match', async () => {
+    // The write guard skips frozen historical files, leaving the committed
+    // bytes in place. If the capture exits 0 without rewriting them, the entry
+    // must not pass by hashing stale evidence: the pre-run removal turns the
+    // missing write into an unavailable hash.
+    const setup = fixture(CAPTURES, { prewrite: 'manifest' });
+    const result = await runScreenshotRepro({
+      ...setup,
+      runCapture: fakeRunner({ dir: setup.dir, captures: CAPTURES, writeFiles: false }),
+      verifyLog: verifyOk,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.differences).toHaveLength(3);
+    for (const difference of result.differences) {
+      expect(difference.run1).toBeNull();
+      expect(difference.run2).toBeNull();
+    }
+    expect(result.report).toContain('a run did not produce the file');
+    expect(result.report).toContain('run 1 sha256: unavailable');
+  });
+
+  it('removes manifested files before the second run so it cannot reuse run 1 bytes', async () => {
+    // Without a per-run removal, a capture that writes run 1 and silently
+    // skips run 2 would hash run 1's bytes twice and pass.
+    const setup = fixture();
+    const result = await runScreenshotRepro({
+      ...setup,
+      runCapture: fakeRunner({
+        dir: setup.dir,
+        captures: CAPTURES,
+        skipWriteRuns: [2],
+      }),
+      verifyLog: verifyOk,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.differences).toHaveLength(3);
+    for (const difference of result.differences) {
+      expect(difference.run1).not.toBeNull();
+      expect(difference.run2).toBeNull();
+    }
+    expect(result.report).toContain('run 2 sha256: unavailable');
+  });
+
+  it('fails the run instead of hashing stale bytes when the pre-run removal fails', async () => {
+    const setup = fixture(CAPTURES, { prewrite: 'manifest' });
+    const result = await runScreenshotRepro({
+      ...setup,
+      removeFile: () => {
+        throw new Error('EACCES: permission denied');
+      },
+      runCapture: fakeRunner({ dir: setup.dir, captures: CAPTURES }),
+      verifyLog: verifyOk,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.captureFailures).toHaveLength(4);
+    expect(result.captureFailures[0]?.exitCode).toBe(1);
+    expect(result.captureFailures[0]?.failureReason).toContain(
+      'cannot remove stale evidence',
+    );
+    expect(result.report).toContain('screenshots:webkit run 1: exit 1: cannot remove stale evidence');
+    expect(result.report).toContain('EACCES');
+  });
+
   it('fails and names the run when a capture command exits non-zero', async () => {
     const setup = fixture();
     const result = await runScreenshotRepro({
@@ -379,6 +538,20 @@ describe('screenshot repro two-run check', () => {
     expect(result.report).toContain('screenshots:webkit run 2: exit 1');
   });
 
+  it('normalizes a non-finite capture exit code to a failure', async () => {
+    const setup = fixture();
+    const result = await runScreenshotRepro({
+      ...setup,
+      runCapture: async () => Number.NaN,
+      verifyLog: verifyOk,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.captureFailures).toHaveLength(4);
+    expect(result.captureFailures[0]?.exitCode).toBe(1);
+    expect(result.report).not.toContain('exit NaN');
+  });
+
   it('rejects a manifest that drifts from the fixed capture environment', async () => {
     const setup = fixture();
     const manifest = manifestFor(CAPTURES);
@@ -393,6 +566,223 @@ describe('screenshot repro two-run check', () => {
       }),
     ).rejects.toThrow(/does not match the fixed capture environment/);
   });
+});
+
+describe('screenshot repro subprocess wiring', () => {
+  it('writes both child streams from an injected spawn and maps its exit code', async () => {
+    const setup = fixture();
+    const logPath = join(setup.logDir, 'injected.log');
+    const calls: string[][] = [];
+
+    const code = await spawnContainerCapture({
+      target: 'screenshots:webkit',
+      logPath,
+      repoRoot: setup.root,
+      env: {},
+      spawn: fakeChildSpawn({ calls }),
+    });
+
+    expect(code).toBe(9);
+    expect(calls).toEqual([
+      [
+        process.platform === 'win32' ? 'npm.cmd' : 'npm',
+        'run',
+        'screenshots:container',
+        '--',
+        'screenshots:webkit',
+      ],
+    ]);
+    const log = readFileSync(logPath, 'utf8');
+    expect(log).toContain('injected stdout');
+    expect(log).toContain('injected stderr');
+  });
+
+  it('forwards the injected spawn through the default capture runner', async () => {
+    const setup = fixture();
+    const calls: string[][] = [];
+
+    const result = await runScreenshotRepro({
+      ...setup,
+      repoRoot: setup.root,
+      spawn: fakeChildSpawn({ exitCode: 0, calls }),
+      verifyLog: verifyOk,
+    });
+
+    expect(calls).toHaveLength(4);
+    expect(result.captureFailures).toEqual([]);
+    expect(result.runs).toHaveLength(4);
+    for (const run of result.runs) {
+      expect(run.exitCode).toBe(0);
+      expect(readFileSync(run.logPath, 'utf8')).toContain('injected stdout');
+    }
+  });
+
+  it('waits for the capture to close when the log stream fails', async () => {
+    const setup = fixture();
+
+    const code = await spawnContainerCapture({
+      target: 'screenshots:webkit',
+      // A directory path makes createWriteStream emit EISDIR asynchronously.
+      logPath: setup.dir,
+      repoRoot: setup.root,
+      env: {},
+      spawn: fakeChildSpawn({ closeDelayMs: 25 }),
+    });
+
+    expect(code).toBe(9);
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'streams the real child stdout/stderr into the per-run log and returns its exit code',
+    async () => {
+      const setup = fixture();
+      const env = fakeNpmBin(7);
+      const logPath = join(setup.logDir, 'capture.log');
+
+      const code = await spawnContainerCapture({
+        target: 'screenshots:webkit',
+        logPath,
+        repoRoot: setup.root,
+        env,
+      });
+
+      expect(code).toBe(7);
+      const log = readFileSync(logPath, 'utf8');
+      expect(log).toContain(
+        'fake npm stdout run screenshots:container -- screenshots:webkit',
+      );
+      expect(log).toContain(
+        'fake npm stderr run screenshots:container -- screenshots:webkit',
+      );
+    },
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'maps a real non-zero capture exit into captureFailures',
+    async () => {
+      const setup = fixture();
+      const env = fakeNpmBin(7);
+
+      const result = await runScreenshotRepro({
+        ...setup,
+        repoRoot: setup.root,
+        env,
+        verifyLog: verifyOk,
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.captureFailures).toHaveLength(4);
+      for (const failure of result.captureFailures) {
+        expect(failure.exitCode).toBe(7);
+        expect(readFileSync(failure.logPath, 'utf8')).toContain('fake npm stderr');
+      }
+      expect(result.report).toContain('4 capture failure(s)');
+    },
+  );
+
+  it('maps a non-zero verifier exit from the default verifyLog into verifyFailures', async () => {
+    const setup = fixture();
+    const calls: Array<{
+      command: string;
+      args: readonly string[];
+      options: unknown;
+    }> = [];
+    const fakeSpawnSync = ((
+      command: string,
+      args: readonly string[],
+      options: unknown,
+    ) => {
+      calls.push({ command, args: [...args], options });
+      return {
+        pid: -1,
+        output: [],
+        stdout: 'verifier stdout\n',
+        stderr: 'verifier stderr\n',
+        status: 3,
+        signal: null,
+      };
+    }) as unknown as typeof nodeSpawnSync;
+
+    const result = await runScreenshotRepro({
+      ...setup,
+      repoRoot: setup.root,
+      runCapture: fakeRunner({ dir: setup.dir, captures: CAPTURES }),
+      spawnSync: fakeSpawnSync,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.verifyFailures).toHaveLength(4);
+    expect(result.verifyFailures[0]?.exitCode).toBe(3);
+    expect(result.report).toContain('verifier stderr');
+    expect(calls).toHaveLength(4);
+    expect(calls[0]?.command).toBe(process.execPath);
+    expect(calls[0]?.args).toContain(
+      resolve(setup.root, 'scripts', 'verify-screenshot-sha256.mjs'),
+    );
+    expect(calls[0]?.args).toContain('--log');
+    expect(calls[0]?.args).toContain(result.runs[0]?.logPath);
+    expect(calls[0]?.options).toMatchObject({ cwd: setup.root });
+  });
+});
+
+describe('verify-screenshot-repro direct entry', () => {
+  it('exits 0 for --help through the real invokedDirectly branch', () => {
+    const result = runCli(['--help']);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('Usage: node scripts/verify-screenshot-repro.mjs');
+  });
+
+  it('exits 2 for a usage error and for an invalid manifest', () => {
+    const root = mkdtempSync(join(tmpdir(), 'screenshot-repro-cli-'));
+    tempDirs.push(root);
+
+    const usage = runCli(['--bogus']);
+    expect(usage.status).toBe(2);
+    expect(usage.stderr).toContain('unknown option: --bogus');
+
+    const invalidManifest = join(root, 'invalid-manifest.json');
+    writeFileSync(invalidManifest, '{"captures": []}\n');
+    const invalid = runCli(['--manifest', invalidManifest]);
+    expect(invalid.status).toBe(2);
+    expect(invalid.stderr).toContain('FAIL: screenshot repro could not run');
+    expect(invalid.stderr).toContain('captures');
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'exits non-zero through process.exitCode when a capture fails',
+    () => {
+      const root = mkdtempSync(join(tmpdir(), 'screenshot-repro-cli-fail-'));
+      tempDirs.push(root);
+      const manifest = JSON.parse(
+        readFileSync(REAL_MANIFEST, 'utf8'),
+      ) as ScreenshotSha256Manifest;
+      const manifestPath = join(root, 'manifest.json');
+      writeFileSync(
+        manifestPath,
+        JSON.stringify({
+          environment: manifest.environment,
+          captures: [manifest.captures[0]],
+        }),
+      );
+      const dir = join(root, 'screenshots');
+      mkdirSync(dir, { recursive: true });
+      const logDir = join(root, 'logs');
+      const env = fakeNpmBin(7);
+
+      const result = runCli(
+        ['--manifest', manifestPath, '--dir', dir, '--log-dir', logDir],
+        env,
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('FAIL: screenshot repro failed');
+      expect(result.stderr).toContain('Capture failures:');
+      expect(result.stderr).toContain('exit 7');
+      // The real default verifyLog runs verify-screenshot-sha256.mjs against
+      // the fake log, so a stubbed default spawnSync would drop this section.
+      expect(result.stderr).toContain('Log verification failures:');
+    },
+  );
 });
 
 function logger() {
