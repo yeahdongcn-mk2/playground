@@ -63,6 +63,50 @@ function indexOfOrFail(haystack: string, needle: string): number {
   return index;
 }
 
+/**
+ * The index of the `}` that closes the block opened at `openBrace`.
+ *
+ * Skips braces inside comments and string / template literals so a comment
+ * such as `// }` cannot move the boundary this test pins. Regex literals are
+ * not handled because neither guard block contains one.
+ */
+function closingBrace(source: string, openBrace: number): number {
+  let depth = 0;
+  for (let index = openBrace; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === '/' && source[index + 1] === '/') {
+      const newline = source.indexOf('\n', index + 2);
+      if (newline === -1) {
+        break;
+      }
+      index = newline;
+    } else if (character === '/' && source[index + 1] === '*') {
+      const commentEnd = source.indexOf('*/', index + 2);
+      if (commentEnd === -1) {
+        break;
+      }
+      index = commentEnd + 1;
+    } else if (character === "'" || character === '"' || character === '`') {
+      const quote = character;
+      for (index += 1; index < source.length; index += 1) {
+        if (source[index] === '\\') {
+          index += 1;
+        } else if (source[index] === quote) {
+          break;
+        }
+      }
+    } else if (character === '{') {
+      depth += 1;
+    } else if (character === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+  throw new Error(`unbalanced block starting at index ${openBrace}`);
+}
+
 function sha256(path: string): string {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
@@ -166,17 +210,43 @@ describe('minesweeper WebKit READY determinism guard', () => {
     );
     expect(seam).toBeGreaterThan(readyOpen);
     expect(readyCapture).toBeGreaterThan(seam);
-    expect(SCRIPT).toContain("if (IS_WEBKIT && prefix === 'after') {");
-    // The warm-up and the seam must be inside the after-mode guard, not just
-    // present as strings elsewhere in the script.
-    const afterGuard = indexOfOrFail(
+
+    // The seam is wrapped by the *second* after-mode guard: the first one only
+    // warms up the throwaway page. Locate both guards and walk each block to
+    // its closing brace, otherwise deleting the seam's guard still leaves the
+    // seam "after the first guard" and the assertion stays green.
+    const guard = "if (IS_WEBKIT && prefix === 'after') {";
+    const warmUpGuard = indexOfOrFail(SCRIPT, guard);
+    const seamGuard = SCRIPT.indexOf(guard, warmUpGuard + guard.length);
+    expect(
+      seamGuard,
+      'missing: the seam guard after the warm-up guard',
+    ).toBeGreaterThan(-1);
+    expect(
+      SCRIPT.indexOf(guard, seamGuard + guard.length),
+      'unexpected: a third after-mode guard',
+    ).toBe(-1);
+
+    const warmUp = indexOfOrFail(
       SCRIPT,
-      "if (IS_WEBKIT && prefix === 'after') {",
+      'const warmUp = await context.newPage()',
     );
-    expect(indexOfOrFail(SCRIPT, 'const warmUp = await context.newPage()')).toBeGreaterThan(
-      afterGuard,
+    const readyPage = SCRIPT.indexOf(
+      'const ready = await context.newPage()',
+      warmUpGuard,
     );
-    expect(seam).toBeGreaterThan(afterGuard);
+    expect(
+      readyPage,
+      'missing: the committed ready page after the warm-up guard',
+    ).toBeGreaterThan(-1);
+    const warmUpGuardEnd = closingBrace(SCRIPT, warmUpGuard + guard.length - 1);
+    const seamGuardEnd = closingBrace(SCRIPT, seamGuard + guard.length - 1);
+
+    expect(warmUp).toBeGreaterThan(warmUpGuard);
+    expect(warmUp).toBeLessThan(warmUpGuardEnd);
+    expect(readyPage).toBeGreaterThan(warmUpGuardEnd);
+    expect(seam).toBeGreaterThan(seamGuard);
+    expect(seam).toBeLessThan(seamGuardEnd);
   });
 
   it('keeps the seam on the shared runtime contract', () => {
