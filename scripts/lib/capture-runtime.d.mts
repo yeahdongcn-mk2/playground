@@ -144,6 +144,15 @@ export interface CaptureScreenshotOptions {
   colorScheme?: string;
   reducedMotion?: string;
   animations?: 'allow' | 'disabled';
+  /**
+   * Require this many consecutive byte-identical whole-image frames before
+   * writing (default 1 keeps the previous single-shot capture).
+   */
+  stableFrames?: number;
+  /** Delay between stable-frame screenshots, in milliseconds. */
+  stableIntervalMs?: number;
+  /** Extra frames the stable-frame check may read before failing. */
+  stableAttempts?: number;
   /** Override the target of the context that produced the page (tests / edge cases). */
   target?: CaptureTarget;
   /** Parsed manifest; defaults to reading `manifestPath` from disk. */
@@ -167,6 +176,15 @@ export function captureScreenshot(
   name: string,
   options: CaptureScreenshotOptions,
 ): Promise<void>;
+
+/** Consecutive whole-image frames the WebKit READY capture must repeat. */
+export const READY_CAPTURE_STABLE_FRAMES: number;
+
+/** Delay between the WebKit READY stability frames, in milliseconds. */
+export const READY_CAPTURE_STABLE_INTERVAL_MS: number;
+
+/** Extra frames the WebKit READY stability check may read before failing. */
+export const READY_CAPTURE_STABLE_ATTEMPTS: number;
 
 /** Animation frames the shared capture settle seam waits for. */
 export const CAPTURE_SETTLE_FRAMES: number;

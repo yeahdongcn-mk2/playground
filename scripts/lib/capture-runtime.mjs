@@ -401,6 +401,81 @@ export function captureRecord(name, engine, viewport, colorScheme = 'dark', redu
   return `${name}: engine=${engine}, viewport=${size}, theme=${colorScheme}, reducedMotion=${reducedMotion}`;
 }
 
+/** Consecutive whole-image frames the WebKit READY capture must repeat. */
+export const READY_CAPTURE_STABLE_FRAMES = 2;
+
+/** Delay between the frames checked for {@link READY_CAPTURE_STABLE_FRAMES}. */
+export const READY_CAPTURE_STABLE_INTERVAL_MS = 250;
+
+/** Extra frames the stable-frame check may read before giving up. */
+export const READY_CAPTURE_STABLE_ATTEMPTS = 5;
+
+function normalizeScreenshotBytes(bytes) {
+  return Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+}
+
+/**
+ * Read whole-image frames until `stableFrames` consecutive screenshots are
+ * byte-identical (Issue #318).
+ *
+ * A single screenshot can race a pending repaint: the same settled page then
+ * exposes two byte-identical frames, while a capture taken mid-repaint differs
+ * by a handful of 1-LSB pixels. Capturing through this check makes that race
+ * fail loudly instead of committing a transient frame as evidence. With the
+ * default `stableFrames === 1` it is the previous single-shot capture, so
+ * existing callers and their bytes stay unchanged.
+ */
+async function captureStableBytes(
+  page,
+  {
+    name,
+    fullPage,
+    animations,
+    stableFrames,
+    stableIntervalMs,
+    stableAttempts,
+  },
+) {
+  if (!Number.isInteger(stableFrames) || stableFrames < 1) {
+    throw new TypeError(
+      `captureScreenshot(${name}): stableFrames must be a positive integer, got ${String(stableFrames)}.`,
+    );
+  }
+  const first = normalizeScreenshotBytes(
+    await page.screenshot({ fullPage, animations }),
+  );
+  if (stableFrames === 1) {
+    return first;
+  }
+
+  let bytes = first;
+  let identical = 1;
+  const observed = [createHash('sha256').update(first).digest('hex')];
+  for (let attempt = 0; attempt < stableAttempts; attempt += 1) {
+    await page.waitForTimeout(stableIntervalMs);
+    const next = normalizeScreenshotBytes(
+      await page.screenshot({ fullPage, animations }),
+    );
+    observed.push(createHash('sha256').update(next).digest('hex'));
+    if (Buffer.compare(next, bytes) === 0) {
+      identical += 1;
+      if (identical >= stableFrames) {
+        return next;
+      }
+    } else {
+      identical = 1;
+    }
+    bytes = next;
+  }
+
+  throw new Error(
+    `Screenshot ${name} did not produce ${stableFrames} consecutive byte-identical ` +
+      `frames after ${stableAttempts + 1} captures (sha256: ${observed.join(', ')}). ` +
+      'No file was written; wait for the pending repaint or widen the stability window ' +
+      'instead of committing a transient frame.',
+  );
+}
+
 /**
  * Take one screenshot and log the engine / viewport / theme record. Callers
  * pass the same options as `page.screenshot`, so the Chromium bytes stay
@@ -416,6 +491,10 @@ export function captureRecord(name, engine, viewport, colorScheme = 'dark', redu
  * manifest untouched so `npm run verify:screenshots:sha256` keeps failing.
  * Files the manifest does not record keep the previous `page.screenshot`
  * write path unchanged.
+ *
+ * `stableFrames` opts into the whole-image stability check above; the WebKit
+ * READY capture passes {@link READY_CAPTURE_STABLE_FRAMES} so two consecutive
+ * identical frames are required before the PNG is written.
  */
 export async function captureScreenshot(
   page,
@@ -427,6 +506,9 @@ export async function captureScreenshot(
     colorScheme = 'dark',
     reducedMotion = 'reduce',
     animations = 'disabled',
+    stableFrames = 1,
+    stableIntervalMs = READY_CAPTURE_STABLE_INTERVAL_MS,
+    stableAttempts = READY_CAPTURE_STABLE_ATTEMPTS,
     target,
     manifest,
     manifestPath = resolve(CAPTURE_REPO_ROOT, DEFAULT_MANIFEST_PATH),
@@ -444,8 +526,21 @@ export async function captureScreenshot(
     parsedManifest === null ? null : findSha256ManifestCapture(parsedManifest, name);
 
   if (capture === null) {
-    // Unrecorded evidence: keep the existing write path byte-for-byte.
-    await page.screenshot({ path, fullPage, animations });
+    // Unrecorded evidence: keep the existing path byte-for-byte unless the
+    // caller explicitly asks for a stable-frame check.
+    if (stableFrames === 1) {
+      await page.screenshot({ path, fullPage, animations });
+    } else {
+      const buffer = await captureStableBytes(page, {
+        name,
+        fullPage,
+        animations,
+        stableFrames,
+        stableIntervalMs,
+        stableAttempts,
+      });
+      writeFileAtomically(path, buffer, fileOperations);
+    }
     console.log(captureRecord(name, engine, page.viewportSize(), colorScheme, reducedMotion));
     return;
   }
@@ -473,8 +568,14 @@ export async function captureScreenshot(
 
   // The guard passed: capture to memory first, so a failing screenshot never
   // replaces the committed PNG, then write it atomically in the same directory.
-  const bytes = await page.screenshot({ fullPage, animations });
-  const buffer = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+  const buffer = await captureStableBytes(page, {
+    name,
+    fullPage,
+    animations,
+    stableFrames,
+    stableIntervalMs,
+    stableAttempts,
+  });
   writeFileAtomically(path, buffer, fileOperations);
 
   const actualSha256 = createHash('sha256').update(buffer).digest('hex');

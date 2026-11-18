@@ -7,6 +7,9 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   CAPTURE_SETTLE_FRAMES,
   CAPTURE_SETTLE_TIMEOUT_MS,
+  READY_CAPTURE_STABLE_ATTEMPTS,
+  READY_CAPTURE_STABLE_FRAMES,
+  READY_CAPTURE_STABLE_INTERVAL_MS,
   settleCapturePaint,
   settleWebkitReadyPaint,
 } from '../../scripts/lib/capture-runtime.mjs';
@@ -77,13 +80,50 @@ function subsection(text: string, heading: string): string {
 /**
  * Static guard for the minesweeper WebKit READY determinism seam (Issue #318).
  *
- * WebKit can rasterise the sticky site header in two subtly different ways on
- * the first paint. The ready capture repaints it with a scroll round-trip and
- * then waits for fonts and two animation frames; this test pins that seam to
- * the ready scene and keeps playing / lost / won on their existing path so a
- * refactor cannot silently restore the non-deterministic capture.
+ * WebKit's first page in a fresh browser can rasterise the sticky header and
+ * the board gradients in a subtly different 1-LSB variant. The ready capture
+ * first loads a throwaway page, then repaints the header with a scroll
+ * round-trip and requires two consecutive identical whole-image frames before
+ * writing. This test pins that seam to the ready scene and keeps playing /
+ * lost / won on their existing path so a refactor cannot silently restore the
+ * non-deterministic capture.
  */
 describe('minesweeper WebKit READY determinism guard', () => {
+  it('warms the first-page paint path before the committed ready page', () => {
+    const warmUpOpen = indexOfOrFail(
+      SCRIPT,
+      'const warmUp = await context.newPage()',
+    );
+    const warmUpLoad = indexOfOrFail(SCRIPT, 'await openTouchGame(warmUp, WIN_MINES)');
+    const warmUpClose = indexOfOrFail(SCRIPT, 'await warmUp.close()');
+    const readyOpen = SCRIPT.indexOf('const ready = await context.newPage()', warmUpClose);
+    expect(readyOpen, 'missing: the ready page after the warm-up page').toBeGreaterThan(-1);
+
+    expect(warmUpLoad).toBeGreaterThan(warmUpOpen);
+    expect(warmUpClose).toBeGreaterThan(warmUpLoad);
+    expect(readyOpen).toBeGreaterThan(warmUpClose);
+  });
+
+  it('requires two identical whole-image frames for the ready capture', () => {
+    expect(SCRIPT).toContain('stableFrames: READY_CAPTURE_STABLE_FRAMES,');
+    expect(SCRIPT).toContain(
+      'stableIntervalMs: READY_CAPTURE_STABLE_INTERVAL_MS,',
+    );
+    expect(SCRIPT).toContain('stableAttempts: READY_CAPTURE_STABLE_ATTEMPTS,');
+    expect(READY_CAPTURE_STABLE_FRAMES).toBe(2);
+    expect(READY_CAPTURE_STABLE_INTERVAL_MS).toBe(250);
+    expect(READY_CAPTURE_STABLE_ATTEMPTS).toBe(5);
+    expect(RUNTIME).toContain(
+      'export const READY_CAPTURE_STABLE_FRAMES = 2;',
+    );
+    expect(RUNTIME).toContain(
+      'export const READY_CAPTURE_STABLE_INTERVAL_MS = 250;',
+    );
+    expect(RUNTIME).toContain(
+      'export const READY_CAPTURE_STABLE_ATTEMPTS = 5;',
+    );
+  });
+
   it('repaints the WebKit header only between ready open and ready capture', () => {
     expect(SCRIPT).toContain(
       "settleWebkitReadyPaint,\n  startPreviewServer,",
@@ -94,7 +134,7 @@ describe('minesweeper WebKit READY determinism guard', () => {
     const seam = indexOfOrFail(SCRIPT, 'await settleWebkitReadyPaint(ready)');
     const readyCapture = indexOfOrFail(
       SCRIPT,
-      "await capture(ready, touchMobileName(prefix, 'ready'), false)",
+      "await capture(ready, touchMobileName(prefix, 'ready'), false, {",
     );
     expect(seam).toBeGreaterThan(readyOpen);
     expect(readyCapture).toBeGreaterThan(seam);
@@ -145,9 +185,44 @@ describe('minesweeper WebKit READY determinism guard', () => {
 
     expect(calls[0]).toBe('evaluate:320');
   });
+
+  it('executes each waitForFunction predicate against the guarded scroll state', async () => {
+    const { page, waitForFunction } = recordingPage();
+
+    await settleWebkitReadyPaint(page);
+
+    const predicates = waitForFunction.mock.calls.map(
+      ([predicate]) => predicate as () => boolean,
+    );
+    const awayPredicate = predicates[0];
+    const backPredicate = predicates[1];
+    expect(awayPredicate).toBeDefined();
+    expect(backPredicate).toBeDefined();
+    if (awayPredicate === undefined || backPredicate === undefined) {
+      throw new Error('the seam did not call waitForFunction twice');
+    }
+    // `scrollY > 0` must reject the pre-scroll state (this would pass if a
+    // refactor changed it to `>= 0`), and `scrollY === 0` must reject the
+    // scrolled-away state before the return to the top.
+    expect(runPredicate(awayPredicate, 0)).toBe(false);
+    expect(runPredicate(awayPredicate, 200)).toBe(true);
+    expect(runPredicate(backPredicate, 200)).toBe(false);
+    expect(runPredicate(backPredicate, 0)).toBe(true);
+  });
 });
 
-/** A Page double that records the seam's calls without running callbacks. */
+/** Run a recorded browser predicate with the given `window.scrollY`. */
+function runPredicate(predicate: () => boolean, scrollY: number): boolean {
+  return new Function('window', `return (${predicate.toString()})();`)({
+    scrollY,
+  }) as boolean;
+}
+
+/**
+ * A Page double that records the seam's calls and executes the callbacks with
+ * a fake `window`, `document` and synchronous `requestAnimationFrame`, so a
+ * predicate that no longer guards the scroll state fails the tests.
+ */
 function recordingPage(): {
   page: Page;
   calls: string[];
@@ -156,11 +231,34 @@ function recordingPage(): {
   waitForTimeout: ReturnType<typeof vi.fn>;
 } {
   const calls: string[] = [];
-  const evaluate = vi.fn(async (_callback: unknown, arg?: unknown) => {
+  const window = {
+    scrollY: 0,
+    scrollTo(_x: number, y: number) {
+      window.scrollY = y;
+    },
+  };
+  const document = { fonts: { ready: Promise.resolve() } };
+  const requestAnimationFrame = (callback: (time: number) => void) =>
+    callback(0);
+  const run = (callback: unknown, arg?: unknown): unknown => {
+    const source = (callback as { toString(): string }).toString();
+    return new Function(
+      'window',
+      'document',
+      'requestAnimationFrame',
+      'arg',
+      `return (${source})(arg);`,
+    )(window, document, requestAnimationFrame, arg);
+  };
+  const evaluate = vi.fn(async (callback: unknown, arg?: unknown) => {
     calls.push(`evaluate:${arg === undefined ? '' : String(arg)}`);
+    return run(callback, arg);
   });
-  const waitForFunction = vi.fn(async () => {
+  const waitForFunction = vi.fn(async (predicate: unknown) => {
     calls.push('waitForFunction');
+    if (!run(predicate)) {
+      throw new Error('waitForFunction predicate was false');
+    }
   });
   const waitForTimeout = vi.fn(async () => {
     calls.push('waitForTimeout');

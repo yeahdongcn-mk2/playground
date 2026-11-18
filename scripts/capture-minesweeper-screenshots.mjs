@@ -1,5 +1,8 @@
 import { mkdir } from 'node:fs/promises';
 import {
+  READY_CAPTURE_STABLE_ATTEMPTS,
+  READY_CAPTURE_STABLE_FRAMES,
+  READY_CAPTURE_STABLE_INTERVAL_MS,
   WEBKIT_ENGINE,
   assertAllDeclaredCaptureTargets,
   captureScreenshot,
@@ -50,10 +53,12 @@ import { touchLongPress } from './lib/touch-input.mjs';
  *
  * Add `--webkit` to the after mode to capture the four stable phone states
  * (ready / playing / lost / won) on the WebKit engine as
- * `after-minesweeper-<state>-webkit.png`. The ready scene additionally runs a
- * scroll-paint seam before its capture: WebKit can rasterise the sticky site
- * header in two subtly different ways on the first paint, and repainting it
- * makes consecutive fixed-container runs byte-identical. The dedicated
+ * `after-minesweeper-<state>-webkit.png`. The ready scene first loads a
+ * throwaway page: WebKit's first page in a fresh browser can rasterise the
+ * sticky header and board gradients in a subtly different 1-LSB variant, while
+ * later pages use the settled paint path. The committed capture then runs a
+ * scroll-paint seam and requires two consecutive byte-identical whole-image
+ * frames before writing. The dedicated
  * `--webkit-narrow` / `--webkit-narrow-before` modes capture the Issue #83
  * narrow-screen matrix at 320×640, 360×640, 375×667 and 412×839 into the
  * committed `*-minesweeper-webkit-narrow-<W>x<H>.png` evidence files; the
@@ -261,14 +266,14 @@ async function settle(page) {
   await page.waitForTimeout(300);
 }
 
-async function capture(page, name, fullPage) {
+async function capture(page, name, fullPage, options = {}) {
   const write = guardHistoricalAfterEvidence({
     file: name,
     mode: MODE,
     allowHistoricalOverwrite: ALLOW_HISTORICAL_OVERWRITE,
   });
   if (!write) return;
-  await captureScreenshot(page, name, { engine: ENGINE, fullPage });
+  await captureScreenshot(page, name, { engine: ENGINE, fullPage, ...options });
 }
 
 function debugUrl(mines) {
@@ -391,17 +396,30 @@ async function captureTouchMobile(browser, prefix) {
         reducedMotion: 'reduce',
       });
 
+  if (IS_WEBKIT && prefix === 'after') {
+    // WebKit's first page in a fresh browser can rasterise the sticky header
+    // and the board gradients in a subtly different 1-LSB variant (Issue #318).
+    // Load a throwaway copy first so the committed READY evidence comes from
+    // the next page, which uses the settled paint path. playing / lost / won
+    // already run after that page and keep their existing byte-identical path.
+    const warmUp = await context.newPage();
+    await openTouchGame(warmUp, WIN_MINES);
+    await warmUp.close();
+  }
+
   const ready = await context.newPage();
   await openTouchGame(ready, WIN_MINES);
   if (IS_WEBKIT && prefix === 'after') {
-    // WebKit's first paint of the sticky site header can settle in two
-    // subtly different rasters (Issue #318). The ready scene is the first page
-    // of this run; a scroll round-trip repaints the header deterministically
-    // before the capture. playing / lost / won keep their existing
-    // byte-identical path.
+    // The scroll round-trip repaints the sticky header; the whole-image
+    // stability check then proves no repaint is still pending before the PNG
+    // is written.
     await settleWebkitReadyPaint(ready);
   }
-  await capture(ready, touchMobileName(prefix, 'ready'), false);
+  await capture(ready, touchMobileName(prefix, 'ready'), false, {
+    stableFrames: READY_CAPTURE_STABLE_FRAMES,
+    stableIntervalMs: READY_CAPTURE_STABLE_INTERVAL_MS,
+    stableAttempts: READY_CAPTURE_STABLE_ATTEMPTS,
+  });
   await ready.close();
 
   const playing = await context.newPage();

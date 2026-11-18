@@ -244,7 +244,7 @@ pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和
 | `npm run screenshots:breakout:before` | 用 `BASE_URL` 指定的 main 预览生成打砖块 Before 截图 |
 | `npm run screenshots:breakout:webkit` | 构建后用 WebKit 生成打砖块 ready / playing / levelclear / gameover 手机截图；ready / levelclear / gameover 历史图默认跳过并警告，确需重建时只能在固定容器内用 `npm run screenshots:container -- screenshots:breakout:webkit --allow-historical-overwrite`，并同步 `capture-sha256-manifest.json` 条目（若收录） |
 | `npm run screenshots:minesweeper` | 构建后生成扫雷大厅、桌面玩法与 Pixel 7 手机玩法截图；4 张桌面与 4 张手机玩法图为 #61 历史证据，脚本默认跳过并警告，确需重建时只能在固定容器内用 `npm run screenshots:container -- screenshots:minesweeper --allow-historical-overwrite`，并同步 `capture-sha256-manifest.json` 条目（若收录）；对照口径见 `docs/screenshots/README.md` 的「历史 After 证据与当前构建不一致（Issue #137）」 |
-| `npm run screenshots:minesweeper:webkit` | 构建后用 WebKit 生成扫雷 ready / playing / lost / won 手机截图；ready 在截图前做一次滚动往返重绘 sticky 页眉，四张均已按固定环境收录 `capture-sha256-manifest.json`，宿主重跑会在 ready 前被写前护栏拒绝，刷新必须用 `npm run screenshots:container -- screenshots:minesweeper:webkit` |
+| `npm run screenshots:minesweeper:webkit` | 构建后用 WebKit 生成扫雷 ready / playing / lost / won 手机截图；ready 先预热首个页面，再滚动往返重绘 sticky 页眉，并要求整幅连续两帧 sha256 相同后落盘，四张均已按固定环境收录 `capture-sha256-manifest.json`，宿主重跑会在 ready 前被写前护栏拒绝，刷新必须用 `npm run screenshots:container -- screenshots:minesweeper:webkit` |
 | `npm run screenshots:minesweeper:webkit-before` | 用 `BASE_URL` 指定的触屏改动前基线生成 WebKit 手机 Before 截图（需外部基线，不提交 Before 文件） |
 | `npm run screenshots:minesweeper:touch-before` | 用 `BASE_URL` 指定的触屏改动前基线生成手机扫雷 Before 截图 |
 | `npm run screenshots:minesweeper:narrow` | 构建后生成 360×740 扫雷窄屏 ready 截图 |
@@ -395,7 +395,7 @@ games/<game>/scene → 对应引擎（动态 import）
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过（oxlint 覆盖 src、tests 与 scripts；error 与 warning 都会失败，warning 经 --deny-warnings 升级；另跑 scripts/check-boundaries.mjs，失败返回非 0）
-npm run test:unit    # 1269 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
+npm run test:unit    # 1277 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
 npm run build        # 通过
 npm run check:budget # 通过（入口 11.16 KB gzip，全部 JS 410.58 KB gzip）
 npm run test:e2e     # 154 passed（桌面 87 + 手机 36 + WebKit 31）
