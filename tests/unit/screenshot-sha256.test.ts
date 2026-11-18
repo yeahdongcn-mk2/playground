@@ -41,6 +41,8 @@ const MANIFEST_TEXT = readFileSync(MANIFEST, 'utf8');
 
 const EXPECTED_FILES = [
   'after-blank-webkit.png',
+  'after-hub-webkit.png',
+  'after-snake-webkit.png',
   'after-2048-playing-webkit.png',
   'after-2048-gameover-webkit.png',
   'after-breakout-playing-webkit.png',
@@ -673,7 +675,7 @@ function runCli(args: string[]): { status: number | null; stdout: string; stderr
 }
 
 describe('capture sha256 manifest', () => {
-  it('lists exactly the five fixed-environment WebKit captures with committed hashes', () => {
+  it('lists exactly the seven fixed-environment WebKit captures with committed hashes', () => {
     const manifest = committedManifest();
     expect(manifest.captures.map((capture) => capture.file)).toEqual(EXPECTED_FILES);
 
@@ -690,7 +692,9 @@ describe('capture sha256 manifest', () => {
               ? 'screenshots:breakout:webkit'
               : capture.file.startsWith('after-minesweeper-scores-')
                 ? 'screenshots:minesweeper:scores:webkit'
-                : 'screenshots:webkit'
+                : capture.file.startsWith('after-snake-')
+                  ? 'screenshots:snake:webkit'
+                  : 'screenshots:webkit'
         }`,
       );
       expect(capture.provenance.container).toBe(
@@ -874,6 +878,9 @@ describe('capture sha256 manifest', () => {
     );
     expect(expectedRecaptureCommand('after-minesweeper-scores-webkit.png')).toBe(
       'npm run screenshots:container -- screenshots:minesweeper:scores:webkit',
+    );
+    expect(expectedRecaptureCommand('after-snake-webkit.png')).toBe(
+      'npm run screenshots:container -- screenshots:snake:webkit',
     );
   });
 

@@ -93,9 +93,9 @@ src/games/snake/
 - 截图场景的确定性：固定首果 + seed 7 + 3 个 tick 后的蛇身、下一颗果实、得分与速度；不同 seed 会改变下一颗果实。
 - `state` 返回防御性副本，外部修改不影响引擎。
 
-运行：`npm run test:unit`（全仓 1327 个用例）。
+运行：`npm run test:unit`（全仓 1329 个用例）。
 
-`src/games/snake/debug.test.ts` 另行覆盖 seed / ticks 参数解析；截图确定性护栏（脚本常量、view / scene 接线与固定 tick 循环）在 `tests/unit/capture-snake-determinism.test.ts`。
+`src/games/snake/debug.test.ts` 另行覆盖 seed / ticks 参数解析；截图确定性护栏（脚本常量、view / scene 接线、固定 tick 循环与 WebKit 首个页面预热接缝）在 `tests/unit/capture-snake-determinism.test.ts`。
 
 ### 端到端（24）
 
@@ -121,8 +121,9 @@ src/games/snake/
 - 默认：贪食蛇大厅、游玩中与手机大厅（After，当前分支）；READY / GAME OVER / 手机游戏是 #14 历史证据，默认被共享守卫跳过并警告，确需重建时只能在固定捕获容器内加 `--allow-historical-overwrite`（未注入容器指纹时宿主直接加会被拒绝）。
 - 固定首果 `?food=11,10` 固定第一颗果实；游玩图再固定 `?seed=7&ticks=3`，吃下首果后推进 3 个引擎 tick 并冻结运行，使蛇身、下一颗果实、得分、长度与速度可逐字节复现。冻结期间保留 Phaser 循环重绘已冻结的 Graphics，不 sleep WebGL 循环（否则截图会捕获到黑屏画布）。
 - 桌面 1440×1000、手机 390×844（DPR 2），深色主题，`reducedMotion: reduce`；同一工作树、开发端口 5188 空闲时连续两次 `npm run screenshots:snake` 生成的 `after-snake-playing.png` sha256 完全一致。复现命令与哈希对照见 [docs/screenshots/README.md](screenshots/README.md) 的「游玩截图确定性」小节。
+- WebKit 手机 READY 图固定在官方 Playwright 容器内捕获；开发服务器在 `#view` 已存在后才注入 CSS，首个页面的 overlay 标题可能停在 reduced-motion `color` 过渡的黑色起点，所以脚本先加载一个丢弃页固定继承色，再加载贪食蛇页。补接缝后容器内连续两跑逐字节一致（`d8e262f3…`），该图已收录 `docs/screenshots/capture-sha256-manifest.json`；宿主上的 `npm run screenshots:snake:webkit` 会在写出前被护栏拒绝，重拍用 `npm run screenshots:container -- screenshots:snake:webkit`。
 
-运行：`npm run screenshots:snake`；WebKit 手机 READY 图用 `npm run screenshots:snake:webkit`。重建历史 After 图时只能在固定容器内用 `npm run screenshots:container -- screenshots:snake --allow-historical-overwrite`，并在同一改动中同步文档、捕获 commit 与 `docs/screenshots/capture-sha256-manifest.json` 条目（若收录）。
+运行：`npm run screenshots:snake`；WebKit 手机 READY 图用 `npm run screenshots:container -- screenshots:snake:webkit`（宿主命令会被清单写前护栏拒绝）。重建历史 After 图时只能在固定容器内用 `npm run screenshots:container -- screenshots:snake --allow-historical-overwrite`，并在同一改动中同步文档、捕获 commit 与 `docs/screenshots/capture-sha256-manifest.json` 条目（若收录）。
 
 ## 已知限制
 

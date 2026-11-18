@@ -235,9 +235,9 @@ pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和
 | `npm run lint` | oxlint（覆盖 `src`、`tests` 与 `scripts`；error 与 warning 都会失败，warning 经 `--deny-warnings` 升级）+ `scripts/check-boundaries.mjs` 模块依赖方向检查（失败同样返回非 0） |
 | `npm run check:budget` | 检查入口无引擎、gzip 体积预算 |
 | `npm run screenshots` | 构建后生成 `docs/screenshots/` 中的界面截图 |
-| `npm run screenshots:webkit` | 构建后用 WebKit 生成大厅与空白画布的 375×667 手机截图 |
+| `npm run screenshots:webkit` | 构建后用 WebKit 生成大厅与空白画布的 375×667 手机截图；两张图已被固定环境 sha256 清单收录，宿主命令会在写出前被拒绝，重拍用 `npm run screenshots:container -- screenshots:webkit` |
 | `npm run screenshots:snake` | 生成贪食蛇 Before / After 截图（开发服务器 + 固定首果；游玩图固定 seed / tick）；ready / gameover 桌面图与手机图为 #14 历史证据，脚本默认跳过并警告，确需重建时只能在固定容器内用 `npm run screenshots:container -- screenshots:snake --allow-historical-overwrite`，并同步 `capture-sha256-manifest.json` 条目（若收录）；对照口径见 `docs/screenshots/README.md` 的「历史 After 证据与当前构建不一致（Issue #137）」 |
-| `npm run screenshots:snake:webkit` | 用开发服务器 + WebKit 生成贪食蛇手机 ready 截图 |
+| `npm run screenshots:snake:webkit` | 用开发服务器 + WebKit 生成贪食蛇手机 ready 截图（先加载预热页固定 overlay 继承色）；该图已被固定环境 sha256 清单收录，宿主命令会在写出前被拒绝，重拍用 `npm run screenshots:container -- screenshots:snake:webkit` |
 | `npm run screenshots:2048` | 构建后生成 2048 大厅与 ready / playing / gameover 截图；ready 桌面整页图与手机图为历史证据，脚本默认跳过并警告，确需重建时只能在固定容器内用 `npm run screenshots:container -- screenshots:2048 --allow-historical-overwrite`，并同步 `capture-sha256-manifest.json` 条目（若收录）；对照口径见 `docs/screenshots/README.md` 的「历史 After 证据与当前构建不一致（Issue #137）」 |
 | `npm run screenshots:2048:before` | 用 `BASE_URL` 指定的 main 预览生成 2048 Before 截图 |
 | `npm run screenshots:2048:webkit` | 构建后用 WebKit 生成 2048 ready / playing / gameover 手机截图；ready 历史图默认跳过并警告，确需重建时只能在固定容器内用 `npm run screenshots:container -- screenshots:2048:webkit --allow-historical-overwrite`，并同步 `capture-sha256-manifest.json` 条目（若收录） |
@@ -268,7 +268,7 @@ pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和
 
 扫雷截图脚本不再提供通用 `--before` 模式：显式传入会报错并以非零状态退出；`touch-before` / `narrow-before` / `min-before` / `restart-before` / `large-before` 等模式保留，分别指向各自的历史基线。
 
-游戏与界面截图脚本新增了 `--webkit` 家族的命令（`capture-baseline.mjs` 仍只用于基线仓库状态）；Chromium 模式的命令、文件名与输出保持不变。WebKit 模式使用 `iPhone SE (3rd gen)` 设备模拟（375×667，DPR 2，深色，`reducedMotion: reduce`；成绩榜为 320×640），窄屏矩阵按 320×640 / 360×640 / 375×667 / 412×839 显式覆盖视口。脚本日志会为每张图打印 `engine / viewport / theme` 记录，来源表见 [docs/screenshots/README.md](docs/screenshots/README.md)。注意：`screenshots:webkit` / `screenshots:2048:webkit` / `screenshots:breakout:webkit` 在宿主上写出未收录文件后，会在清单收录的 `after-blank-webkit.png` / `after-2048-playing-webkit.png` / `after-breakout-playing-webkit.png` 前被写前护栏拒绝；刷新这些已收录证据必须用 `npm run screenshots:container -- <target>`（见下一段）。
+游戏与界面截图脚本新增了 `--webkit` 家族的命令（`capture-baseline.mjs` 仍只用于基线仓库状态）；Chromium 模式的命令、文件名与输出保持不变。WebKit 模式使用 `iPhone SE (3rd gen)` 设备模拟（375×667，DPR 2，深色，`reducedMotion: reduce`；成绩榜为 320×640），窄屏矩阵按 320×640 / 360×640 / 375×667 / 412×839 显式覆盖视口。脚本日志会为每张图打印 `engine / viewport / theme` 记录，来源表见 [docs/screenshots/README.md](docs/screenshots/README.md)。注意：`screenshots:webkit` / `screenshots:snake:webkit` / `screenshots:2048:webkit` / `screenshots:breakout:webkit` 在宿主上会在清单收录的 `after-hub-webkit.png` / `after-snake-webkit.png` / `after-blank-webkit.png` / `after-2048-playing-webkit.png` / `after-breakout-playing-webkit.png` 前被写前护栏拒绝；刷新这些已收录证据必须用 `npm run screenshots:container -- <target>`（见下一段）。
 
 清单收录的 WebKit 证据（`docs/screenshots/capture-sha256-manifest.json`）在写盘前还有环境护栏：`captureScreenshot` 会先用产生该图的上下文目标比对清单里的 source / target / DPR / 平台 / 镜像 tag+digest / EGL 变量 / 字体包版本；宿主重跑或指纹不一致时在写出任何字节前非零退出，并给出期望 / 实际指纹与固定容器重拍命令，目标 PNG 保持不变。确需刷新时只能用 `npm run screenshots:container -- <target>`；固定容器内指纹一致但新哈希与清单不同时，捕获会打印必须同步清单 `sha256` / `provenance` 与 `docs/screenshots/README.md` 的 checklist，并在清单更新前让 `npm run verify:screenshots:sha256` 继续失败。未收录的截图不受影响。详见 [docs/screenshots/README.md](docs/screenshots/README.md) 的「已提交证据 sha256 清单与校验」。
 
@@ -396,7 +396,7 @@ games/<game>/scene → 对应引擎（动态 import）
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过（oxlint 覆盖 src、tests 与 scripts；error 与 warning 都会失败，warning 经 --deny-warnings 升级；另跑 scripts/check-boundaries.mjs，失败返回非 0）
-npm run test:unit    # 1327 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
+npm run test:unit    # 1329 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
 npm run build        # 通过
 npm run check:budget # 通过（入口 11.16 KB gzip，全部 JS 410.58 KB gzip）
 npm run score        # 通过（打印「指标 / 当前值 / 基线值 / 差值」表与末行 SCORE_JSON；退化退出 1，变好只报差值）

@@ -29,6 +29,35 @@ describe('snake screenshot determinism guard', () => {
     );
   });
 
+  it('warms up a throwaway WebKit page before the committed READY page', () => {
+    // Issue #318 t3: the dev server injects CSS after `#view` exists, so the
+    // READY overlay title can start a reduced-motion color transition from
+    // black and stay at its start point on the browser's first page. A warm-up
+    // page makes the committed page settle on the inherited `--text` color.
+    const start = SCRIPT.indexOf('async function captureWebkitMobile(');
+    const end = SCRIPT.indexOf('\n}\n', start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const body = SCRIPT.slice(start, end);
+
+    const warmup = body.indexOf('const warmup = await mobile.newPage();');
+    const warmupGoto = body.indexOf(
+      "await warmup.goto(ORIGIN, { waitUntil: 'networkidle' });",
+    );
+    const warmupClose = body.indexOf('await warmup.close();');
+    const game = body.indexOf('const mobileGame = await mobile.newPage();');
+    const gameGoto = body.indexOf('?debug=1&food=11,10');
+
+    expect(warmup).toBeGreaterThan(-1);
+    expect(warmupGoto).toBeGreaterThan(warmup);
+    expect(warmupClose).toBeGreaterThan(warmupGoto);
+    expect(game).toBeGreaterThan(warmupClose);
+    expect(gameGoto).toBeGreaterThan(game);
+    // The warm-up page must not replace the fixed first fruit on the committed
+    // page: it loads the plain hub URL, while the snake page keeps its seam.
+    expect(body).not.toContain('warmup.goto(`${ORIGIN}/#/games/snake');
+  });
+
   it('waits for the fixed-tick marker instead of a wall-clock delay', () => {
     expect(SCRIPT).not.toContain('waitForTimeout(120)');
     expect(SCRIPT).not.toContain('score >= 10');
