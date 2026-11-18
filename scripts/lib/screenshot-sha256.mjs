@@ -431,6 +431,18 @@ export function expectedRecaptureCommand(file) {
   if (file.startsWith('after-breakout-')) {
     return 'npm run screenshots:container -- screenshots:breakout:webkit';
   }
+  if (file.startsWith('after-minesweeper-')) {
+    if (file.includes('-webkit-narrow-')) {
+      return 'npm run screenshots:container -- screenshots:minesweeper:webkit-narrow';
+    }
+    if (file.includes('-scores-webkit')) {
+      return 'npm run screenshots:container -- screenshots:minesweeper:scores:webkit';
+    }
+    if (file.endsWith('-webkit.png')) {
+      return 'npm run screenshots:container -- screenshots:minesweeper:webkit';
+    }
+    return 'npm run screenshots:container -- screenshots:minesweeper';
+  }
   return 'npm run screenshots:container -- screenshots:webkit';
 }
 

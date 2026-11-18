@@ -53,7 +53,7 @@ const BREAKOUT_DRIFT = [
   'after-breakout-levelclear-webkit.png',
   'after-breakout-gameover-webkit.png',
 ];
-const MINESWEEPER_DRIFT = [
+const MINESWEEPER_MANIFEST = [
   'after-minesweeper-ready-webkit.png',
   'after-minesweeper-playing-webkit.png',
   'after-minesweeper-lost-webkit.png',
@@ -65,7 +65,7 @@ const NARROW_DRIFT = [
   'after-minesweeper-webkit-narrow-375x667.png',
   'after-minesweeper-webkit-narrow-412x839.png',
 ];
-const DRIFTED = [...BREAKOUT_DRIFT, ...MINESWEEPER_DRIFT, ...NARROW_DRIFT];
+const DRIFTED = [...BREAKOUT_DRIFT, ...NARROW_DRIFT];
 const DETERMINISTIC = [
   'after-breakout-playing-webkit.png',
   'after-2048-playing-webkit.png',
@@ -89,11 +89,11 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     );
     expect(WEBKIT_HISTORICAL).toContain('9c39e68');
     expect(WEBKIT_HISTORICAL).toContain('重新捕获');
-    expect(WEBKIT_HISTORICAL).toContain('不重拍');
-    expect(WEBKIT_HISTORICAL).toContain('不改动任何已提交 PNG');
+    expect(WEBKIT_HISTORICAL).toContain('重拍并纳入固定环境 sha256 清单');
+    expect(WEBKIT_HISTORICAL).toContain('其余已提交 PNG 不改动');
   });
 
-  it('lists the drifted breakout, minesweeper and webkit-narrow artifacts', () => {
+  it('lists the drifted breakout and webkit-narrow artifacts', () => {
     for (const file of DRIFTED) {
       expect(WEBKIT_HISTORICAL).toContain(file);
       expect(driftBullets(WEBKIT_HISTORICAL)).toContain(file);
@@ -105,12 +105,21 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
   it('keeps the same-environment deterministic WebKit captures out of the drift list', () => {
     expect(WEBKIT_HISTORICAL).toContain('不在');
     expect(WEBKIT_HISTORICAL).toContain('确定性接缝');
-    for (const file of DETERMINISTIC) {
+    for (const file of [...DETERMINISTIC, ...MINESWEEPER_MANIFEST]) {
       expect(WEBKIT_HISTORICAL).toContain(file);
       expect(driftBullets(WEBKIT_HISTORICAL)).not.toContain(file);
     }
     expect(WEBKIT_HISTORICAL).toContain('4173dce8');
     expect(WEBKIT_HISTORICAL).toContain('bf7548b7');
+  });
+
+  it('records the minesweeper ready paint seam and its manifest coverage', () => {
+    expect(WEBKIT_HISTORICAL).toContain('滚动往返');
+    expect(WEBKIT_HISTORICAL).toContain('sticky 页眉');
+    expect(WEBKIT_HISTORICAL).toContain('连续两跑 sha256 相同');
+    expect(WEBKIT_HISTORICAL).toContain('capture-sha256-manifest.json');
+    expect(WEBKIT_HISTORICAL).toContain('#318');
+    expect(WEBKIT_HISTORICAL).not.toContain('扫雷 ready 的相邻两跑则可能不同');
   });
 
   it('records the 2048 ready cross-run difference without fixing a sample hash', () => {
@@ -139,10 +148,6 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(WEBKIT_HISTORICAL).toContain('won 0.02%');
     expect(WEBKIT_HISTORICAL).toContain('10 / 14 / 12 / 12');
     expect(WEBKIT_HISTORICAL).toContain('两种结果互差 11157 px（每通道最大 1）');
-    expect(WEBKIT_HISTORICAL).toContain('也只在部分状态逐字节一致');
-    expect(WEBKIT_HISTORICAL).toContain('playing / lost / won 在容器内两跑 sha256 相同');
-    expect(WEBKIT_HISTORICAL).toContain('ready 的相邻两跑则可能不同');
-    expect(WEBKIT_HISTORICAL).not.toContain('扫雷这 4 张在容器内两跑 sha256 相同');
     expect(WEBKIT_HISTORICAL).toContain('2048 ready 在同一容器两跑不同');
   });
 
@@ -179,7 +184,7 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
   it('keeps the webkit-phone and webkit-narrow tables and their commands intact', () => {
     for (const file of [
       ...BREAKOUT_DRIFT,
-      ...MINESWEEPER_DRIFT,
+      ...MINESWEEPER_MANIFEST,
       'after-2048-ready-webkit.png',
       ...DETERMINISTIC,
     ]) {
@@ -201,6 +206,10 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
       ['after-2048-playing-webkit.png', 'screenshots:container -- screenshots:2048:webkit'],
       ['after-2048-gameover-webkit.png', 'screenshots:container -- screenshots:2048:webkit'],
       ['after-breakout-playing-webkit.png', 'screenshots:container -- screenshots:breakout:webkit'],
+      ['after-minesweeper-ready-webkit.png', 'screenshots:container -- screenshots:minesweeper:webkit'],
+      ['after-minesweeper-playing-webkit.png', 'screenshots:container -- screenshots:minesweeper:webkit'],
+      ['after-minesweeper-lost-webkit.png', 'screenshots:container -- screenshots:minesweeper:webkit'],
+      ['after-minesweeper-won-webkit.png', 'screenshots:container -- screenshots:minesweeper:webkit'],
     ]);
     for (const [file, command] of containerCommands) {
       const row = WEBKIT_PHONE.split('\n').find(

@@ -165,30 +165,6 @@ const EXPECTED_EVIDENCE = [
     issue: '#120',
     commit: '498a14f',
   },
-  {
-    file: 'after-minesweeper-ready-webkit.png',
-    game: 'minesweeper',
-    issue: '#120',
-    commit: '498a14f',
-  },
-  {
-    file: 'after-minesweeper-playing-webkit.png',
-    game: 'minesweeper',
-    issue: '#120',
-    commit: '498a14f',
-  },
-  {
-    file: 'after-minesweeper-lost-webkit.png',
-    game: 'minesweeper',
-    issue: '#120',
-    commit: '498a14f',
-  },
-  {
-    file: 'after-minesweeper-won-webkit.png',
-    game: 'minesweeper',
-    issue: '#120',
-    commit: '498a14f',
-  },
 ] as const;
 
 /** Captures that must keep refreshing because they are current-build evidence. */
@@ -201,6 +177,10 @@ const REFRESHABLE = [
   'after-2048-gameover-mobile.png',
   'after-2048-playing-webkit.png',
   'after-2048-gameover-webkit.png',
+  'after-minesweeper-ready-webkit.png',
+  'after-minesweeper-playing-webkit.png',
+  'after-minesweeper-lost-webkit.png',
+  'after-minesweeper-won-webkit.png',
   'after-breakout-playing-desktop.png',
   'after-breakout-playing-mobile.png',
   'after-breakout-playing-webkit.png',
@@ -262,7 +242,7 @@ describe('historical After evidence list (Issue #137)', () => {
     expect(files.slice().sort()).toEqual(
       EXPECTED_EVIDENCE.map((entry) => entry.file).slice().sort(),
     );
-    expect(files).toHaveLength(26);
+    expect(files).toHaveLength(22);
 
     for (const expected of EXPECTED_EVIDENCE) {
       const entry = findHistoricalAfterEvidence(expected.file);
@@ -613,14 +593,19 @@ describe('historical evidence command docs', () => {
     expect(SCREENSHOTS_README).toContain(containerCommand(command));
   });
 
-  it('documents the container-only overwrite for the WebKit commands that write protected files', () => {
+  it('documents the container-only overwrite for the WebKit commands that still write protected files', () => {
     for (const command of [
       'npm run screenshots:2048:webkit',
       'npm run screenshots:breakout:webkit',
-      'npm run screenshots:minesweeper:webkit',
     ]) {
       expect(SCREENSHOTS_README).toContain(containerCommand(command));
     }
+    expect(SCREENSHOTS_README).toContain(
+      'npm run screenshots:container -- screenshots:minesweeper:webkit',
+    );
+    expect(SCREENSHOTS_README).not.toContain(
+      containerCommand('npm run screenshots:minesweeper:webkit'),
+    );
   });
 
   it('explains the default skip, the fixed environment and the update checklist', () => {
