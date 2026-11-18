@@ -124,6 +124,40 @@ async function settle(page) {
   await page.waitForTimeout(300);
 }
 
+/**
+ * Deterministic first-paint seam for the WebKit READY capture (Issue #318).
+ *
+ * The READY overlay is static HTML, so WebKit snapshots its blurred
+ * `backdrop-filter` backdrop before the Phaser scene has painted the brick
+ * field. The screenshot then keeps the empty court behind the overlay even
+ * though the bricks are drawn on the canvas. Toggling the same filter off and
+ * on again after the scene is ready forces a fresh backdrop snapshot; the final
+ * style is the stylesheet's `blur(5px)`, so the state does not change. Only the
+ * READY capture uses this seam: the playing / levelclear / gameover evidence
+ * must keep its committed bytes.
+ */
+async function settleReadyBackdrop(page) {
+  await page.evaluate(async () => {
+    const overlay = document.querySelector('[data-testid="overlay"]');
+    if (!(overlay instanceof HTMLElement)) {
+      return;
+    }
+    const nextFrame = () =>
+      new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+      });
+    overlay.style.transition = 'none';
+    overlay.style.backdropFilter = 'none';
+    overlay.style.webkitBackdropFilter = 'none';
+    await nextFrame();
+    overlay.style.backdropFilter = '';
+    overlay.style.webkitBackdropFilter = '';
+    await nextFrame();
+    overlay.style.transition = '';
+  });
+  await settle(page);
+}
+
 async function capture(page, name, fullPage) {
   const write = guardHistoricalAfterEvidence({
     file: name,
@@ -150,6 +184,9 @@ async function openReady(page) {
   await openBreakout(page, {});
   await page.getByTestId('overlay-title').filter({ hasText: '击碎整面砖墙' }).waitFor();
   await page.getByTestId('status').filter({ hasText: '待开始' }).waitFor();
+  if (IS_WEBKIT) {
+    await settleReadyBackdrop(page);
+  }
 }
 
 async function openPlaying(page) {
