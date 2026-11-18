@@ -167,3 +167,21 @@ export function captureScreenshot(
   name: string,
   options: CaptureScreenshotOptions,
 ): Promise<void>;
+
+/** Animation frames the shared capture settle seam waits for. */
+export const CAPTURE_SETTLE_FRAMES: number;
+
+/** Fallback wait after those frames, in milliseconds. */
+export const CAPTURE_SETTLE_TIMEOUT_MS: number;
+
+/** Wait until fonts, two animation frames and a short fallback timeout settle. */
+export function settleCapturePaint(page: Page): Promise<void>;
+
+/**
+ * Repaint the sticky site header with a scroll round-trip, then settle fonts
+ * and frames before a WebKit READY capture.
+ */
+export function settleWebkitReadyPaint(
+  page: Page,
+  options?: { offset?: number },
+): Promise<void>;

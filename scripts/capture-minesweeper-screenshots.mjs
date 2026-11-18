@@ -11,6 +11,7 @@ import {
   engineLabel,
   launchCaptureBrowser,
   parseCaptureEngine,
+  settleWebkitReadyPaint,
   startPreviewServer,
   stopPreviewServer,
 } from './lib/capture-runtime.mjs';
@@ -49,7 +50,10 @@ import { touchLongPress } from './lib/touch-input.mjs';
  *
  * Add `--webkit` to the after mode to capture the four stable phone states
  * (ready / playing / lost / won) on the WebKit engine as
- * `after-minesweeper-<state>-webkit.png`. The dedicated
+ * `after-minesweeper-<state>-webkit.png`. The ready scene additionally runs a
+ * scroll-paint seam before its capture: WebKit can rasterise the sticky site
+ * header in two subtly different ways on the first paint, and repainting it
+ * makes consecutive fixed-container runs byte-identical. The dedicated
  * `--webkit-narrow` / `--webkit-narrow-before` modes capture the Issue #83
  * narrow-screen matrix at 320×640, 360×640, 375×667 and 412×839 into the
  * committed `*-minesweeper-webkit-narrow-<W>x<H>.png` evidence files; the
@@ -389,6 +393,14 @@ async function captureTouchMobile(browser, prefix) {
 
   const ready = await context.newPage();
   await openTouchGame(ready, WIN_MINES);
+  if (IS_WEBKIT && prefix === 'after') {
+    // WebKit's first paint of the sticky site header can settle in two
+    // subtly different rasters (Issue #318). The ready scene is the first page
+    // of this run; a scroll round-trip repaints the header deterministically
+    // before the capture. playing / lost / won keep their existing
+    // byte-identical path.
+    await settleWebkitReadyPaint(ready);
+  }
   await capture(ready, touchMobileName(prefix, 'ready'), false);
   await ready.close();
 

@@ -645,3 +645,58 @@ function writeFileAtomically(path, bytes, { renameSync: replaceTarget = renameSy
     throw error;
   }
 }
+
+/** Animation frames the shared capture settle seam waits for. */
+export const CAPTURE_SETTLE_FRAMES = 2;
+
+/** Fallback wait after those frames, in milliseconds. */
+export const CAPTURE_SETTLE_TIMEOUT_MS = 300;
+
+/**
+ * Wait until fonts, two animation frames and a short fallback timeout settle.
+ *
+ * Shared by the deterministic READY seams so they wait exactly like the
+ * already deterministic playing / gameover captures.
+ */
+export async function settleCapturePaint(page) {
+  await page.evaluate(() => document.fonts.ready);
+  await page.evaluate(
+    (frames) =>
+      new Promise((resolve) => {
+        let remaining = frames;
+        const frame = () => {
+          remaining -= 1;
+          if (remaining <= 0) {
+            resolve();
+          } else {
+            requestAnimationFrame(frame);
+          }
+        };
+        requestAnimationFrame(frame);
+      }),
+    CAPTURE_SETTLE_FRAMES,
+  );
+  await page.waitForTimeout(CAPTURE_SETTLE_TIMEOUT_MS);
+}
+
+/**
+ * Deterministic first-paint seam for the WebKit READY capture (Issue #318).
+ *
+ * A fresh browser can rasterise the sticky site header in two subtly different
+ * ways: the same DOM boxes and board differ by a small number of pixels with a
+ * per-channel difference of one. A scroll round-trip drives the sticky header
+ * through its normal repaint path and converges on one rasterisation, after
+ * which consecutive fixed-container runs are byte identical. The position is
+ * restored to 0 so the screenshot still shows the top of the page;
+ * {@link settleCapturePaint} then waits for fonts and frames.
+ *
+ * Only the READY capture uses this seam: the playing / lost / won evidence is
+ * already deterministic and its committed bytes must not change.
+ */
+export async function settleWebkitReadyPaint(page, { offset = 200 } = {}) {
+  await page.evaluate((distance) => window.scrollTo(0, distance), offset);
+  await page.waitForFunction(() => window.scrollY > 0);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForFunction(() => window.scrollY === 0);
+  await settleCapturePaint(page);
+}
