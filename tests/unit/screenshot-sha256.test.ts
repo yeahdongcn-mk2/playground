@@ -44,6 +44,7 @@ const EXPECTED_FILES = [
   'after-2048-playing-webkit.png',
   'after-2048-gameover-webkit.png',
   'after-breakout-playing-webkit.png',
+  'after-minesweeper-scores-webkit.png',
 ];
 
 /** Font versions recorded by the t1 container run (docs/screenshots/README.md). */
@@ -672,7 +673,7 @@ function runCli(args: string[]): { status: number | null; stdout: string; stderr
 }
 
 describe('capture sha256 manifest', () => {
-  it('lists exactly the four fixed-environment WebKit captures with committed hashes', () => {
+  it('lists exactly the five fixed-environment WebKit captures with committed hashes', () => {
     const manifest = committedManifest();
     expect(manifest.captures.map((capture) => capture.file)).toEqual(EXPECTED_FILES);
 
@@ -687,7 +688,9 @@ describe('capture sha256 manifest', () => {
             ? 'screenshots:2048:webkit'
             : capture.file.startsWith('after-breakout')
               ? 'screenshots:breakout:webkit'
-              : 'screenshots:webkit'
+              : capture.file.startsWith('after-minesweeper-scores-')
+                ? 'screenshots:minesweeper:scores:webkit'
+                : 'screenshots:webkit'
         }`,
       );
       expect(capture.provenance.container).toBe(
@@ -868,6 +871,9 @@ describe('capture sha256 manifest', () => {
     );
     expect(expectedRecaptureCommand('after-breakout-playing-webkit.png')).toBe(
       'npm run screenshots:container -- screenshots:breakout:webkit',
+    );
+    expect(expectedRecaptureCommand('after-minesweeper-scores-webkit.png')).toBe(
+      'npm run screenshots:container -- screenshots:minesweeper:scores:webkit',
     );
   });
 
