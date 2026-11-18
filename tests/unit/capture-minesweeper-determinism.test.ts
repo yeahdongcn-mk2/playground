@@ -139,6 +139,19 @@ describe('minesweeper WebKit READY determinism guard', () => {
     );
   });
 
+  it('forwards the ready options through capture() to captureScreenshot()', () => {
+    // `capture()` is the only bridge from the ready scene's stability options
+    // to `captureScreenshot`. Dropping its `options` parameter or the
+    // `...options` spread silently disables the two-frame check while every
+    // capture run still succeeds, so pin both ends of that wiring.
+    expect(SCRIPT).toMatch(
+      /async function capture\(\s*page,\s*name,\s*fullPage,\s*options = \{\}\s*\)\s*\{/,
+    );
+    expect(SCRIPT).toMatch(
+      /await captureScreenshot\(\s*page,\s*name,\s*\{\s*\.\.\.options,\s*engine: ENGINE,\s*fullPage\s*\}\s*\);/,
+    );
+  });
+
   it('repaints the WebKit header only between ready open and ready capture', () => {
     expect(SCRIPT).toContain(
       "settleWebkitReadyPaint,\n  startPreviewServer,",
