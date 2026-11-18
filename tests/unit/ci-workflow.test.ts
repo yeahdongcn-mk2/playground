@@ -39,6 +39,7 @@ const VERIFY_CHECK_ORDER = [
   'Screenshot evidence sha256 manifest',
   'Production build',
   'Bundle budget',
+  'Score baseline',
   'End-to-end tests',
   'Check target e2e flakes',
   'WebKit narrow screenshot smoke test',
@@ -168,6 +169,10 @@ const DOC_COUNTS_COMMAND = `npm run verify:doc-counts -- --report ${UNIT_TEST_RE
 const isUnitTests = (step: WorkflowStep): boolean =>
   (step.run ?? '').trim() === UNIT_TEST_COMMAND;
 const isBuild = (step: WorkflowStep): boolean => (step.run ?? '').trim() === 'npm run build';
+const BUDGET_COMMAND = 'npm run check:budget';
+const isBudget = (step: WorkflowStep): boolean => (step.run ?? '').trim() === BUDGET_COMMAND;
+const SCORE_COMMAND = 'npm run score';
+const isScore = (step: WorkflowStep): boolean => (step.run ?? '').trim() === SCORE_COMMAND;
 const isScreenshotDocDims = (step: WorkflowStep): boolean =>
   (step.run ?? '').trim() === SCREENSHOT_DOC_DIMS_COMMAND;
 const isScreenshotSha256 = (step: WorkflowStep): boolean =>
@@ -346,6 +351,39 @@ describe('CI workflow', () => {
     expect(stepIndex(isScreenshotSha256)).toBeGreaterThan(docDimsIndex);
     expect(stepIndex(isScreenshotSha256)).toBeLessThan(buildIndex);
     expect(verify?.['timeout-minutes']).toBe(20);
+  });
+
+  it('gates the committed score baseline between the bundle budget and the e2e tests', () => {
+    const step = requireStep(isScore, 'a score baseline step');
+    expect(step.name).toBe('Score baseline');
+    expect((step.run ?? '').trim()).toBe(SCORE_COMMAND);
+    // CI only reports drift: --update would rewrite the committed baseline, and
+    // continue-on-error would hide a regression from the branch protection gate.
+    expect((step.run ?? '').trim()).not.toContain('--update');
+    expect(step['continue-on-error']).toBeUndefined();
+
+    // Score compares evidence that is already committed, so it must run after
+    // the build / budget / doc-count checks and before the e2e step, which
+    // rewrites WebKit narrow screenshots.
+    const buildIndex = stepIndex(isBuild);
+    const budgetIndex = stepIndex(isBudget);
+    const docCountsIndex = stepIndex(isDocCounts);
+    const scoreIndex = stepIndex(isScore);
+    const e2eIndex = stepIndex(isE2e);
+    expect(buildIndex).toBeGreaterThanOrEqual(0);
+    expect(budgetIndex).toBeGreaterThan(buildIndex);
+    expect(docCountsIndex).toBeGreaterThanOrEqual(0);
+    expect(scoreIndex).toBeGreaterThan(budgetIndex);
+    expect(scoreIndex).toBeGreaterThan(docCountsIndex);
+    expect(e2eIndex).toBeGreaterThanOrEqual(0);
+    expect(scoreIndex).toBeLessThan(e2eIndex);
+
+    // The baseline is only ever updated locally by a person, never by CI.
+    for (const command of steps.flatMap(commandsOf)) {
+      expect(command, 'the verify job must not update the score baseline').not.toMatch(
+        /\bnpm run score\b[^\n]*--update/,
+      );
+    }
   });
 
   it('runs the doc test count check after the unit tests and before the build', () => {
