@@ -160,6 +160,14 @@ describe('minesweeper WebKit READY determinism guard', () => {
     expect(warmUpLoad).toBeGreaterThan(warmUpOpen);
     expect(warmUpClose).toBeGreaterThan(warmUpLoad);
     expect(readyOpen).toBeGreaterThan(warmUpClose);
+
+    // The throwaway page must be closed even when opening the game throws:
+    // dropping the try/finally would leak the page (and can shift the committed
+    // ready page onto a different paint path). This structural assertion fails
+    // if `finally` is removed or the close is moved outside the block.
+    expect(SCRIPT).toMatch(
+      /const warmUp = await context\.newPage\(\);\s*try \{\s*await openTouchGame\(warmUp, WIN_MINES\);\s*\} finally \{\s*await warmUp\.close\(\);\s*\}/,
+    );
   });
 
   it('requires two identical whole-image frames for the ready capture', () => {
@@ -430,7 +438,7 @@ describe('minesweeper WebKit manifest and README contract', () => {
       expect(row).toContain(`\`${capture?.sha256}\``);
       expect(row).toContain(`\`${MINESWEEPER_COMMAND}\``);
     }
-    expect(manifestSection).toContain('清单覆盖（8 张');
+    expect(manifestSection).toContain('清单覆盖（14 张');
   });
 
   it('advertises the container command for the four webkit-phone rows', () => {
@@ -482,6 +490,7 @@ describe('minesweeper WebKit manifest and README contract', () => {
     expect(historical).toContain('滚动往返');
     expect(historical).toContain('sticky 页眉');
     expect(historical).toContain('一次性预热页');
-    expect(historical).toContain('ready 7/7 均为');
+    expect(historical).toContain('连续 3 跑（含全新容器首跑）');
+    expect(historical).toContain('整幅连续两帧');
   });
 });

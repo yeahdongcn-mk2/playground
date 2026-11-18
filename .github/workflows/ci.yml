@@ -106,6 +106,13 @@ jobs:
       - name: Bundle budget
         run: npm run check:budget
 
+      # Score compares the current checks against docs/score-baseline.json.
+      # It must never run with --update here: CI only reports drift, and a
+      # person still commits a new baseline explicitly. No continue-on-error
+      # either, so a regression (or a corrupted baseline) fails the job.
+      - name: Score baseline
+        run: npm run score
+
       - name: End-to-end tests
         run: npm run test:e2e
         env:

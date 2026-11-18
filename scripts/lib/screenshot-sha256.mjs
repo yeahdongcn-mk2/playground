@@ -443,6 +443,9 @@ export function expectedRecaptureCommand(file) {
     }
     return 'npm run screenshots:container -- screenshots:minesweeper';
   }
+  if (file.startsWith('after-snake-')) {
+    return 'npm run screenshots:container -- screenshots:snake:webkit';
+  }
   return 'npm run screenshots:container -- screenshots:webkit';
 }
 

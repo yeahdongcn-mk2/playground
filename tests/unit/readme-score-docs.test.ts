@@ -63,4 +63,13 @@ describe('README score documentation', () => {
     expect(scoreLine, 'README 的「验证」段落应记录 npm run score').toBeDefined();
     expect(scoreLine).toContain('SCORE_JSON');
   });
+
+  it('says CI runs npm run score without --update and a person commits the baseline', () => {
+    const verification = section(README, '## 验证');
+
+    expect(verification).toContain('CI');
+    expect(verification).toContain('`npm run score`');
+    expect(verification).toContain('不会运行 `npm run score -- --update`');
+    expect(verification).toContain('基线仍由人显式运行 `--update` 后提交');
+  });
 });

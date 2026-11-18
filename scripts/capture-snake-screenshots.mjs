@@ -109,9 +109,37 @@ async function settle(page) {
   await page.waitForTimeout(300);
 }
 
+/**
+ * Resolved value of the `--text` theme token in `src/styles/app.css`.
+ *
+ * The READY overlay title pins this color in `snake.css`; the capture waits for
+ * it so a future transition / cascade regression fails the run instead of
+ * writing a drifted PNG.
+ */
+const READY_TITLE_COLOR = 'rgb(226, 232, 240)';
+
 async function waitForSnakeReady(page) {
   await page.waitForSelector('[data-testid="snake-board"] canvas');
   await page.waitForFunction(() => window.__playground?.getState().status === 'ready');
+  // Issue #318 t3: the dev server injects CSS after the initial HTML is parsed,
+  // so an unpinned inherited color starts a reduced-motion `color` transition at
+  // the pre-CSS black start point, and WebKit can leave it stuck there. The
+  // overlay title pins its final color with no transition; waiting for that
+  // exact color and no running animation makes a recurrence fail the capture
+  // rather than commit a black-title frame.
+  await page.waitForFunction(
+    (expectedColor) => {
+      const title = document.querySelector('[data-testid="overlay-title"]');
+      if (!(title instanceof HTMLElement)) {
+        return false;
+      }
+      return (
+        getComputedStyle(title).color === expectedColor &&
+        title.getAnimations().length === 0
+      );
+    },
+    READY_TITLE_COLOR,
+  );
   await settle(page);
 }
 
@@ -125,7 +153,16 @@ async function capture(page, name, fullPage = true) {
   await captureScreenshot(page, name, { engine: ENGINE, fullPage });
 }
 
-/** Capture the stable snake phone frame on the WebKit engine. */
+/**
+ * Capture the stable snake phone frame on the WebKit engine.
+ *
+ * The READY title no longer inherits the pre-CSS black color through a
+ * reduced-motion `color` transition (`snake.css` pins the final color with no
+ * transition), and {@link waitForSnakeReady} refuses to capture until the title
+ * reports that final color with no running animation. The captured frame is
+ * therefore the state a player actually sees and two runs stay byte-identical
+ * (Issue #318 t3).
+ */
 async function captureWebkitMobile(browser) {
   const mobile = await createPhoneContext(browser, ENGINE);
   const mobileGame = await mobile.newPage();

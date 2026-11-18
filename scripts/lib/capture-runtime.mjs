@@ -501,8 +501,10 @@ async function captureStableBytes(
  * PNG atomically (temporary file + rename) and, when the new sha256 differs
  * from the manifest, prints the manifest / docs checklist while leaving the
  * manifest untouched so `npm run verify:screenshots:sha256` keeps failing.
- * Files the manifest does not record keep the previous `page.screenshot`
- * write path unchanged.
+ * Files the manifest does not record keep the previous single-shot
+ * `page.screenshot` write path when `stableFrames` is 1; asking for
+ * `stableFrames > 1` uses the same stable-frame check and atomic write as a
+ * manifested file (the WebKit READY capture relies on that).
  *
  * `stableFrames` opts into the whole-image stability check above; the WebKit
  * READY capture passes {@link READY_CAPTURE_STABLE_FRAMES} so two consecutive

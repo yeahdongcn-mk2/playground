@@ -56,6 +56,24 @@
       }
     },
     {
+      "file": "after-hub-webkit.png",
+      "sha256": "6c2856e33a5619dc2eff5833c059608c74f03492192029515edf345b165581f4",
+      "command": "npm run screenshots:container -- screenshots:webkit",
+      "provenance": {
+        "container": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
+        "captureCommit": "c6a8c6c0b6cb70aac968f12d834d00f1073ade61"
+      }
+    },
+    {
+      "file": "after-snake-webkit.png",
+      "sha256": "d8e262f366b11436d5a1dc309f01ee86a473b23f74684fd92e03392fc28450ba",
+      "command": "npm run screenshots:container -- screenshots:snake:webkit",
+      "provenance": {
+        "container": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
+        "captureCommit": "c6a8c6c0b6cb70aac968f12d834d00f1073ade61"
+      }
+    },
+    {
       "file": "after-2048-playing-webkit.png",
       "sha256": "4173dce84c814f2573fa506360f95bab477c985b37a2dfe2d5b0d1c2c5992a91",
       "command": "npm run screenshots:container -- screenshots:2048:webkit",
@@ -83,12 +101,39 @@
       }
     },
     {
+      "file": "after-breakout-ready-webkit.png",
+      "sha256": "372a320ab27d94e2881484047adb358ef222391c00c1c4bfb6a636ab6f3e5f65",
+      "command": "npm run screenshots:container -- screenshots:breakout:webkit",
+      "provenance": {
+        "container": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
+        "captureCommit": "d3f0f30437b69022f29f6c7677f117f84ffc09f1"
+      }
+    },
+    {
+      "file": "after-breakout-levelclear-webkit.png",
+      "sha256": "c1edf10ec9b483db6a022fa26998438286220d88d0be614a0ead09fe046ddf2d",
+      "command": "npm run screenshots:container -- screenshots:breakout:webkit",
+      "provenance": {
+        "container": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
+        "captureCommit": "d3f0f30437b69022f29f6c7677f117f84ffc09f1"
+      }
+    },
+    {
+      "file": "after-breakout-gameover-webkit.png",
+      "sha256": "ea78b118f6a50374e2949affae4fca410eeedf057c4e316afad0cd1eae7b8d13",
+      "command": "npm run screenshots:container -- screenshots:breakout:webkit",
+      "provenance": {
+        "container": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
+        "captureCommit": "d3f0f30437b69022f29f6c7677f117f84ffc09f1"
+      }
+    },
+    {
       "file": "after-minesweeper-ready-webkit.png",
       "sha256": "56c3f68d51c643d9e23a3e5a17d99b44b9da47c52d0cca451080ec3dc878fe0a",
       "command": "npm run screenshots:container -- screenshots:minesweeper:webkit",
       "provenance": {
         "container": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
-        "captureCommit": "20d78f189392d1a1cb312ddb3ced86301239e2bf"
+        "captureCommit": "76149a83e5aa58b37fd8e2e88bbf8e93f272aab9"
       }
     },
     {
@@ -97,7 +142,7 @@
       "command": "npm run screenshots:container -- screenshots:minesweeper:webkit",
       "provenance": {
         "container": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
-        "captureCommit": "20d78f189392d1a1cb312ddb3ced86301239e2bf"
+        "captureCommit": "76149a83e5aa58b37fd8e2e88bbf8e93f272aab9"
       }
     },
     {
@@ -106,7 +151,7 @@
       "command": "npm run screenshots:container -- screenshots:minesweeper:webkit",
       "provenance": {
         "container": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
-        "captureCommit": "20d78f189392d1a1cb312ddb3ced86301239e2bf"
+        "captureCommit": "76149a83e5aa58b37fd8e2e88bbf8e93f272aab9"
       }
     },
     {
@@ -115,7 +160,16 @@
       "command": "npm run screenshots:container -- screenshots:minesweeper:webkit",
       "provenance": {
         "container": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
-        "captureCommit": "20d78f189392d1a1cb312ddb3ced86301239e2bf"
+        "captureCommit": "76149a83e5aa58b37fd8e2e88bbf8e93f272aab9"
+      }
+    },
+    {
+      "file": "after-minesweeper-scores-webkit.png",
+      "sha256": "44768a977454b98f4526033e96c3cdf60012f6278b10912cf7a11071419674fe",
+      "command": "npm run screenshots:container -- screenshots:minesweeper:scores:webkit",
+      "provenance": {
+        "container": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
+        "captureCommit": "05818ae0bfe980ac9274d75146d22a4e59f96c8e"
       }
     }
   ]

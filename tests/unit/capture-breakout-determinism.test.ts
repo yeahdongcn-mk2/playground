@@ -13,6 +13,24 @@ const SCRIPT = readFileSync(
 const VIEW = readFileSync(join(ROOT, 'src', 'games', 'breakout', 'view.ts'), 'utf8');
 const SCENE = readFileSync(join(ROOT, 'src', 'games', 'breakout', 'scene.ts'), 'utf8');
 
+/** The body of one top-level function, found by matching braces. */
+function functionBody(source: string, name: string): string {
+  const start = source.indexOf(`async function ${name}(`);
+  if (start < 0) {
+    throw new Error(`missing function: ${name}`);
+  }
+  const open = source.indexOf('{', start);
+  let depth = 0;
+  for (let index = open; index < source.length; index += 1) {
+    if (source[index] === '{') depth += 1;
+    if (source[index] === '}') {
+      depth -= 1;
+      if (depth === 0) return source.slice(open, index + 1);
+    }
+  }
+  throw new Error(`unterminated function: ${name}`);
+}
+
 /**
  * Guard for the committed playing PNGs. The engine test proves 120 fixed steps
  * with seed 7 reach a deterministic state; these tests runtime-test the
@@ -110,5 +128,30 @@ describe('breakout screenshot determinism guard', () => {
     expect(VIEW).toMatch(
       /debugStepsPaused = true;\s*activeScene\?\.requestFixedSteps\(fixedStepCount\);/,
     );
+  });
+
+  it('repaints the WebKit READY backdrop without touching the other states', () => {
+    // The READY overlay appears before Phaser paints the court, so a WebKit
+    // screenshot can keep the empty backdrop. openReady must run the seam only
+    // in WebKit mode; deleting the call or the guard restores the blank-court
+    // drift while every other assertion above stays green.
+    const openReady = functionBody(SCRIPT, 'openReady');
+    expect(openReady).toMatch(/if \(IS_WEBKIT\) \{\s*await settleReadyBackdrop\(page\);/);
+
+    // The seam must disable and restore the same backdrop-filter between two
+    // committed frames; dropping either toggle, the frame waits or the restore
+    // would leave the browser on a stale or visibly unfiltered snapshot.
+    const seam = functionBody(SCRIPT, 'settleReadyBackdrop');
+    expect(seam).toContain("overlay.style.backdropFilter = 'none'");
+    expect(seam).toContain("overlay.style.webkitBackdropFilter = 'none'");
+    expect(seam).toContain("overlay.style.backdropFilter = ''");
+    expect(seam).toContain("overlay.style.webkitBackdropFilter = ''");
+    expect(seam.match(/await nextFrame\(\);/g)).toHaveLength(2);
+
+    // playing / levelclear / gameover keep their committed bytes, so the seam
+    // must not leak into the state captures.
+    for (const name of ['openPlaying', 'openLevelClear', 'openGameOver']) {
+      expect(functionBody(SCRIPT, name)).not.toContain('settleReadyBackdrop');
+    }
   });
 });

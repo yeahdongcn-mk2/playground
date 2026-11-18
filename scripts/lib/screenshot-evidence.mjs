@@ -17,10 +17,10 @@
  * environment.
  *
  * The capture scripts that only refresh current evidence (2048 playing /
- * gameover, breakout playing, the four minesweeper WebKit phone states and the
- * dedicated minesweeper viewports, plus the
- * `after-minesweeper-webkit-narrow-*` CI smoke matrix) must stay out of this
- * list so their runs keep writing files.
+ * gameover, the four breakout WebKit phone states, breakout playing, the four
+ * minesweeper WebKit phone states and the dedicated minesweeper viewports, plus
+ * the `after-minesweeper-webkit-narrow-*` CI smoke matrix) must stay out of
+ * this list so their runs keep writing files.
  */
 
 import { readFileSync } from 'node:fs';
@@ -222,30 +222,6 @@ export const HISTORICAL_AFTER_EVIDENCE = Object.freeze(
       trackingIssue: '#137',
       captureCommit: '498a14f',
       note: '2048 ready WebKit 手机图：同一捕获提交下两次 sha256 不同，跨环境重跑也无法等于已提交产物。',
-    },
-    {
-      file: 'after-breakout-ready-webkit.png',
-      game: 'breakout',
-      issue: '#120',
-      trackingIssue: '#137',
-      captureCommit: '498a14f',
-      note: '打砖块 ready WebKit 手机图（iPhone SE 3rd gen）：同一命令重跑后 sha256 与已提交产物不同。',
-    },
-    {
-      file: 'after-breakout-levelclear-webkit.png',
-      game: 'breakout',
-      issue: '#120',
-      trackingIssue: '#137',
-      captureCommit: '498a14f',
-      note: '打砖块 levelclear WebKit 手机图：同一命令重跑后 sha256 与已提交产物不同。',
-    },
-    {
-      file: 'after-breakout-gameover-webkit.png',
-      game: 'breakout',
-      issue: '#120',
-      trackingIssue: '#137',
-      captureCommit: '498a14f',
-      note: '打砖块 gameover WebKit 手机图：同一命令重跑后 sha256 与已提交产物不同。',
     },
   ].map((entry) => Object.freeze(entry)),
 );
