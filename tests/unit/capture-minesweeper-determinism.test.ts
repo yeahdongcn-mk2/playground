@@ -53,6 +53,10 @@ const MINESWEEPER_WEBKIT = [
 const MINESWEEPER_COMMAND =
   'npm run screenshots:container -- screenshots:minesweeper:webkit';
 
+/** The WebKit-after guard that wraps each capture-only paint step. */
+const AFTER_GUARD = "if (IS_WEBKIT && prefix === 'after') {";
+const AFTER_GUARD_OPEN_BRACE_OFFSET = AFTER_GUARD.length - 1;
+
 function count(pattern: RegExp): number {
   return [...SCRIPT.matchAll(pattern)].length;
 }
@@ -66,9 +70,8 @@ function indexOfOrFail(haystack: string, needle: string): number {
 /**
  * The index of the `}` that closes the block opened at `openBrace`.
  *
- * Skips braces inside comments and string / template literals so a comment
- * such as `// }` cannot move the boundary this test pins. Regex literals are
- * not handled because neither guard block contains one.
+ * The capture script's after-mode guards contain only `//` comments, so skip
+ * those; a brace in a comment must not move the boundary this test pins.
  */
 function closingBrace(source: string, openBrace: number): number {
   let depth = 0;
@@ -80,21 +83,6 @@ function closingBrace(source: string, openBrace: number): number {
         break;
       }
       index = newline;
-    } else if (character === '/' && source[index + 1] === '*') {
-      const commentEnd = source.indexOf('*/', index + 2);
-      if (commentEnd === -1) {
-        break;
-      }
-      index = commentEnd + 1;
-    } else if (character === "'" || character === '"' || character === '`') {
-      const quote = character;
-      for (index += 1; index < source.length; index += 1) {
-        if (source[index] === '\\') {
-          index += 1;
-        } else if (source[index] === quote) {
-          break;
-        }
-      }
     } else if (character === '{') {
       depth += 1;
     } else if (character === '}') {
@@ -105,6 +93,32 @@ function closingBrace(source: string, openBrace: number): number {
     }
   }
   throw new Error(`unbalanced block starting at index ${openBrace}`);
+}
+
+/**
+ * The index of the `if (IS_WEBKIT && prefix === 'after') {` guard whose block
+ * contains `index`, or a test failure naming what was expected there.
+ */
+function enclosingAfterGuard(
+  source: string,
+  index: number,
+  description: string,
+): number {
+  for (
+    let guard = source.indexOf(AFTER_GUARD);
+    guard !== -1;
+    guard = source.indexOf(AFTER_GUARD, guard + AFTER_GUARD.length)
+  ) {
+    if (
+      guard < index &&
+      index < closingBrace(source, guard + AFTER_GUARD_OPEN_BRACE_OFFSET)
+    ) {
+      return guard;
+    }
+  }
+  throw new Error(
+    `missing: ${description} is not inside a WebKit-after guard`,
+  );
 }
 
 function sha256(path: string): string {
@@ -211,40 +225,42 @@ describe('minesweeper WebKit READY determinism guard', () => {
     expect(seam).toBeGreaterThan(readyOpen);
     expect(readyCapture).toBeGreaterThan(seam);
 
-    // The seam is wrapped by the *second* after-mode guard: the first one only
-    // warms up the throwaway page. Locate both guards and walk each block to
-    // its closing brace, otherwise deleting the seam's guard still leaves the
-    // seam "after the first guard" and the assertion stays green.
-    const guard = "if (IS_WEBKIT && prefix === 'after') {";
-    const warmUpGuard = indexOfOrFail(SCRIPT, guard);
-    const seamGuard = SCRIPT.indexOf(guard, warmUpGuard + guard.length);
-    expect(
-      seamGuard,
-      'missing: the seam guard after the warm-up guard',
-    ).toBeGreaterThan(-1);
-    expect(
-      SCRIPT.indexOf(guard, seamGuard + guard.length),
-      'unexpected: a third after-mode guard',
-    ).toBe(-1);
-
-    const warmUp = indexOfOrFail(
+    // Walk the script's actual WebKit-after guard blocks: the seam must be
+    // inside one of them, not merely after the warm-up guard. Matching each
+    // guard to its closing brace is what makes deleting the seam's own guard
+    // falsifiable.
+    const warmUpOpen = indexOfOrFail(
       SCRIPT,
       'const warmUp = await context.newPage()',
     );
-    const readyPage = SCRIPT.indexOf(
+    const warmUpGuard = enclosingAfterGuard(
+      SCRIPT,
+      warmUpOpen,
+      'the warm-up page',
+    );
+    const seamGuard = enclosingAfterGuard(SCRIPT, seam, 'the ready seam');
+    expect(warmUpGuard).not.toBe(seamGuard);
+
+    const warmUpGuardEnd = closingBrace(
+      SCRIPT,
+      warmUpGuard + AFTER_GUARD_OPEN_BRACE_OFFSET,
+    );
+    const seamGuardEnd = closingBrace(
+      SCRIPT,
+      seamGuard + AFTER_GUARD_OPEN_BRACE_OFFSET,
+    );
+    const readyPageOpen = SCRIPT.indexOf(
       'const ready = await context.newPage()',
-      warmUpGuard,
+      warmUpGuardEnd,
     );
     expect(
-      readyPage,
+      readyPageOpen,
       'missing: the committed ready page after the warm-up guard',
     ).toBeGreaterThan(-1);
-    const warmUpGuardEnd = closingBrace(SCRIPT, warmUpGuard + guard.length - 1);
-    const seamGuardEnd = closingBrace(SCRIPT, seamGuard + guard.length - 1);
 
-    expect(warmUp).toBeGreaterThan(warmUpGuard);
-    expect(warmUp).toBeLessThan(warmUpGuardEnd);
-    expect(readyPage).toBeGreaterThan(warmUpGuardEnd);
+    expect(warmUpOpen).toBeGreaterThan(warmUpGuard);
+    expect(warmUpOpen).toBeLessThan(warmUpGuardEnd);
+    expect(readyPageOpen).toBeGreaterThan(warmUpGuardEnd);
     expect(seam).toBeGreaterThan(seamGuard);
     expect(seam).toBeLessThan(seamGuardEnd);
   });
