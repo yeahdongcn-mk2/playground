@@ -395,11 +395,13 @@ games/<game>/scene → 对应引擎（动态 import）
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过（oxlint 覆盖 src、tests 与 scripts；error 与 warning 都会失败，warning 经 --deny-warnings 升级；另跑 scripts/check-boundaries.mjs，失败返回非 0）
-npm run test:unit    # 1214 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
+npm run test:unit    # 1258 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
 npm run build        # 通过
 npm run check:budget # 通过（入口 11.16 KB gzip，全部 JS 410.58 KB gzip）
 npm run test:e2e     # 154 passed（桌面 87 + 手机 36 + WebKit 31）
 ```
+
+截图证据的夜间复现由 [.github/workflows/capture-repro.yml](.github/workflows/capture-repro.yml) 按 `docs/screenshots/capture-sha256-manifest.json` 的 `command` 连续两跑并校验环境指纹，失败信息与重拍步骤见 [docs/screenshots/README.md](docs/screenshots/README.md) 的「夜间固定容器两跑复现与排障」；该 workflow 不提交、不改清单。
 
 CI 的 passed / flaky / failed 口径、PR 稳定性门禁范围、每日 `flake-watch` 巡检、固定镜像与回退边界见 [docs/ci-flaky-policy.md](docs/ci-flaky-policy.md) 第 2–5 节；截图捕获与 CI 共用的镜像 pin、升级清单见 [docs/screenshots/README.md](docs/screenshots/README.md) 的「固定捕获环境」。
 

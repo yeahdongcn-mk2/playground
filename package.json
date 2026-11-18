@@ -54,6 +54,7 @@
     "check:budget": "node scripts/check-budget.mjs",
     "verify:screenshots:webkit": "node scripts/verify-screenshot-artifacts.mjs",
     "verify:screenshots:sha256": "node scripts/verify-screenshot-sha256.mjs",
+    "verify:screenshots:repro": "node scripts/verify-screenshot-repro.mjs",
     "verify:screenshots:doc-dims": "node scripts/check-screenshot-doc-dims.mjs",
     "verify:doc-counts": "node scripts/check-doc-counts.mjs"
   },
