@@ -1,12 +1,29 @@
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import {
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { chromium, devices, webkit } from '@playwright/test';
 import {
   CAPTURE_CONTAINER_FLAG,
+  CAPTURE_REPO_ROOT,
   CAPTURE_TARGET_VAR,
   captureEnvironmentFingerprint,
   formatCaptureEnvironmentFingerprint,
   normalizeCaptureTargets,
 } from './capture-env.mjs';
+import {
+  DEFAULT_MANIFEST_PATH,
+  compareCaptureEnvironmentFingerprint,
+  findSha256ManifestCapture,
+  formatManifestCaptureEnvironment,
+  parseSha256Manifest,
+} from './screenshot-sha256.mjs';
 import {
   WEBKIT_FLAG,
   WEBKIT_NARROW_BEFORE_FLAG,
@@ -51,6 +68,26 @@ export function engineLabel(engine) {
 /** Targets already logged for one browser, so each run logs each target once. */
 const loggedTargetsByBrowser = new WeakMap();
 
+/**
+ * The capture target every context created by this runtime belongs to.
+ *
+ * A screenshot does not carry its target (a Chromium process can create a
+ * desktop, a phone and a Pixel 7 touch context), so the context helpers that
+ * already know the target tag it here. `captureScreenshot` then compares the
+ * manifested file against the environment of the context that produced it
+ * without every call site repeating the target.
+ */
+const contextTargets = new WeakMap();
+
+/**
+ * The latest fingerprint logged per target.
+ *
+ * `logCaptureEnvironment` already probes the image, fonts and EGL variables
+ * when a context is created; the write-time guard reuses that fingerprint so a
+ * run does not probe the same environment for every manifested PNG.
+ */
+const fingerprintsByTarget = new Map();
+
 function markTargetLogged(browser, target) {
   let logged = loggedTargetsByBrowser.get(browser);
   if (logged === undefined) {
@@ -88,6 +125,7 @@ export function recordedCaptureTargets() {
  */
 export function resetRecordedCaptureTargets() {
   recordedTargets.clear();
+  fingerprintsByTarget.clear();
 }
 
 function recordCaptureTarget(target) {
@@ -212,6 +250,7 @@ export function logCaptureEnvironment(target, browser, { env, run } = {}) {
       run: { browserVersion: browser.version(), ...run },
       env,
     });
+    fingerprintsByTarget.set(target, fingerprint);
     console.log(formatCaptureEnvironmentFingerprint(fingerprint));
     markTargetLogged(browser, target);
   } catch (error) {
@@ -260,6 +299,7 @@ export function stopPreviewServer(server) {
 /** Create a desktop context and record the desktop DPR-1 fingerprint. */
 export async function createDesktopContext(browser, options = {}) {
   const context = await browser.newContext(options);
+  contextTargets.set(context, 'desktop');
   logCaptureEnvironment('desktop', browser);
   return context;
 }
@@ -267,6 +307,7 @@ export async function createDesktopContext(browser, options = {}) {
 /** Create a phone context and record the phone DPR-2 fingerprint. */
 export async function createMobileContext(browser, options = {}) {
   const context = await browser.newContext(options);
+  contextTargets.set(context, 'mobile');
   logCaptureEnvironment('mobile', browser);
   return context;
 }
@@ -294,6 +335,7 @@ export async function createTouchMobileContext(browser, options = {}) {
     reducedMotion: 'reduce',
     ...options,
   });
+  contextTargets.set(context, 'mobile-touch');
   logCaptureEnvironment('mobile-touch', browser);
   return context;
 }
@@ -345,9 +387,11 @@ export function phoneContextOptions(
 /** Create a phone context on the selected engine. */
 export async function createPhoneContext(browser, engine, options) {
   const context = await browser.newContext(phoneContextOptions(engine, options));
+  const target = engine === WEBKIT_ENGINE ? 'webkit' : 'mobile';
+  contextTargets.set(context, target);
   // WebKit phone evidence is its own target; Chromium phone evidence is the
   // `mobile` target of a run that also captures desktop.
-  logCaptureEnvironment(engine === WEBKIT_ENGINE ? 'webkit' : 'mobile', browser);
+  logCaptureEnvironment(target, browser);
   return context;
 }
 
@@ -361,6 +405,17 @@ export function captureRecord(name, engine, viewport, colorScheme = 'dark', redu
  * Take one screenshot and log the engine / viewport / theme record. Callers
  * pass the same options as `page.screenshot`, so the Chromium bytes stay
  * unchanged.
+ *
+ * A file recorded in `docs/screenshots/capture-sha256-manifest.json` is guarded
+ * before any byte is written (Issue #199): the environment fingerprint of the
+ * context that produced it must match the manifest environment, otherwise a
+ * host run or a different image / font / EGL stack fails instead of silently
+ * replacing the fixed-environment evidence. A matching environment writes the
+ * PNG atomically (temporary file + rename) and, when the new sha256 differs
+ * from the manifest, prints the manifest / docs checklist while leaving the
+ * manifest untouched so `npm run verify:screenshots:sha256` keeps failing.
+ * Files the manifest does not record keep the previous `page.screenshot`
+ * write path unchanged.
  */
 export async function captureScreenshot(
   page,
@@ -372,12 +427,221 @@ export async function captureScreenshot(
     colorScheme = 'dark',
     reducedMotion = 'reduce',
     animations = 'disabled',
+    target,
+    manifest,
+    manifestPath = resolve(CAPTURE_REPO_ROOT, DEFAULT_MANIFEST_PATH),
+    readFile = readFileSync,
+    fileOperations = {},
+    env,
+    run,
+    fingerprint,
+    log = console,
   },
 ) {
-  await page.screenshot({
-    path: `${outputDir}/${name}`,
-    fullPage,
-    animations,
-  });
+  const path = `${outputDir}/${name}`;
+  const parsedManifest = loadSha256Manifest({ manifest, manifestPath, readFile });
+  const capture =
+    parsedManifest === null ? null : findSha256ManifestCapture(parsedManifest, name);
+
+  if (capture === null) {
+    // Unrecorded evidence: keep the existing write path byte-for-byte.
+    await page.screenshot({ path, fullPage, animations });
+    console.log(captureRecord(name, engine, page.viewportSize(), colorScheme, reducedMotion));
+    return;
+  }
+
+  const captureTarget = target ?? manifestedCaptureTarget(page, engine);
+  const actualFingerprint =
+    fingerprint ?? fingerprintForTarget(captureTarget, { env, run });
+  const comparison = compareCaptureEnvironmentFingerprint(
+    actualFingerprint,
+    parsedManifest.environment,
+  );
+  if (comparison.problems.length > 0) {
+    throw new Error(
+      manifestedEnvironmentErrorMessage({
+        name,
+        path,
+        manifestLabel: manifestLabelFor({ manifest, manifestPath }),
+        environment: parsedManifest.environment,
+        capture,
+        comparison,
+        fingerprint: actualFingerprint,
+      }),
+    );
+  }
+
+  // The guard passed: capture to memory first, so a failing screenshot never
+  // replaces the committed PNG, then write it atomically in the same directory.
+  const bytes = await page.screenshot({ fullPage, animations });
+  const buffer = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+  writeFileAtomically(path, buffer, fileOperations);
+
+  const actualSha256 = createHash('sha256').update(buffer).digest('hex');
+  if (actualSha256 !== capture.sha256) {
+    log.warn(
+      manifestHashDriftChecklist({
+        file: name,
+        path,
+        manifest: parsedManifest,
+        capture,
+        actualSha256,
+      }),
+    );
+  }
+
   console.log(captureRecord(name, engine, page.viewportSize(), colorScheme, reducedMotion));
+}
+
+/**
+ * Read and validate the sha256 manifest that drives the write-time guard.
+ *
+ * A missing manifest (for example a trimmed checkout) means no file is
+ * recorded, so unrecorded evidence keeps its normal write path. Any other read
+ * or parse failure is fail-closed: writing a screenshot the manifest cannot
+ * describe would silently bypass the guard.
+ */
+function loadSha256Manifest({ manifest, manifestPath, readFile }) {
+  if (manifest !== undefined) {
+    return manifest === null ? null : manifest;
+  }
+
+  let text;
+  try {
+    text = readFile(manifestPath, 'utf8');
+  } catch (error) {
+    const code =
+      typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined;
+    if (code === 'ENOENT') {
+      return null;
+    }
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Cannot read the screenshot sha256 manifest ${manifestPath} before writing a screenshot: ` +
+        `${detail}. Restore the manifest or capture through a clean checkout.`,
+    );
+  }
+
+  try {
+    return parseSha256Manifest(text, { source: manifestPath });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Cannot parse the screenshot sha256 manifest ${manifestPath} before writing a screenshot: ` +
+        `${detail}. Fix the manifest instead of writing evidence it cannot describe.`,
+    );
+  }
+}
+
+/**
+ * The target of the context that produced `page`.
+ *
+ * Context helpers tag every context they create, so a script that captures
+ * desktop / phone / touch evidence in one Chromium run still compares each
+ * manifested file against its own target. A page created without a helper
+ * falls back to the engine's only target (WebKit) or desktop, which keeps the
+ * guard fail-closed: a mismatch is reported instead of being accepted.
+ */
+function manifestedCaptureTarget(page, engine) {
+  let context = null;
+  try {
+    context = page.context?.() ?? null;
+  } catch {
+    context = null;
+  }
+  const tagged = context === null ? null : (contextTargets.get(context) ?? null);
+  if (tagged !== null) {
+    return tagged;
+  }
+  return engine === WEBKIT_ENGINE ? 'webkit' : 'desktop';
+}
+
+/** Reuse the context-creation fingerprint, or build one for this target. */
+function fingerprintForTarget(target, { env, run }) {
+  if (env === undefined && run === undefined) {
+    const cached = fingerprintsByTarget.get(target);
+    if (cached !== undefined) {
+      return cached;
+    }
+  }
+  return captureEnvironmentFingerprint({ target, env: env ?? process.env, run });
+}
+
+function manifestLabelFor({ manifest, manifestPath }) {
+  if (manifest !== undefined) {
+    return DEFAULT_MANIFEST_PATH;
+  }
+  return resolve(manifestPath) === resolve(CAPTURE_REPO_ROOT, DEFAULT_MANIFEST_PATH)
+    ? DEFAULT_MANIFEST_PATH
+    : manifestPath;
+}
+
+/** Readable refusal naming the file, both fingerprints and the recapture command. */
+function manifestedEnvironmentErrorMessage({
+  name,
+  path,
+  manifestLabel,
+  environment,
+  capture,
+  comparison,
+  fingerprint,
+}) {
+  return [
+    `Refusing to write ${path} before writing any bytes: ${name} is tracked by ` +
+      `${manifestLabel}, but this capture does not match the fixed environment recorded for it.`,
+    `Expected environment fingerprint: ${formatManifestCaptureEnvironment(environment)}`,
+    `Actual environment fingerprint: ${formatCaptureEnvironmentFingerprint(fingerprint)}`,
+    `Differences: ${comparison.problems.join('; ')}`,
+    `Re-capture inside the fixed container: ${capture.command}`,
+    'The target PNG was not created or replaced.',
+  ].join('\n');
+}
+
+/** The checklist printed when a fixed-environment capture changes a hash. */
+function manifestHashDriftChecklist({ file, path, manifest, capture, actualSha256 }) {
+  const index = manifest.captures.indexOf(capture);
+  const command = capture.command;
+  return [
+    `Wrote ${path} inside the fixed capture environment, but its sha256 differs from ` +
+      `${DEFAULT_MANIFEST_PATH}:`,
+    `  manifest sha256: ${capture.sha256}`,
+    `  captured sha256: ${actualSha256}`,
+    'The PNG was written, but the recorded evidence is stale until the following are updated ' +
+      'in the same change:',
+    `- ${DEFAULT_MANIFEST_PATH}: captures[${index}].sha256 -> ${actualSha256}`,
+    `- ${DEFAULT_MANIFEST_PATH}: captures[${index}].provenance.captureCommit -> ` +
+      'the commit that produced the new PNG',
+    `- docs/screenshots/README.md: the sha256 / capture commit / size row for ${file}`,
+    `- docs/screenshots/README.md: the provenance note / table for ${file}`,
+    `Until those are updated, npm run verify:screenshots:sha256 keeps failing on the stale ` +
+      `sha256 for ${file}. Re-capture with: ${command}`,
+  ].join('\n');
+}
+
+/** Monotonic suffix so two writes in the same millisecond cannot collide. */
+let tempFileCounter = 0;
+
+/**
+ * Write a PNG through a temporary sibling and rename it into place.
+ *
+ * `fileOperations.renameSync` is replaceable so unit tests can fail the swap
+ * after the temporary file exists, proving the committed PNG is not replaced
+ * and the temporary sibling is removed. The successful path (same bytes, no
+ * leftover temporary file) is covered by the normal write test.
+ */
+function writeFileAtomically(path, bytes, { renameSync: replaceTarget = renameSync } = {}) {
+  mkdirSync(dirname(path), { recursive: true });
+  tempFileCounter += 1;
+  const tempPath = `${path}.tmp-${process.pid}-${tempFileCounter}`;
+  try {
+    writeFileSync(tempPath, bytes);
+    replaceTarget(tempPath, path);
+  } catch (error) {
+    try {
+      unlinkSync(tempPath);
+    } catch {
+      // The temporary file may not exist; the original error is what matters.
+    }
+    throw error;
+  }
 }

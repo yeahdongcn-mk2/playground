@@ -7,8 +7,10 @@ import type {
 import type { ChildProcess } from 'node:child_process';
 import type {
   CaptureEnvironmentFingerprint,
+  CaptureFingerprintRun,
   CaptureTarget,
 } from './capture-env.mjs';
+import type { ScreenshotSha256Manifest } from './screenshot-sha256.mjs';
 
 export const WEBKIT_FLAG: string;
 export const WEBKIT_NARROW_FLAG: string;
@@ -130,6 +132,11 @@ export function captureRecord(
   reducedMotion?: string,
 ): string;
 
+/** Replaceable final rename for the atomic write path; unit tests inject a failure. */
+export interface CaptureAtomicWriteOperations {
+  renameSync?: (oldPath: string, newPath: string) => void;
+}
+
 export interface CaptureScreenshotOptions {
   engine: CaptureEngine;
   fullPage?: boolean;
@@ -137,6 +144,22 @@ export interface CaptureScreenshotOptions {
   colorScheme?: string;
   reducedMotion?: string;
   animations?: 'allow' | 'disabled';
+  /** Override the target of the context that produced the page (tests / edge cases). */
+  target?: CaptureTarget;
+  /** Parsed manifest; defaults to reading `manifestPath` from disk. */
+  manifest?: ScreenshotSha256Manifest | null;
+  manifestPath?: string;
+  readFile?: (path: string, encoding: 'utf8') => string;
+  /** Replaceable atomic rename (unit tests inject a failure). */
+  fileOperations?: CaptureAtomicWriteOperations;
+  /** Environment used when no context fingerprint is available; defaults to `process.env`. */
+  env?: Record<string, string | undefined>;
+  /** Extra fingerprint inputs (browser version, font packages) for tests. */
+  run?: CaptureFingerprintRun;
+  /** Explicit fingerprint; skips the context / env probe. */
+  fingerprint?: CaptureEnvironmentFingerprint;
+  /** Warning sink for the manifest hash-drift checklist (default `console`). */
+  log?: { warn: (message: string) => void };
 }
 
 export function captureScreenshot(

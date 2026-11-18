@@ -6,7 +6,7 @@
 
 ## 固定捕获环境（Issue #199）
 
-- 目的：把浏览器构建、字体、DPR 与 EGL / 软件渲染固定到同一环境，让截图捕获可复现；宿主上的普通 `npm run screenshots:*` 命令保持不变，只多打印一行环境指纹，不会因为缺少字体 / EGL 探测而失败。
+- 目的：把浏览器构建、字体、DPR 与 EGL / 软件渲染固定到同一环境，让截图捕获可复现；宿主上的普通 `npm run screenshots:*` 命令对未收录文件保持不变，只多打印一行环境指纹，不会因为缺少字体 / EGL 探测而失败；清单收录的文件在宿主重跑会在写出任何字节前被拒绝，必须用 `npm run screenshots:container -- <target>` 重拍。
 - 镜像 tag / digest：`mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f`。tag 的版本来自 `package-lock.json` 的 `@playwright/test`（当前 1.64.1），digest 固定的是多架构 manifest list——同一个 digest 在 amd64 与 arm64 主机会解析到不同浏览器构建；实际运行平台由 `linux/amd64` 固定，见下一条。契约常量在 `scripts/lib/capture-env.mjs` 的 `PLAYWRIGHT_IMAGE_PIN`。CI 与截图共用同一个 pin：`.github/workflows/ci.yml` 的 `verify` job 与 `.github/workflows/flake-watch.yml` 的 `mobile-webkit-first-run` job 的 `container.image` 必须与 `PLAYWRIGHT_IMAGE_PIN`、`docker/capture/Dockerfile` 的 `FROM` 完全一致；`tests/unit/ci-workflow.test.ts`、`tests/unit/flake-watch-workflow.test.ts`、`tests/unit/capture-env.test.ts` 与 `tests/unit/flaky-policy-docs.test.ts` 会分别校验镜像、常量与文档，任一处漂移都会让单测失败。
 - 平台固定与 arm64 主机：宿主入口对 `docker build --platform linux/amd64` 与 `docker run --platform linux/amd64` 都显式传平台，并在构建或复用本地镜像后用 `docker image inspect --format '{{.Os}}/{{.Architecture}}'` 断言实际镜像平台恰为 `linux/amd64`；宿主入口还通过 `docker run --env CAPTURE_PLATFORM=linux/amd64` 注入平台，容器入口的 `assertContainerCaptureEnvironment` 在运行任何捕获、写出任何 PNG 之前校验该变量。这样固定的不只是一个多架构 digest，还包括该 digest 实际解析出的架构。arm64 主机（例如 Apple Silicon）必须让 Docker 以 amd64 模拟运行（Docker Desktop 的 amd64 模拟或等效的 binfmt / qemu）；宿主机无法提供 amd64 镜像时，入口在构建 / inspect 阶段以可读错误拒绝（非 0 退出）：构建失败或无法 inspect 时列出期望平台、镜像 digest 与重拍命令，inspect 成功但平台不符时再列出实际平台；绝不会静默改用 arm64 浏览器写出不同 PNG。失败示例：`Capture image playground-capture:v1.64.1-noble is platform "linux/arm64", but the fixed capture platform is "linux/amd64" (image digest sha256:...)`；容器内校验到平台不符时是 `Capture environment variable "CAPTURE_PLATFORM" is "linux/arm64": expected "linux/amd64".`
 - 升级清单（Playwright 版本 bump 时逐项完成）：
@@ -56,13 +56,14 @@
 | `after-breakout-playing-webkit.png` | `27297f5f79792511e1d2a56cc1a1c5565922ba10e7fda3de798c663769147704` | `npm run screenshots:container -- screenshots:breakout:webkit` | `bc7759432d66034141261a483a50454ee0631235`（#159） |
 
 - 清单顶层 `environment` 记录整份清单共用的固定环境指纹：平台 `linux/amd64`（`environment.platform`，必须与 `scripts/lib/capture-env.mjs` 的 `CAPTURE_PLATFORM` 一致；字段只接受 `<os>/<arch>` 或带 variant 的 `<os>/<arch>/<variant>`，`unavailable` 不是合法清单平台），镜像 `mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f`，`EGL_PLATFORM=surfaceless`、`LIBGL_ALWAYS_SOFTWARE=1`、`__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json`，目标 `webkit` / DPR 2，字体版本与上文容器日志记录一致（`fonts-freefont-ttf@20211204+svn4273-2`、`fonts-ipafont-gothic@00303-21ubuntu1`、`fonts-liberation@1:2.1.5-3`、`fonts-noto-color-emoji@2.047-0ubuntu0.24.04.1`、`fonts-tlwg-loma-otf@1:0.7.3-1`、`fonts-unifont@1:15.1.01-1build1`、`fonts-wqy-zenhei@0.9.45-8`）；每条 capture 记录还带 `provenance.container`（镜像 tag / digest）与捕获 commit。
+- 写前护栏（Issue #199 t2）：`scripts/lib/capture-runtime.mjs` 的 `captureScreenshot` 在写出任何字节之前读取本清单。目标文件被收录时，它用产生该截图的上下文目标（`desktop` / `mobile` / `mobile-touch` / `webkit`）构造 `captureEnvironmentFingerprint()`，并与清单 `environment` 的 `source`、`target`、`dpr`、`platform`、镜像 repository / tag / digest、三个 EGL 变量与字体包版本逐项比较。宿主（`source=host`）或任一字段不一致时以非零状态失败，stderr 列出文件名、期望 / 实际环境指纹、差异项与固定容器重拍命令，目标 PNG 不会被创建或替换；固定容器内指纹一致时先把截图写入内存，再用同目录临时文件 + rename 原子写入。写入后若新 PNG 的 sha256 与清单不同，捕获本身仍成功，但会打印必须同步清单 `sha256` / `provenance.captureCommit`、本文档表格与 provenance 的 checklist，并且不会改写清单，因此 `npm run verify:screenshots:sha256` 会继续以退出码 1 报告该文件的哈希不一致，直到在同一改动里显式更新清单与文档。未收录文件仍走原来的 `page.screenshot({ path })` 写入路径。清单缺失（例如裁剪过的检出）时按「未收录」处理；清单存在但无法解析时在写截图前以可读错误失败，避免在无法判断收录关系时静默写证据。
 - 平台与清单一一对应：`environment.platform` 是整份清单的权威平台，校验器不会从 PNG 反推平台，一份清单只描述一个平台。未来支持 arm64 时必须另建独立清单（例如 `capture-sha256-manifest-linux-arm64.json`）以及独立 README 表格 / 重拍命令，amd64 与 arm64 的 sha256 不得写进同一份清单或互相替代——同一个多架构 digest 在不同架构解析到不同浏览器构建，混用会把平台差异伪装成哈希漂移。用 `--manifest` 指向对应清单的同时，还要让校验器按该清单的 `environment.platform`（或显式 `--platform`）校验；当前实现仍只接受 `linux/amd64`，所以 arm64 支持必须同步扩展校验器与测试，不能只新增一个清单文件。
 - 命令与退出码：`npm run verify:screenshots:sha256`（即 `node scripts/verify-screenshot-sha256.mjs`）读取清单，逐个校验文件存在且 PNG sha256 与期望一致；传入 `--log <捕获日志>` 时再校验日志中的 `capture-env:` 指纹。全部一致退出 0；哈希不一致或环境指纹不一致退出 1，并把「环境指纹不一致」与「哈希不一致」分开报告（哈希失败会列出文件、期望 / 实际 sha256 与固定容器内重拍命令；带合法日志时还会列出实际环境指纹，无日志或日志非法时标记 unavailable / 按格式错误退出 2）。平台差异单独成段（`Platform mismatch`）：清单 `environment.platform` 或日志指纹平台与固定 `linux/amd64` 不一致时（例如期望 `linux/amd64`、实际 `linux/arm64`），列出期望 / 实际平台、镜像 tag / digest 与逐文件固定容器重拍命令；单独出现时退出 1，即使所有 PNG 的 sha256 仍与清单一致也按平台差异失败。退出码优先级：清单若同时还有其它固定契约不一致（镜像 tag / digest、EGL、DPR 或重拍命令），校验器仍以清单非法退出 2，并在同一输出中打印平台段；只有平台一项不一致时才用 1。清单非法（含重复文件、sha256 不是 64 位 hex、缺少 / 非法 `environment.platform`，或 `environment` 的其它字段 / `provenance.container` / 重拍命令与固定契约不一致）或捕获日志中的 `capture-env:` 行格式非法（缺字段、重复 / 未知字段、非规范十进制 DPR 如 `2.0` / `+2`）时退出 2。运行时写出的 `capture-env: unavailable (...)` 回退行按环境不可用处理（退出 1），不算非法日志。缺少已提交 PNG 按哈希失败处理（退出 1），因为它同样说明证据与清单不一致。
 - 本地带日志复核示例：`npm run verify:screenshots:sha256 -- --log test-results/capture-container/screenshots-webkit-<timestamp>.log`。
 - CI：`.github/workflows/ci.yml` 的 `verify` job 在 `Screenshot doc dimensions` 之后、`Production build` 之前运行 `Screenshot evidence sha256 manifest` 步骤（`npm run verify:screenshots:sha256`，不带日志），干净检出即校验已提交证据，防止静默替换；`tests/unit/ci-workflow.test.ts` 钉住该步骤的命令与位置。
-- 刷新流程（固定容器重拍后显式更新清单，不静默改写）：在临时工作副本（不要在准备提交的 worktree 里直接覆盖已提交 PNG）用上表的固定容器命令重拍所需目标，连续两次运行并对每份日志分别执行带 `--log` 的校验；只有两次 sha256 相同且环境指纹一致时，才在同一改动里显式更新清单的 `sha256` / `provenance` 与本节表格，并说明重拍原因。若目标属于 #137 标记的历史 After 证据，替换已提交 PNG 还必须走 #137 的显式刷新口径（`--allow-historical-overwrite` 等护栏）；本清单收录的当前 WebKit 证据不在历史清单内，按上表命令重拍并显式更新清单即可。校验器本身只读清单和 PNG，不会改写文件。
+- 刷新流程（固定容器重拍后显式更新清单，不静默改写）：在临时工作副本（不要在准备提交的 worktree 里直接覆盖已提交 PNG）用上表的固定容器命令重拍所需目标，连续两次运行并对每份日志分别执行带 `--log` 的校验；只有两次 sha256 相同且环境指纹一致时，才在同一改动里显式更新清单的 `sha256` / `provenance` 与本节表格，并说明重拍原因。固定容器内指纹一致但新哈希与清单不同时，写前护栏会直接打印清单 / 文档同步 checklist：先按 checklist 更新 `captures[].sha256`、`captures[].provenance.captureCommit` 与本节表格，再重跑 `npm run verify:screenshots:sha256`，不要把清单留在旧哈希上。若目标属于 #137 标记的历史 After 证据，替换已提交 PNG 还必须走 #137 的显式刷新口径（`--allow-historical-overwrite` 等护栏）；本清单收录的当前 WebKit 证据不在历史清单内，按上表命令重拍并显式更新清单即可。校验器本身只读清单和 PNG，不会改写文件。
 - 平台门禁：重拍前先确认入口的 `--platform linux/amd64` 与镜像 `Os` / `Architecture` 断言通过，日志中 `platform=linux/amd64`；带 `--log` 校验出现 `Platform mismatch`（例如 `linux/arm64`）时先修正运行平台，单独的平台漂移按退出码 1 处理，若清单同时还有其它固定契约不一致则按退出码 2 处理；不能通过改清单 / 更新 sha256 掩盖。arm64 成为受支持平台时按上一段的拆分流程新增独立清单与文档，而不是把本清单的 `environment.platform` 改成 arm64；新增清单前先按上一段扩展校验器。
-- 单测：`tests/unit/screenshot-sha256.test.ts` 用临时目录构造 PNG / 日志夹具，覆盖清单解析（非法条目、控制字符路径、大小写重复文件、非 64 位 hex）、全部一致时的退出 0、缺文件 / 哈希漂移 / 环境指纹漂移 / 非法日志（缺字段、重复或未知字段、非规范十进制 DPR）的可读报错与退出码、`capture-env: unavailable (...)` 回退行按环境不可用处理，以及清单环境 / `provenance.container` / 重拍命令与固定契约不一致时经 CLI 退出 2；平台字段单独覆盖：清单缺少 / 非法 `environment.platform` 退出 2，清单平台与日志平台漂移（期望 `linux/amd64`、实际 `linux/arm64`）单独报告期望 / 实际平台、镜像 tag / digest 与重拍命令并退出 1，PNG 哈希一致但平台不一致时仍失败。测试还断言清单的镜像 tag / 平台 / EGL / 目标 DPR 与 `scripts/lib/capture-env.mjs` 常量一致、字体版本与 README 的容器 `capture-env:` 示例一致。不依赖真实浏览器或 Docker。`tests/unit/screenshot-platform-docs.test.ts` 另外钉住本 README 的平台文档契约：固定捕获环境写明 `linux/amd64`、`--platform`、平台指纹字段与 arm64 主机拒绝行为；清单章节写明 `environment.platform`、平台差异单独报告及退出码、重拍流程与未来按平台拆分清单；容器 `capture-env:` 示例可被 `parseCaptureEnvironmentFingerprintLine` 解析，且示例平台与清单 `environment.platform`、`CAPTURE_PLATFORM` 一致。
+- 单测：`tests/unit/screenshot-sha256.test.ts` 用临时目录构造 PNG / 日志夹具，覆盖清单解析（非法条目、控制字符路径、大小写重复文件、非 64 位 hex）、全部一致时的退出 0、缺文件 / 哈希漂移 / 环境指纹漂移 / 非法日志（缺字段、重复或未知字段、非规范十进制 DPR）的可读报错与退出码、`capture-env: unavailable (...)` 回退行按环境不可用处理，以及清单环境 / `provenance.container` / 重拍命令与固定契约不一致时经 CLI 退出 2；平台字段单独覆盖：清单缺少 / 非法 `environment.platform` 退出 2，清单平台与日志平台漂移（期望 `linux/amd64`、实际 `linux/arm64`）单独报告期望 / 实际平台、镜像 tag / digest 与重拍命令并退出 1，PNG 哈希一致但平台不一致时仍失败。测试还断言清单的镜像 tag / 平台 / EGL / 目标 DPR 与 `scripts/lib/capture-env.mjs` 常量一致、字体版本与 README 的容器 `capture-env:` 示例一致。不依赖真实浏览器或 Docker。`tests/unit/capture-write-guard.test.ts` 覆盖写前护栏：指纹一致时原子写入、rename 失败时目标保持旧字节且不残留临时文件、指纹 / 宿主不符时在写出任何字节前失败且不改动目标 PNG、未收录文件保持原写入路径、固定环境下哈希漂移时打印清单 / 文档 checklist 且校验器仍以退出码 1 失败、截图编码失败不留下临时文件、畸形清单与清单存在但不可读时 fail-closed，以及清单缺失按未收录处理。`tests/unit/screenshot-platform-docs.test.ts` 另外钉住本 README 的平台文档契约：固定捕获环境写明 `linux/amd64`、`--platform`、平台指纹字段与 arm64 主机拒绝行为；清单章节写明 `environment.platform`、平台差异单独报告及退出码、重拍流程与未来按平台拆分清单；容器 `capture-env:` 示例可被 `parseCaptureEnvironmentFingerprintLine` 解析，且示例平台与清单 `environment.platform`、`CAPTURE_PLATFORM` 一致。
 
 ## 通用大厅整页证据（Issue #161 / 子任务 1）
 
@@ -217,10 +218,10 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
 - 来源：本子任务分支 `agent/plan-100-t3` 的当前 head。Chromium 的既有同名状态文件保持不变；下表全部是新增的 `*-webkit*.png`，由仓库内脚本生成。
 - 引擎 / 设备：Playwright WebKit（Linux WPE）`iPhone SE (3rd gen)` 设备模拟（DPR 2、`isMobile: true`、`hasTouch: true`）；除成绩榜使用 320×640 外，其余为 375×667 CSS px。深色主题、`reducedMotion: reduce`；除成绩榜为全页截图（`fullPage: true`，宽度 320 CSS px）外，其余为视口截图（`fullPage: false`）。
 - 复现命令：
-  - `npm run screenshots:webkit` → 大厅 / 空白画布
+  - `npm run screenshots:container -- screenshots:webkit` → 大厅 / 空白画布（`after-blank-webkit.png` 已被清单收录，宿主命令会在该文件前被拒绝）
   - `npm run screenshots:snake:webkit` → 贪食蛇手机 ready（开发服务器 + 固定首果）
-  - `npm run screenshots:2048:webkit` → 2048 ready / playing / gameover
-  - `npm run screenshots:breakout:webkit` → 打砖块 ready / playing / levelclear / gameover
+  - `npm run screenshots:container -- screenshots:2048:webkit` → 2048 ready / playing / gameover（playing / gameover 已被清单收录，宿主命令会在 playing 前被拒绝）
+  - `npm run screenshots:container -- screenshots:breakout:webkit` → 打砖块 ready / playing / levelclear / gameover（playing 已被清单收录，宿主命令会在 playing 前被拒绝）
   - `npm run screenshots:minesweeper:webkit` → 扫雷 ready / playing / lost / won
   - `npm run screenshots:minesweeper:webkit-before` → 同一组 WebKit 手机 Before 状态（需 `BASE_URL` 指向触屏改动前的基线预览；仓库不提交这些 Before 文件）
   - `npm run screenshots:minesweeper:scores:webkit` → 最高用时榜（当前面板包含「清空记录」）
@@ -233,13 +234,13 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
 | 文件 | 场景 | 引擎 / 视口 / 主题 | 生成命令 |
 | --- | --- | --- | --- |
 | `after-hub-webkit.png` | 大厅 | WebKit / 375×667 / 深色 | `npm run screenshots:webkit` |
-| `after-blank-webkit.png` | 空白画布（触屏移动并停稳后） | WebKit / 375×667 / 深色 | `npm run screenshots:webkit` |
+| `after-blank-webkit.png` | 空白画布（触屏移动并停稳后） | WebKit / 375×667 / 深色 | `npm run screenshots:container -- screenshots:webkit` |
 | `after-snake-webkit.png` | 贪食蛇 READY（手机） | WebKit / 375×667 / 深色 | `npm run screenshots:snake:webkit` |
 | `after-2048-ready-webkit.png` | 2048 READY（手机） | WebKit / 375×667 / 深色 | `npm run screenshots:2048:webkit` |
-| `after-2048-playing-webkit.png` | 2048 合并计分中（手机） | WebKit / 375×667 / 深色 | `npm run screenshots:2048:webkit` |
-| `after-2048-gameover-webkit.png` | 2048 无路可走（手机） | WebKit / 375×667 / 深色 | `npm run screenshots:2048:webkit` |
+| `after-2048-playing-webkit.png` | 2048 合并计分中（手机） | WebKit / 375×667 / 深色 | `npm run screenshots:container -- screenshots:2048:webkit` |
+| `after-2048-gameover-webkit.png` | 2048 无路可走（手机） | WebKit / 375×667 / 深色 | `npm run screenshots:container -- screenshots:2048:webkit` |
 | `after-breakout-ready-webkit.png` | 打砖块 READY（手机） | WebKit / 375×667 / 深色 | `npm run screenshots:breakout:webkit` |
-| `after-breakout-playing-webkit.png` | 打砖块游玩中（手机） | WebKit / 375×667 / 深色 | `npm run screenshots:breakout:webkit` |
+| `after-breakout-playing-webkit.png` | 打砖块游玩中（手机） | WebKit / 375×667 / 深色 | `npm run screenshots:container -- screenshots:breakout:webkit` |
 | `after-breakout-levelclear-webkit.png` | 打砖块过关（手机） | WebKit / 375×667 / 深色 | `npm run screenshots:breakout:webkit` |
 | `after-breakout-gameover-webkit.png` | 打砖块生命用完（手机） | WebKit / 375×667 / 深色 | `npm run screenshots:breakout:webkit` |
 | `after-minesweeper-ready-webkit.png` | 扫雷 READY（手机） | WebKit / 375×667 / 深色 | `npm run screenshots:minesweeper:webkit` |
@@ -247,6 +248,8 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
 | `after-minesweeper-lost-webkit.png` | 扫雷 BOOM（触屏） | WebKit / 375×667 / 深色 | `npm run screenshots:minesweeper:webkit` |
 | `after-minesweeper-won-webkit.png` | 扫雷 CLEARED（触屏） | WebKit / 375×667 / 深色 | `npm run screenshots:minesweeper:webkit` |
 | `after-minesweeper-scores-webkit.png` | 最高用时榜（含「清空记录」，手机） | WebKit / 320×640 / 深色 | `npm run screenshots:minesweeper:scores:webkit` |
+
+上表被 `capture-sha256-manifest.json` 收录的行（`after-blank-webkit.png`、`after-2048-playing-webkit.png`、`after-2048-gameover-webkit.png`、`after-breakout-playing-webkit.png`）已改为固定容器命令；对应的宿主命令（`npm run screenshots:webkit`、`npm run screenshots:2048:webkit`、`npm run screenshots:breakout:webkit`）会在写出这些文件前被写前护栏拒绝。同一脚本中先写出的未收录文件（例如 ready 图）可能已经落盘，随后命令才以非零状态中止。
 
 ### WebKit 历史证据（Issue #137 / #120）
 
@@ -498,7 +501,7 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
 - After：PR #29 的截图捕获提交 [`abed3bc`](https://github.com/yeahdongcn-mk2/playground/commit/abed3bc0346fe738f24ef4e51666ca1ddb369f48)（分支 `agent/plan-27-t1`）。其后提交只修改 `tests/e2e/` 与 `docs/screenshots/README.md`，不改变界面；PR 描述中附有 Before / After 截图链接。
 - 视口 / 主题：桌面 1440×1000、手机 390×844（DPR 2），深色主题，`reducedMotion: reduce`。桌面与手机大厅均为整页截图（`fullPage: true`），手机 Before / After 用同一口径，保证单列布局中的打砖块卡片进入画面。
 - 生成：`npm run screenshots:breakout`（生产构建 + `vite preview`，固定砖块 / 球 / 生命走 `?debug=1` 调试接缝）。`after-breakout-ready-desktop.png` / `after-breakout-levelclear-desktop.png` / `after-breakout-gameover-desktop.png` 与 `after-breakout-ready-mobile.png` / `after-breakout-gameover-mobile.png` 是 `26e84fa`（#29）捕获的历史证据：桌面整页图含旧页脚，手机图重跑差异覆盖游戏区约 y=472..1565（不是页脚），用当前构建重跑必然不同；脚本默认跳过这些历史图并打印守卫警告，确需重建时只能在固定容器内用 `npm run screenshots:container -- screenshots:breakout --allow-historical-overwrite`，并在同一改动中同步本节捕获 commit 与 `capture-sha256-manifest.json` 条目（若收录）；权威对照口径见「历史 After 证据与当前构建不一致（Issue #137）」。
-- 游玩截图确定性：`openPlaying()` 固定 `?debug=1&seed=7&steps=120`。点击「开始游戏」后，调试接缝在下一帧内以引擎固定的 120 Hz 步长（`FIXED_STEP_MS`）精确推进 120 个固定步（约 1 秒模拟时间），随后暂停主循环；截图脚本等待 `data-debug-steps=120` 标记后再截图。所以球、挡板与砖块状态只由 seed 与步数决定，不依赖真实帧时序。因此 3 张 `after-breakout-playing-{desktop,mobile,webkit}.png` 是确定性产物：同一构建、预览端口 4185 空闲时连续两次执行 `npm run screenshots:breakout`（以及 `npm run screenshots:breakout:webkit`）得到的 sha256 完全一致，并等于已提交产物；ready / levelclear / gameover 等未走该接缝的图不受影响；共享大厅证据不由该命令写出。复现命令：`npm run screenshots:breakout && npm run screenshots:breakout:webkit`，随后用 `sha256sum docs/screenshots/after-breakout-playing-{desktop,mobile,webkit}.png` 对照。WebKit 产物在官方 Playwright 容器（`mcr.microsoft.com/playwright:v1.64.1-noble`，与仓库的 Playwright 1.64.1 对应）内捕获，避免宿主 EGL / 字体环境差异。本子任务重生成的桌面整页 playing 图带当前页脚，与其余 desktop 图的旧页脚不一致；页脚漂移统一由 #137 跟踪，不影响本子任务的确定性验收。
+- 游玩截图确定性：`openPlaying()` 固定 `?debug=1&seed=7&steps=120`。点击「开始游戏」后，调试接缝在下一帧内以引擎固定的 120 Hz 步长（`FIXED_STEP_MS`）精确推进 120 个固定步（约 1 秒模拟时间），随后暂停主循环；截图脚本等待 `data-debug-steps=120` 标记后再截图。所以球、挡板与砖块状态只由 seed 与步数决定，不依赖真实帧时序。因此 3 张 `after-breakout-playing-{desktop,mobile,webkit}.png` 是确定性产物：同一构建、预览端口 4185 空闲时连续两次执行 `npm run screenshots:breakout`（以及固定容器内的 `npm run screenshots:container -- screenshots:breakout:webkit`）得到的 sha256 完全一致，并等于已提交产物；ready / levelclear / gameover 等未走该接缝的图不受影响；共享大厅证据不由该命令写出。复现命令：`npm run screenshots:breakout && npm run screenshots:container -- screenshots:breakout:webkit`，随后用 `sha256sum docs/screenshots/after-breakout-playing-{desktop,mobile,webkit}.png` 对照。WebKit 产物在官方 Playwright 容器（`mcr.microsoft.com/playwright:v1.64.1-noble`，与仓库的 Playwright 1.64.1 对应）内捕获，避免宿主 EGL / 字体环境差异。本子任务重生成的桌面整页 playing 图带当前页脚，与其余 desktop 图的旧页脚不一致；页脚漂移统一由 #137 跟踪，不影响本子任务的确定性验收。
 - 预览端口：默认 `4185`；共享主机或并行 worktree 用 `PREVIEW_PORT=4186 npm run screenshots:breakout` 覆盖（`PREVIEW_PORT` 为空串时回退 `4185`；`screenshots:breakout:webkit` 复用同一启动路径与端口）。端口已被占用时脚本在启动 preview 前以非零状态退出，错误包含实际端口、`the port is already in use` 与 `Set PREVIEW_PORT` 建议，不会写出或覆盖任何截图；端口探测通过后 preview 提前退出时报告子进程退出码与 stderr，不再静默连到端口上的其它服务。Before 模式（`screenshots:breakout:before`）以 `BASE_URL` 为准，不启动 preview、不探测 preview 端口；`npm run screenshots:container` 与此一致，`BASE_URL` 非空时跳过宿主预览端口预检，只有 `BASE_URL` 为空、容器内会自行启动 preview 时才探测默认 `4185`。
 - 复现 Before：在 `63bf67e` 的干净 worktree 里 `npm ci && npm run build`，用 `node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 4184 --strictPort` 启动预览，然后在当前分支运行 `BASE_URL=http://127.0.0.1:4184 npm run screenshots:breakout:before`。
 
@@ -576,7 +579,7 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
 - 复现命令（同一构建、预览端口空闲；Chromium 与 WebKit 分开执行并各跑两次）：
   ```sh
   npm run screenshots:2048
-  npm run screenshots:2048:webkit
+  npm run screenshots:container -- screenshots:2048:webkit
   sha256sum docs/screenshots/after-2048-{playing,gameover}-{desktop,mobile,webkit}.png
   ```
   两次运行的 6 个 sha256 应完全一致，且等于已提交产物。本任务只提交这 6 张 playing / gameover 图；After 守卫现在会跳过 ready 桌面 / 手机 / WebKit 历史图。该命令不再写共享大厅证据（`after-hub-*.png` 只由 `npm run screenshots:container -- screenshots` 写入），因此提交时不需要再还原这两张共享图。WebKit 产物在官方 Playwright 容器（`mcr.microsoft.com/playwright:v1.64.1-noble`，与仓库的 Playwright 1.64.1 对应）内捕获，避免宿主 EGL / 字体环境差异。
@@ -682,11 +685,11 @@ npm run screenshots
 - 等待条件：点击 / 轻触后不再固定等待，改为每 100 ms 读取 `[data-testid="readout"]` 的 `data-x` / `data-y` / `data-trail`（`trail` 是场景实际 trail 数组长度，由 `src/games/blank/view.ts` 写入），直到连续 5 个采样都落在点击目标 ±2 CSS px 且 `data-trail="0"` 才截图；15 s 内不满足则报错并带最后一次读数，不会静默写出中间帧。
 - 固定参数：桌面在 canvas 的 (0.66, 0.40) 处点击；手机与 WebKit 在 (0.36, 0.62) 处轻触；`colorScheme: dark`、`reducedMotion: reduce`。桌面 1440×1000（DPR 1，视口截图，不是整页图、不含页脚），手机 390×844（DPR 2），WebKit 375×667（DPR 2）。
 - 确定性条件：`reducedMotion: reduce` 下目标圆环不脉冲、orb 缩放固定为 1；orb 到达目标后场景把 `target` 置空并精确落到点击点，trail 按 1.15 s 生命衰减并从数组移除。等 `data-trail="0"` 后画面只剩固定 backdrop / 网格 / 静态 orb，不再随时间变化，因此同一构建的截图逐字节一致；正常交互没有变化，也不需要新增调试接缝。
-- 复现（同一构建、预览端口 4174 空闲；Chromium 与 WebKit 各跑两次）：
+- 复现（同一构建、预览端口 4174 空闲；Chromium 在宿主、WebKit 在固定容器内各跑两次）：
 
   ```sh
   npm run screenshots
-  npm run screenshots:webkit
+  npm run screenshots:container -- screenshots:webkit
   sha256sum docs/screenshots/after-blank-{desktop,mobile,webkit}.png
   ```
 
