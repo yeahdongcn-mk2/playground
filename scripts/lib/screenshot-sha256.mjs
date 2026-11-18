@@ -599,6 +599,142 @@ function formatFonts(fonts) {
 }
 
 /**
+ * Render the manifest environment as the expected fingerprint line.
+ *
+ * The manifest does not record the Node / Playwright / browser versions (they
+ * are not part of the reproducible environment contract), so the returned line
+ * keeps the same fields the manifest does record: source, target, DPR,
+ * platform, image reference, font package versions and EGL variables. It is
+ * used by the write-time guard to print "expected" next to the actual
+ * `formatCaptureEnvironmentFingerprint()` line.
+ */
+export function formatManifestCaptureEnvironment(environment) {
+  return [
+    'capture-env:',
+    `source=${environment.source}`,
+    `target=${environment.target}`,
+    `dpr=${environment.dpr}`,
+    `platform=${environment.platform}`,
+    `image=${imageReference(environment.image)}`,
+    `fonts=${formatFonts(environment.fonts)}`,
+    `env=${CAPTURE_EGL_VARS.map(
+      (name) => `${name}=${environment.egl[name] ?? ''}`,
+    ).join(',')}`,
+  ].join(' ');
+}
+
+/**
+ * Compare one capture environment fingerprint with the manifest environment.
+ *
+ * Every field the manifest records is compared: source, target, DPR, platform,
+ * pinned image reference, EGL variables and the exact font package versions.
+ * The Node / Playwright / browser versions are not compared because the
+ * manifest does not record them. Platform drift is returned both in `problems`
+ * and as a structured `platformMismatches` entry, matching the log verifier so
+ * the CLI keeps reporting it as its own failure class.
+ *
+ * @returns {{
+ *   problems: string[],
+ *   platformMismatches: Array<{
+ *     source: 'manifest',
+ *     expected: string,
+ *     actual: string,
+ *     image: { repository: string, tag: string, digest: string },
+ *     actualImage: { repository: string, tag: string, digest: string } | null,
+ *     message: string,
+ *   }>,
+ * }}
+ */
+export function compareCaptureEnvironmentFingerprint(
+  fingerprint,
+  environment,
+  { source = 'manifest' } = {},
+) {
+  const problems = [];
+  const platformMismatches = [];
+
+  if (fingerprint.source !== environment.source) {
+    problems.push(
+      `capture environment source is "${fingerprint.source}", expected "${environment.source}"`,
+    );
+  }
+  if (fingerprint.target !== environment.target) {
+    problems.push(
+      `capture environment target is "${fingerprint.target}", expected "${environment.target}"`,
+    );
+  }
+  if (fingerprint.dpr !== environment.dpr) {
+    problems.push(`capture environment dpr is ${fingerprint.dpr}, expected ${environment.dpr}`);
+  }
+
+  if (fingerprint.source === 'container' && fingerprint.platform !== environment.platform) {
+    const message =
+      `capture environment platform is "${fingerprint.platform}", ` +
+      `expected "${environment.platform}"`;
+    platformMismatches.push({
+      source,
+      expected: environment.platform,
+      actual: fingerprint.platform,
+      image: environment.image,
+      actualImage: fingerprint.image,
+      message,
+    });
+    // Keep the message in the flat list as well: callers that only consume
+    // `problems` still see the drift, while `platformMismatches` gives the CLI
+    // the structured expected / actual values.
+    problems.push(message);
+  }
+
+  const expectedReference = imageReference(environment.image);
+  if (fingerprint.image === null) {
+    problems.push('capture environment image is unavailable, expected the pinned container image');
+  } else {
+    const actualReference = imageReference(fingerprint.image);
+    if (actualReference !== expectedReference) {
+      problems.push(
+        `capture environment image is "${actualReference}", expected "${expectedReference}"`,
+      );
+    }
+  }
+
+  if (fingerprint.env === null) {
+    problems.push('capture environment EGL variables are unavailable');
+  } else {
+    for (const name of CAPTURE_EGL_VARS) {
+      if (fingerprint.env[name] !== environment.egl[name]) {
+        problems.push(
+          `capture environment ${name} is "${fingerprint.env[name] ?? ''}", ` +
+            `expected "${environment.egl[name]}"`,
+        );
+      }
+    }
+  }
+
+  const actualFonts = formatFonts(fingerprint.fonts);
+  const expectedFonts = formatFonts(environment.fonts);
+  if (actualFonts !== expectedFonts) {
+    problems.push(`capture environment fonts are "${actualFonts}", expected "${expectedFonts}"`);
+  }
+
+  return { problems, platformMismatches };
+}
+
+/**
+ * Find the manifest entry for one screenshot file name.
+ *
+ * Matching is exact: `parseSha256Manifest` already rejects case / Unicode
+ * aliases as duplicate files, so the committed name is the only one the guard
+ * needs to recognise. A file that is not recorded returns `null`; its write
+ * keeps the pre-guard behaviour.
+ */
+export function findSha256ManifestCapture(manifest, file) {
+  if (manifest === null || manifest === undefined) {
+    return null;
+  }
+  return manifest.captures.find((capture) => capture.file === file) ?? null;
+}
+
+/**
  * Verify the capture environment fingerprint against the manifest expectation.
  *
  * A capture log can hold several fingerprint lines (a Chromium run records one
@@ -684,68 +820,12 @@ export function verifyCaptureEnvironment({ logText, environment } = {}) {
     );
   }
 
-  const expectedReference = imageReference(environment.image);
   for (const fingerprint of matching) {
-    if (fingerprint.source !== environment.source) {
-      problems.push(
-        `capture environment source is "${fingerprint.source}", expected "${environment.source}"`,
-      );
-    }
-    if (fingerprint.dpr !== environment.dpr) {
-      problems.push(
-        `capture environment dpr is ${fingerprint.dpr}, expected ${environment.dpr}`,
-      );
-    }
-
-    if (fingerprint.source === 'container' && fingerprint.platform !== environment.platform) {
-      const message =
-        `capture environment platform is "${fingerprint.platform}", ` +
-        `expected "${environment.platform}"`;
-      platformMismatches.push({
-        source: 'log',
-        expected: environment.platform,
-        actual: fingerprint.platform,
-        image: environment.image,
-        actualImage: fingerprint.image,
-        message,
-      });
-      // Keep the message in the flat list as well: callers that only consume
-      // `problems` still see the drift, while `platformMismatches` gives the
-      // CLI the structured expected / actual values.
-      problems.push(message);
-    }
-
-    if (fingerprint.image === null) {
-      problems.push('capture environment image is unavailable, expected the pinned container image');
-    } else {
-      const actualReference = imageReference(fingerprint.image);
-      if (actualReference !== expectedReference) {
-        problems.push(
-          `capture environment image is "${actualReference}", expected "${expectedReference}"`,
-        );
-      }
-    }
-
-    if (fingerprint.env === null) {
-      problems.push('capture environment EGL variables are unavailable');
-    } else {
-      for (const name of CAPTURE_EGL_VARS) {
-        if (fingerprint.env[name] !== environment.egl[name]) {
-          problems.push(
-            `capture environment ${name} is "${fingerprint.env[name] ?? ''}", ` +
-              `expected "${environment.egl[name]}"`,
-          );
-        }
-      }
-    }
-
-    const actualFonts = formatFonts(fingerprint.fonts);
-    const expectedFonts = formatFonts(environment.fonts);
-    if (actualFonts !== expectedFonts) {
-      problems.push(
-        `capture environment fonts are "${actualFonts}", expected "${expectedFonts}"`,
-      );
-    }
+    const compared = compareCaptureEnvironmentFingerprint(fingerprint, environment, {
+      source: 'log',
+    });
+    problems.push(...compared.problems);
+    platformMismatches.push(...compared.platformMismatches);
   }
 
   return {

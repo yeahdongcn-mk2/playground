@@ -269,6 +269,8 @@ pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和
 
 游戏与界面截图脚本新增了 `--webkit` 家族的命令（`capture-baseline.mjs` 仍只用于基线仓库状态）；Chromium 模式的命令、文件名与输出保持不变。WebKit 模式使用 `iPhone SE (3rd gen)` 设备模拟（375×667，DPR 2，深色，`reducedMotion: reduce`；成绩榜为 320×640），窄屏矩阵按 320×640 / 360×640 / 375×667 / 412×839 显式覆盖视口。脚本日志会为每张图打印 `engine / viewport / theme` 记录，来源表见 [docs/screenshots/README.md](docs/screenshots/README.md)。
 
+清单收录的 WebKit 证据（`docs/screenshots/capture-sha256-manifest.json`）在写盘前还有环境护栏：`captureScreenshot` 会先用产生该图的上下文目标比对清单里的 source / target / DPR / 平台 / 镜像 tag+digest / EGL 变量 / 字体包版本；宿主重跑或指纹不一致时在写出任何字节前非零退出，并给出期望 / 实际指纹与固定容器重拍命令，目标 PNG 保持不变。确需刷新时只能用 `npm run screenshots:container -- <target>`；固定容器内指纹一致但新哈希与清单不同时，捕获会打印必须同步清单 `sha256` / `provenance` 与 `docs/screenshots/README.md` 的 checklist，并在清单更新前让 `npm run verify:screenshots:sha256` 继续失败。未收录的截图不受影响。详见 [docs/screenshots/README.md](docs/screenshots/README.md) 的「已提交证据 sha256 清单与校验」。
+
 首次运行端到端测试前需要安装 Chromium 与 WebKit 两个引擎：
 
 ```bash
@@ -393,7 +395,7 @@ games/<game>/scene → 对应引擎（动态 import）
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过（oxlint 覆盖 src、tests 与 scripts；error 与 warning 都会失败，warning 经 --deny-warnings 升级；另跑 scripts/check-boundaries.mjs，失败返回非 0）
-npm run test:unit    # 1202 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
+npm run test:unit    # 1212 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
 npm run build        # 通过
 npm run check:budget # 通过（入口 11.16 KB gzip，全部 JS 410.58 KB gzip）
 npm run test:e2e     # 154 passed（桌面 87 + 手机 36 + WebKit 31）

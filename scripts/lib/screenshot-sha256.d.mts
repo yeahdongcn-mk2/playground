@@ -90,6 +90,16 @@ export interface VerifyCaptureEnvironmentOptions {
   environment: ScreenshotSha256Environment;
 }
 
+export interface CompareCaptureEnvironmentOptions {
+  /** Failure label of the structured platform mismatch (default `manifest`). */
+  source?: 'manifest' | 'log';
+}
+
+export interface CaptureEnvironmentComparison {
+  problems: string[];
+  platformMismatches: ScreenshotSha256PlatformMismatch[];
+}
+
 export interface VerifyScreenshotSha256Options {
   dir?: string;
   manifest: ScreenshotSha256Manifest;
@@ -117,6 +127,18 @@ export function manifestEnvironmentMismatches(
 export function manifestPlatformMismatch(
   manifest: ScreenshotSha256Manifest,
 ): ScreenshotSha256PlatformMismatch | null;
+export function formatManifestCaptureEnvironment(
+  environment: ScreenshotSha256Environment,
+): string;
+export function compareCaptureEnvironmentFingerprint(
+  fingerprint: CaptureEnvironmentFingerprintRecord,
+  environment: ScreenshotSha256Environment,
+  options?: CompareCaptureEnvironmentOptions,
+): CaptureEnvironmentComparison;
+export function findSha256ManifestCapture(
+  manifest: ScreenshotSha256Manifest | null | undefined,
+  file: string,
+): ScreenshotSha256Capture | null;
 export function imageReference(image: ScreenshotSha256Image): string;
 export function expectedRecaptureCommand(file: string): string;
 export function parseImageReference(value: string): ScreenshotSha256Image | null;
