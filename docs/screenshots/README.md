@@ -53,7 +53,7 @@
 | `after-blank-webkit.png` | `cd4ed3fea1e0a068661c8102ee0b58b0601b3a249e480d76224d22782a0e088f` | `npm run screenshots:container -- screenshots:webkit` | `f5b87c05b3c55694c3605530de4bcf8e20097a80`（#162） |
 | `after-hub-webkit.png` | `6c2856e33a5619dc2eff5833c059608c74f03492192029515edf345b165581f4` | `npm run screenshots:container -- screenshots:webkit` | `c6a8c6c0b6cb70aac968f12d834d00f1073ade61`（#318 t3） |
 | `after-snake-webkit.png` | `d8e262f366b11436d5a1dc309f01ee86a473b23f74684fd92e03392fc28450ba` | `npm run screenshots:container -- screenshots:snake:webkit` | `c6a8c6c0b6cb70aac968f12d834d00f1073ade61`（#318 t3） |
-| `after-2048-ready-webkit.png` | `0ea38c8d6a1ff580c695cedc6f5165ad4299a7612dd3da32d3c62c06e73b4856` | `npm run screenshots:container -- screenshots:2048:webkit` | `b855ec9aaca5944be200a8a5802b647a78f5d1ce`（#199 t1） |
+| `after-2048-ready-webkit.png` | `0ea38c8d6a1ff580c695cedc6f5165ad4299a7612dd3da32d3c62c06e73b4856` | `npm run screenshots:container -- screenshots:2048:webkit` | `582401b55b535e397faca3d6bb24e6b8571637b2`（#199 t1） |
 | `after-2048-playing-webkit.png` | `4173dce84c814f2573fa506360f95bab477c985b37a2dfe2d5b0d1c2c5992a91` | `npm run screenshots:container -- screenshots:2048:webkit` | `8dbe3e7e40e1a17ac84f5b715ce6383cbf039187`（#145） |
 | `after-2048-gameover-webkit.png` | `bf7548b7c7fc696b89e9d1ed00c48f0d1bdb2274575c278240e6c801630ba837` | `npm run screenshots:container -- screenshots:2048:webkit` | `8dbe3e7e40e1a17ac84f5b715ce6383cbf039187`（#145） |
 | `after-breakout-playing-webkit.png` | `27297f5f79792511e1d2a56cc1a1c5565922ba10e7fda3de798c663769147704` | `npm run screenshots:container -- screenshots:breakout:webkit` | `bc7759432d66034141261a483a50454ee0631235`（#159） |
