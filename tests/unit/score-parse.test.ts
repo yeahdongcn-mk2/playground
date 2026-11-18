@@ -280,6 +280,15 @@ describe('parseBudgetMetrics', () => {
       totalJsGzipBytes: null,
     });
   });
+
+  it('returns null for an unparseable KB figure instead of NaN', () => {
+    expect(
+      parseBudgetMetrics('Entry JS: 24.58 KB (1.2.3 KB gzip)\nAll JS chunks: x KB gzip\n'),
+    ).toEqual({
+      entryGzipBytes: null,
+      totalJsGzipBytes: null,
+    });
+  });
 });
 
 describe('parseUnitTests', () => {

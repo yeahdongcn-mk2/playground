@@ -7,6 +7,7 @@ import {
   buildSnapshot,
   compareSnapshot,
   createBaseline,
+  findSnapshotGaps,
   formatBaselineUpdate,
   formatComparisonSummary,
   formatComparisonTable,
@@ -28,8 +29,12 @@ result with ${BASELINE_RELATIVE_PATH}.
              item's old value → new value
   -h, --help show this help
 
-Exit codes: 0 unchanged / improved, 1 regression, 2 missing or corrupt baseline
-or a usage error.`;
+Exit codes:
+  0 unchanged / improved, and a successful --update (even when the new values
+    regress)
+  1 regression during comparison
+  2 missing or corrupt baseline during comparison, an incomplete snapshot or a
+    write failure for --update, or a usage error`;
 
 function npmCommand() {
   return process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -154,6 +159,16 @@ function printSnapshotJson(snapshot) {
 }
 
 function updateBaseline(snapshot) {
+  const gaps = findSnapshotGaps(snapshot);
+  if (gaps.length > 0) {
+    // Writing nulls would disable the matching regression checks on every
+    // later run, so refuse instead of overwriting a complete baseline.
+    console.error('错误: 当前快照不完整，拒绝写入基线：');
+    for (const gap of gaps) console.error(`  - ${gap}`);
+    console.error('请先修复上述问题，再运行 npm run score -- --update。');
+    return 2;
+  }
+
   const hadBaseline = existsSync(BASELINE_PATH);
   const loaded = loadBaseline();
   const previous = loaded.baseline;

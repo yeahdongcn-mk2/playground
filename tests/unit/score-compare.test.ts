@@ -3,6 +3,7 @@ import {
   ScoreBaselineError,
   compareSnapshot,
   createBaseline,
+  findSnapshotGaps,
   formatBaselineUpdate,
   formatComparisonSummary,
   formatComparisonTable,
@@ -179,6 +180,36 @@ describe('compareSnapshot', () => {
     expect(formatComparisonSummary(comparison)).toContain('部分指标无法比较');
   });
 
+  it('treats a check that only one side could evaluate as unknown', () => {
+    const currentUnknown = compareSnapshot(
+      snapshot({ checks: { ...PASS_CHECKS, lint: null } }),
+      baseline(),
+    );
+
+    expect(currentUnknown.status).toBe('unchanged');
+    expect(currentUnknown.unknown).toHaveLength(1);
+    expect(row(currentUnknown, 'lint')).toMatchObject({
+      current: null,
+      baseline: 'pass',
+      verdict: 'unknown',
+      deltaLabel: 'pass → null',
+    });
+    expect(formatComparisonSummary(currentUnknown)).toContain('部分指标无法比较');
+
+    const baselineUnknown = compareSnapshot(
+      snapshot(),
+      baseline({ checks: { ...PASS_CHECKS, lint: null } }),
+    );
+
+    expect(baselineUnknown.status).toBe('unchanged');
+    expect(row(baselineUnknown, 'lint')).toMatchObject({
+      current: 'pass',
+      baseline: null,
+      verdict: 'unknown',
+      deltaLabel: 'null → pass',
+    });
+  });
+
   it('keeps the current snapshot error reasons in the summary', () => {
     const comparison = compareSnapshot(
       snapshot({ error: { lint: 'npm run lint was not executed' } }),
@@ -210,7 +241,7 @@ describe('formatComparisonTable', () => {
 });
 
 describe('baseline update', () => {
-  it('writes the new baseline and prints every old value → new value', () => {
+  it('formats the update report and round-trips the serialized baseline', () => {
     const previous = baseline();
     const next = createBaseline(
       snapshot({
@@ -277,6 +308,74 @@ describe('parseBaseline', () => {
 
     expect(() => parseBaseline(JSON.stringify(report))).toThrow(ScoreBaselineError);
     expect(() => parseBaseline(JSON.stringify(report))).toThrow(/checks\.lint/);
+  });
+});
+
+describe('findSnapshotGaps', () => {
+  it('returns no gaps for a fully measured snapshot', () => {
+    expect(findSnapshotGaps(snapshot())).toEqual([]);
+  });
+
+  it('lists every null metric and check with the captured reason', () => {
+    const gaps = findSnapshotGaps(
+      snapshot({
+        entryGzipBytes: null,
+        checks: { ...PASS_CHECKS, lint: null },
+        error: {
+          entryGzipBytes: 'check:budget output did not report the entry gzip size',
+          lint: 'npm run lint did not report an exit status',
+        },
+      }),
+    );
+
+    expect(gaps).toEqual([
+      'entryGzipBytes: check:budget output did not report the entry gzip size',
+      'lint: npm run lint did not report an exit status',
+    ]);
+  });
+
+  it('reports a null or unrecognised check value', () => {
+    expect(
+      findSnapshotGaps(snapshot({ checks: { ...PASS_CHECKS, lint: null }, error: {} })),
+    ).toEqual(['lint 无法获取']);
+    expect(
+      findSnapshotGaps(snapshot({ checks: { ...PASS_CHECKS, lint: 'ok' as CheckStatus } })),
+    ).toEqual(['lint 状态无效']);
+  });
+
+  it('reports an undefined metric value', () => {
+    expect(findSnapshotGaps(snapshot({ unitTests: undefined }))).toEqual([
+      'unitTests 无法获取',
+    ]);
+  });
+
+  it('reports a non-finite or negative metric value instead of persisting null', () => {
+    expect(findSnapshotGaps(snapshot({ entryGzipBytes: Number.NaN }))).toEqual([
+      'entryGzipBytes 无法获取',
+    ]);
+    expect(findSnapshotGaps(snapshot({ totalJsGzipBytes: -1 }))).toEqual([
+      'totalJsGzipBytes 无法获取',
+    ]);
+  });
+
+  it('surfaces an unknown error key that is not a baseline field', () => {
+    expect(findSnapshotGaps(snapshot({ error: { futureMetric: 'boom' } }))).toEqual([
+      'futureMetric: boom',
+    ]);
+  });
+
+  it('treats a failed build as incomplete even when metrics were parsed', () => {
+    expect(
+      findSnapshotGaps(snapshot({ error: { build: 'npm run build exited with code 1' } })),
+    ).toEqual(['build: npm run build exited with code 1']);
+  });
+
+  it('ignores a git commit error because the commit is not stored in the baseline', () => {
+    expect(
+      findSnapshotGaps(
+        snapshot({ gitCommit: null, error: { gitCommit: 'git rev-parse HEAD exited with code 1' } }),
+      ),
+    ).toEqual([]);
   });
 });
 

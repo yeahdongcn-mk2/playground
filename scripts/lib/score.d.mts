@@ -91,6 +91,7 @@ export function buildSnapshot(options: BuildSnapshotOptions): ScoreSnapshot;
 export function parseBaseline(text: string, source?: string): ScoreBaseline;
 export function createBaseline(snapshot: ScoreSnapshot): ScoreBaseline;
 export function serializeBaseline(baseline: ScoreBaseline): string;
+export function findSnapshotGaps(snapshot: ScoreSnapshot): string[];
 export function compareSnapshot(
   snapshot: ScoreSnapshot,
   baseline: ScoreBaseline,

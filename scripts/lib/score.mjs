@@ -74,11 +74,19 @@ function summarizeOutput(result) {
   return '';
 }
 
+/** Convert one captured KB figure to whole bytes; unparseable input is null. */
+function parseKilobytes(match) {
+  if (match === null) return null;
+  const kilobytes = Number(match[1]);
+  return Number.isFinite(kilobytes) ? kbToBytes(kilobytes) : null;
+}
+
 /**
  * Parse the two gzip sizes printed by `npm run check:budget`.
  *
- * A missing line yields null for that value instead of throwing, so a
- * partially broken budget run still produces the rest of the snapshot.
+ * A missing line or a number that does not parse yields null for that value
+ * instead of throwing, so a partially broken budget run still produces the
+ * rest of the snapshot and cannot inject NaN into the baseline.
  *
  * @returns {{ entryGzipBytes: number | null, totalJsGzipBytes: number | null }}
  */
@@ -88,8 +96,8 @@ export function parseBudgetMetrics(output) {
   const total = TOTAL_JS_GZIP_PATTERN.exec(text);
 
   return {
-    entryGzipBytes: entry === null ? null : kbToBytes(Number(entry[1])),
-    totalJsGzipBytes: total === null ? null : kbToBytes(Number(total[1])),
+    entryGzipBytes: parseKilobytes(entry),
+    totalJsGzipBytes: parseKilobytes(total),
   };
 }
 
@@ -434,6 +442,63 @@ export function createBaseline(snapshot) {
 /** Render a baseline object as the on-disk JSON file contents. */
 export function serializeBaseline(baseline) {
   return `${JSON.stringify(baseline, null, 2)}\n`;
+}
+
+/**
+ * List the reasons a snapshot cannot become a trustworthy baseline.
+ *
+ * `--update` must not silently persist a half-captured snapshot: a null,
+ * negative or non-integer metric, or a null / unrecognised check, disables
+ * the corresponding regression check on every later run. `gitCommit` is only
+ * run metadata and is not stored in the baseline, so a failed
+ * `git rev-parse` does not make the values incomplete.
+ *
+ * @returns {string[]} one human-readable line per invalid value; empty when
+ *   every baseline field was measured.
+ */
+export function findSnapshotGaps(snapshot) {
+  if (snapshot === null || typeof snapshot !== 'object') {
+    throw new TypeError('snapshot must be an object');
+  }
+
+  const error = snapshot.error ?? {};
+  const gaps = [];
+  const reported = new Set();
+
+  const report = (key, fallback) => {
+    const reason = error[key];
+    gaps.push(typeof reason === 'string' && reason !== '' ? `${key}: ${reason}` : fallback);
+    reported.add(key);
+  };
+
+  for (const metric of COMPARED_METRICS) {
+    const value = snapshot[metric.name];
+    // Mirror parseBaseline's validation: a NaN or negative value would break
+    // the regression maths and must never be written to the baseline.
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+      report(metric.name, `${metric.name} 无法获取`);
+    }
+  }
+  for (const definition of CHECK_DEFINITIONS) {
+    const value = snapshot.checks?.[definition.name];
+    if (value === null || value === undefined) {
+      report(definition.name, `${definition.name} 无法获取`);
+    } else if (value !== 'pass' && value !== 'fail') {
+      // Mirror parseBaseline: an unrecognised status would corrupt the file
+      // and fail the next comparison with a baseline error.
+      report(definition.name, `${definition.name} 状态无效`);
+    }
+  }
+
+  // Surface every remaining error entry (including build failures) so a
+  // future collection step cannot hide a gap behind a key `--update` does not
+  // know about.
+  for (const [key, reason] of Object.entries(error)) {
+    if (key === 'gitCommit' || reported.has(key)) continue;
+    gaps.push(`${key}: ${reason}`);
+  }
+
+  return gaps;
 }
 
 function compareMetricRow(name, current, baseline, lowerIsBetter) {
