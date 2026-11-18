@@ -1225,6 +1225,11 @@ describe('captureScreenshot evidence logging', () => {
           engine: call.engine,
           colorScheme: call.theme,
           fullPage: call.fullPage,
+          // This case only covers the evidence log line. Passing a null
+          // manifest keeps a sample that later joins the fixed-environment
+          // sha256 manifest (for example the scores PNG in #318 t2) on the
+          // unrecorded write path instead of tripping the write-time guard.
+          manifest: null,
         });
       }
 

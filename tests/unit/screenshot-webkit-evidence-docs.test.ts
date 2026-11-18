@@ -71,6 +71,11 @@ const DETERMINISTIC = [
   'after-2048-playing-webkit.png',
   'after-2048-gameover-webkit.png',
 ];
+const MINESWEEPER_SCORES = 'after-minesweeper-scores-webkit.png';
+const MINESWEEPER_SCORES_SHA256 =
+  '44768a977454b98f4526033e96c3cdf60012f6278b10912cf7a11071419674fe';
+const MINESWEEPER_SCORES_CAPTURE_COMMIT =
+  '05818ae0bfe980ac9274d75146d22a4e59f96c8e';
 
 /** Bullets nested under the drift list, which is where every drifted file must appear. */
 function driftBullets(text: string): string {
@@ -81,7 +86,7 @@ function driftBullets(text: string): string {
 }
 
 describe('WebKit historical evidence docs (Issue #137)', () => {
-  it('records the #120 capture commit and that the committed PNGs are not re-shot', () => {
+  it('records the #120 capture commit and limits the re-shot to the reviewed scores capture', () => {
     expect(WEBKIT_HISTORICAL).toContain(CAPTURE_COMMIT);
     expect(WEBKIT_HISTORICAL).toContain('#120');
     expect(WEBKIT_HISTORICAL).toContain(
@@ -89,8 +94,8 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     );
     expect(WEBKIT_HISTORICAL).toContain('9c39e68');
     expect(WEBKIT_HISTORICAL).toContain('重新捕获');
-    expect(WEBKIT_HISTORICAL).toContain('不重拍');
-    expect(WEBKIT_HISTORICAL).toContain('不改动任何已提交 PNG');
+    expect(WEBKIT_HISTORICAL).toContain('只重拍扫雷最高用时榜');
+    expect(WEBKIT_HISTORICAL).toContain('其余已提交 PNG 不改动');
   });
 
   it('lists the drifted breakout, minesweeper and webkit-narrow artifacts', () => {
@@ -144,6 +149,47 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(WEBKIT_HISTORICAL).toContain('ready 的相邻两跑则可能不同');
     expect(WEBKIT_HISTORICAL).not.toContain('扫雷这 4 张在容器内两跑 sha256 相同');
     expect(WEBKIT_HISTORICAL).toContain('2048 ready 在同一容器两跑不同');
+  });
+
+  it('records the reviewed minesweeper scores capture in the fixed manifest', () => {
+    expect(WEBKIT_HISTORICAL).toContain(MINESWEEPER_SCORES);
+    expect(WEBKIT_HISTORICAL).toContain(MINESWEEPER_SCORES_SHA256);
+    expect(WEBKIT_HISTORICAL).toContain(MINESWEEPER_SCORES_CAPTURE_COMMIT);
+    expect(WEBKIT_HISTORICAL).toContain('连续两跑 sha256 相同');
+    expect(WEBKIT_HISTORICAL).toContain('5687');
+    expect(WEBKIT_HISTORICAL).toContain('0.2143%');
+    expect(WEBKIT_HISTORICAL).toContain(
+      'screenshots:minesweeper:scores:webkit',
+    );
+    expect(WEBKIT_HISTORICAL).toContain('#318 t2');
+    expect(WEBKIT_HISTORICAL).not.toMatch(
+      /本轮未复核[^。]*after-minesweeper-scores-webkit/,
+    );
+
+    const manifest = JSON.parse(
+      readFileSync(
+        join(ROOT, 'docs', 'screenshots', 'capture-sha256-manifest.json'),
+        'utf8',
+      ),
+    ) as {
+      captures: Array<{
+        file: string;
+        sha256: string;
+        command: string;
+        provenance: { captureCommit: string };
+      }>;
+    };
+    const capture = manifest.captures.find(
+      (entry) => entry.file === MINESWEEPER_SCORES,
+    );
+    expect(capture).toBeDefined();
+    expect(capture?.sha256).toBe(MINESWEEPER_SCORES_SHA256);
+    expect(capture?.command).toBe(
+      'npm run screenshots:container -- screenshots:minesweeper:scores:webkit',
+    );
+    expect(capture?.provenance.captureCommit).toBe(
+      MINESWEEPER_SCORES_CAPTURE_COMMIT,
+    );
   });
 
   it('makes the CI manifest, not sha256, the authoritative webkit-narrow check', () => {
@@ -201,6 +247,10 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
       ['after-2048-playing-webkit.png', 'screenshots:container -- screenshots:2048:webkit'],
       ['after-2048-gameover-webkit.png', 'screenshots:container -- screenshots:2048:webkit'],
       ['after-breakout-playing-webkit.png', 'screenshots:container -- screenshots:breakout:webkit'],
+      [
+        MINESWEEPER_SCORES,
+        'screenshots:container -- screenshots:minesweeper:scores:webkit',
+      ],
     ]);
     for (const [file, command] of containerCommands) {
       const row = WEBKIT_PHONE.split('\n').find(

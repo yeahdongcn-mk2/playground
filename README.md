@@ -261,7 +261,7 @@ pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和
 | `npm run screenshots:minesweeper:large` | 构建后生成 320×640 / 360×640 的 16×30 大棋盘提示截图 |
 | `npm run screenshots:minesweeper:large-before` | 用 `BASE_URL` 指定的大棋盘提示改动前基线生成 320×640 / 360×640 Before 截图 |
 | `npm run screenshots:minesweeper:scores` | 构建后生成扫雷最高用时榜的桌面与 320×640 手机 After 截图；两张图是 #45 子任务 1 的历史证据，当前 UI 已含「清空记录」，脚本默认拒绝覆盖；该脚本的 #45 拒绝逻辑保持独立，确需重生成时建议在固定容器内用 `npm run screenshots:container -- screenshots:minesweeper:scores --allow-historical-overwrite`，并同步更新文档、整页尺寸与 `capture-sha256-manifest.json` 条目（若收录） |
-| `npm run screenshots:minesweeper:scores:webkit` | 构建后用 WebKit 生成 320×640 最高用时榜 After 截图 |
+| `npm run screenshots:minesweeper:scores:webkit` | 构建后用 WebKit 生成 320×640 最高用时榜 After 截图；该图已被固定环境 sha256 清单收录，宿主命令会在写出前被拒绝，重拍用 `npm run screenshots:container -- screenshots:minesweeper:scores:webkit` |
 | `npm run screenshots:minesweeper:scores-before` | 用 `BASE_URL` 指定的改动前基线生成最高用时榜 Before 截图 |
 | `npm run screenshots:minesweeper:scores-clear` | 构建后生成带「清空记录」入口的最高用时榜 After 截图 |
 | `npm run screenshots:minesweeper:scores-clear-before` | 用 `BASE_URL` 指定的「清空记录」改动前基线生成 Before 截图 |
@@ -396,7 +396,7 @@ games/<game>/scene → 对应引擎（动态 import）
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过（oxlint 覆盖 src、tests 与 scripts；error 与 warning 都会失败，warning 经 --deny-warnings 升级；另跑 scripts/check-boundaries.mjs，失败返回非 0）
-npm run test:unit    # 1326 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
+npm run test:unit    # 1327 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
 npm run build        # 通过
 npm run check:budget # 通过（入口 11.16 KB gzip，全部 JS 410.58 KB gzip）
 npm run score        # 通过（打印「指标 / 当前值 / 基线值 / 差值」表与末行 SCORE_JSON；退化退出 1，变好只报差值）
