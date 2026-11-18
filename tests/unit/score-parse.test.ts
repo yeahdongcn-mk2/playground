@@ -122,6 +122,24 @@ describe('buildSnapshot', () => {
     expect(snapshot.error).toEqual({});
   });
 
+  it('marks a documented usage/I/O error (exit 2) as null with a reason', () => {
+    const results = passingResults();
+    results[3] = {
+      name: 'verify:screenshots:doc-dims',
+      script: 'verify:screenshots:doc-dims',
+      status: 2,
+      signal: null,
+      stdout: '',
+      stderr: 'error: cannot read README /repo/docs/screenshots/README.md: ENOENT\n',
+    };
+
+    const snapshot = snapshotFrom(results);
+
+    expect(snapshot.checks['verify:screenshots:doc-dims']).toBeNull();
+    expect(snapshot.error['verify:screenshots:doc-dims']).toContain('execution error');
+    expect(snapshot.error['verify:screenshots:doc-dims']).toContain('cannot read README');
+  });
+
   it('keeps the parsed gzip sizes when check:budget fails on an over-budget build', () => {
     const results = passingResults();
     results[1] = failing('check:budget', BUDGET_OVER_LIMIT);
@@ -132,6 +150,22 @@ describe('buildSnapshot', () => {
     expect(snapshot.entryGzipBytes).toBe(53248);
     expect(snapshot.totalJsGzipBytes).toBe(512000);
     expect(snapshot.error).toEqual({});
+  });
+
+  it('marks a check:budget exit without a violation block as an execution error', () => {
+    const results = passingResults();
+    results[1] = failing(
+      'check:budget',
+      'dist/index.html is missing; run `npm run build` first.\n',
+    );
+
+    const snapshot = snapshotFrom(results);
+
+    expect(snapshot.checks['check:budget']).toBeNull();
+    expect(snapshot.error['check:budget']).toContain('did not report a validation failure');
+    expect(snapshot.error['check:budget']).toContain('dist/index.html is missing');
+    expect(snapshot.entryGzipBytes).toBeNull();
+    expect(snapshot.totalJsGzipBytes).toBeNull();
   });
 
   it('reports null metrics and null checks with reasons for unparseable output', () => {
@@ -174,6 +208,42 @@ describe('buildSnapshot', () => {
 
     expect(snapshot.checks['verify:screenshots:webkit']).toBeNull();
     expect(snapshot.error['verify:screenshots:webkit']).toContain('is missing');
+  });
+
+  it('marks an entry killed by a signal as null with the signal name', () => {
+    const results = passingResults();
+    results[2] = {
+      name: 'verify:doc-counts',
+      script: 'verify:doc-counts',
+      status: null,
+      signal: 'SIGTERM',
+      stdout: '',
+      stderr: '',
+    };
+
+    const snapshot = snapshotFrom(results);
+
+    expect(snapshot.checks['verify:doc-counts']).toBeNull();
+    expect(snapshot.error['verify:doc-counts']).toContain('signal SIGTERM');
+  });
+
+  it('marks an entry that could not start as null with the spawn error', () => {
+    const results = passingResults();
+    results[0] = {
+      name: 'lint',
+      script: 'lint',
+      status: null,
+      signal: null,
+      stdout: '',
+      stderr: '',
+      error: 'spawn npm ENOENT',
+    };
+
+    const snapshot = snapshotFrom(results);
+
+    expect(snapshot.checks.lint).toBeNull();
+    expect(snapshot.error.lint).toContain('failed to start');
+    expect(snapshot.error.lint).toContain('spawn npm ENOENT');
   });
 
   it('records a failed build in error without dropping the rest of the snapshot', () => {

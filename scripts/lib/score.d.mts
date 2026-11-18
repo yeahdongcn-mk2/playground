@@ -4,6 +4,7 @@ export interface CheckDefinition {
   readonly name: string;
   readonly script: string;
   readonly successPattern: RegExp;
+  readonly failurePattern?: RegExp;
 }
 
 export interface CapturedCommandResult {

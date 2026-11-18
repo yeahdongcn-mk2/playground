@@ -20,6 +20,9 @@ export const CHECK_DEFINITIONS = [
     name: 'check:budget',
     script: 'check:budget',
     successPattern: /Budget check OK:/,
+    // check:budget exits 1 both for a budget violation and for a missing dist/
+    // build, so only the printed violation block counts as a validation fail.
+    failurePattern: /Budget check failed:/,
   },
   {
     name: 'verify:doc-counts',
@@ -57,6 +60,18 @@ export function kbToBytes(kilobytes) {
 function combinedOutput(result) {
   if (result === undefined || result === null) return '';
   return `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
+}
+
+/** First non-empty line of stderr/stdout, trimmed and bounded for the error map. */
+function summarizeOutput(result) {
+  const text = `${result.stderr ?? ''}\n${result.stdout ?? ''}`;
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed !== '') {
+      return trimmed.length > 200 ? `${trimmed.slice(0, 197)}...` : trimmed;
+    }
+  }
+  return '';
 }
 
 /**
@@ -102,9 +117,11 @@ export function parseUnitTests(output) {
  * Classify one captured entry point.
  *
  * - pass: exit code 0 and the expected success marker is present
- * - fail: exit code is non-zero (the check itself reported a problem)
- * - null: the script was not run, could not start, is missing, or exited 0
- *   without a recognisable success marker
+ * - fail: the check ran and reported a validation failure (exit code 1, or
+ *   check:budget's printed violation block; four entry points document exit
+ *   code 2 as a usage/I/O error rather than a validation result)
+ * - null: the script was not run, could not start, is missing, exited 0
+ *   without a recognisable success marker, or hit an execution error
  *
  * @returns {{ status: 'pass' | 'fail' | null, reason: string | null }}
  */
@@ -146,7 +163,26 @@ export function classifyCheckResult(definition, result) {
     };
   }
 
-  return { status: 'fail', reason: null };
+  const summary = summarizeOutput(result);
+  const detail = summary === '' ? '' : `: ${summary}`;
+
+  if (definition.failurePattern !== undefined) {
+    return definition.failurePattern.test(output)
+      ? { status: 'fail', reason: null }
+      : {
+          status: null,
+          reason: `npm run ${definition.script} exited with code ${result.status} but did not report a validation failure${detail}`,
+        };
+  }
+
+  if (result.status === 1) {
+    return { status: 'fail', reason: null };
+  }
+
+  return {
+    status: null,
+    reason: `npm run ${definition.script} exited with code ${result.status} (execution error)${detail}`,
+  };
 }
 
 function buildFailureReason(build) {
