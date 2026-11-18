@@ -92,7 +92,7 @@ const MINESWEEPER_COLLECTED_SHA256 = new Map([
     '77e7b244607dbdec71ff31df1a991a6744d813fa800c254eb1ebbaf8567f12a2',
   ],
 ]);
-const MINESWEEPER_CAPTURE_COMMIT = '76149a83e5aa58b37fd8e2e88bbf8e93f272aab9';
+const MINESWEEPER_CAPTURE_COMMIT = '5115db16d93a75636de679102a65f83e50c4cf6b';
 const NARROW_DRIFT = [
   'after-minesweeper-webkit-narrow-320x640.png',
   'after-minesweeper-webkit-narrow-360x640.png',
