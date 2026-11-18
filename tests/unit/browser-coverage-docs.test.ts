@@ -239,6 +239,7 @@ describe('browser coverage documentation', () => {
       .filter((file) => file.endsWith('.webkit.spec.ts'))
       .sort();
     expect(webkitSpecs).toEqual([
+      '2048-ready-determinism.webkit.spec.ts',
       '2048.mobile.webkit.spec.ts',
       'breakout.mobile.webkit.spec.ts',
       'framework.mobile.webkit.spec.ts',
@@ -711,9 +712,10 @@ describe('browser coverage documentation', () => {
     expect(desktop + mobile + webkit).toBe(counts.readmeE2e);
     // The WebKit project now runs framework, the minesweeper touch gestures
     // (including the real tap pointerdown / click shape and the two long-press
-    // flag cases), the touch difficulty form, the snake / tetris phone cases and
-    // the 2048 / breakout phone cases on top of the contract / smoke cases.
-    expect(webkit).toBe(31);
+    // flag cases), the touch difficulty form, the snake / tetris phone cases,
+    // the 2048 / breakout phone cases and the 2048 READY two-run byte guard on
+    // top of the contract / smoke cases.
+    expect(webkit).toBe(32);
   });
 
   it('keeps the README unit-test line to one total and a qualitative summary', () => {

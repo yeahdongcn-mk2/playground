@@ -103,12 +103,32 @@ const MINESWEEPER_SCORES_SHA256 =
 const MINESWEEPER_SCORES_CAPTURE_COMMIT =
   '05818ae0bfe980ac9274d75146d22a4e59f96c8e';
 
-/** Bullets nested under the drift list, which is where every drifted file must appear. */
-function driftBullets(text: string): string {
-  return text
-    .split('\n')
-    .filter((line) => line.startsWith('  - '))
-    .join('\n');
+/**
+ * The indented children of one top-level bullet.
+ *
+ * Collecting every `  - ` line cannot tell which parent a child belongs to,
+ * so a new top-level bullet inserted between the drift parent and its children
+ * would silently reparent them. This helper stops at the next top-level bullet
+ * and is what the drift assertions use.
+ */
+function childBullets(text: string, parentPrefix: string): string {
+  const lines = text.split('\n');
+  const start = lines.findIndex((line) => line.startsWith(`- ${parentPrefix}`));
+  if (start < 0) {
+    throw new Error(`missing parent bullet: ${parentPrefix}`);
+  }
+  const children: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    if (line.startsWith('  - ')) {
+      children.push(line);
+      continue;
+    }
+    if (line.trim() === '') {
+      continue;
+    }
+    break;
+  }
+  return children.join('\n');
 }
 
 describe('WebKit historical evidence docs (Issue #137)', () => {
@@ -140,12 +160,29 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     }
   });
 
+  it('keeps the fixed 2048 drift out of the still-drifted parent', () => {
+    // The three drifted bullets must stay under "已报告的漂移产物"; the fixed
+    // 2048 ready note is a separate top-level bullet after them. Slicing from
+    // the parent to the fixed note proves the children were not reparented,
+    // even if the prose inside a child changes.
+    const parent = WEBKIT_HISTORICAL.indexOf('- 已报告的漂移产物');
+    const fixed = WEBKIT_HISTORICAL.indexOf('- 已修复的漂移');
+    expect(parent).toBeGreaterThan(-1);
+    expect(fixed).toBeGreaterThan(parent);
+    const between = WEBKIT_HISTORICAL.slice(parent, fixed);
+    for (const file of DRIFTED) {
+      expect(between).toContain(file);
+    }
+    expect(childBullets(WEBKIT_HISTORICAL, '已修复的漂移')).toBe('');
+  });
+
   it('keeps the same-environment deterministic WebKit captures out of the drift list', () => {
     expect(WEBKIT_HISTORICAL).toContain('不在');
     expect(WEBKIT_HISTORICAL).toContain('确定性接缝');
+    const reported = childBullets(WEBKIT_HISTORICAL, '已报告的漂移产物');
     for (const file of DETERMINISTIC) {
       expect(WEBKIT_HISTORICAL).toContain(file);
-      expect(driftBullets(WEBKIT_HISTORICAL)).not.toContain(file);
+      expect(reported).not.toContain(file);
     }
     expect(WEBKIT_HISTORICAL).toContain('4173dce8');
     expect(WEBKIT_HISTORICAL).toContain('bf7548b7');
@@ -164,7 +201,11 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     );
     expect(WEBKIT_HISTORICAL).toContain('capture-sha256-manifest.json');
     expect(WEBKIT_HISTORICAL).toContain('不再是历史漂移证据');
-    expect(driftBullets(WEBKIT_HISTORICAL)).not.toContain(
+    expect(WEBKIT_HISTORICAL).toContain('连续两张截图逐字节一致');
+    expect(WEBKIT_HISTORICAL).toContain('backdrop-filter');
+    expect(WEBKIT_HISTORICAL).toContain('隐藏两帧');
+    expect(WEBKIT_HISTORICAL).toContain('repaintWebkitReadyOverlay');
+    expect(childBullets(WEBKIT_HISTORICAL, '已报告的漂移产物')).not.toContain(
       'after-2048-ready-webkit.png',
     );
   });
@@ -189,7 +230,7 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(WEBKIT_HISTORICAL).toContain('ready 的相邻两跑则可能不同');
     expect(WEBKIT_HISTORICAL).not.toContain('扫雷这 4 张在容器内两跑 sha256 相同');
     expect(WEBKIT_HISTORICAL).toContain(
-      '2048 ready 的连续两跑漂移已由 #199 t1 的页眉重绘接缝消除',
+      '2048 ready 的连续两跑漂移已由 #199 t1 的页眉重绘 + overlay 重绘接缝消除',
     );
   });
 

@@ -19,6 +19,32 @@ function indexOfOrFail(needle: string): number {
   return index;
 }
 
+/** The source of one top-level `async function name(...)` declaration. */
+function functionBody(name: string): string {
+  const marker = `async function ${name}(`;
+  const start = indexOfOrFail(marker);
+  const end = SOURCE.indexOf('\n}\n', start);
+  expect(end, `unterminated: ${marker}`).toBeGreaterThan(start);
+  return SOURCE.slice(start, end);
+}
+
+/**
+ * Assert each needle appears exactly once, in the given order, inside a
+ * function body. Anchoring on the function body keeps a same-named call from
+ * another scene (for example the Chromium desktop READY capture) from
+ * satisfying the guard.
+ */
+function expectInOrder(fn: string, needles: readonly string[]): void {
+  let cursor = -1;
+  for (const needle of needles) {
+    const occurrences = fn.split(needle).length - 1;
+    expect(occurrences, `expected exactly one occurrence of: ${needle}`).toBe(1);
+    const index = fn.indexOf(needle);
+    expect(index, `missing in function: ${needle}`).toBeGreaterThan(cursor);
+    cursor = index;
+  }
+}
+
 /**
  * Static guard for the committed playing / gameover / ready WebKit PNGs. The
  * engine test proves seed 135 is deterministic for the pinned boards; this test
@@ -59,13 +85,31 @@ describe('2048 screenshot determinism guard', () => {
     expect(SOURCE).toContain('settleCapturePaint,\n  settleWebkitReadyPaint,');
     expect(count(/settleWebkitReadyPaint\(/g)).toBe(1);
 
-    const readyOpen = indexOfOrFail('await open2048(ready, COLOR_BOARD)');
-    const seam = indexOfOrFail('await settleWebkitReadyPaint(ready)');
-    const readyCapture = indexOfOrFail(
-      "await capture(ready, 'after-2048-ready-webkit.png', false)",
+    const webkit = functionBody('captureWebkitMobile');
+    expectInOrder(webkit, [
+      'await open2048(ready, COLOR_BOARD)',
+      'await settleWebkitReadyPaint(ready)',
+      'await repaintWebkitReadyOverlay(ready)',
+      "await capture(ready, 'after-2048-ready-webkit.png', false, { stable: true })",
+      "await capture(playing, 'after-2048-playing-webkit.png', false)",
+      "await capture(over, 'after-2048-gameover-webkit.png', false)",
+    ]);
+    expect(webkit).not.toContain('settleWebkitReadyPaint(playing)');
+    expect(webkit).not.toContain('settleWebkitReadyPaint(over)');
+  });
+
+  it('waits for a stable raster only on the WebKit ready capture', () => {
+    expect(count(/stable: true/g)).toBe(1);
+    const webkit = functionBody('captureWebkitMobile');
+    expect(webkit).toContain(
+      "await capture(ready, 'after-2048-ready-webkit.png', false, { stable: true })",
     );
-    expect(seam).toBeGreaterThan(readyOpen);
-    expect(readyCapture).toBeGreaterThan(seam);
+    expect(webkit).toContain('await repaintWebkitReadyOverlay(ready)');
+    expectInOrder(webkit, [
+      'await open2048(ready, COLOR_BOARD)',
+      'await settleWebkitReadyPaint(ready)',
+      "await capture(ready, 'after-2048-ready-webkit.png', false, { stable: true })",
+    ]);
   });
 
   it('keeps every scene on the shared settle contract', () => {

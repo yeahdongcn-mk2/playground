@@ -8,12 +8,15 @@ import {
 import {
   CAPTURE_SETTLE_FRAMES,
   CAPTURE_SETTLE_TIMEOUT_MS,
+  CAPTURE_STABLE_ATTEMPTS,
   TOUCH_MOBILE_DEVICE,
+  captureStableBytes,
   createDesktopContext,
   createMobileContext,
   createPhoneContext,
   createTouchMobileContext,
   logCaptureEnvironment,
+  repaintWebkitReadyOverlay,
   settleCapturePaint,
   settleWebkitReadyPaint,
 } from '../../scripts/lib/capture-runtime.mjs';
@@ -359,5 +362,82 @@ describe('2048 WebKit READY paint seam (Issue #199)', () => {
     await settleWebkitReadyPaint(page, { offset: 320 });
 
     expect(calls[0]).toBe('evaluate:320');
+  });
+});
+
+describe('stable capture loop (Issue #199)', () => {
+  /** A Page double whose screenshots come from a fixed buffer sequence. */
+  function screenshotPage(buffers: Buffer[]): {
+    page: Page;
+    screenshot: ReturnType<typeof vi.fn>;
+  } {
+    let index = 0;
+    const screenshot = vi.fn(async () => {
+      const buffer = buffers[Math.min(index, buffers.length - 1)];
+      index += 1;
+      if (buffer === undefined) {
+        throw new Error('screenshot sequence is empty');
+      }
+      return buffer;
+    });
+    return { page: { screenshot } as unknown as Page, screenshot };
+  }
+
+  it('retries until two consecutive screenshots are byte-identical', async () => {
+    const first = Buffer.from('in-flight frame');
+    const stable = Buffer.from('settled frame');
+    const { page, screenshot } = screenshotPage([first, stable, stable]);
+    const settle = vi.fn(async () => {});
+
+    const bytes = await captureStableBytes(page, { settle });
+
+    expect(bytes.equals(stable)).toBe(true);
+    expect(screenshot).toHaveBeenCalledTimes(3);
+    // One settle before the first screenshot and one between each pair.
+    expect(settle).toHaveBeenCalledTimes(3);
+  });
+
+  it('returns as soon as two consecutive frames match', async () => {
+    const first = Buffer.from('settled frame');
+    const { page, screenshot } = screenshotPage([first, first]);
+    const settle = vi.fn(async () => {});
+
+    const bytes = await captureStableBytes(page, { settle });
+
+    expect(bytes.equals(first)).toBe(true);
+    expect(screenshot).toHaveBeenCalledTimes(2);
+    expect(settle).toHaveBeenCalledTimes(2);
+  });
+
+  it('fails instead of returning an unstable image when the page never settles', async () => {
+    const { page } = screenshotPage([
+      Buffer.from('frame 1'),
+      Buffer.from('frame 2'),
+      Buffer.from('frame 3'),
+      Buffer.from('frame 4'),
+    ]);
+
+    await expect(captureStableBytes(page, { settle: async () => {} })).rejects.toThrow(
+      `did not stabilise after ${CAPTURE_STABLE_ATTEMPTS} screenshots`,
+    );
+  });
+
+  it('requires at least two screenshots', async () => {
+    const { page } = screenshotPage([Buffer.from('only frame')]);
+
+    await expect(captureStableBytes(page, { attempts: 1 })).rejects.toThrow(RangeError);
+  });
+});
+
+describe('WebKit READY overlay repaint (Issue #199)', () => {
+  it('forces one repaint and then settles the page', async () => {
+    const evaluate = vi.fn(async () => {});
+    const settle = vi.fn(async () => {});
+    const page = { evaluate } as unknown as Page;
+
+    await repaintWebkitReadyOverlay(page, { settle });
+
+    expect(evaluate).toHaveBeenCalledTimes(1);
+    expect(settle).toHaveBeenCalledTimes(1);
   });
 });
