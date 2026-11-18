@@ -56,6 +56,24 @@
       }
     },
     {
+      "file": "after-hub-webkit.png",
+      "sha256": "6c2856e33a5619dc2eff5833c059608c74f03492192029515edf345b165581f4",
+      "command": "npm run screenshots:container -- screenshots:webkit",
+      "provenance": {
+        "container": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
+        "captureCommit": "c6a8c6c0b6cb70aac968f12d834d00f1073ade61"
+      }
+    },
+    {
+      "file": "after-snake-webkit.png",
+      "sha256": "d8e262f366b11436d5a1dc309f01ee86a473b23f74684fd92e03392fc28450ba",
+      "command": "npm run screenshots:container -- screenshots:snake:webkit",
+      "provenance": {
+        "container": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
+        "captureCommit": "c6a8c6c0b6cb70aac968f12d834d00f1073ade61"
+      }
+    },
+    {
       "file": "after-2048-playing-webkit.png",
       "sha256": "4173dce84c814f2573fa506360f95bab477c985b37a2dfe2d5b0d1c2c5992a91",
       "command": "npm run screenshots:container -- screenshots:2048:webkit",

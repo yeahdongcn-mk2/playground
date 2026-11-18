@@ -70,7 +70,17 @@ const DETERMINISTIC = [
   'after-breakout-playing-webkit.png',
   'after-2048-playing-webkit.png',
   'after-2048-gameover-webkit.png',
+  'after-hub-webkit.png',
+  'after-snake-webkit.png',
 ];
+const HUB = 'after-hub-webkit.png';
+const HUB_SHA256 =
+  '6c2856e33a5619dc2eff5833c059608c74f03492192029515edf345b165581f4';
+const SNAKE = 'after-snake-webkit.png';
+const SNAKE_SHA256 =
+  'd8e262f366b11436d5a1dc309f01ee86a473b23f74684fd92e03392fc28450ba';
+const HUB_SNAKE_CAPTURE_COMMIT =
+  'c6a8c6c0b6cb70aac968f12d834d00f1073ade61';
 const MINESWEEPER_SCORES = 'after-minesweeper-scores-webkit.png';
 const MINESWEEPER_SCORES_SHA256 =
   '44768a977454b98f4526033e96c3cdf60012f6278b10912cf7a11071419674fe';
@@ -86,7 +96,7 @@ function driftBullets(text: string): string {
 }
 
 describe('WebKit historical evidence docs (Issue #137)', () => {
-  it('records the #120 capture commit and limits the re-shot to the reviewed scores capture', () => {
+  it('records the #120 capture commit and the reviewed t2/t3 re-shots', () => {
     expect(WEBKIT_HISTORICAL).toContain(CAPTURE_COMMIT);
     expect(WEBKIT_HISTORICAL).toContain('#120');
     expect(WEBKIT_HISTORICAL).toContain(
@@ -95,6 +105,7 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(WEBKIT_HISTORICAL).toContain('9c39e68');
     expect(WEBKIT_HISTORICAL).toContain('重新捕获');
     expect(WEBKIT_HISTORICAL).toContain('只重拍扫雷最高用时榜');
+    expect(WEBKIT_HISTORICAL).toContain('t3 只重拍大厅与贪食蛇');
     expect(WEBKIT_HISTORICAL).toContain('其余已提交 PNG 不改动');
   });
 
@@ -192,6 +203,55 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     );
   });
 
+  it('records the reviewed hub and snake captures in the fixed manifest', () => {
+    expect(WEBKIT_HISTORICAL).toContain(HUB);
+    expect(WEBKIT_HISTORICAL).toContain(HUB_SHA256);
+    expect(WEBKIT_HISTORICAL).toContain(SNAKE);
+    expect(WEBKIT_HISTORICAL).toContain(SNAKE_SHA256);
+    expect(WEBKIT_HISTORICAL).toContain(HUB_SNAKE_CAPTURE_COMMIT);
+    expect(WEBKIT_HISTORICAL).toContain('连续两跑 sha256 相同');
+    expect(WEBKIT_HISTORICAL).toContain('#318 t3');
+    expect(WEBKIT_HISTORICAL).toContain('740211');
+    expect(WEBKIT_HISTORICAL).toContain('73.9841%');
+    expect(WEBKIT_HISTORICAL).toContain('158');
+    expect(WEBKIT_HISTORICAL).toContain('0.0158%');
+    expect(WEBKIT_HISTORICAL).toContain('预热接缝');
+    expect(WEBKIT_HISTORICAL).not.toMatch(
+      /本轮未复核[^。]*after-(?:hub|snake)-webkit/,
+    );
+
+    const manifest = JSON.parse(
+      readFileSync(
+        join(ROOT, 'docs', 'screenshots', 'capture-sha256-manifest.json'),
+        'utf8',
+      ),
+    ) as {
+      captures: Array<{
+        file: string;
+        sha256: string;
+        command: string;
+        provenance: { captureCommit: string };
+      }>;
+    };
+    const expected = [
+      [HUB, HUB_SHA256, 'npm run screenshots:container -- screenshots:webkit'],
+      [
+        SNAKE,
+        SNAKE_SHA256,
+        'npm run screenshots:container -- screenshots:snake:webkit',
+      ],
+    ] as const;
+    for (const [file, sha256, command] of expected) {
+      const capture = manifest.captures.find((entry) => entry.file === file);
+      expect(capture, `missing manifest entry for ${file}`).toBeDefined();
+      expect(capture?.sha256).toBe(sha256);
+      expect(capture?.command).toBe(command);
+      expect(capture?.provenance.captureCommit).toBe(
+        HUB_SNAKE_CAPTURE_COMMIT,
+      );
+    }
+  });
+
   it('makes the CI manifest, not sha256, the authoritative webkit-narrow check', () => {
     expect(WEBKIT_HISTORICAL).toContain('不是 sha256');
     expect(WEBKIT_HISTORICAL).toContain('ci-webkit-narrow-manifest.json');
@@ -244,6 +304,8 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     // command would be refused by the write-time guard.
     const containerCommands = new Map([
       ['after-blank-webkit.png', 'screenshots:container -- screenshots:webkit'],
+      [HUB, 'screenshots:container -- screenshots:webkit'],
+      [SNAKE, 'screenshots:container -- screenshots:snake:webkit'],
       ['after-2048-playing-webkit.png', 'screenshots:container -- screenshots:2048:webkit'],
       ['after-2048-gameover-webkit.png', 'screenshots:container -- screenshots:2048:webkit'],
       ['after-breakout-playing-webkit.png', 'screenshots:container -- screenshots:breakout:webkit'],

@@ -434,6 +434,9 @@ export function expectedRecaptureCommand(file) {
   if (file.startsWith('after-minesweeper-scores-')) {
     return 'npm run screenshots:container -- screenshots:minesweeper:scores:webkit';
   }
+  if (file.startsWith('after-snake-')) {
+    return 'npm run screenshots:container -- screenshots:snake:webkit';
+  }
   return 'npm run screenshots:container -- screenshots:webkit';
 }
 
