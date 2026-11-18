@@ -46,3 +46,30 @@ export function waitForBlankSettled(
   target: BlankPointerTarget,
   options?: BlankSettleOptions,
 ): Promise<BlankReadoutSample>;
+
+export interface BlankHeaderRepaintOptions {
+  selector: string;
+  frames: number;
+}
+
+export interface BlankHeaderSettleOptions {
+  evaluate?: (
+    page: Page,
+    repaint: (options: BlankHeaderRepaintOptions) => Promise<boolean>,
+    options: BlankHeaderRepaintOptions,
+  ) => Promise<boolean>;
+  selector?: string;
+  frames?: number;
+}
+
+export const BLANK_HEADER_SELECTOR: string;
+export const BLANK_HEADER_SETTLE_FRAMES: number;
+
+export function repaintBlankHeader(
+  options: BlankHeaderRepaintOptions,
+): Promise<boolean>;
+
+export function settleBlankHeader(
+  page: Page,
+  options?: BlankHeaderSettleOptions,
+): Promise<void>;

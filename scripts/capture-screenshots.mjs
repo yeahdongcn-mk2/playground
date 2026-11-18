@@ -18,7 +18,10 @@ import {
   isPrintCaptureTargetsRequested,
   printCaptureTargets,
 } from './lib/capture-targets.mjs';
-import { waitForBlankSettled } from './lib/blank-settle.mjs';
+import {
+  settleBlankHeader,
+  waitForBlankSettled,
+} from './lib/blank-settle.mjs';
 import { assertPortAvailable, parsePreviewPort } from './lib/preview-port.mjs';
 import { waitForPreviewServer } from './lib/preview-server.mjs';
 
@@ -203,6 +206,9 @@ async function captureWebkitMobile(browser) {
     throw new Error('Canvas has no bounding box');
   }
   await tapBlankCanvas(page, box, 0.36, 0.62, { touch: true });
+  // The blank canvas and the shared header settle independently on WebKit; pin
+  // the header's backdrop-filter snapshot before the screenshot (Issue #326).
+  await settleBlankHeader(page);
   await captureScreenshot(page, 'after-blank-webkit.png', {
     engine: ENGINE,
     animations: 'allow',
