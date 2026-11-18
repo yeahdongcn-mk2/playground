@@ -11,6 +11,35 @@ const SCRIPT = readFileSync(
 );
 const VIEW = readFileSync(join(ROOT, 'src', 'games', 'snake', 'snake-view.ts'), 'utf8');
 const SCENE = readFileSync(join(ROOT, 'src', 'games', 'snake', 'scene.ts'), 'utf8');
+const SNAKE_CSS = readFileSync(join(ROOT, 'src', 'games', 'snake', 'snake.css'), 'utf8');
+const APP_CSS = readFileSync(join(ROOT, 'src', 'styles', 'app.css'), 'utf8');
+const E2E_MOBILE_CASES = readFileSync(
+  join(ROOT, 'tests', 'e2e', 'snake-mobile-cases.ts'),
+  'utf8',
+);
+
+/** The declarations of the first rule whose selector contains `selector`. */
+function cssRule(css: string, selector: string): string {
+  const start = css.indexOf(selector);
+  if (start < 0) {
+    throw new Error(`missing CSS rule: ${selector}`);
+  }
+  const open = css.indexOf('{', start + selector.length);
+  const close = open < 0 ? -1 : css.indexOf('}', open);
+  if (open < 0 || close < 0) {
+    throw new Error(`unterminated CSS rule: ${selector}`);
+  }
+  return css.slice(open + 1, close);
+}
+
+/** `#rrggbb` as the resolved `rgb(r, g, b)` value `getComputedStyle` reports. */
+function hexToRgb(hex: string): string {
+  const value = hex.replace('#', '');
+  const channels = [0, 2, 4].map((offset) =>
+    Number.parseInt(value.slice(offset, offset + 2), 16),
+  );
+  return `rgb(${channels.join(', ')})`;
+}
 
 /**
  * Guard for the committed playing PNG. The engine test proves seed 7 plus three
@@ -29,33 +58,57 @@ describe('snake screenshot determinism guard', () => {
     );
   });
 
-  it('warms up a throwaway WebKit page before the committed READY page', () => {
-    // Issue #318 t3: the dev server injects CSS after `#view` exists, so the
-    // READY overlay title can start a reduced-motion color transition from
-    // black and stay at its start point on the browser's first page. A warm-up
-    // page makes the committed page settle on the inherited `--text` color.
-    const start = SCRIPT.indexOf('async function captureWebkitMobile(');
+  it('pins the READY title color and disables its transition', () => {
+    // Issue #318 t3: the reduced-motion rule sets `transition-duration` on every
+    // element, so an inherited title color started a `color` transition at the
+    // pre-CSS black start point and WebKit could leave it stuck there. Pinning
+    // `--text` plus `transition: none` makes the first paint the final state.
+    const rule = cssRule(SNAKE_CSS, '.snake-overlay-card h2');
+    expect(rule).toContain('color: var(--text);');
+    expect(rule).toMatch(/transition:\s*none;/);
+  });
+
+  it('waits for the READY title final color with no running transition', () => {
+    const start = SCRIPT.indexOf('async function waitForSnakeReady(');
     const end = SCRIPT.indexOf('\n}\n', start);
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const body = SCRIPT.slice(start, end);
 
-    const warmup = body.indexOf('const warmup = await mobile.newPage();');
-    const warmupGoto = body.indexOf(
-      "await warmup.goto(ORIGIN, { waitUntil: 'networkidle' });",
+    // The wait must read the real computed color and active animations, not
+    // just the status marker: a stuck color transition keeps painting black
+    // while the state machine already reports `ready`.
+    expect(body).toContain(
+      "document.querySelector('[data-testid=\"overlay-title\"]')",
     );
-    const warmupClose = body.indexOf('await warmup.close();');
-    const game = body.indexOf('const mobileGame = await mobile.newPage();');
-    const gameGoto = body.indexOf('?debug=1&food=11,10');
+    expect(body).toContain('getComputedStyle(title).color === expectedColor');
+    expect(body).toContain('title.getAnimations().length === 0');
+    expect(SCRIPT).toContain('const READY_TITLE_COLOR =');
+    expect(body).toMatch(/READY_TITLE_COLOR,\s*\);/);
 
-    expect(warmup).toBeGreaterThan(-1);
-    expect(warmupGoto).toBeGreaterThan(warmup);
-    expect(warmupClose).toBeGreaterThan(warmupGoto);
-    expect(game).toBeGreaterThan(warmupClose);
-    expect(gameGoto).toBeGreaterThan(game);
-    // The warm-up page must not replace the fixed first fruit on the committed
-    // page: it loads the plain hub URL, while the snake page keeps its seam.
-    expect(body).not.toContain('warmup.goto(`${ORIGIN}/#/games/snake');
+    // The guard must run before the committed WebKit capture, not after it.
+    const waitAt = SCRIPT.indexOf('await waitForSnakeReady(mobileGame);');
+    const captureAt = SCRIPT.indexOf(
+      "await capture(mobileGame, 'after-snake-webkit.png', false);",
+    );
+    expect(waitAt).toBeGreaterThan(-1);
+    expect(captureAt).toBeGreaterThan(waitAt);
+    // The ineffective first-page warm-up was replaced by the root-cause fix.
+    expect(SCRIPT).not.toContain('const warmup = await mobile.newPage();');
+  });
+
+  it('keeps the expected READY title color in sync with the app.css token', () => {
+    const token = APP_CSS.match(/--text:\s*(#[0-9a-fA-F]{6});/)?.[1] ?? '';
+    expect(token).not.toBe('');
+    const expectedColor = hexToRgb(token);
+    expect(SCRIPT).toContain(
+      `const READY_TITLE_COLOR = '${expectedColor}';`,
+    );
+    // The e2e assertion hardcodes the same resolved value; keep it in sync so a
+    // token change cannot leave a green unit guard and a failing mobile test.
+    expect(E2E_MOBILE_CASES).toContain(
+      `expect(readyTitle.color).toBe('${expectedColor}');`,
+    );
   });
 
   it('waits for the fixed-tick marker instead of a wall-clock delay', () => {

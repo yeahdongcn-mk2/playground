@@ -109,9 +109,37 @@ async function settle(page) {
   await page.waitForTimeout(300);
 }
 
+/**
+ * Resolved value of the `--text` theme token in `src/styles/app.css`.
+ *
+ * The READY overlay title pins this color in `snake.css`; the capture waits for
+ * it so a future transition / cascade regression fails the run instead of
+ * writing a drifted PNG.
+ */
+const READY_TITLE_COLOR = 'rgb(226, 232, 240)';
+
 async function waitForSnakeReady(page) {
   await page.waitForSelector('[data-testid="snake-board"] canvas');
   await page.waitForFunction(() => window.__playground?.getState().status === 'ready');
+  // Issue #318 t3: the dev server injects CSS after the initial HTML is parsed,
+  // so an unpinned inherited color starts a reduced-motion `color` transition at
+  // the pre-CSS black start point, and WebKit can leave it stuck there. The
+  // overlay title pins its final color with no transition; waiting for that
+  // exact color and no running animation makes a recurrence fail the capture
+  // rather than commit a black-title frame.
+  await page.waitForFunction(
+    (expectedColor) => {
+      const title = document.querySelector('[data-testid="overlay-title"]');
+      if (!(title instanceof HTMLElement)) {
+        return false;
+      }
+      return (
+        getComputedStyle(title).color === expectedColor &&
+        title.getAnimations().length === 0
+      );
+    },
+    READY_TITLE_COLOR,
+  );
   await settle(page);
 }
 
@@ -128,22 +156,15 @@ async function capture(page, name, fullPage = true) {
 /**
  * Capture the stable snake phone frame on the WebKit engine.
  *
- * The dev server injects CSS after `#view` already exists, so inherited text
- * (the READY overlay title) can start a reduced-motion `color` transition from
- * the initial black. On the browser's first page WebKit can keep that
- * transition at its start point, which paints the title black on one run and
- * `--text` on a slower one. Loading a throwaway page first lets the committed
- * page settle on the inherited color, so the captured frame is the state a
- * player actually sees and two runs stay byte-identical (Issue #318 t3, the
- * same first-page seam used for the WebKit READY capture).
+ * The READY title no longer inherits the pre-CSS black color through a
+ * reduced-motion `color` transition (`snake.css` pins the final color with no
+ * transition), and {@link waitForSnakeReady} refuses to capture until the title
+ * reports that final color with no running animation. The captured frame is
+ * therefore the state a player actually sees and two runs stay byte-identical
+ * (Issue #318 t3).
  */
 async function captureWebkitMobile(browser) {
   const mobile = await createPhoneContext(browser, ENGINE);
-  const warmup = await mobile.newPage();
-  await warmup.goto(ORIGIN, { waitUntil: 'networkidle' });
-  await settle(warmup);
-  await warmup.close();
-
   const mobileGame = await mobile.newPage();
   await mobileGame.goto(`${ORIGIN}/#/games/snake?debug=1&food=11,10`, { waitUntil: 'networkidle' });
   await waitForSnakeReady(mobileGame);

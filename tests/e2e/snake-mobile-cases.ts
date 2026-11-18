@@ -13,6 +13,16 @@ export function defineSnakeMobileCases(): void {
       await openSnake(page, { food: '11,10' });
       await expectNoHorizontalOverflow(page);
 
+      // Issue #318 t3: the READY title must already paint the final `--text`
+      // color with no running transition. A stuck reduced-motion color
+      // transition would capture a black title and drift the WebKit PNG.
+      const readyTitle = await page.getByTestId('overlay-title').evaluate((element) => ({
+        color: getComputedStyle(element).color,
+        animations: element.getAnimations().length,
+      }));
+      expect(readyTitle.color).toBe('rgb(226, 232, 240)');
+      expect(readyTitle.animations).toBe(0);
+
       const dpad = page.getByTestId('dpad');
       await expect(dpad).toBeVisible();
       await dpad.scrollIntoViewIfNeeded();

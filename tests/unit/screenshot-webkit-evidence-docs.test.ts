@@ -215,7 +215,12 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(WEBKIT_HISTORICAL).toContain('73.9841%');
     expect(WEBKIT_HISTORICAL).toContain('158');
     expect(WEBKIT_HISTORICAL).toContain('0.0158%');
-    expect(WEBKIT_HISTORICAL).toContain('预热接缝');
+    expect(WEBKIT_HISTORICAL).toContain('transition: none');
+    expect(WEBKIT_HISTORICAL).toContain('getAnimations()');
+    expect(WEBKIT_HISTORICAL).toContain('连续四跑');
+    expect(WEBKIT_HISTORICAL).toContain('7092');
+    expect(WEBKIT_HISTORICAL).toContain('0.7088%');
+    expect(WEBKIT_HISTORICAL).toContain('8e9e845e');
     expect(WEBKIT_HISTORICAL).not.toMatch(
       /本轮未复核[^。]*after-(?:hub|snake)-webkit/,
     );
