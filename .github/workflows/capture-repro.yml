@@ -1,0 +1,63 @@
+name: Screenshot repro
+
+# Nightly two-run reproducibility check for the fixed-container screenshot
+# evidence (Issue #199). The targets come from
+# docs/screenshots/capture-sha256-manifest.json: every `captures[].command`
+# names the `npm run screenshots:container -- <target>` invocation that
+# produced that evidence, and the repro entry runs each unique target twice.
+#
+# The job deliberately has no `container:` key: the fixed Playwright container
+# is started by scripts/run-container-capture.mjs from the ordinary
+# ubuntu-latest runner (Docker is available there), so the job-level image
+# cannot shadow the capture environment. The workflow never commits or pushes
+# and never edits the manifest; the manifest-unchanged step asserts that below.
+on:
+  schedule:
+    # Daily at 04:41 UTC; off the top of the hour to avoid GitHub's peak.
+    - cron: '41 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repro:
+    name: fixed-container two-run repro
+    runs-on: ubuntu-latest
+    # Six captures (three manifest targets x two runs) plus the dependency
+    # install; the first run also pulls / builds the fixed capture image.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Two fixed-container capture runs
+        # The entry prints the failure report to the step output and appends the
+        # same expected / actual sha256, log paths, environment fingerprint and
+        # re-capture steps to $GITHUB_STEP_SUMMARY.
+        run: npm run verify:screenshots:repro
+
+      - name: Assert the manifest was not modified
+        # The repro captures evidence; it must never accept a new hash by
+        # editing the manifest. Run even after a failed repro so the readonly
+        # contract is still checked.
+        if: always()
+        run: git diff --exit-code -- docs/screenshots/capture-sha256-manifest.json
+
+      - name: Upload capture logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: capture-repro-logs
+          path: |
+            test-results/screenshot-repro/
+            test-results/capture-container/
+          if-no-files-found: ignore
+          retention-days: 14
