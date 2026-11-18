@@ -1,9 +1,12 @@
+// @vitest-environment jsdom
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Page } from '@playwright/test';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  BLANK_HEADER_SELECTOR,
+  BLANK_HEADER_SETTLE_FRAMES,
   BLANK_SETTLE_INTERVAL_MS,
   BLANK_SETTLE_TIMEOUT_MS,
   BLANK_STABLE_SAMPLES,
@@ -11,9 +14,14 @@ import {
   isBlankAtTarget,
   nextBlankStableStreak,
   readBlankReadout,
+  repaintBlankHeader,
+  settleBlankHeader,
   waitForBlankSettled,
 } from '../../scripts/lib/blank-settle.mjs';
-import type { BlankReadoutSample } from '../../scripts/lib/blank-settle.mjs';
+import type {
+  BlankHeaderRepaintOptions,
+  BlankReadoutSample,
+} from '../../scripts/lib/blank-settle.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SCRIPT = readFileSync(
@@ -21,6 +29,7 @@ const SCRIPT = readFileSync(
   'utf8',
 );
 const VIEW = readFileSync(join(ROOT, 'src', 'games', 'blank', 'view.ts'), 'utf8');
+const APP = readFileSync(join(ROOT, 'src', 'app', 'app.ts'), 'utf8');
 const SCENE = readFileSync(
   join(ROOT, 'src', 'games', 'blank', 'scene.ts'),
   'utf8',
@@ -34,6 +43,69 @@ function tapBlankCanvasBody(): string {
   }
   return match[0];
 }
+
+/** The body of one top-level function, found by matching braces. */
+function functionBody(source: string, name: string): string {
+  const start = source.indexOf(`async function ${name}(`);
+  if (start < 0) {
+    throw new Error(`missing function: ${name}`);
+  }
+  const open = source.indexOf('{', start);
+  let depth = 0;
+  for (let index = open; index < source.length; index += 1) {
+    if (source[index] === '{') depth += 1;
+    if (source[index] === '}') {
+      depth -= 1;
+      if (depth === 0) return source.slice(open, index + 1);
+    }
+  }
+  throw new Error(`unterminated function: ${name}`);
+}
+
+/** A deferred promise whose resolution order a test can control. */
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+/** Replace jsdom's missing / asynchronous `document.fonts` with a stub. */
+function stubFonts(ready: Promise<void> = Promise.resolve()): void {
+  Object.defineProperty(document, 'fonts', {
+    configurable: true,
+    value: { ready },
+  });
+}
+
+function installHeader(markup?: string): HTMLElement {
+  document.body.innerHTML =
+    markup ??
+    '<header class="site-header">PLAYGROUND <span>ARCADE</span></header>';
+  const header = document.querySelector<HTMLElement>(BLANK_HEADER_SELECTOR);
+  if (!header) {
+    throw new Error('test fixture did not create the shared header');
+  }
+  return header;
+}
+
+/**
+ * Read the WebKit-prefixed filter as jsdom exposes it. jsdom's
+ * CSSStyleDeclaration does not model the vendor property (its cssText stays
+ * empty), but assigning / clearing the camelCase alias still records the value
+ * the seam set, which is enough to prove the prefixed toggle runs.
+ */
+function webkitFilter(header: HTMLElement): string {
+  return (
+    header.style as CSSStyleDeclaration & { webkitBackdropFilter?: string }
+  ).webkitBackdropFilter ?? '';
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  document.body.innerHTML = '';
+});
 
 /** Drop comments so a commented-out call cannot satisfy the static pin. */
 function stripComments(source: string): string {
@@ -215,9 +287,9 @@ describe('blank canvas screenshot determinism guard', () => {
     const body = stripComments(tapBlankCanvasBody());
     expect(body).toMatch(/await\s+waitForBlankSettled\(\s*page,\s*target\b/);
     expect(SCRIPT).not.toContain('waitForTimeout(700)');
-    expect(SCRIPT).toContain(
-      "import { waitForBlankSettled } from './lib/blank-settle.mjs';",
-    );
+    expect(SCRIPT).toContain('settleBlankHeader,');
+    expect(SCRIPT).toContain('waitForBlankSettled,');
+    expect(SCRIPT).toContain("} from './lib/blank-settle.mjs';");
     // The polling constants and failure message live in the tested module.
     expect(BLANK_SETTLE_INTERVAL_MS).toBe(100);
     expect(BLANK_SETTLE_TIMEOUT_MS).toBe(15_000);
@@ -245,7 +317,11 @@ describe('blank canvas screenshot determinism guard', () => {
     expect(isBlankAtTarget({ x: 120, y: 80, trail: 0 }, target)).toBe(true);
     expect(
       isBlankAtTarget(
-        { x: 120 + BLANK_TARGET_TOLERANCE, y: 80 - BLANK_TARGET_TOLERANCE, trail: 0 },
+        {
+          x: 120 + BLANK_TARGET_TOLERANCE,
+          y: 80 - BLANK_TARGET_TOLERANCE,
+          trail: 0,
+        },
         target,
       ),
     ).toBe(true);
@@ -280,6 +356,152 @@ describe('blank canvas screenshot determinism guard', () => {
     expect(streak).toBe(1);
     streak = nextBlankStableStreak(streak, moving, target);
     expect(streak).toBe(0);
+  });
+
+  it('waits for the header fonts, then repaints it between committed frames', async () => {
+    const header = installHeader();
+    const fonts = deferred();
+    stubFonts(fonts.promise);
+    const observedFilters: Array<{ backdrop: string; webkit: string }> = [];
+    vi.stubGlobal(
+      'requestAnimationFrame',
+      (callback: FrameRequestCallback) => {
+        observedFilters.push({
+          backdrop: header.style.backdropFilter,
+          webkit: webkitFilter(header),
+        });
+        callback(0);
+        return 0;
+      },
+    );
+
+    const pending = repaintBlankHeader({
+      selector: BLANK_HEADER_SELECTOR,
+      frames: BLANK_HEADER_SETTLE_FRAMES,
+    });
+    await Promise.resolve();
+    // The filter must not be touched until the header fonts have loaded.
+    expect(header.style.backdropFilter).toBe('');
+    expect(observedFilters).toEqual([]);
+
+    fonts.resolve();
+    await expect(pending).resolves.toBe(true);
+    // Two toggles, each followed by BLANK_HEADER_SETTLE_FRAMES double-rAF
+    // waits: both aliases are off for the first side and restored for the
+    // second instead of being left unfiltered or never toggled.
+    expect(observedFilters).toEqual([
+      ...Array(BLANK_HEADER_SETTLE_FRAMES * 2).fill({
+        backdrop: 'none',
+        webkit: 'none',
+      }),
+      ...Array(BLANK_HEADER_SETTLE_FRAMES * 2).fill({
+        backdrop: '',
+        webkit: '',
+      }),
+    ]);
+    expect(header.style.backdropFilter).toBe('');
+    expect(webkitFilter(header)).toBe('');
+  });
+
+  it('honours a custom header selector and frame budget', async () => {
+    document.body.innerHTML = '<header class="custom-header">X</header>';
+    const header = document.querySelector<HTMLElement>('.custom-header');
+    if (!header) {
+      throw new Error('test fixture did not create the custom header');
+    }
+    stubFonts();
+    let frames = 0;
+    vi.stubGlobal(
+      'requestAnimationFrame',
+      (callback: FrameRequestCallback) => {
+        frames += 1;
+        callback(0);
+        return 0;
+      },
+    );
+
+    await expect(
+      repaintBlankHeader({ selector: '.custom-header', frames: 1 }),
+    ).resolves.toBe(true);
+
+    // One double-rAF wait per toggle side, so a hard-coded two-wait budget or
+    // the shared `.site-header` selector would fail this case.
+    expect(frames).toBe(4);
+    expect(header.style.backdropFilter).toBe('');
+  });
+
+  it('fails instead of silently skipping a missing shared header', async () => {
+    document.body.innerHTML = '';
+    stubFonts();
+
+    await expect(
+      repaintBlankHeader({
+        selector: BLANK_HEADER_SELECTOR,
+        frames: BLANK_HEADER_SETTLE_FRAMES,
+      }),
+    ).resolves.toBe(false);
+
+    // The default page.evaluate wiring reaches the in-page seam; a missing
+    // header becomes a capture error rather than a silent no-op.
+    const page = {
+      evaluate: (
+        repaint: (options: BlankHeaderRepaintOptions) => Promise<boolean>,
+        options: BlankHeaderRepaintOptions,
+      ) => repaint(options),
+    } as unknown as Page;
+    await expect(settleBlankHeader(page)).rejects.toThrow(
+      'Blank header ".site-header" was not found',
+    );
+  });
+
+  it('passes the selector and frame budget to the in-page seam', async () => {
+    const calls: Array<{ repaint: unknown; options: unknown }> = [];
+    const page = {
+      evaluate: async (repaint: unknown, options: unknown) => {
+        calls.push({ repaint, options });
+        return true;
+      },
+    } as unknown as Page;
+
+    await settleBlankHeader(page);
+
+    expect(calls).toEqual([
+      {
+        repaint: repaintBlankHeader,
+        options: {
+          selector: BLANK_HEADER_SELECTOR,
+          frames: BLANK_HEADER_SETTLE_FRAMES,
+        },
+      },
+    ]);
+    // The helper targets the real shell header and commits two double-rAF
+    // waits per toggle; changing either constant must change this test.
+    expect(APP).toContain('<header class="site-header">');
+    expect(BLANK_HEADER_SELECTOR).toBe('.site-header');
+    expect(BLANK_HEADER_SETTLE_FRAMES).toBe(2);
+  });
+
+  it('settles the shared header only for the WebKit blank capture', () => {
+    const body = functionBody(SCRIPT, 'captureWebkitMobile');
+    const tapAt = body.indexOf(
+      'await tapBlankCanvas(page, box, 0.36, 0.62, { touch: true });',
+    );
+    const seamAt = body.indexOf('await settleBlankHeader(page);');
+    const captureAt = body.indexOf(
+      "captureScreenshot(page, 'after-blank-webkit.png'",
+    );
+    // The seam runs after the blank scene settles and before its screenshot.
+    expect(tapAt).toBeGreaterThan(-1);
+    expect(seamAt).toBeGreaterThan(tapAt);
+    expect(captureAt).toBeGreaterThan(seamAt);
+    expect([...body.matchAll(/await settleBlankHeader\(page\);/g)]).toHaveLength(1);
+
+    // The hub capture precedes the route switch, and the Chromium blank
+    // captures keep their committed bytes, so neither may run the seam.
+    expect(body.slice(0, tapAt)).not.toContain('settleBlankHeader');
+    for (const name of ['captureDesktop', 'captureMobile']) {
+      expect(functionBody(SCRIPT, name)).not.toContain('settleBlankHeader');
+    }
   });
 
   it('caps the streak at the configured sample count', () => {
