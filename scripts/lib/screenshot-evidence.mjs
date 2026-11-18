@@ -215,14 +215,6 @@ export const HISTORICAL_AFTER_EVIDENCE = Object.freeze(
       note: '扫雷 won 手机图：#85、#87 侧栏 UI 变更后未重拍，当前构建重跑约 56.1 万像素不同。',
     },
     {
-      file: 'after-2048-ready-webkit.png',
-      game: '2048',
-      issue: '#120',
-      trackingIssue: '#137',
-      captureCommit: '498a14f',
-      note: '2048 ready WebKit 手机图：同一捕获提交下两次 sha256 不同，跨环境重跑也无法等于已提交产物。',
-    },
-    {
       file: 'after-minesweeper-ready-webkit.png',
       game: 'minesweeper',
       issue: '#120',
