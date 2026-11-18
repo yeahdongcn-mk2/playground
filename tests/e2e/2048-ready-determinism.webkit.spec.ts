@@ -35,15 +35,74 @@ async function openReady(page: Page): Promise<void> {
   await expect(page.getByTestId('status')).toHaveText('准备开始');
 }
 
-/** Capture one READY run through the production stability loop. */
-async function captureStableReady(page: Page): Promise<string> {
-  await settleWebkitReadyPaint(page);
-  await repaintWebkitReadyOverlay(page);
-  const bytes = await captureStableBytes(page);
-  return createHash('sha256').update(bytes).digest('hex');
+interface OverlayRepaintTrace {
+  /** The overlay style attribute before each mutation: this records `display: none`. */
+  styles: (string | null)[];
+  /** The inline display value after the seam, which must be restored. */
+  display: string;
 }
 
-async function captureRun(baseURL: string): Promise<string> {
+interface ReadyRun {
+  digest: string;
+  repaint: OverlayRepaintTrace;
+}
+
+/**
+ * Record the overlay style mutations the repaint seam makes.
+ *
+ * The two-run hash guard cannot fail when both runs produce the same wrong
+ * raster, which is the shape of the load-dependent blocker. Observing the
+ * overlay during the real capture proves the hide / restore seam actually ran
+ * in each fresh browser process: removing it leaves this trace empty and fails
+ * the run even before the two hashes are compared.
+ */
+async function observeOverlayRepaint(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const overlay = document.querySelector('[data-testid="overlay"]');
+    if (!(overlay instanceof HTMLElement)) {
+      throw new Error('the READY page must have an overlay element to repaint');
+    }
+    const trace: (string | null)[] = [];
+    const target = window as typeof window & {
+      __readyOverlayRepaint?: (string | null)[];
+    };
+    target.__readyOverlayRepaint = trace;
+    new MutationObserver((records) => {
+      for (const record of records) {
+        trace.push(record.oldValue);
+      }
+    }).observe(overlay, {
+      attributes: true,
+      attributeFilter: ['style'],
+      attributeOldValue: true,
+    });
+  });
+}
+
+async function readOverlayRepaintTrace(page: Page): Promise<OverlayRepaintTrace> {
+  return page.evaluate(() => {
+    const overlay = document.querySelector('[data-testid="overlay"]');
+    const target = window as typeof window & {
+      __readyOverlayRepaint?: (string | null)[];
+    };
+    return {
+      styles: target.__readyOverlayRepaint ?? [],
+      display: overlay instanceof HTMLElement ? overlay.style.display : 'missing',
+    };
+  });
+}
+
+/** Capture one READY run through the production stability loop. */
+async function captureStableReady(page: Page): Promise<ReadyRun> {
+  await settleWebkitReadyPaint(page);
+  await observeOverlayRepaint(page);
+  await repaintWebkitReadyOverlay(page);
+  const repaint = await readOverlayRepaintTrace(page);
+  const bytes = await captureStableBytes(page);
+  return { digest: createHash('sha256').update(bytes).digest('hex'), repaint };
+}
+
+async function captureRun(baseURL: string): Promise<ReadyRun> {
   const browser = await webkit.launch();
   try {
     // This context is created outside the built-in fixtures, so it must carry
@@ -56,15 +115,15 @@ async function captureRun(baseURL: string): Promise<string> {
     const pageErrors: Error[] = [];
     page.on('pageerror', (error) => pageErrors.push(error));
     await openReady(page);
-    const digest = await captureStableReady(page);
+    const run = await captureStableReady(page);
     expect(pageErrors, 'the READY page must not throw').toEqual([]);
-    return digest;
+    return run;
   } finally {
     await browser.close();
   }
 }
 
-test('2048 READY WebKit capture is byte-identical on two fresh runs', async () => {
+test('2048 READY WebKit capture hides and restores the overlay, then is byte-identical on two runs', async () => {
   test.slow();
 
   const baseURL = test.info().project.use.baseURL;
@@ -75,5 +134,19 @@ test('2048 READY WebKit capture is byte-identical on two fresh runs', async () =
   const first = await captureRun(baseURL);
   const second = await captureRun(baseURL);
 
-  expect(second, 'both runs must produce the same READY bytes').toBe(first);
+  for (const [label, run] of [
+    ['first', first],
+    ['second', second],
+  ] as const) {
+    expect(
+      run.repaint.styles.some((style) => style?.includes('display: none')),
+      `the ${label} run must hide the overlay for the repaint seam`,
+    ).toBe(true);
+    expect(
+      run.repaint.display,
+      `the ${label} run must restore the overlay before the capture`,
+    ).toBe('');
+  }
+
+  expect(second.digest, 'both runs must produce the same READY bytes').toBe(first.digest);
 });

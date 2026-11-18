@@ -430,14 +430,46 @@ describe('stable capture loop (Issue #199)', () => {
 });
 
 describe('WebKit READY overlay repaint (Issue #199)', () => {
-  it('forces one repaint and then settles the page', async () => {
-    const evaluate = vi.fn(async () => {});
+  it('runs the evaluate callback and hides, then restores, the overlay for two frames', async () => {
+    const overlay = { style: { display: '' } };
+    class FakeHTMLElement {}
+    Object.setPrototypeOf(overlay, FakeHTMLElement.prototype);
+    const frames: Array<(time: number) => void> = [];
+    // Run the callback the runtime hands to Playwright instead of asserting
+    // only that evaluate was called: the hide / restore is the seam that fixes
+    // the load-dependent raster, so deleting it must turn this test red.
+    const evaluate = vi.fn((callback: () => Promise<void>) => callback());
     const settle = vi.fn(async () => {});
     const page = { evaluate } as unknown as Page;
 
-    await repaintWebkitReadyOverlay(page, { settle });
+    vi.stubGlobal('HTMLElement', FakeHTMLElement);
+    vi.stubGlobal('document', { querySelector: () => overlay });
+    vi.stubGlobal('requestAnimationFrame', (callback: (time: number) => void) => {
+      frames.push(callback);
+      return frames.length;
+    });
 
-    expect(evaluate).toHaveBeenCalledTimes(1);
-    expect(settle).toHaveBeenCalledTimes(1);
+    try {
+      const repaint = repaintWebkitReadyOverlay(page, { settle });
+
+      // The callback runs synchronously up to its first frame wait.
+      expect(evaluate).toHaveBeenCalledTimes(1);
+      expect(overlay.style.display).toBe('none');
+      expect(frames).toHaveLength(1);
+
+      frames[0]?.(0);
+      expect(frames, 'two animation frames must pass before the overlay returns').toHaveLength(2);
+      expect(overlay.style.display, 'the overlay stays hidden during the second frame').toBe(
+        'none',
+      );
+
+      frames[1]?.(0);
+      await repaint;
+
+      expect(overlay.style.display, 'the overlay must be restored before capture').toBe('');
+      expect(settle).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
