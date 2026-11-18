@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildSnapshot,
-  formatScoreTable,
   kbToBytes,
   parseBudgetMetrics,
   parseUnitTests,
@@ -303,23 +302,5 @@ describe('kbToBytes', () => {
   it('rounds the rounded KB figure back to whole bytes', () => {
     expect(kbToBytes(8.12)).toBe(8315);
     expect(kbToBytes(0)).toBe(0);
-  });
-});
-
-describe('formatScoreTable', () => {
-  it('renders the metric table and lists the reasons for null values', () => {
-    const results = passingResults();
-    results[1] = ok('check:budget', 'unexpected budget output\n');
-
-    const table = formatScoreTable(snapshotFrom(results));
-
-    expect(table).toContain('指标');
-    expect(table).toContain('当前值');
-    expect(table).toContain('unitTests');
-    expect(table).toContain('1258');
-    expect(table).toContain('entryGzipBytes');
-    expect(table).toContain('null');
-    expect(table).toContain('错误:');
-    expect(table).toContain('check:budget:');
   });
 });

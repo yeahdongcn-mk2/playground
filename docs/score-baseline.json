@@ -1,0 +1,13 @@
+{
+  "unitTests": 1295,
+  "entryGzipBytes": 11428,
+  "totalJsGzipBytes": 420434,
+  "checks": {
+    "lint": "pass",
+    "check:budget": "pass",
+    "verify:doc-counts": "pass",
+    "verify:screenshots:doc-dims": "pass",
+    "verify:screenshots:sha256": "pass",
+    "verify:screenshots:webkit": "pass"
+  }
+}
