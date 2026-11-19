@@ -93,8 +93,50 @@ describe('snake screenshot determinism guard', () => {
     );
     expect(waitAt).toBeGreaterThan(-1);
     expect(captureAt).toBeGreaterThan(waitAt);
-    // The ineffective first-page warm-up was replaced by the root-cause fix.
-    expect(SCRIPT).not.toContain('const warmup = await mobile.newPage();');
+  });
+
+  it('warms the first-page paint path before the committed WebKit ready page', () => {
+    // Issue #342 rework: a fresh browser's first page can rasterise the sticky
+    // header and the READY card / blurred backdrop in a stable 1-2-LSB variant.
+    // `{ stable: true }` cannot catch that because the wrong raster is itself
+    // byte-identical across consecutive frames, so the committed page must not
+    // be the browser's first page. A throwaway page loads the same READY scene
+    // (including the overlay and its backdrop-filter) and closes before the
+    // real page opens, the same seam as the minesweeper READY capture.
+    expect(SCRIPT).toContain(
+      "const SNAKE_READY_URL = `${ORIGIN}/#/games/snake?debug=1&food=11,10`;",
+    );
+    const helperStart = SCRIPT.indexOf('async function captureWebkitMobile(');
+    const helperEnd = SCRIPT.indexOf('\n}\n', helperStart);
+    expect(helperStart).toBeGreaterThan(-1);
+    expect(helperEnd).toBeGreaterThan(helperStart);
+    const body = SCRIPT.slice(helperStart, helperEnd);
+
+    const warmUpOpen = body.indexOf('const warmUp = await mobile.newPage();');
+    const warmUpLoad = body.indexOf(
+      "await warmUp.goto(SNAKE_READY_URL, { waitUntil: 'networkidle' });",
+    );
+    const warmUpWait = body.indexOf('await waitForSnakeReady(warmUp);');
+    const warmUpSettle = body.indexOf('await settleCapturePaint(warmUp);');
+    const warmUpClose = body.indexOf('await warmUp.close();');
+    const committedOpen = body.indexOf('const mobileGame = await mobile.newPage();');
+    const committedLoad = body.indexOf(
+      "await mobileGame.goto(SNAKE_READY_URL, { waitUntil: 'networkidle' });",
+    );
+
+    expect(warmUpOpen).toBeGreaterThan(-1);
+    expect(warmUpLoad).toBeGreaterThan(warmUpOpen);
+    expect(warmUpWait).toBeGreaterThan(warmUpLoad);
+    expect(warmUpSettle).toBeGreaterThan(warmUpWait);
+    expect(warmUpClose).toBeGreaterThan(warmUpSettle);
+    expect(committedOpen).toBeGreaterThan(warmUpClose);
+    expect(committedLoad).toBeGreaterThan(committedOpen);
+
+    // The throwaway page must close even when loading, waiting or settling
+    // throws: dropping the try/finally would leak the page if the warm-up fails.
+    expect(body).toMatch(
+      /const warmUp = await mobile\.newPage\(\);\s*try \{\s*await warmUp\.goto\([^;]+;\s*await waitForSnakeReady\(warmUp\);\s*(?:\/\/[^\n]*\n\s*)*await settleCapturePaint\(warmUp\);\s*\} finally \{\s*await warmUp\.close\(\);\s*\}/,
+    );
   });
 
   it('runs the READY repaint seams in order before the stable WebKit capture', () => {
@@ -104,7 +146,7 @@ describe('snake screenshot determinism guard', () => {
     // overlay repaint after the framing scroll. A reordered or dropped call
     // must fail this static guard.
     expect(SCRIPT).toContain(
-      'repaintWebkitReadyOverlay,\n  settleWebkitReadyPaint,',
+      'repaintWebkitReadyOverlay,\n  settleCapturePaint,\n  settleWebkitReadyPaint,',
     );
     expect(SCRIPT).toMatch(/\bsettleWebkitReadyPaint,\n\s*stopPreviewServer,/);
 

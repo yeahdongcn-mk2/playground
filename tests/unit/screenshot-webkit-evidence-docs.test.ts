@@ -321,6 +321,13 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(WEBKIT_HISTORICAL).toContain('7092');
     expect(WEBKIT_HISTORICAL).toContain('0.7088%');
     expect(WEBKIT_HISTORICAL).toContain('8e9e845e');
+    // Issue #342 rework: the cold-start drift and its fixed-container evidence
+    // are recorded next to the t3 title fix; keep that prose from rotting.
+    expect(WEBKIT_HISTORICAL).toContain('#342');
+    expect(WEBKIT_HISTORICAL).toContain('3d595ea5');
+    expect(WEBKIT_HISTORICAL).toContain('9138');
+    expect(WEBKIT_HISTORICAL).toContain('verify:screenshots:repro');
+    expect(WEBKIT_HISTORICAL).toContain('清单与已提交 PNG 均未改变');
 
     const manifest = JSON.parse(
       readFileSync(
