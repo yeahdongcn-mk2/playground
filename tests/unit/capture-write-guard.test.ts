@@ -25,6 +25,7 @@ import {
 import {
   captureScreenshot,
   createDesktopContext,
+  expectedCaptureSha256,
   resetRecordedCaptureTargets,
 } from '../../scripts/lib/capture-runtime.mjs';
 
@@ -189,6 +190,39 @@ describe('captureScreenshot write-time environment guard', () => {
       animations: 'disabled',
     });
     expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it('writes caller-validated bytes without taking another screenshot', async () => {
+    // The scores retry compares a stale-host-load frame against the manifest
+    // before it writes. The matched bytes must then go through the same guard
+    // and atomic write, without a third screenshot that could be a different
+    // raster again.
+    const dir = tempScreenshotDir();
+    const target = join(dir, FILE);
+    const bytes = Buffer.from('validated png bytes');
+    const manifest = sampleManifest({ sha256: sha256(bytes) });
+    const { page, screenshotSpy } = fakePage({
+      screenshot: async () => {
+        throw new Error('capturedBytes must not take another screenshot');
+      },
+    });
+    const log = { warn: vi.fn() };
+
+    await captureScreenshot(page, FILE, {
+      engine: 'webkit',
+      outputDir: dir,
+      manifest,
+      fingerprint: containerFingerprint() as never,
+      capturedBytes: bytes,
+      log,
+    });
+
+    expect(readFileSync(target)).toEqual(bytes);
+    expect(readdirSync(dir)).toEqual([FILE]);
+    expect(screenshotSpy).not.toHaveBeenCalled();
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(expectedCaptureSha256(FILE, { manifest })).toBe(sha256(bytes));
+    expect(expectedCaptureSha256('not-in-manifest.png', { manifest })).toBeNull();
   });
 
   it('keeps the committed PNG and removes the temporary sibling when the atomic rename fails', async () => {

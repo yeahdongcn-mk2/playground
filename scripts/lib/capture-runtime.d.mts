@@ -155,6 +155,12 @@ export interface CaptureScreenshotOptions {
   stableIntervalMs?: number;
   /** Extra frames the stable-frame check may read before failing. */
   stableAttempts?: number;
+  /**
+   * Bytes a caller already validated (for example against the manifest sha256
+   * while resampling a fresh page); the writer skips the screenshot and still
+   * applies the environment guard and the atomic write.
+   */
+  capturedBytes?: Buffer | Uint8Array;
   /** Override the target of the context that produced the page (tests / edge cases). */
   target?: CaptureTarget;
   /** Parsed manifest; defaults to reading `manifestPath` from disk. */
@@ -178,6 +184,19 @@ export function captureScreenshot(
   name: string,
   options: CaptureScreenshotOptions,
 ): Promise<void>;
+
+/**
+ * The sha256 recorded for `name` in the screenshot manifest, or null when the
+ * file is unrecorded (for example a trimmed checkout).
+ */
+export function expectedCaptureSha256(
+  name: string,
+  options?: {
+    manifest?: ScreenshotSha256Manifest | null;
+    manifestPath?: string;
+    readFile?: (path: string, encoding: 'utf8') => string;
+  },
+): string | null;
 
 /** Consecutive whole-image frames the WebKit READY capture must repeat. */
 export const READY_CAPTURE_STABLE_FRAMES: number;
