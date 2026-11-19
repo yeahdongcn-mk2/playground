@@ -3,10 +3,8 @@ import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Page } from '@playwright/test';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
-  BLANK_HEADER_SELECTOR,
-  BLANK_HEADER_SETTLE_FRAMES,
   BLANK_SETTLE_INTERVAL_MS,
   BLANK_SETTLE_TIMEOUT_MS,
   BLANK_STABLE_SAMPLES,
@@ -14,14 +12,16 @@ import {
   isBlankAtTarget,
   nextBlankStableStreak,
   readBlankReadout,
-  repaintBlankHeader,
   settleBlankHeader,
   waitForBlankSettled,
 } from '../../scripts/lib/blank-settle.mjs';
-import type {
-  BlankHeaderRepaintOptions,
-  BlankReadoutSample,
-} from '../../scripts/lib/blank-settle.mjs';
+import type { BlankReadoutSample } from '../../scripts/lib/blank-settle.mjs';
+import {
+  SHARED_HEADER_SELECTOR,
+  SHARED_HEADER_SETTLE_FRAMES,
+  repaintSharedHeader,
+} from '../../scripts/lib/webkit-compositing-settle.mjs';
+import type { SharedHeaderRepaintOptions } from '../../scripts/lib/webkit-compositing-settle.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SCRIPT = readFileSync(
@@ -29,7 +29,10 @@ const SCRIPT = readFileSync(
   'utf8',
 );
 const VIEW = readFileSync(join(ROOT, 'src', 'games', 'blank', 'view.ts'), 'utf8');
-const APP = readFileSync(join(ROOT, 'src', 'app', 'app.ts'), 'utf8');
+const BLANK_SETTLE = readFileSync(
+  join(ROOT, 'scripts', 'lib', 'blank-settle.mjs'),
+  'utf8',
+);
 const SCENE = readFileSync(
   join(ROOT, 'src', 'games', 'blank', 'scene.ts'),
   'utf8',
@@ -62,15 +65,6 @@ function functionBody(source: string, name: string): string {
   throw new Error(`unterminated function: ${name}`);
 }
 
-/** A deferred promise whose resolution order a test can control. */
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
 /** Replace jsdom's missing / asynchronous `document.fonts` with a stub. */
 function stubFonts(ready: Promise<void> = Promise.resolve()): void {
   Object.defineProperty(document, 'fonts', {
@@ -79,31 +73,7 @@ function stubFonts(ready: Promise<void> = Promise.resolve()): void {
   });
 }
 
-function installHeader(markup?: string): HTMLElement {
-  document.body.innerHTML =
-    markup ??
-    '<header class="site-header">PLAYGROUND <span>ARCADE</span></header>';
-  const header = document.querySelector<HTMLElement>(BLANK_HEADER_SELECTOR);
-  if (!header) {
-    throw new Error('test fixture did not create the shared header');
-  }
-  return header;
-}
-
-/**
- * Read the WebKit-prefixed filter as jsdom exposes it. jsdom's
- * CSSStyleDeclaration does not model the vendor property (its cssText stays
- * empty), but assigning / clearing the camelCase alias still records the value
- * the seam set, which is enough to prove the prefixed toggle runs.
- */
-function webkitFilter(header: HTMLElement): string {
-  return (
-    header.style as CSSStyleDeclaration & { webkitBackdropFilter?: string }
-  ).webkitBackdropFilter ?? '';
-}
-
 afterEach(() => {
-  vi.unstubAllGlobals();
   document.body.innerHTML = '';
 });
 
@@ -358,103 +328,7 @@ describe('blank canvas screenshot determinism guard', () => {
     expect(streak).toBe(0);
   });
 
-  it('waits for the header fonts, then repaints it between committed frames', async () => {
-    const header = installHeader();
-    const fonts = deferred();
-    stubFonts(fonts.promise);
-    const observedFilters: Array<{ backdrop: string; webkit: string }> = [];
-    vi.stubGlobal(
-      'requestAnimationFrame',
-      (callback: FrameRequestCallback) => {
-        observedFilters.push({
-          backdrop: header.style.backdropFilter,
-          webkit: webkitFilter(header),
-        });
-        callback(0);
-        return 0;
-      },
-    );
-
-    const pending = repaintBlankHeader({
-      selector: BLANK_HEADER_SELECTOR,
-      frames: BLANK_HEADER_SETTLE_FRAMES,
-    });
-    await Promise.resolve();
-    // The filter must not be touched until the header fonts have loaded.
-    expect(header.style.backdropFilter).toBe('');
-    expect(observedFilters).toEqual([]);
-
-    fonts.resolve();
-    await expect(pending).resolves.toBe(true);
-    // Two toggles, each followed by BLANK_HEADER_SETTLE_FRAMES double-rAF
-    // waits: both aliases are off for the first side and restored for the
-    // second instead of being left unfiltered or never toggled.
-    expect(observedFilters).toEqual([
-      ...Array(BLANK_HEADER_SETTLE_FRAMES * 2).fill({
-        backdrop: 'none',
-        webkit: 'none',
-      }),
-      ...Array(BLANK_HEADER_SETTLE_FRAMES * 2).fill({
-        backdrop: '',
-        webkit: '',
-      }),
-    ]);
-    expect(header.style.backdropFilter).toBe('');
-    expect(webkitFilter(header)).toBe('');
-  });
-
-  it('honours a custom header selector and frame budget', async () => {
-    document.body.innerHTML = '<header class="custom-header">X</header>';
-    const header = document.querySelector<HTMLElement>('.custom-header');
-    if (!header) {
-      throw new Error('test fixture did not create the custom header');
-    }
-    stubFonts();
-    let frames = 0;
-    vi.stubGlobal(
-      'requestAnimationFrame',
-      (callback: FrameRequestCallback) => {
-        frames += 1;
-        callback(0);
-        return 0;
-      },
-    );
-
-    await expect(
-      repaintBlankHeader({ selector: '.custom-header', frames: 1 }),
-    ).resolves.toBe(true);
-
-    // One double-rAF wait per toggle side, so a hard-coded two-wait budget or
-    // the shared `.site-header` selector would fail this case.
-    expect(frames).toBe(4);
-    expect(header.style.backdropFilter).toBe('');
-  });
-
-  it('fails instead of silently skipping a missing shared header', async () => {
-    document.body.innerHTML = '';
-    stubFonts();
-
-    await expect(
-      repaintBlankHeader({
-        selector: BLANK_HEADER_SELECTOR,
-        frames: BLANK_HEADER_SETTLE_FRAMES,
-      }),
-    ).resolves.toBe(false);
-
-    // The default page.evaluate wiring reaches the in-page seam; a missing
-    // header becomes a capture error rather than a silent no-op.
-    const page = {
-      evaluate: (
-        repaint: (options: BlankHeaderRepaintOptions) => Promise<boolean>,
-        options: BlankHeaderRepaintOptions,
-      ) => repaint(options),
-    } as unknown as Page;
-    await expect(settleBlankHeader(page)).rejects.toThrow(
-      'Blank header ".site-header" was not found',
-    );
-  });
-
-  it('passes the selector and frame budget to the in-page seam', async () => {
+  it('delegates the blank header seam to the shared compositing module', async () => {
     const calls: Array<{ repaint: unknown; options: unknown }> = [];
     const page = {
       evaluate: async (repaint: unknown, options: unknown) => {
@@ -467,18 +341,35 @@ describe('blank canvas screenshot determinism guard', () => {
 
     expect(calls).toEqual([
       {
-        repaint: repaintBlankHeader,
+        repaint: repaintSharedHeader,
         options: {
-          selector: BLANK_HEADER_SELECTOR,
-          frames: BLANK_HEADER_SETTLE_FRAMES,
+          selector: SHARED_HEADER_SELECTOR,
+          frames: SHARED_HEADER_SETTLE_FRAMES,
         },
       },
     ]);
-    // The helper targets the real shell header and commits two double-rAF
-    // waits per toggle; changing either constant must change this test.
-    expect(APP).toContain('<header class="site-header">');
-    expect(BLANK_HEADER_SELECTOR).toBe('.site-header');
-    expect(BLANK_HEADER_SETTLE_FRAMES).toBe(2);
+    // The blank module must reuse the shared seam instead of keeping a second
+    // copy of the filter toggle / double-rAF sequence.
+    expect(BLANK_SETTLE).toContain("from './webkit-compositing-settle.mjs'");
+    expect(BLANK_SETTLE).not.toContain('requestAnimationFrame');
+    expect(BLANK_SETTLE).not.toContain('backdropFilter');
+  });
+
+  it('fails the blank capture when the shared header is missing', async () => {
+    document.body.innerHTML = '';
+    stubFonts();
+
+    // The default page.evaluate wiring reaches the shared in-page seam; a
+    // missing header becomes a capture error rather than a silent no-op.
+    const page = {
+      evaluate: (
+        repaint: (options: SharedHeaderRepaintOptions) => Promise<boolean>,
+        options: SharedHeaderRepaintOptions,
+      ) => repaint(options),
+    } as unknown as Page;
+    await expect(settleBlankHeader(page)).rejects.toThrow(
+      'Shared header ".site-header" was not found',
+    );
   });
 
   it('settles the shared header only for the WebKit blank capture', () => {
