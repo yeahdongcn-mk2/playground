@@ -170,88 +170,85 @@ describe('breakout screenshot determinism guard', () => {
     );
   });
 
-  it('freezes the loop for the WebKit terminal captures only', () => {
+  it('freezes the WebKit terminal loop through a waitable explicit marker', () => {
     // Issue #328: even after the header / backdrop seams, a live court lets
     // WebKit pick between 1-LSB card and button rasters across loaded runs.
-    // The debug freeze stops the loop once the terminal overlay is ready, so
-    // the seam composite is built from a canvas that can no longer redraw.
+    // The explicit debug freeze must run after the overlay title and before the
+    // seams; a capture-side waitForFunction sees the marker, not a rAF guess.
+    const stripped = stripComments(SCRIPT);
+    expect(stripped).toContain(
+      "import { freezeBreakoutLoop } from './lib/breakout-freeze.mjs';",
+    );
     for (const name of ['openLevelClear', 'openGameOver']) {
-      expect(functionBody(stripComments(SCRIPT), name)).toContain(
+      expect(functionBody(stripped, name)).toContain(
         "...(IS_WEBKIT ? { freeze: '1' } : {})",
       );
-    }
-    // READY / playing keep their existing paths, and Chromium never asks for
-    // the freeze; the WebKit spread is the only gate.
-    for (const name of ['openReady', 'openPlaying']) {
-      expect(functionBody(stripComments(SCRIPT), name)).not.toContain(
-        'freeze:',
+      expect(functionBody(stripped, name)).toContain(
+        'await freezeBreakoutLoop(page);',
       );
     }
-    expect(functionBody(stripComments(SCRIPT), 'captureDesktop')).not.toContain(
-      'freeze:',
+    // READY / playing and both Chromium paths never request the freeze; the two
+    // terminal WebKit URLs are the only sites with `freeze: '1'`.
+    for (const name of ['openReady', 'openPlaying', 'captureDesktop', 'captureMobile']) {
+      const body = functionBody(stripped, name);
+      expect(body).not.toContain('freeze:');
+      expect(body).not.toContain('freezeBreakoutLoop');
+    }
+    expect([...stripped.matchAll(/freeze: '1'/g)]).toHaveLength(2);
+    expect([
+      ...stripped.matchAll(/await freezeBreakoutLoop\(page\);/g),
+    ]).toHaveLength(2);
+
+    const view = stripComments(VIEW);
+    // The obsolete rAF watcher must not come back: it could run after the
+    // screenshot under load, which is exactly the late-freeze variant.
+    expect(view).not.toContain('freezeRequested');
+    expect(view).not.toContain('sleepOnTerminal');
+    expect(view).not.toContain('requestAnimationFrame(sleepOnTerminal)');
+    // The freeze is debug-only and URL-gated; a missing gate must throw rather
+    // than silently pausing a normal player's loop.
+    expect(view).toMatch(
+      /const freezeLoopEnabled =\s*debugEnabled\(\) && debugParams\(\)\.get\('freeze'\) === '1';/,
+    );
+    expect(view).toMatch(
+      /if \(!freezeLoopEnabled\) \{\s*throw new Error\(\s*'Breakout freeze requested without \?debug=1&freeze=1',\s*\);\s*\}/,
     );
 
-    // The view flag is debug-only and stops the loop only after a terminal
-    // step; the watcher must sleep the loop and raise the existing pause guard
-    // so a focus / visibility event cannot wake the frozen capture.
-    expect(VIEW).toMatch(
-      /const freezeOnTerminal =\s*debugEnabled\(\) && debugParams\(\)\.get\('freeze'\) === '1';/,
+    // The debug method raises the existing pause guard before sleeping, then
+    // publishes the marker only after Phaser reports the loop stopped. A marker
+    // written before the sleep, or a missing running check, would let the
+    // capture wait on a loop that can still redraw.
+    const freezeAt = view.indexOf('const freezeLoop = (): boolean => {');
+    expect(freezeAt).toBeGreaterThan(-1);
+    const freezeBody = bracedBlock(view, view.indexOf('{', freezeAt)).body;
+    const gateAt = freezeBody.indexOf('if (!freezeLoopEnabled) {');
+    const pauseAt = freezeBody.indexOf('debugStepsPaused = true;');
+    const sleepAt = freezeBody.indexOf('activeRuntime.game.loop.sleep();');
+    const runningCheckAt = freezeBody.indexOf(
+      'if (activeRuntime.game.loop.running) {',
     );
-    expect(VIEW).toMatch(
-      /if \(freezeOnTerminal && \(result\.levelCleared \|\| result\.gameOver\)\) \{\s*freezeRequested = true;\s*\}/,
+    const markerAt = freezeBody.indexOf(
+      "gameRoot.dataset.debugFrozen = '1';",
     );
-    // The flag must have exactly one setter: a second early setter would sleep
-    // the loop before the terminal step even with the watcher intact.
-    const view = stripComments(VIEW);
-    expect([...view.matchAll(/freezeRequested = true;/g)]).toHaveLength(1);
-    // Pin the watcher structure rather than the mere presence of the two API
-    // calls: deleting the initial schedule leaves no watcher at all, deleting
-    // the recursion stops it after the first frame, and emptying or deleting
-    // the `freezeRequested` guard sleeps the loop on the first mounted frame.
-    // All of those mutations previously kept this test green.
-    const watcherGateAt = view.indexOf('if (freezeOnTerminal) {');
-    expect(watcherGateAt).toBeGreaterThan(-1);
-    const watcherBlock = bracedBlock(view, view.indexOf('{', watcherGateAt));
-    const watcher = watcherBlock.body;
-    expect(
-      watcher.match(/requestAnimationFrame\(sleepOnTerminal\);/g),
-    ).toHaveLength(2);
-    expect(watcher).toContain('const sleepOnTerminal = (): void => {');
-    const arrowOpen = watcher.indexOf(
-      '{',
-      watcher.indexOf('const sleepOnTerminal = (): void =>'),
-    );
-    const arrowBlock = bracedBlock(watcher, arrowOpen);
-    const arrow = arrowBlock.body;
-    const guardAt = arrow.indexOf('if (freezeRequested) {');
-    const pauseAt = arrow.indexOf('debugStepsPaused = true;');
-    const sleepAt = arrow.indexOf('activeRuntime.game.loop.sleep();');
-    const returnAt = arrow.indexOf('return;', sleepAt);
-    const recursiveAt = arrow.indexOf(
-      'requestAnimationFrame(sleepOnTerminal);',
-      returnAt,
-    );
-    // The sleep must live inside the guard, after the flag is observed, and the
-    // recursion must stay outside it so the watcher keeps polling until the
-    // terminal step.
-    expect(guardAt).toBeGreaterThan(-1);
-    const guard = bracedBlock(arrow, arrow.indexOf('{', guardAt));
-    expect(guard.body).toContain('debugStepsPaused = true;');
-    expect(guard.body).toContain('activeRuntime.game.loop.sleep();');
-    expect(guard.body).toContain('return;');
-    expect(guard.body).not.toContain('requestAnimationFrame(sleepOnTerminal);');
-    expect(pauseAt).toBeGreaterThan(guardAt);
+    const returnAt = freezeBody.indexOf('return true;', markerAt);
+    expect(gateAt).toBeGreaterThan(-1);
+    expect(pauseAt).toBeGreaterThan(gateAt);
     expect(sleepAt).toBeGreaterThan(pauseAt);
-    expect(returnAt).toBeGreaterThan(sleepAt);
-    expect(recursiveAt).toBeGreaterThan(guard.close);
-    expect(arrow.indexOf('requestAnimationFrame(sleepOnTerminal);')).toBe(
-      recursiveAt,
-    );
-    // The only other schedule is the initial one, and it must sit after the
-    // arrow: deleting it previously left the recursive call behind and passed.
-    expect(
-      watcher.lastIndexOf('requestAnimationFrame(sleepOnTerminal);'),
-    ).toBeGreaterThan(arrowBlock.close);
+    expect(runningCheckAt).toBeGreaterThan(sleepAt);
+    expect(markerAt).toBeGreaterThan(runningCheckAt);
+    expect(returnAt).toBeGreaterThan(markerAt);
+    // Exactly one marker writer, and the only activeRuntime sleep sites are the
+    // explicit freeze and the existing visibility pause: a second early freeze
+    // sleep would make the capture proceed before the terminal state is frozen.
+    expect([...view.matchAll(/gameRoot\.dataset\.debugFrozen = '1';/g)]).toHaveLength(1);
+    expect([...view.matchAll(/activeRuntime\.game\.loop\.sleep\(\);/g)]).toHaveLength(2);
+    // Freeze is exposed through the existing debug API only (which is itself
+    // installed under `debugEnabled()`), not on the normal game handle.
+    expect(view).toMatch(/freeze: freezeLoop,/);
+    expect(view).toMatch(/if \(debugEnabled\(\)\) \{\s*debugWindow\(\)\.__playground = \{/);
+    // No terminal-step auto-freeze may creep back in: the capture owns the
+    // moment, and a handleStep freeze would race the title wait.
+    expect(view).not.toContain('result.levelCleared || result.gameOver');
   });
 
   it('repaints the WebKit overlay backdrop for ready and the settled terminal states', () => {
@@ -295,10 +292,10 @@ describe('breakout screenshot determinism guard', () => {
     expect(seam.match(/await nextFrame\(\);/g)).toHaveLength(2);
 
     // Issue #328: the levelclear / gameover cards share the same blurred
-    // backdrop. Each waits for its own title, settles inside the WebKit gate,
-    // repaints the overlay backdrop, and only then rebuilds the header snapshot:
-    // moving the backdrop before the settle or outside the gate (both
-    // previously kept this test green) must fail here.
+    // backdrop. Each waits for its own title, freezes the canvas inside the
+    // WebKit gate, settles, repaints the overlay backdrop, and only then
+    // rebuilds the header snapshot: moving the freeze after the settle or the
+    // backdrop before the settle must fail here.
     const stripped = stripComments(SCRIPT);
     for (const [name, anchor] of [
       ['openLevelClear', "filter({ hasText: '第 1 关清空' })"],
@@ -307,7 +304,8 @@ describe('breakout screenshot determinism guard', () => {
       const body = functionBody(stripped, name);
       const titleAt = body.indexOf(anchor);
       const gateAt = body.indexOf('if (IS_WEBKIT) {', titleAt);
-      const settleAt = body.indexOf('await settle(page);', gateAt);
+      const freezeAt = body.indexOf('await freezeBreakoutLoop(page);', titleAt);
+      const settleAt = body.indexOf('await settle(page);', freezeAt);
       const backdropAt = body.indexOf(
         'await settleReadyBackdrop(page);',
         settleAt,
@@ -323,15 +321,21 @@ describe('breakout screenshot determinism guard', () => {
       expect(gateAt, `${name} must gate the terminal seams on WebKit`).toBeGreaterThan(
         titleAt,
       );
-      expect(settleAt, `${name} must settle after the title`).toBeGreaterThan(
-        gateAt,
-      );
+      expect(
+        freezeAt,
+        `${name} must freeze the loop after the title`,
+      ).toBeGreaterThan(titleAt);
+      expect(
+        settleAt,
+        `${name} must settle only after the explicit freeze`,
+      ).toBeGreaterThan(freezeAt);
       expect(backdropAt, `${name} must repaint the overlay backdrop`).toBeGreaterThan(
         settleAt,
       );
       expect(headerAt, `${name} must settle the header last`).toBeGreaterThan(
         backdropAt,
       );
+      expect(freezeAt).toBeGreaterThan(gateAt);
       expect(backdropAt).toBeLessThan(gateCloseAt);
       expect(headerAt).toBeLessThan(gateCloseAt);
     }

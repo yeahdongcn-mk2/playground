@@ -117,6 +117,15 @@ const VIEW_HTML = `
 interface BreakoutDebugApi {
   gameId: 'breakout';
   getState: () => BreakoutSnapshot;
+  /**
+   * Test seam: stop the Phaser loop for a deterministic WebKit capture.
+   *
+   * Returns true only after Phaser reports the loop stopped, then publishes
+   * `data-debug-frozen="1"` so the capture can wait for it. Throws when the
+   * `?debug=1&freeze=1` URL gate is absent, so a capture can never freeze a
+   * normal page silently.
+   */
+  freeze: () => boolean;
   /** Test seam: destroy the mount without waiting for a route change. */
   destroy: () => void;
 }
@@ -351,12 +360,12 @@ export async function mountBreakout(
 
   const engine = createEngine();
   const fixedStepCount = debugStepCount();
-  // `?debug=1&freeze=1`: stop the loop once the terminal overlay appears, so a
-  // capture snapshots a canvas that can no longer redraw. Debug-only; normal
-  // play and the other debug scenes never set this flag.
-  const freezeOnTerminal =
+  // `?debug=1&freeze=1`: lets the WebKit terminal capture freeze the loop
+  // through the explicit debug API below, after it has waited for the overlay
+  // title. Debug-only; normal play and the other debug scenes never set this
+  // flag, and a freeze request without it throws instead of leaking.
+  const freezeLoopEnabled =
     debugEnabled() && debugParams().get('freeze') === '1';
-  let freezeRequested = false;
   let started = engine.currentStatus !== 'ready';
   let lastStatus: BreakoutStatus = engine.currentStatus;
   let activeScene: BreakoutScene | null = null;
@@ -524,9 +533,6 @@ export async function mountBreakout(
       services.audio.play('blip');
     }
     sync();
-    if (freezeOnTerminal && (result.levelCleared || result.gameOver)) {
-      freezeRequested = true;
-    }
   }
 
   const held = new Set<'left' | 'right'>();
@@ -738,21 +744,31 @@ export async function mountBreakout(
   }
   const activeRuntime = runtime;
 
-  if (freezeOnTerminal) {
-    const sleepOnTerminal = (): void => {
-      if (mountSignal.aborted) {
-        return;
-      }
-      if (freezeRequested) {
-        // Guard the focus / visibility wake-ups so the frozen frame stays put.
-        debugStepsPaused = true;
-        activeRuntime.game.loop.sleep();
-        return;
-      }
-      requestAnimationFrame(sleepOnTerminal);
-    };
-    requestAnimationFrame(sleepOnTerminal);
-  }
+  /**
+   * Explicit debug freeze for the WebKit terminal captures (Issue #328).
+   *
+   * The previous rAF watcher could run after the capture under host load, so
+   * the screenshot sometimes kept a pre-freeze composite; two identical frames
+   * can also agree on a stable but wrong variant. The capture now waits for
+   * the terminal overlay title, calls this method once and waits for
+   * `data-debug-frozen="1"`, so no rAF polling can race the screenshot. The
+   * fixed-step pause guard is reused so later focus / visibility events cannot
+   * wake the frozen loop.
+   */
+  const freezeLoop = (): boolean => {
+    if (!freezeLoopEnabled) {
+      throw new Error(
+        'Breakout freeze requested without ?debug=1&freeze=1',
+      );
+    }
+    debugStepsPaused = true;
+    activeRuntime.game.loop.sleep();
+    if (activeRuntime.game.loop.running) {
+      return false;
+    }
+    gameRoot.dataset.debugFrozen = '1';
+    return true;
+  };
 
   root.addEventListener(
     'click',
@@ -816,6 +832,7 @@ export async function mountBreakout(
     debugWindow().__playground = {
       gameId: 'breakout',
       getState: () => engine.state,
+      freeze: freezeLoop,
       destroy,
     };
   }

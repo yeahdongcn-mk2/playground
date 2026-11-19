@@ -24,6 +24,7 @@ import {
   HISTORICAL_OVERWRITE_FLAG,
   guardHistoricalAfterEvidence,
 } from './lib/screenshot-evidence.mjs';
+import { freezeBreakoutLoop } from './lib/breakout-freeze.mjs';
 import { settleSharedHeaderCompositing } from './lib/webkit-compositing-settle.mjs';
 
 /**
@@ -229,14 +230,18 @@ async function openLevelClear(page) {
   });
   await page.getByTestId('overlay-title').filter({ hasText: '第 1 关清空' }).waitFor();
   if (IS_WEBKIT) {
-    // Issue #328: only the WebKit phone capture needs the extra settle after the
-    // terminal overlay appears. Keeping it inside this guard restores
-    // Chromium's pre-t1 timing (no extra 300 ms wait) and leaves its committed
-    // bytes unchanged.
+    // Issue #328: freeze the live Phaser loop through the explicit debug marker
+    // before any compositing seam. The capture waits for `data-debug-frozen`,
+    // so the terminal canvas can no longer redraw when the overlay backdrop is
+    // rebuilt and the stable frames are taken.
+    await freezeBreakoutLoop(page);
+    // Only the WebKit phone capture needs the extra settle after the terminal
+    // overlay appears. Keeping it inside this guard restores Chromium's pre-t1
+    // timing (no extra 300 ms wait) and leaves its committed bytes unchanged.
     await settle(page);
     // The overlay's blurred stage backdrop is a second compositing layer;
     // toggling the same filter off and on forces WebKit to re-snapshot it from
-    // the settled court. The shared header seam runs last so no later
+    // the frozen court. The shared header seam runs last so no later
     // compositing change can invalidate its snapshot.
     await settleReadyBackdrop(page);
     await settleSharedHeaderCompositing(page);
@@ -251,8 +256,9 @@ async function openGameOver(page) {
   });
   await page.getByTestId('overlay-title').filter({ hasText: '生命用完了' }).waitFor();
   if (IS_WEBKIT) {
-    // Issue #328: same gated settle and overlay-then-header order as
+    // Issue #328: same explicit freeze then settle / overlay / header order as
     // levelclear; only the WebKit phone capture runs this path.
+    await freezeBreakoutLoop(page);
     await settle(page);
     await settleReadyBackdrop(page);
     await settleSharedHeaderCompositing(page);
