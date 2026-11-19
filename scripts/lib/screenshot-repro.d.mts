@@ -14,6 +14,8 @@ export interface ReproHashEntry {
   file: string;
   sha256: string | null;
   error: string | null;
+  /** The retained per-run copy below the log directory, or null. */
+  copyPath: string | null;
 }
 
 export interface ReproRun {
@@ -25,10 +27,19 @@ export interface ReproRun {
   hashes: ReproHashEntry[];
 }
 
+export interface ReproRunHash {
+  run: number;
+  sha256: string | null;
+  logPath: string;
+  copyPath: string | null;
+}
+
 export interface ReproDifference {
   file: string;
   target: string;
   expected: string;
+  /** Every run's hash and retained copy path, in run order. */
+  runHashes: ReproRunHash[];
   run1: string | null;
   run2: string | null;
   log1: string;
@@ -54,10 +65,20 @@ export interface ReproVerifyFailure {
 
 export interface ReproEnvironmentMismatch {
   target: string;
+  /** Every run's fingerprint lines, in run order. */
+  runs: Array<{ run: number; logPath: string; fingerprints: string[] }>;
   log1: string;
   log2: string;
   run1: string[];
   run2: string[];
+}
+
+export interface ReproArtifactFailure {
+  target: string;
+  run: number;
+  file: string;
+  path: string;
+  message: string;
 }
 
 export interface ReproResult {
@@ -66,11 +87,13 @@ export interface ReproResult {
   manifestPath: string;
   dir: string;
   logDir: string;
+  runsPerTarget: number;
   plans: ReproPlan[];
   runs: ReproRun[];
   differences: ReproDifference[];
   captureFailures: ReproCaptureFailure[];
   verifyFailures: ReproVerifyFailure[];
+  artifactFailures: ReproArtifactFailure[];
   environmentMismatches: ReproEnvironmentMismatch[];
   verifiedFiles: number;
 }
@@ -126,10 +149,17 @@ export interface RunScreenshotReproOptions {
   dir?: string;
   logDir?: string;
   repoRoot?: string;
+  /** Requested manifest targets; empty means every target. */
+  targets?: string[];
+  /** Runs per target; defaults to REPRO_RUN_COUNT. */
+  runs?: number | string;
   env?: NodeJS.ProcessEnv;
   logger?: ReproLogger;
+  /** Live progress lines, one per file and run. */
+  progress?: (line: string) => void;
   readText?: (path: string) => string;
   hashFile?: (path: string) => string;
+  copyFile?: (source: string, destination: string) => void;
   mkdir?: (path: string, options: { recursive: true }) => void;
   removeFile?: (path: string) => void;
   spawn?: ReproSpawn;
@@ -151,8 +181,18 @@ export class ScreenshotReproError extends Error {}
 export function captureCommandArgs(target: string): string[];
 export function sha256VerifierArgs(options: ReproVerifyLogOptions): string[];
 export function parseCaptureTarget(command: string): string;
+export function validateCaptureTarget(target: string): string;
+export function normalizeRunCount(value: number | string): number;
+export function selectReproPlans(plans: ReproPlan[], targets?: string[]): ReproPlan[];
 export function deriveReproPlans(manifest: ScreenshotSha256Manifest): ReproPlan[];
 export function reproLogPath(logDir: string, target: string, run: number): string;
+export function reproArtifactDir(logDir: string, target: string, run: number): string;
+export function reproArtifactPath(
+  logDir: string,
+  target: string,
+  run: number,
+  file: string,
+): string;
 export function spawnContainerCapture(options: SpawnContainerCaptureOptions): Promise<number>;
 export function spawnSha256Verifier(options: SpawnSha256VerifierOptions): ReproVerification;
 export function runScreenshotRepro(

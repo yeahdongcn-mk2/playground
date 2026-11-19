@@ -5,6 +5,8 @@ export interface VerifyReproOptions {
   manifest: string;
   dir: string;
   logDir: string;
+  targets: string[];
+  runs: number;
 }
 
 export interface VerifyReproLogger {
@@ -19,8 +21,11 @@ export interface ReproMainDependencies {
     manifestPath: string;
     dir: string;
     logDir: string;
+    targets: string[];
+    runs: number;
     repoRoot: string;
     env: NodeJS.ProcessEnv;
+    progress?: (line: string) => void;
   }) => ReproResult | Promise<ReproResult>;
   appendFile?: (path: string, data: string) => void;
   repoRoot?: string;
