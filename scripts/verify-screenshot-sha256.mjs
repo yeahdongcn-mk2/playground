@@ -19,18 +19,28 @@ Verify the fixed-environment screenshot evidence against
 ${DEFAULT_MANIFEST_PATH}: each PNG must exist and hash to its recorded
 sha256. With --log the capture environment fingerprint printed by the capture
 runtime is checked too, and environment drift is reported separately from a
-changed PNG.
+changed PNG. A log that contains the runtime's sha256 drift checklist is also
+checked: every captured sha256 must equal the current manifest entry. A log
+with no drift checklist keeps the previous behaviour and skips that check, so
+older logs remain usable.
 
 Options:
   --dir <path>       screenshot directory (default: ${DEFAULT_SCREENSHOT_DIR})
   --manifest <path>  sha256 manifest (default: ${DEFAULT_MANIFEST_PATH})
-  --log <path>       capture log with capture-env fingerprint line(s)
+  --log <path>       capture log with capture-env fingerprint line(s) and/or
+                     the sha256 drift checklist printed by the capture runtime
   -h, --help         show this help
 
-Exit codes: 0 all checks pass, 1 hash, environment or platform mismatch,
-            2 usage, invalid manifest, unreadable manifest/log or malformed
-              capture-env line. A missing or changed PNG is a hash failure (1);
-              a platform difference is printed as its own section and exits 1.`;
+Exit codes: 0 all checks pass, 1 hash, environment, platform or capture-log
+            sha256 mismatch, 2 usage, invalid manifest, unreadable
+            manifest/log, malformed capture-env line or malformed capture-log
+            sha256 drift record. A missing or changed PNG is a hash failure (1);
+            a platform difference is printed as its own section and exits 1.
+            A captured sha256 that differs from the manifest, or a captured
+            file the manifest does not record, is a capture-log sha256 failure
+            (1); a drift checklist with missing, repeated or non-64-hex-lower-
+            case fields is invalid input (2). Logs without a drift checklist
+            are accepted unchanged for compatibility.`;
 
 function parseArgs(argv) {
   const options = {
@@ -103,6 +113,28 @@ function printHashProblems(hashProblems, captureByFile, entries, dir) {
     const capture = captureByFile.get(problem.file);
     if (capture !== undefined) {
       console.error(`    recapture in fixed container: ${capture.command}`);
+    }
+  }
+}
+
+function printLogHashProblems(problems, captureByFile) {
+  console.error(`FAIL: ${problems.length} capture-log captured sha256 problem(s):`);
+  for (const problem of problems) {
+    console.error(`  ${problem.file}: ${problem.message}`);
+    console.error(
+      `    expected sha256: ${problem.expected ?? 'not recorded in the manifest'}`,
+    );
+    console.error(`    captured sha256: ${problem.actual}`);
+    const capture = captureByFile.get(problem.file);
+    if (capture !== undefined) {
+      console.error(`    recapture in fixed container: ${capture.command}`);
+    } else {
+      // Without a manifest entry there is no reliable target to derive, so do
+      // not print a guessed fixed-container command that could recapture the
+      // wrong file.
+      console.error(
+        '    recapture with the script that wrote this file, then add it to the manifest.',
+      );
     }
   }
 }
@@ -203,7 +235,7 @@ function main(argv) {
     manifest.captures.map((capture) => [capture.file, capture]),
   );
   const result = verifyScreenshotSha256({ dir, manifest, logText });
-  const { hashProblems, environment } = result;
+  const { hashProblems, logHashes, environment } = result;
 
   // A malformed log is invalid input (exit 2), but it must not hide a changed
   // committed PNG: report the hash problems before returning.
@@ -211,21 +243,32 @@ function main(argv) {
     printHashProblems(hashProblems, captureByFile, result.entries, dir);
   }
 
-  if (environment.invalid) {
+  const invalidLogProblems = [
+    ...(environment.invalid ? environment.problems : []),
+    ...(logHashes.invalid && logHashes.invalidMessage !== null
+      ? [logHashes.invalidMessage]
+      : []),
+  ];
+  if (invalidLogProblems.length > 0) {
     console.error(`error: invalid capture log ${logPath ?? ''}:`);
-    for (const problem of environment.problems) {
+    for (const problem of invalidLogProblems) {
       console.error(`  ${problem}`);
     }
     return 2;
   }
 
-  if (hashProblems.length === 0 && environment.ok) {
+  if (hashProblems.length === 0 && environment.ok && logHashes.ok) {
     const envNote =
       logPath === null
         ? ''
         : '; capture environment fingerprint verified';
+    const logHashNote =
+      logHashes.records.length === 0
+        ? ''
+        : `; capture-log captured sha256 verified (${logHashes.records.length} record(s))`;
     console.log(
-      `OK: ${result.entries} screenshot sha256 entries verified in ${dir}${envNote}`,
+      `OK: ${result.entries} screenshot sha256 entries verified in ${dir}` +
+        `${envNote}${logHashNote}`,
     );
     return 0;
   }
@@ -239,6 +282,12 @@ function main(argv) {
   const environmentProblems = environment.problems.filter(
     (problem) => !platformProblems.has(problem),
   );
+
+  // Captured sha256 drift is reported on its own as well: it proves a logged
+  // run wrote different bytes even when the committed PNGs still match.
+  if (logHashes.problems.length > 0) {
+    printLogHashProblems(logHashes.problems, captureByFile);
+  }
 
   if (environmentProblems.length > 0) {
     console.error(
@@ -262,10 +311,24 @@ function main(argv) {
     }
   }
   if (hashProblems.length === 0) {
-    console.error(
-      `FAIL: ${environment.problems.length} capture environment problem(s); ` +
-        'committed PNG hashes still match the manifest.',
-    );
+    const failureClasses = [];
+    if (environment.problems.length > 0) {
+      failureClasses.push(`${environment.problems.length} capture environment problem(s)`);
+    }
+    if (logHashes.problems.length > 0) {
+      failureClasses.push(
+        `${logHashes.problems.length} capture-log captured sha256 problem(s)`,
+      );
+    }
+    if (failureClasses.length > 0) {
+      // "committed PNG hashes still match" is only true while the log hash
+      // check passed; with captured sha256 drift it would be misleading.
+      const suffix =
+        logHashes.problems.length === 0
+          ? '; committed PNG hashes still match the manifest.'
+          : '.';
+      console.error(`FAIL: ${failureClasses.join('; ')}${suffix}`);
+    }
   }
   return 1;
 }

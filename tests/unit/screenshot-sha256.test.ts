@@ -24,8 +24,10 @@ import {
   manifestPlatformMismatch,
   parseCaptureEnvironmentFingerprintLine,
   parseCaptureLogFingerprints,
+  parseCaptureLogHashRecords,
   parseSha256Manifest,
   verifyCaptureEnvironment,
+  verifyCaptureLogHashes,
   verifyScreenshotSha256,
 } from '../../scripts/lib/screenshot-sha256.mjs';
 import type {
@@ -240,6 +242,78 @@ const MALFORMED_CAPTURE_ENV_FIELD_CASES: Array<{
     label: 'an image reference that is not repo:tag@digest',
     logLine: CONTAINER_LOG_LINE.replace(/image=\S+/, 'image=garbage'),
     message: 'invalid capture-env image reference "garbage"',
+  },
+];
+
+/** A baseline / captured sha256 fixture for the drift-checklist tests. */
+const DRIFT_BASELINE_SHA = 'a'.repeat(64);
+const DRIFT_CAPTURED_SHA = 'b'.repeat(64);
+
+/**
+ * Drift checklists that are structurally invalid. The runtime format is
+ * stable, so a header without its two fields, a repeated field or a sha256
+ * that is not 64 lower-case hex characters is invalid input (exit 2), never a
+ * silently ignored record.
+ */
+const MALFORMED_CAPTURE_LOG_HASH_CASES: Array<{
+  label: string;
+  build: (file: string) => string;
+  message: string;
+}> = [
+  {
+    label: 'a drift header without fields',
+    build: (file) =>
+      `Wrote /tmp/${file} inside the fixed capture environment, but its sha256 differs ` +
+      `from ${DEFAULT_MANIFEST_PATH}:\n`,
+    message: 'is missing "manifest sha256"',
+  },
+  {
+    label: 'a drift record without captured sha256',
+    build: (file) =>
+      `Wrote /tmp/${file} inside the fixed capture environment, but its sha256 differs ` +
+      `from ${DEFAULT_MANIFEST_PATH}:\n  manifest sha256: ${DRIFT_BASELINE_SHA}\n`,
+    message: 'is missing "captured sha256"',
+  },
+  {
+    label: 'a drift record without manifest sha256',
+    build: (file) =>
+      `Wrote /tmp/${file} inside the fixed capture environment, but its sha256 differs ` +
+      `from ${DEFAULT_MANIFEST_PATH}:\n  captured sha256: ${DRIFT_CAPTURED_SHA}\n`,
+    message: 'is missing "manifest sha256"',
+  },
+  {
+    label: 'an upper-case captured sha256',
+    build: (file) =>
+      `Wrote /tmp/${file} inside the fixed capture environment, but its sha256 differs ` +
+      `from ${DEFAULT_MANIFEST_PATH}:\n` +
+      `  manifest sha256: ${DRIFT_BASELINE_SHA}\n  captured sha256: ${'A'.repeat(64)}\n`,
+    message: 'must be 64 lower-case hex characters',
+  },
+  {
+    label: 'a short manifest sha256',
+    build: (file) =>
+      `Wrote /tmp/${file} inside the fixed capture environment, but its sha256 differs ` +
+      `from ${DEFAULT_MANIFEST_PATH}:\n` +
+      `  manifest sha256: ${'a'.repeat(63)}\n  captured sha256: ${DRIFT_CAPTURED_SHA}\n`,
+    message: 'must be 64 lower-case hex characters',
+  },
+  {
+    label: 'a repeated captured sha256',
+    build: (file) =>
+      `Wrote /tmp/${file} inside the fixed capture environment, but its sha256 differs ` +
+      `from ${DEFAULT_MANIFEST_PATH}:\n` +
+      `  manifest sha256: ${DRIFT_BASELINE_SHA}\n` +
+      `  captured sha256: ${DRIFT_CAPTURED_SHA}\n` +
+      `  captured sha256: ${DRIFT_CAPTURED_SHA}\n`,
+    message: 'repeats "captured sha256"',
+  },
+  {
+    label: 'a drift header without a trailing colon',
+    build: (file) =>
+      `Wrote /tmp/${file} inside the fixed capture environment, but its sha256 differs ` +
+      `from ${DEFAULT_MANIFEST_PATH}\n` +
+      `  manifest sha256: ${DRIFT_BASELINE_SHA}\n  captured sha256: ${DRIFT_CAPTURED_SHA}\n`,
+    message: 'malformed capture-log sha256 drift header',
   },
 ];
 
@@ -679,6 +753,53 @@ function runCli(args: string[]): { status: number | null; stdout: string; stderr
     status: result.status,
     stdout: result.stdout ?? '',
     stderr: `${result.stderr ?? ''}${result.error === undefined ? '' : String(result.error)}`,
+  };
+}
+
+/** The write-time checklist `capture-runtime.mjs` prints on sha256 drift. */
+function driftChecklist(
+  filePath: string,
+  manifestSha256: string,
+  capturedSha256: string,
+): string {
+  return [
+    `Wrote ${filePath} inside the fixed capture environment, but its sha256 differs from ` +
+      `${DEFAULT_MANIFEST_PATH}:`,
+    `  manifest sha256: ${manifestSha256}`,
+    `  captured sha256: ${capturedSha256}`,
+    'The PNG was written, but the recorded evidence is stale until the following are updated ' +
+      'in the same change:',
+    `- ${DEFAULT_MANIFEST_PATH}: captures[0].sha256 -> ${capturedSha256}`,
+  ].join('\n');
+}
+
+/** A drift checklist for a file captured below a container-like directory. */
+function driftLogForFile(
+  file: string,
+  capturedSha256: string,
+  manifestSha256 = DRIFT_BASELINE_SHA,
+): string {
+  return `${driftChecklist(
+    `/workspace/docs/screenshots/${file}`,
+    manifestSha256,
+    capturedSha256,
+  )}\n`;
+}
+
+/** A manifest whose captures follow the fixed recapture-command contract. */
+function fixtureManifestFor(
+  files: Array<{ file: string; bytes: Buffer }>,
+): ScreenshotSha256Manifest {
+  const base = committedManifest();
+  const provenance = (base.captures[0] as ScreenshotSha256Capture).provenance;
+  return {
+    environment: base.environment,
+    captures: files.map(({ file, bytes }) => ({
+      file,
+      sha256: sha256(bytes),
+      command: expectedRecaptureCommand(file),
+      provenance,
+    })),
   };
 }
 
@@ -1681,5 +1802,429 @@ describe('verifyScreenshotSha256', () => {
     ]);
     expect(unreadableLog.status).toBe(2);
     expect(unreadableLog.stderr).toContain('cannot read capture log');
+  });
+});
+
+describe('capture log captured sha256 records', () => {
+  it('parses the runtime drift checklist and matches the file by basename', () => {
+    const file = EXPECTED_FILES[0] as string;
+    const logText = [
+      CONTAINER_LOG_LINE,
+      driftChecklist(
+        `/repo/docs/screenshots/${file}`,
+        DRIFT_BASELINE_SHA,
+        DRIFT_CAPTURED_SHA,
+      ),
+      'unrelated trailing output',
+    ].join('\n');
+
+    expect(parseCaptureLogFingerprints(logText)).toHaveLength(1);
+    expect(parseCaptureLogHashRecords(logText)).toEqual([
+      {
+        file,
+        path: `/repo/docs/screenshots/${file}`,
+        manifestSha256: DRIFT_BASELINE_SHA,
+        capturedSha256: DRIFT_CAPTURED_SHA,
+      },
+    ]);
+  });
+
+  it('returns no records for an older log without the drift checklist', () => {
+    expect(parseCaptureLogHashRecords(`${CONTAINER_LOG_LINE}\n`)).toEqual([]);
+    expect(parseCaptureLogHashRecords('')).toEqual([]);
+    expect(parseCaptureLogHashRecords('captured sha256: unrelated prose\n')).toEqual([]);
+  });
+
+  it('passes when the captured sha256 equals the manifest even with a different baseline', () => {
+    const bytes = makePng();
+    const file = EXPECTED_FILES[0] as string;
+    const manifest = fixtureManifest(bytes);
+
+    const verification = verifyCaptureLogHashes({
+      logText: driftLogForFile(file, sha256(bytes), DRIFT_BASELINE_SHA),
+      manifest,
+    });
+
+    expect(verification.checked).toBe(true);
+    expect(verification.invalid).toBe(false);
+    expect(verification.ok).toBe(true);
+    expect(verification.problems).toEqual([]);
+    expect(verification.records[0]?.manifestSha256).toBe(DRIFT_BASELINE_SHA);
+    expect(verification.records[0]?.capturedSha256).toBe(sha256(bytes));
+  });
+
+  it('exposes a captured sha256 problem separately from the committed PNG problems', () => {
+    const dir = makeTempDir();
+    const bytes = makePng();
+    const file = EXPECTED_FILES[0] as string;
+    writePng(dir, file, bytes);
+    const manifest = fixtureManifest(bytes);
+
+    const result = verifyScreenshotSha256({
+      dir,
+      manifest,
+      logText: `${CONTAINER_LOG_LINE}\n${driftLogForFile(file, DRIFT_CAPTURED_SHA)}`,
+    });
+
+    expect(result.hashProblems).toEqual([]);
+    expect(result.environment.ok).toBe(true);
+    expect(result.logHashes.checked).toBe(true);
+    expect(result.logHashes.invalid).toBe(false);
+    expect(result.logHashes.ok).toBe(false);
+    expect(result.logHashes.records).toHaveLength(1);
+    expect(result.logHashes.problems).toEqual([
+      {
+        file,
+        expected: sha256(bytes),
+        actual: DRIFT_CAPTURED_SHA,
+        message: 'captured sha256 differs from the manifest',
+      },
+    ]);
+  });
+
+  it('marks the log hash check unchecked without a log', () => {
+    const dir = makeTempDir();
+    const bytes = makePng();
+    writePng(dir, EXPECTED_FILES[0] as string, bytes);
+
+    const result = verifyScreenshotSha256({ dir, manifest: fixtureManifest(bytes) });
+
+    expect(result.logHashes).toEqual({
+      checked: false,
+      invalid: false,
+      invalidMessage: null,
+      ok: true,
+      problems: [],
+      records: [],
+    });
+  });
+
+  it('requires a parsed manifest for the log hash check', () => {
+    expect(() => verifyCaptureLogHashes({ logText: '' } as never)).toThrow(
+      ScreenshotSha256Error,
+    );
+    expect(() => verifyCaptureLogHashes({ logText: '' } as never)).toThrow(
+      'verifyCaptureLogHashes needs a parsed manifest',
+    );
+  });
+
+  it.each(MALFORMED_CAPTURE_LOG_HASH_CASES)(
+    'rejects $label as invalid capture log input',
+    ({ build, message }) => {
+      const file = EXPECTED_FILES[0] as string;
+      const logText = build(file);
+
+      expect(() => parseCaptureLogHashRecords(logText)).toThrow(ScreenshotSha256Error);
+      expect(() => parseCaptureLogHashRecords(logText)).toThrow(message);
+
+      const verification = verifyCaptureLogHashes({
+        logText,
+        manifest: fixtureManifest(makePng()),
+      });
+      expect(verification.checked).toBe(true);
+      expect(verification.invalid).toBe(true);
+      expect(verification.ok).toBe(false);
+      // Invalid input is reported as a message, not as a structured drift
+      // problem, so the public problems list keeps one shape.
+      expect(verification.invalidMessage).toContain(message);
+      expect(verification.problems).toEqual([]);
+      expect(verification.records).toEqual([]);
+    },
+  );
+
+  it.each(MALFORMED_CAPTURE_LOG_HASH_CASES)(
+    'exits 2 for $label without printing OK',
+    ({ build }) => {
+      const dir = makeTempDir();
+      const bytes = makePng();
+      const file = EXPECTED_FILES[0] as string;
+      writePng(dir, file, bytes);
+      const manifestPath = writeManifest(dir, fixtureManifest(bytes));
+      const logPath = join(dir, 'capture.log');
+      writeFileSync(logPath, `${CONTAINER_LOG_LINE}\n${build(file)}`);
+
+      const result = runCli([
+        '--dir',
+        dir,
+        '--manifest',
+        manifestPath,
+        '--log',
+        logPath,
+      ]);
+
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain('invalid capture log');
+      expect(result.stdout).not.toContain('OK:');
+    },
+  );
+
+  it('exits 1 and reports captured sha256 drift in its own section', () => {
+    const dir = makeTempDir();
+    const bytes = makePng();
+    const file = EXPECTED_FILES[0] as string;
+    writePng(dir, file, bytes);
+    const expected = sha256(bytes);
+    const captured = sha256(Buffer.concat([bytes, Buffer.from('logged drift')]));
+    const manifestPath = writeManifest(dir, fixtureManifest(bytes));
+    const logPath = join(dir, 'capture.log');
+    writeFileSync(
+      logPath,
+      `${CONTAINER_LOG_LINE}\n${driftLogForFile(file, captured, expected)}`,
+    );
+
+    const result = runCli([
+      '--dir',
+      dir,
+      '--manifest',
+      manifestPath,
+      '--log',
+      logPath,
+    ]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('FAIL: 1 capture-log captured sha256 problem(s):');
+    expect(result.stderr).toContain(`${file}: captured sha256 differs from the manifest`);
+    expect(result.stderr).toContain(`expected sha256: ${expected}`);
+    expect(result.stderr).toContain(`captured sha256: ${captured}`);
+    expect(result.stderr).toContain(
+      'recapture in fixed container: npm run screenshots:container -- screenshots:webkit',
+    );
+    expect(result.stderr).toContain('FAIL: 1 capture-log captured sha256 problem(s).');
+    // Not mixed into the committed-PNG or environment failure classes.
+    expect(result.stderr).not.toContain('screenshot sha256 problem');
+    expect(result.stderr).not.toContain('Environment fingerprint mismatch');
+    // The misleading all-is-well summary must not appear for a log-only failure.
+    expect(result.stderr).not.toContain('committed PNG hashes still match');
+    expect(result.stdout).not.toContain('OK:');
+  });
+
+  it('exits 0 when the captured sha256 equals the current manifest', () => {
+    const dir = makeTempDir();
+    const bytes = makePng();
+    const file = EXPECTED_FILES[0] as string;
+    writePng(dir, file, bytes);
+    const manifestPath = writeManifest(dir, fixtureManifest(bytes));
+    const logPath = join(dir, 'capture.log');
+    writeFileSync(
+      logPath,
+      `${CONTAINER_LOG_LINE}\n${driftLogForFile(file, sha256(bytes), DRIFT_BASELINE_SHA)}`,
+    );
+
+    const result = runCli([
+      '--dir',
+      dir,
+      '--manifest',
+      manifestPath,
+      '--log',
+      logPath,
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(result.stdout).toContain('OK: 1 screenshot sha256 entries verified');
+    expect(result.stdout).toContain(
+      'capture-log captured sha256 verified (1 record(s))',
+    );
+  });
+
+  it('keeps older logs without a drift checklist compatible', () => {
+    const dir = makeTempDir();
+    const bytes = makePng();
+    const file = EXPECTED_FILES[0] as string;
+    writePng(dir, file, bytes);
+    const manifestPath = writeManifest(dir, fixtureManifest(bytes));
+    const logPath = join(dir, 'capture.log');
+    writeFileSync(logPath, `${CONTAINER_LOG_LINE}\n`);
+
+    const result = runCli([
+      '--dir',
+      dir,
+      '--manifest',
+      manifestPath,
+      '--log',
+      logPath,
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('capture environment fingerprint verified');
+    expect(result.stdout).not.toContain('capture-log captured sha256');
+  });
+
+  it('checks every record when the same file appears more than once', () => {
+    const dir = makeTempDir();
+    const bytes = makePng();
+    const file = EXPECTED_FILES[0] as string;
+    writePng(dir, file, bytes);
+    const expected = sha256(bytes);
+    const captured = sha256(Buffer.concat([bytes, Buffer.from('second record')]));
+    const manifestPath = writeManifest(dir, fixtureManifest(bytes));
+    const logPath = join(dir, 'capture.log');
+    writeFileSync(
+      logPath,
+      `${CONTAINER_LOG_LINE}\n${driftLogForFile(file, expected)}${driftLogForFile(
+        file,
+        captured,
+      )}`,
+    );
+
+    const result = runCli([
+      '--dir',
+      dir,
+      '--manifest',
+      manifestPath,
+      '--log',
+      logPath,
+    ]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('FAIL: 1 capture-log captured sha256 problem(s):');
+    expect(result.stderr).toContain(`${file}: captured sha256 differs from the manifest`);
+    expect(result.stderr).toContain(`captured sha256: ${captured}`);
+  });
+
+  it('exits 1 when a logged capture file is not recorded in the manifest', () => {
+    const dir = makeTempDir();
+    const bytes = makePng();
+    const recorded = EXPECTED_FILES[0] as string;
+    const unknown = 'after-snake-webkit.png';
+    writePng(dir, recorded, bytes);
+    const manifestPath = writeManifest(dir, fixtureManifest(bytes));
+    const logPath = join(dir, 'capture.log');
+    writeFileSync(
+      logPath,
+      `${CONTAINER_LOG_LINE}\n${driftLogForFile(unknown, DRIFT_CAPTURED_SHA)}`,
+    );
+
+    const result = runCli([
+      '--dir',
+      dir,
+      '--manifest',
+      manifestPath,
+      '--log',
+      logPath,
+    ]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      `${unknown}: captured by the log but not recorded in the manifest`,
+    );
+    expect(result.stderr).toContain('expected sha256: not recorded in the manifest');
+    expect(result.stderr).toContain(`captured sha256: ${DRIFT_CAPTURED_SHA}`);
+    // No manifest entry means no reliable target: do not guess a recapture
+    // command that could rebuild the wrong evidence file.
+    expect(result.stderr).toContain(
+      'recapture with the script that wrote this file, then add it to the manifest.',
+    );
+    expect(result.stderr).not.toContain('recapture in fixed container');
+    expect(result.stderr).not.toContain('committed PNG hashes still match');
+  });
+
+  it('verifies every file in a multi-file captured-sha256 log', () => {
+    const dir = makeTempDir();
+    const first = { file: EXPECTED_FILES[0] as string, bytes: makePng() };
+    const second = {
+      file: EXPECTED_FILES[1] as string,
+      bytes: Buffer.concat([makePng(), Buffer.from('second file')]),
+    };
+    writePng(dir, first.file, first.bytes);
+    writePng(dir, second.file, second.bytes);
+    const manifestPath = writeManifest(
+      dir,
+      fixtureManifestFor([first, second]),
+    );
+    const secondCaptured = sha256(Buffer.concat([second.bytes, Buffer.from('drift')]));
+    const logPath = join(dir, 'capture.log');
+    writeFileSync(
+      logPath,
+      `${CONTAINER_LOG_LINE}\n${driftLogForFile(
+        first.file,
+        sha256(first.bytes),
+      )}${driftLogForFile(second.file, secondCaptured)}`,
+    );
+
+    const result = runCli([
+      '--dir',
+      dir,
+      '--manifest',
+      manifestPath,
+      '--log',
+      logPath,
+    ]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('FAIL: 1 capture-log captured sha256 problem(s):');
+    expect(result.stderr).toContain(
+      `${second.file}: captured sha256 differs from the manifest`,
+    );
+    expect(result.stderr).not.toContain(
+      `${first.file}: captured sha256 differs from the manifest`,
+    );
+  });
+
+  it('keeps disk hash drift and captured sha256 drift in separate sections', () => {
+    const dir = makeTempDir();
+    const expected = makePng();
+    const diskBytes = Buffer.concat([makePng(), Buffer.from('disk drift')]);
+    const file = EXPECTED_FILES[0] as string;
+    writePng(dir, file, diskBytes);
+    const manifestPath = writeManifest(dir, fixtureManifest(expected));
+    const captured = sha256(Buffer.concat([expected, Buffer.from('log drift')]));
+    const logPath = join(dir, 'capture.log');
+    writeFileSync(
+      logPath,
+      `${CONTAINER_LOG_LINE}\n${driftLogForFile(file, captured)}`,
+    );
+
+    const result = runCli([
+      '--dir',
+      dir,
+      '--manifest',
+      manifestPath,
+      '--log',
+      logPath,
+    ]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('FAIL: 1 screenshot sha256 problem(s)');
+    expect(result.stderr).toContain(`actual sha256:   ${sha256(diskBytes)}`);
+    expect(result.stderr).toContain('FAIL: 1 capture-log captured sha256 problem(s)');
+    expect(result.stderr).toContain(`captured sha256: ${captured}`);
+    expect(result.stderr).not.toContain('committed PNG hashes still match');
+  });
+
+  it('keeps environment drift and captured sha256 drift in separate sections', () => {
+    const dir = makeTempDir();
+    const bytes = makePng();
+    const file = EXPECTED_FILES[0] as string;
+    writePng(dir, file, bytes);
+    const manifestPath = writeManifest(dir, fixtureManifest(bytes));
+    const captured = sha256(Buffer.concat([bytes, Buffer.from('log drift')]));
+    const logPath = join(dir, 'capture.log');
+    writeFileSync(
+      logPath,
+      `${CONTAINER_LOG_LINE.replace('dpr=2', 'dpr=1')}\n${driftLogForFile(
+        file,
+        captured,
+      )}`,
+    );
+
+    const result = runCli([
+      '--dir',
+      dir,
+      '--manifest',
+      manifestPath,
+      '--log',
+      logPath,
+    ]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Environment fingerprint mismatch');
+    expect(result.stderr).toContain('dpr');
+    expect(result.stderr).toContain('FAIL: 1 capture-log captured sha256 problem(s)');
+    expect(result.stderr).toContain(
+      'FAIL: 1 capture environment problem(s); ' +
+        '1 capture-log captured sha256 problem(s).',
+    );
+    expect(result.stderr).not.toContain('committed PNG hashes still match');
   });
 });

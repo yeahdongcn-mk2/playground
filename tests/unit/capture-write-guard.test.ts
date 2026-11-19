@@ -19,6 +19,7 @@ import {
 } from '../../scripts/lib/capture-env.mjs';
 import {
   DEFAULT_MANIFEST_PATH,
+  verifyScreenshotSha256,
   type ScreenshotSha256Manifest,
 } from '../../scripts/lib/screenshot-sha256.mjs';
 import {
@@ -378,6 +379,41 @@ describe('captureScreenshot write-time environment guard', () => {
     expect(verify.stderr).toContain(oldSha);
     expect(verify.stderr).toContain(newSha);
     expect(verify.stderr).toContain(RECAPTURE);
+
+    // The checklist captured from the real capture runtime must be recognized
+    // by the log verifier, not just contain the expected substrings. A wording
+    // or logger-prefix change would otherwise silently fall back to "no
+    // records" and stop checking the captured bytes.
+    const drifted = verifyScreenshotSha256({ dir, manifest, logText: checklist });
+    expect(drifted.logHashes.records).toHaveLength(1);
+    expect(drifted.logHashes.records[0]).toMatchObject({
+      file: FILE,
+      manifestSha256: oldSha,
+      capturedSha256: newSha,
+    });
+    expect(drifted.logHashes.problems).toEqual([
+      {
+        file: FILE,
+        expected: oldSha,
+        actual: newSha,
+        message: 'captured sha256 differs from the manifest',
+      },
+    ]);
+
+    // After the explicit manifest refresh the same record passes: the logged
+    // `manifest sha256` is a capture-time baseline, not a required match.
+    const refreshed = {
+      ...manifest,
+      captures: [{ ...manifest.captures[0]!, sha256: newSha }],
+    };
+    const afterRefresh = verifyScreenshotSha256({
+      dir,
+      manifest: refreshed,
+      logText: checklist,
+    });
+    expect(afterRefresh.hashProblems).toEqual([]);
+    expect(afterRefresh.logHashes.ok).toBe(true);
+    expect(afterRefresh.logHashes.problems).toEqual([]);
   });
 
   it('leaves the committed PNG and no temporary file when the screenshot fails', async () => {
