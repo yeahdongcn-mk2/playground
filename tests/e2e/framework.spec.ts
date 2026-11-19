@@ -2,6 +2,7 @@ import {
   blurListenerCount,
   canvasBox,
   expect,
+  holdKeyUntilMoved,
   installBlurListenerProbe,
   openBlankGame,
   readPosition,
@@ -126,21 +127,24 @@ test.describe('blank canvas game', () => {
     await openBlankGame(page);
     const start = await readPosition(page);
 
-    await page.keyboard.down('ArrowRight');
-    await page.waitForTimeout(450);
-    await page.keyboard.up('ArrowRight');
-    await expect
-      .poll(async () => (await readPosition(page)).x, { timeout: 2_000 })
-      .toBeGreaterThan(start.x + 60);
+    // Hold each key until the readout proves the move instead of releasing it
+    // after a fixed window: under parallel load a single frame clamped to
+    // MAX_DELTA covers only 36 CSS px, below these thresholds. The helper
+    // keyups in `finally`, so a timeout cannot leave the key stuck down.
+    // The timeout is only a failure budget: a heavily loaded host can stall
+    // the render loop for seconds, and the still-held key keeps moving the
+    // cursor once frames resume. The displacement thresholds are unchanged.
+    await holdKeyUntilMoved(page, 'ArrowRight', (position) => position.x > start.x + 60, {
+      timeout: 10_000,
+      description: 'ArrowRight movement',
+    });
     await expect(page.getByTestId('input-mode')).toHaveText('键盘');
 
     const afterRight = await readPosition(page);
-    await page.keyboard.down('KeyS');
-    await page.waitForTimeout(350);
-    await page.keyboard.up('KeyS');
-    await expect
-      .poll(async () => (await readPosition(page)).y, { timeout: 2_000 })
-      .toBeGreaterThan(afterRight.y + 40);
+    await holdKeyUntilMoved(page, 'KeyS', (position) => position.y > afterRight.y + 40, {
+      timeout: 10_000,
+      description: 'KeyS movement',
+    });
   });
 
   test('ignores modifier-key shortcuts', async ({ page }) => {
