@@ -6,6 +6,13 @@ import type {
 } from '../../src/games/minesweeper/engine';
 import { expect } from './fixtures';
 import {
+  FOCUS_VIEWPORT_TOLERANCE,
+  formatFocusSettleFailure,
+  focusViewportSignature,
+  isFocusedInsideViewport,
+  type FocusViewportSnapshot,
+} from './minesweeper-focus';
+import {
   cancelTouch,
   dispatchTouchPointerEvent,
   endTouch,
@@ -261,11 +268,119 @@ export async function expectInsideViewport(
   expect(box.x, `${label} should start inside the viewport`).toBeGreaterThanOrEqual(0);
   expect(box.y, `${label} should start inside the viewport`).toBeGreaterThanOrEqual(0);
   expect(box.x + box.width, `${label} should end inside the viewport`).toBeLessThanOrEqual(
-    viewport.width + 0.5,
+    viewport.width + FOCUS_VIEWPORT_TOLERANCE,
   );
   expect(box.y + box.height, `${label} should end inside the viewport`).toBeLessThanOrEqual(
-    viewport.height + 0.5,
+    viewport.height + FOCUS_VIEWPORT_TOLERANCE,
   );
+}
+
+export interface FocusInsideViewportOptions {
+  /**
+   * Failure budget for the poll; defaults to 5 seconds. It is not a fixed
+   * wait: the helper returns as soon as the condition holds.
+   */
+  readonly timeout?: number;
+  /** First poll interval; later retries back off to twice and four times it. */
+  readonly pollInterval?: number;
+}
+
+/** Read one focus / scroll / layout observation for `locator`. */
+async function readFocusViewportSnapshot(
+  page: Page,
+  locator: Locator,
+): Promise<FocusViewportSnapshot> {
+  const viewport = page.viewportSize();
+  if (!viewport) {
+    throw new Error('focus / viewport helper requires a fixed viewport size');
+  }
+  const state = await locator.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const active = document.activeElement;
+    const activeTestId =
+      active instanceof HTMLElement ? (active.dataset.testid ?? null) : null;
+    return {
+      focused: active === element,
+      activeTestId,
+      activeTag: active?.tagName.toLowerCase() ?? null,
+      scrollX: window.scrollX,
+      scrollY: window.scrollY,
+      targetTestId: element.getAttribute('data-testid'),
+      rect: {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+      },
+      at: performance.now(),
+    };
+  });
+  return {
+    ...state,
+    viewport: { width: viewport.width, height: viewport.height },
+  };
+}
+
+/**
+ * Wait until `locator` is `document.activeElement` and its whole bounding box
+ * is inside the current viewport, keeping the same strict left / top bound and
+ * 0.5px right / bottom tolerance as {@link expectInsideViewport}.
+ *
+ * Focus alone is not enough: after a restart WebKit applies the focus
+ * auto-scroll a moment after the synchronous `focus()` call, and the board
+ * reflow can move the control again. An immediate `toBeFocused()` +
+ * `boundingBox()` pair therefore races the browser under parallel load. This
+ * helper polls the combined condition instead of widening the coordinate
+ * assertion, skipping, or waiting a fixed long time.
+ *
+ * On timeout the error carries the trigger snapshot, the latest `scrollY` /
+ * rect / viewport / active-element testid and tag, and the deduplicated reflow
+ * history, so "the focus auto-scroll never landed" stays distinguishable from
+ * "layout was still settling" and from a product layout regression.
+ */
+export async function expectFocusedInsideViewport(
+  page: Page,
+  locator: Locator,
+  label: string,
+  { timeout = 5_000, pollInterval = 50 }: FocusInsideViewportOptions = {},
+): Promise<void> {
+  const trigger = await readFocusViewportSnapshot(page, locator);
+  const reflow: FocusViewportSnapshot[] = [];
+  let latest = trigger;
+  let sampleCount = 1;
+
+  try {
+    await expect
+      .poll(
+        async () => {
+          const snapshot = await readFocusViewportSnapshot(page, locator);
+          sampleCount += 1;
+          latest = snapshot;
+          const previous = reflow.at(-1) ?? trigger;
+          if (focusViewportSignature(snapshot) !== focusViewportSignature(previous)) {
+            reflow.push(snapshot);
+          }
+          return isFocusedInsideViewport(snapshot);
+        },
+        {
+          timeout,
+          intervals: [pollInterval, pollInterval * 2, pollInterval * 4],
+        },
+      )
+      .toBe(true);
+  } catch (error) {
+    throw new Error(
+      formatFocusSettleFailure({
+        label,
+        timeout,
+        trigger,
+        latest,
+        reflow,
+        sampleCount,
+      }),
+      { cause: error },
+    );
+  }
 }
 
 export interface FirstScreenContractOptions {
