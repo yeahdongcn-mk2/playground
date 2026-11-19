@@ -279,6 +279,26 @@ describe('blank canvas screenshot determinism guard', () => {
     expect(SCENE).toContain('trail: this.trail.length,');
   });
 
+  it('fades the trail from wall-clock time, not the clamped Phaser delta', () => {
+    // Phaser replaces an over-long delta with a previous ~16.67 ms value, so a
+    // software-rendered 250-400 ms frame must not drive the 1.15 s trail fade
+    // (Issue #341 t2 rework). Movement deliberately keeps the clamped delta.
+    const scene = stripComments(SCENE);
+    expect(scene).toContain("from './trail'");
+    expect(scene).toContain(
+      'const elapsed = elapsedUpdateMs(time, this.lastUpdateTime);',
+    );
+    expect(scene).toContain(
+      'this.lastUpdateTime = Number.isFinite(time) ? time : this.lastUpdateTime;',
+    );
+    expect(scene).toContain('this.updateTrail(elapsed, moved);');
+    expect(scene).toContain('this.stateClock += elapsed;');
+    expect(scene).toContain('fadeTrail(this.trail, elapsed);');
+    expect(scene).not.toContain('dot.life -= dt / 1.15');
+    expect(scene).not.toContain('this.trailClock += delta;');
+    expect(scene).toContain('const dt = Math.min(delta, MAX_DELTA) / 1000;');
+  });
+
   it('accepts only a sample at the target and with no trail left', () => {
     const target = { x: 120, y: 80 };
     // Pin the documented capture contract, not just self-consistency.
