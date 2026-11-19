@@ -75,9 +75,41 @@ export interface ScreenshotSha256HashProblem {
   message: string;
 }
 
+export interface CaptureLogHashRecord {
+  /** The header path's basename, matched against `captures[].file`. */
+  file: string;
+  /** The full path printed in the `Wrote <path>` header. */
+  path: string;
+  /** The baseline recorded at capture time; not compared with the manifest. */
+  manifestSha256: string;
+  /** The sha256 of the bytes that run wrote. */
+  capturedSha256: string;
+}
+
+export interface CaptureLogHashProblem {
+  file: string;
+  /** The current manifest sha256, or `null` when the file is not recorded. */
+  expected: string | null;
+  actual: string;
+  message: string;
+}
+
+export interface CaptureLogHashesVerification {
+  checked: boolean;
+  /** True when a drift checklist header exists but cannot be parsed. */
+  invalid: boolean;
+  /** The parser error when `invalid`, `null` otherwise. */
+  invalidMessage: string | null;
+  ok: boolean;
+  /** Structured drift mismatches; empty when the log is invalid. */
+  problems: CaptureLogHashProblem[];
+  records: CaptureLogHashRecord[];
+}
+
 export interface ScreenshotSha256Verification {
   entries: number;
   hashProblems: ScreenshotSha256HashProblem[];
+  logHashes: CaptureLogHashesVerification;
   environment: CaptureEnvironmentVerification;
 }
 
@@ -88,6 +120,11 @@ export interface ParseSha256ManifestOptions {
 export interface VerifyCaptureEnvironmentOptions {
   logText?: string | null;
   environment: ScreenshotSha256Environment;
+}
+
+export interface VerifyCaptureLogHashesOptions {
+  logText?: string | null;
+  manifest: ScreenshotSha256Manifest;
 }
 
 export interface CompareCaptureEnvironmentOptions {
@@ -149,6 +186,10 @@ export function parseCaptureLogFingerprints(text: string): CaptureEnvironmentFin
 export function verifyCaptureEnvironment(
   options?: VerifyCaptureEnvironmentOptions,
 ): CaptureEnvironmentVerification;
+export function parseCaptureLogHashRecords(text: string): CaptureLogHashRecord[];
+export function verifyCaptureLogHashes(
+  options: VerifyCaptureLogHashesOptions,
+): CaptureLogHashesVerification;
 export function verifyScreenshotSha256(
   options: VerifyScreenshotSha256Options,
 ): ScreenshotSha256Verification;

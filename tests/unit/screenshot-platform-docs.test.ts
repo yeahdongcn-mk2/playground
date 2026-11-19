@@ -148,6 +148,30 @@ describe('sha256 manifest platform docs (Issue #314)', () => {
   });
 });
 
+describe('sha256 manifest capture-log docs (Issue #329)', () => {
+  it('documents the captured-sha256 check and the old-log compatibility behaviour', () => {
+    // The `--log` verifier reads the write-time drift checklist, not only the
+    // capture-env fingerprint, and reports its own failure section.
+    expect(MANIFEST_SECTION).toContain('captured sha256');
+    expect(MANIFEST_SECTION).toContain(
+      '`captured sha256` 必须等于当前清单的 `sha256`',
+    );
+    expect(MANIFEST_SECTION).toContain('`manifest sha256` 只是捕获时的基线');
+    // The documented section label must match the string the CLI prints.
+    expect(MANIFEST_SECTION).toContain(
+      'FAIL: <n> capture-log captured sha256 problem(s):',
+    );
+    expect(MANIFEST_SECTION).toContain('expected / captured sha256');
+    expect(MANIFEST_SECTION).toContain('日志 captured sha256 不一致退出 1');
+    // Older logs without the checklist keep the previous exit-0 behaviour, and
+    // malformed checklist records are invalid input, not silent passes.
+    expect(MANIFEST_SECTION).toContain('没有 drift checklist');
+    expect(MANIFEST_SECTION).toContain('保持原行为');
+    expect(MANIFEST_SECTION).toContain('sha256 drift 记录格式非法');
+    expect(MANIFEST_SECTION).toContain('记录里的文件不在当前清单');
+  });
+});
+
 describe('documented container fingerprint sample (Issue #314)', () => {
   it('parses the README sample and matches the manifest platform', () => {
     const samples = FIXED_ENVIRONMENT.split(/\r?\n/)

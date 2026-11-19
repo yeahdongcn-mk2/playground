@@ -606,6 +606,208 @@ export function parseCaptureLogFingerprints(text) {
   return fingerprints;
 }
 
+/**
+ * The marker in the sha256 drift checklist printed by
+ * `manifestHashDriftChecklist` in `capture-runtime.mjs`.
+ *
+ * The checklist is written after the PNG is already on disk, so the capture
+ * does not fail. Its `captured sha256` is the only evidence in the log that
+ * proves which bytes that run produced.
+ */
+const CAPTURE_LOG_HASH_HEADER_MARKER =
+  ' inside the fixed capture environment, but its sha256 differs from ';
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+const CAPTURE_LOG_HASH_HEADER_PATTERN = new RegExp(
+  `^Wrote (?<path>.+)${escapeRegExp(CAPTURE_LOG_HASH_HEADER_MARKER)}(?<manifest>.+):$`,
+);
+const CAPTURE_LOG_HASH_FIELD_PATTERN = /^(?<field>manifest|captured) sha256: (?<value>.*)$/;
+
+/**
+ * Parse the sha256 drift checklist(s) printed by the capture runtime.
+ *
+ * A fixed-environment capture writes a PNG first and then logs a checklist
+ * when its bytes do not match the manifest. The header names the written path
+ * and the manifest; the next non-empty lines record the capture-time
+ * `manifest sha256` and the `captured sha256`. Records are associated with the
+ * manifest by the header path's basename, so a log captured inside the
+ * container still matches the repository file name.
+ *
+ * The checklist format is stable, so a header without its fields, a duplicate
+ * field, or a sha256 that is not 64 lower-case hex characters is invalid input
+ * rather than `[]`. A log with no checklist at all returns `[]`; that keeps
+ * older logs, which never recorded the captured bytes, compatible.
+ *
+ * @returns {Array<{
+ *   file: string,
+ *   path: string,
+ *   manifestSha256: string,
+ *   capturedSha256: string,
+ * }>}
+ */
+export function parseCaptureLogHashRecords(text) {
+  const lines = String(text).split(/\r?\n/);
+  const records = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index].trim();
+    if (!line.startsWith('Wrote ') || !line.includes(CAPTURE_LOG_HASH_HEADER_MARKER)) {
+      continue;
+    }
+
+    const header = CAPTURE_LOG_HASH_HEADER_PATTERN.exec(line);
+    if (header === null) {
+      throw new ScreenshotSha256Error(
+        `malformed capture-log sha256 drift header: "${line}"`,
+      );
+    }
+    const filePath = header.groups?.path ?? '';
+    const file = filePath.split(/[\\/]/).pop() ?? '';
+    if (file === '') {
+      throw new ScreenshotSha256Error(
+        `capture-log sha256 drift header does not name a file: "${line}"`,
+      );
+    }
+
+    const values = { manifest: undefined, captured: undefined };
+    let cursor = index + 1;
+    while (cursor < lines.length) {
+      const entry = lines[cursor].trim();
+      if (entry === '') {
+        cursor += 1;
+        continue;
+      }
+      const field = CAPTURE_LOG_HASH_FIELD_PATTERN.exec(entry);
+      if (field === null) break;
+      const name = field.groups?.field;
+      if (name !== 'manifest' && name !== 'captured') break;
+      if (values[name] !== undefined) {
+        throw new ScreenshotSha256Error(
+          `capture-log sha256 drift record for "${file}" repeats "${name} sha256"`,
+        );
+      }
+      values[name] = (field.groups?.value ?? '').trim();
+      cursor += 1;
+    }
+
+    for (const name of ['manifest', 'captured']) {
+      const value = values[name];
+      if (value === undefined) {
+        throw new ScreenshotSha256Error(
+          `capture-log sha256 drift record for "${file}" is missing "${name} sha256"`,
+        );
+      }
+      if (!SHA256_PATTERN.test(value)) {
+        throw new ScreenshotSha256Error(
+          `capture-log ${name} sha256 for "${file}" must be 64 lower-case hex ` +
+            `characters, got "${value}"`,
+        );
+      }
+    }
+
+    records.push({
+      file,
+      path: filePath,
+      manifestSha256: values.manifest,
+      capturedSha256: values.captured,
+    });
+    index = cursor - 1;
+  }
+
+  return records;
+}
+
+/**
+ * Compare the log's `captured sha256` records with the current manifest.
+ *
+ * The log's `manifest sha256` is the baseline at capture time and is not
+ * compared: when the manifest is later updated to the captured value, the
+ * record still proves that run produced the committed bytes. Every record for
+ * the same file must equal the manifest. A file that the log captured but the
+ * manifest does not list is a log hash problem (exit 1), not something to
+ * ignore. A log with no drift checklist keeps the previous behaviour: nothing
+ * is checked and the result is `ok`.
+ *
+ * @returns {{
+ *   checked: boolean,
+ *   invalid: boolean,
+ *   invalidMessage: string | null,
+ *   ok: boolean,
+ *   problems: Array<{
+ *     file: string,
+ *     expected: string | null,
+ *     actual: string,
+ *     message: string,
+ *   }>,
+ *   records: ReturnType<typeof parseCaptureLogHashRecords>,
+ * }}
+ */
+export function verifyCaptureLogHashes({ logText, manifest } = {}) {
+  if (manifest === undefined) {
+    throw new ScreenshotSha256Error('verifyCaptureLogHashes needs a parsed manifest');
+  }
+  if (logText === undefined || logText === null) {
+    return {
+      checked: false,
+      invalid: false,
+      invalidMessage: null,
+      ok: true,
+      problems: [],
+      records: [],
+    };
+  }
+
+  let records;
+  try {
+    records = parseCaptureLogHashRecords(logText);
+  } catch (error) {
+    return {
+      checked: true,
+      invalid: true,
+      invalidMessage: error instanceof Error ? error.message : String(error),
+      ok: false,
+      // Invalid input is reported through `invalidMessage`; `problems` stays
+      // the structured list of drift mismatches.
+      problems: [],
+      records: [],
+    };
+  }
+
+  const problems = [];
+  for (const record of records) {
+    const capture = findSha256ManifestCapture(manifest, record.file);
+    if (capture === null) {
+      problems.push({
+        file: record.file,
+        expected: null,
+        actual: record.capturedSha256,
+        message: 'captured by the log but not recorded in the manifest',
+      });
+      continue;
+    }
+    if (record.capturedSha256 !== capture.sha256) {
+      problems.push({
+        file: capture.file,
+        expected: capture.sha256,
+        actual: record.capturedSha256,
+        message: 'captured sha256 differs from the manifest',
+      });
+    }
+  }
+
+  return {
+    checked: true,
+    invalid: false,
+    invalidMessage: null,
+    ok: problems.length === 0,
+    problems,
+    records,
+  };
+}
+
 function formatFonts(fonts) {
   if (fonts === null || fonts === 'unavailable') {
     return 'unavailable';
@@ -857,11 +1059,16 @@ export function verifyCaptureEnvironment({ logText, environment } = {}) {
  * Verify the committed evidence against the manifest.
  *
  * Every entry must exist and hash to its expected sha256. When `logText` is
- * supplied the capture environment is checked as a separate problem class.
+ * supplied the capture environment is checked as a separate problem class, and
+ * any sha256 drift checklist records are compared with the current manifest
+ * captures. The three failure classes stay independent: `hashProblems` is
+ * about the committed PNGs, `logHashes.problems` is about the bytes a logged
+ * capture wrote, and `environment.problems` is about the capture environment.
  *
  * @returns {{
  *   entries: number,
  *   hashProblems: Array<{file: string, expected: string, actual: string | null, message: string}>,
+ *   logHashes: ReturnType<typeof verifyCaptureLogHashes>,
  *   environment: ReturnType<typeof verifyCaptureEnvironment>,
  * }}
  */
@@ -908,6 +1115,7 @@ export function verifyScreenshotSha256({
   return {
     entries: manifest.captures.length,
     hashProblems,
+    logHashes: verifyCaptureLogHashes({ logText, manifest }),
     environment: verifyCaptureEnvironment({ logText, environment: manifest.environment }),
   };
 }
