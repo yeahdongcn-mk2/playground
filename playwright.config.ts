@@ -10,7 +10,7 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   workers: process.env.CI ? 1 : undefined,
   // CI writes a JSON report so scripts/check-e2e-flakes.mjs can fail the job
-  // when the guarded mobile-webkit case only passes after a retry.
+  // when a guarded case only passes after a retry.
   reporter: process.env.CI
     ? [['github'], ['list'], ['json', { outputFile: DEFAULT_E2E_REPORT_PATH }]]
     : [['list']],

@@ -35,14 +35,17 @@ afterEach(() => {
   }
 });
 
-function targetFor(projectName: string): E2eFlakeTarget {
-  const target = TARGET_CASES.find((entry) => entry.projectName === projectName);
-  if (target === undefined) throw new Error(`TARGET_CASES is missing the ${projectName} case`);
+function targetFor(titleFragment: string): E2eFlakeTarget {
+  const target = TARGET_CASES.find((entry) => entry.titleFragment === titleFragment);
+  if (target === undefined) throw new Error(`TARGET_CASES is missing the ${titleFragment} case`);
   return target;
 }
 
-const MOBILE_TARGET = targetFor('mobile-webkit');
-const RESET_TARGET = targetFor('chromium');
+const HUB_TARGET = targetFor('hub and blank canvas');
+const RESET_TARGET = targetFor('reset centres the cursor and keyboard keeps working afterwards');
+const RESTART_TARGET = targetFor(
+  'restarting from the sidebar focuses the visible compact restart on a phone',
+);
 
 function testFor(projectName: string, repeat: RepeatOutcome): PlaywrightJsonTest {
   if (repeat === 'flaky') {
@@ -132,13 +135,14 @@ function section(summary: string, label: string): string {
 }
 
 describe('flake-watch summary', () => {
-  it('reports both guarded cases separately when all five first runs pass', () => {
+  it('reports all guarded cases separately when all five first runs pass', () => {
     const dir = makeTempDir();
     writeReport(
       dir,
       reportFor([
-        { target: MOBILE_TARGET, repeats: repeatsOf('passed') },
+        { target: HUB_TARGET, repeats: repeatsOf('passed') },
         { target: RESET_TARGET, repeats: repeatsOf('passed') },
+        { target: RESTART_TARGET, repeats: repeatsOf('passed') },
       ]),
     );
 
@@ -164,11 +168,12 @@ describe('flake-watch summary', () => {
     writeReport(
       dir,
       reportFor([
-        { target: MOBILE_TARGET, repeats: repeatsOf('passed') },
+        { target: HUB_TARGET, repeats: repeatsOf('passed') },
         {
           target: RESET_TARGET,
           repeats: ['passed', 'passed', 'failed', 'passed', 'passed'],
         },
+        { target: RESTART_TARGET, repeats: repeatsOf('passed') },
       ]),
     );
 
@@ -177,8 +182,8 @@ describe('flake-watch summary', () => {
     expect(section(summary, RESET_TARGET.label)).toContain('首跑通过：4');
     expect(section(summary, RESET_TARGET.label)).toContain('失败：1');
     // The other case keeps its own tally instead of inheriting the failure.
-    expect(section(summary, MOBILE_TARGET.label)).toContain('首跑通过：5');
-    expect(section(summary, MOBILE_TARGET.label)).toContain('失败：0');
+    expect(section(summary, HUB_TARGET.label)).toContain('首跑通过：5');
+    expect(section(summary, HUB_TARGET.label)).toContain('失败：0');
   });
 
   it('counts a retried pass as flaky for the owning case', () => {
@@ -186,8 +191,9 @@ describe('flake-watch summary', () => {
     writeReport(
       dir,
       reportFor([
-        { target: MOBILE_TARGET, repeats: repeatsOf('passed') },
+        { target: HUB_TARGET, repeats: repeatsOf('passed') },
         { target: RESET_TARGET, repeats: ['passed', 'flaky', 'passed', 'passed', 'passed'] },
+        { target: RESTART_TARGET, repeats: repeatsOf('passed') },
       ]),
     );
 
@@ -202,8 +208,9 @@ describe('flake-watch summary', () => {
     writeReport(
       dir,
       reportFor([
-        { target: MOBILE_TARGET, repeats: repeatsOf('passed') },
+        { target: HUB_TARGET, repeats: repeatsOf('passed') },
         { target: RESET_TARGET, repeats: ['skipped', 'passed', 'passed', 'passed', 'passed'] },
+        { target: RESTART_TARGET, repeats: repeatsOf('passed') },
       ]),
     );
 
@@ -212,16 +219,42 @@ describe('flake-watch summary', () => {
     expect(targetSection).toContain('跳过：1');
   });
 
-  it('flags a guarded case that is missing from the report', () => {
+  it('attributes the sidebar restart target repeats to its own section', () => {
     const dir = makeTempDir();
-    const report = reportFor([{ target: MOBILE_TARGET, repeats: repeatsOf('passed') }]);
+    writeReport(
+      dir,
+      reportFor([
+        { target: HUB_TARGET, repeats: repeatsOf('passed') },
+        { target: RESET_TARGET, repeats: repeatsOf('passed') },
+        {
+          target: RESTART_TARGET,
+          repeats: ['passed', 'failed', 'passed', 'passed', 'passed'],
+        },
+      ]),
+    );
+
+    const summary = runSummary(dir, { outcome: 'failure' });
+    const restart = section(summary, RESTART_TARGET.label);
+    expect(restart).toContain('首跑通过：4');
+    expect(restart).toContain('失败：1');
+    // The other mobile-webkit case keeps its own tally.
+    expect(section(summary, HUB_TARGET.label)).toContain('首跑通过：5');
+    expect(section(summary, HUB_TARGET.label)).toContain('失败：0');
+    expect(section(summary, RESET_TARGET.label)).toContain('首跑通过：5');
+  });
+
+  it('flags guarded cases that are missing from the report', () => {
+    const dir = makeTempDir();
+    const report = reportFor([{ target: HUB_TARGET, repeats: repeatsOf('passed') }]);
     writeReport(dir, report);
 
     const summary = runSummary(dir);
-    expect(section(summary, MOBILE_TARGET.label)).toContain('首跑通过：5');
-    const missing = section(summary, RESET_TARGET.label);
-    expect(missing).toContain('缺失');
-    expect(missing).toContain('TARGET_CASES');
+    expect(section(summary, HUB_TARGET.label)).toContain('首跑通过：5');
+    for (const target of [RESET_TARGET, RESTART_TARGET]) {
+      const missing = section(summary, target.label);
+      expect(missing).toContain('缺失');
+      expect(missing).toContain('TARGET_CASES');
+    }
   });
 
   it('keeps a readable summary when the report file is missing', () => {

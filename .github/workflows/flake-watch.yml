@@ -55,19 +55,20 @@ jobs:
         id: flake-watch
         env:
           CI: 'true'
-        # One command guards both cases without widening the grep:
-        # --project=mobile-webkit matches only the *.webkit.spec.ts entry point
-        # (hub and blank canvas) and --project=chromium matches only
-        # framework.spec.ts (reset centres the cursor), because each project
-        # excludes the other project's specs. --retries=0 keeps every repeat a
-        # first run, so a cold-start failure cannot be hidden by a retry.
+        # One command guards all three cases without widening the grep:
+        # --project=mobile-webkit matches only the *.webkit.spec.ts entry points
+        # (hub and blank canvas, restarting from the sidebar) and
+        # --project=chromium matches only framework.spec.ts (reset centres the
+        # cursor), because each project excludes the other project's specs.
+        # --retries=0 keeps every repeat a first run, so a cold-start failure
+        # cannot be hidden by a retry.
         # --trace=retain-on-failure keeps the trace even though retries are
         # disabled.
         run: |
           npx playwright test \
             --project=mobile-webkit \
             --project=chromium \
-            -g "hub and blank canvas|reset centres the cursor and keyboard keeps working afterwards" \
+            -g "hub and blank canvas|reset centres the cursor and keyboard keeps working afterwards|restarting from the sidebar focuses the visible compact restart on a phone" \
             --repeat-each=5 \
             --retries=0 \
             --trace=retain-on-failure
