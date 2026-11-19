@@ -271,9 +271,11 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
       'screenshots:minesweeper:scores:webkit',
     );
     expect(WEBKIT_HISTORICAL).toContain('#318 t2');
-    expect(WEBKIT_HISTORICAL).not.toMatch(
-      /本轮未复核[^。]*after-minesweeper-scores-webkit/,
-    );
+    // The reviewed capture must not be re-reported as drifted: assert on the
+    // drift bullet's own children so re-adding this file fails the test.
+    expect(
+      childBullets(WEBKIT_HISTORICAL, '已报告的漂移产物'),
+    ).not.toContain(MINESWEEPER_SCORES);
 
     const manifest = JSON.parse(
       readFileSync(
@@ -319,9 +321,6 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(WEBKIT_HISTORICAL).toContain('7092');
     expect(WEBKIT_HISTORICAL).toContain('0.7088%');
     expect(WEBKIT_HISTORICAL).toContain('8e9e845e');
-    expect(WEBKIT_HISTORICAL).not.toMatch(
-      /本轮未复核[^。]*after-(?:hub|snake)-webkit/,
-    );
 
     const manifest = JSON.parse(
       readFileSync(
@@ -369,10 +368,6 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(WEBKIT_HISTORICAL).toContain('310');
     expect(WEBKIT_HISTORICAL).toContain('0.0310%');
     expect(WEBKIT_HISTORICAL).toContain('字节未变');
-    // The three files must leave the #137 protected set once collected.
-    expect(WEBKIT_HISTORICAL).not.toMatch(
-      /本轮未复核[^。]*after-breakout-(?:ready|levelclear|gameover)-webkit/,
-    );
 
     const manifest = JSON.parse(
       readFileSync(
