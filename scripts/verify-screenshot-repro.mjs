@@ -11,30 +11,41 @@ import {
   DEFAULT_REPRO_LOG_DIR,
   REPRO_RUN_COUNT,
   ScreenshotReproError,
+  normalizeRunCount,
   runScreenshotRepro,
+  validateCaptureTarget,
 } from './lib/screenshot-repro.mjs';
 
 const USAGE = `Usage: node scripts/verify-screenshot-repro.mjs [options]
 
-Re-run every screenshot target named by ${DEFAULT_MANIFEST_PATH} twice in the
-fixed Playwright container (${REPRO_RUN_COUNT} runs, one capture log per run),
-then verify that every manifested PNG has the same sha256 in both runs and
-still equals the manifest. Each run log is also checked with
+Re-run the screenshot targets named by ${DEFAULT_MANIFEST_PATH} in the fixed
+Playwright container. By default every target runs ${REPRO_RUN_COUNT} times;
+--target selects a subset (repeatable) and --runs <N> changes the repetition
+count, e.g. for reproducing a load-dependent drift. Every run keeps one capture
+log and a copy of each manifested PNG under test-results/screenshot-repro/, so
+drifting runs can be compared after the last run overwrote the shared paths.
+
+Every manifested PNG must have the same sha256 in every run and equal the
+manifest. Each run log is also checked with
 node scripts/verify-screenshot-sha256.mjs --log.
 
 The entry never commits, pushes or edits the manifest. On a mismatch it prints
-the differing files with expected / actual sha256, both capture log paths, the
-environment fingerprint and the re-capture steps, and appends the same report
-to $GITHUB_STEP_SUMMARY when set.
+the differing files with expected / per-run actual sha256, the capture log and
+retained PNG paths, the environment fingerprint and the re-capture steps, and
+appends the same report to $GITHUB_STEP_SUMMARY when set.
 
 Options:
   --manifest <path>  sha256 manifest (default: ${DEFAULT_MANIFEST_PATH})
   --dir <path>       screenshot directory (default: ${DEFAULT_SCREENSHOT_DIR})
-  --log-dir <path>   per-run capture logs (default: ${DEFAULT_REPRO_LOG_DIR})
+  --log-dir <path>   logs and per-run PNG copies (default: ${DEFAULT_REPRO_LOG_DIR})
+  --target <name>    capture only this manifest target (repeatable;
+                     default: every target the manifest names)
+  --runs <N>         runs per target, positive integer (default: ${REPRO_RUN_COUNT})
   -h, --help         show this help
 
-Exit codes: 0 both runs match the manifest and each log verifies,
-            1 capture, hash, environment or log verification failure,
+Exit codes: 0 every run matches the manifest and each log verifies,
+            1 capture, hash, per-run PNG copy, environment or log verification
+              failure,
             2 usage, an unreadable / invalid manifest, or a manifest whose
               recorded environment does not match the fixed capture one.`;
 
@@ -45,14 +56,17 @@ export function parseArgs(argv) {
     manifest: DEFAULT_MANIFEST_PATH,
     dir: DEFAULT_SCREENSHOT_DIR,
     logDir: DEFAULT_REPRO_LOG_DIR,
+    targets: [],
+    runs: REPRO_RUN_COUNT,
   };
 
+  const valued = new Set(['--manifest', '--dir', '--log-dir', '--target', '--runs']);
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '-h' || arg === '--help') {
       return { ...options, help: true };
     }
-    if (arg !== '--manifest' && arg !== '--dir' && arg !== '--log-dir') {
+    if (!valued.has(arg)) {
       throw new ScreenshotReproError(`unknown option: ${arg}`);
     }
     const value = argv[index + 1];
@@ -64,8 +78,12 @@ export function parseArgs(argv) {
       options.manifest = value;
     } else if (arg === '--dir') {
       options.dir = value;
-    } else {
+    } else if (arg === '--log-dir') {
       options.logDir = value;
+    } else if (arg === '--target') {
+      options.targets.push(validateCaptureTarget(value));
+    } else {
+      options.runs = normalizeRunCount(value);
     }
   }
 
@@ -117,8 +135,11 @@ export async function main(
       manifestPath: resolve(repoRoot, options.manifest),
       dir: resolve(repoRoot, options.dir),
       logDir: resolve(repoRoot, options.logDir),
+      targets: options.targets,
+      runs: options.runs,
       repoRoot,
       env,
+      progress: (line) => logger.log?.(line),
     });
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);

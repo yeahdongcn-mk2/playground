@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import {
   appendFileSync,
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -25,12 +26,16 @@ import {
 import {
   captureCommandArgs,
   deriveReproPlans,
+  normalizeRunCount,
   parseCaptureTarget,
+  reproArtifactPath,
   reproLogPath,
   runScreenshotRepro,
   ScreenshotReproError,
+  selectReproPlans,
   sha256VerifierArgs,
   spawnContainerCapture,
+  validateCaptureTarget,
 } from '../../scripts/lib/screenshot-repro.mjs';
 import type {
   ReproRunCaptureOptions,
@@ -320,6 +325,48 @@ describe('screenshot repro target derivation', () => {
       '/tmp/logs/screenshots-webkit-run2.log',
     );
   });
+
+  it('keeps each run PNG copy in its own directory below the log directory', () => {
+    expect(reproArtifactPath('/tmp/logs', 'screenshots:2048:webkit', 3, 'a.png')).toBe(
+      '/tmp/logs/screenshots-2048-webkit-run3-png/a.png',
+    );
+  });
+
+  it('validates a --target value as a screenshots npm script', () => {
+    expect(validateCaptureTarget(' screenshots:breakout:webkit ')).toBe(
+      'screenshots:breakout:webkit',
+    );
+    for (const target of ['', 'breakout:webkit', 'screenshots', 'screenshots:a b', '../x']) {
+      expect(() => validateCaptureTarget(target), target).toThrow(ScreenshotReproError);
+    }
+  });
+
+  it('normalizes --runs to a positive integer', () => {
+    expect(normalizeRunCount(4)).toBe(4);
+    expect(normalizeRunCount('8')).toBe(8);
+    for (const value of [0, -2, 2.5, 'x', '']) {
+      expect(() => normalizeRunCount(value), String(value)).toThrow(/positive integer/);
+    }
+  });
+
+  it('selects requested targets in manifest order and rejects unknown ones', () => {
+    const plans = deriveReproPlans(manifestFor(CAPTURES));
+
+    expect(selectReproPlans(plans, [])).toEqual(plans);
+    expect(
+      selectReproPlans(plans, ['screenshots:2048:webkit', 'screenshots:webkit']).map(
+        (plan) => plan.target,
+      ),
+    ).toEqual(['screenshots:webkit', 'screenshots:2048:webkit']);
+    expect(
+      selectReproPlans(plans, ['screenshots:webkit', 'screenshots:webkit']).map(
+        (plan) => plan.target,
+      ),
+    ).toEqual(['screenshots:webkit']);
+    expect(() => selectReproPlans(plans, ['screenshots:breakout:webkit'])).toThrow(
+      /unknown repro target\(s\): screenshots:breakout:webkit/,
+    );
+  });
 });
 
 describe('screenshot repro two-run check', () => {
@@ -415,7 +462,7 @@ describe('screenshot repro two-run check', () => {
 
     expect(result.ok).toBe(false);
     expect(result.report).toContain(
-      'both runs agree with each other but not with the manifest',
+      'all runs agree with each other but not with the manifest',
     );
   });
 
@@ -470,7 +517,7 @@ describe('screenshot repro two-run check', () => {
       expect(difference.run1).toBeNull();
       expect(difference.run2).toBeNull();
     }
-    expect(result.report).toContain('a run did not produce the file');
+    expect(result.report).toContain('did not produce the file');
     expect(result.report).toContain('run 1 sha256: unavailable');
   });
 
@@ -565,6 +612,157 @@ describe('screenshot repro two-run check', () => {
         verifyLog: verifyOk,
       }),
     ).rejects.toThrow(/does not match the fixed capture environment/);
+  });
+
+  it('runs only the selected target for --runs and retains every run PNG copy', async () => {
+    const setup = fixture();
+    const order: string[] = [];
+    const progress: string[] = [];
+    const result = await runScreenshotRepro({
+      ...setup,
+      targets: ['screenshots:2048:webkit'],
+      runs: 3,
+      runCapture: fakeRunner({ dir: setup.dir, captures: CAPTURES, order }),
+      verifyLog: verifyOk,
+      progress: (line) => progress.push(line),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.runsPerTarget).toBe(3);
+    expect(result.plans.map((plan) => plan.target)).toEqual(['screenshots:2048:webkit']);
+    expect(order).toEqual([
+      'screenshots:2048:webkit:1',
+      'screenshots:2048:webkit:2',
+      'screenshots:2048:webkit:3',
+    ]);
+    expect(result.runs).toHaveLength(3);
+    expect(result.report).toContain('1 target(s) x 3 runs');
+    expect(result.report).toContain('2 file(s) matched the manifest and each other');
+    expect(result.report).toContain('Per-run sha256:');
+    expect(result.report).toContain('Per-file summary:');
+    for (const run of result.runs) {
+      for (const capture of CAPTURES.filter((entry) => entry.command === GAME_COMMAND)) {
+        const copyPath = reproArtifactPath(
+          setup.logDir,
+          'screenshots:2048:webkit',
+          run.run,
+          capture.file,
+        );
+        expect(
+          run.hashes.find((entry) => entry.file === capture.file)?.copyPath,
+        ).toBe(copyPath);
+        expect(readFileSync(copyPath, 'utf8')).toBe(capture.content);
+      }
+    }
+    expect(progress.join('\n')).toContain(
+      'screenshots:2048:webkit run 3: after-2048-playing-webkit.png',
+    );
+    expect(progress.join('\n')).toContain(`sha256 ${sha256('playing-v1')}`);
+  });
+
+  it('names the drifting run and keeps its bytes on a --runs 3 mismatch', async () => {
+    const setup = fixture();
+    const result = await runScreenshotRepro({
+      ...setup,
+      targets: ['screenshots:2048:webkit'],
+      runs: 3,
+      runCapture: fakeRunner({
+        dir: setup.dir,
+        captures: CAPTURES,
+        writes: { 'after-2048-playing-webkit.png': { 2: 'playing-v2' } },
+      }),
+      verifyLog: verifyOk,
+    });
+
+    expect(result.ok).toBe(false);
+    const difference = result.differences.find(
+      (entry) => entry.file === 'after-2048-playing-webkit.png',
+    );
+    expect(difference?.runHashes.map((entry) => entry.sha256)).toEqual([
+      sha256('playing-v1'),
+      sha256('playing-v2'),
+      sha256('playing-v1'),
+    ]);
+    const report = result.report;
+    expect(report).toContain(`run 2 sha256: ${sha256('playing-v2')}`);
+    expect(report).toContain(`run 3 sha256: ${sha256('playing-v1')}`);
+    expect(report).toContain('1 of 3 run(s) disagree with the manifest (run 2)');
+    const drifted = difference?.runHashes.find((entry) => entry.run === 2);
+    expect(readFileSync(drifted?.copyPath ?? '', 'utf8')).toBe('playing-v2');
+  });
+
+  it('clears the previous per-run PNG copy before a run that no longer writes it', async () => {
+    // A repeated invocation reuses the same log directory. If this run fails to
+    // write a file, its copy slot must not keep the previous invocation's bytes,
+    // which a human comparing drift runs could mistake for this run's evidence.
+    const setup = fixture();
+    const target = 'screenshots:2048:webkit';
+    const first = await runScreenshotRepro({
+      ...setup,
+      targets: [target],
+      runs: 1,
+      runCapture: fakeRunner({ dir: setup.dir, captures: CAPTURES }),
+      verifyLog: verifyOk,
+    });
+    expect(first.ok).toBe(true);
+    const stalePath = reproArtifactPath(
+      setup.logDir,
+      target,
+      1,
+      'after-2048-playing-webkit.png',
+    );
+    expect(readFileSync(stalePath, 'utf8')).toBe('playing-v1');
+
+    const second = await runScreenshotRepro({
+      ...setup,
+      targets: [target],
+      runs: 1,
+      runCapture: fakeRunner({
+        dir: setup.dir,
+        captures: CAPTURES,
+        skipWriteRuns: [1],
+      }),
+      verifyLog: verifyOk,
+    });
+
+    expect(second.ok).toBe(false);
+    expect(second.artifactFailures).toEqual([]);
+    expect(existsSync(stalePath)).toBe(false);
+    expect(second.report).toContain('run 1 png: not retained');
+  });
+
+  it('fails when a per-run PNG copy cannot be retained', async () => {
+    const setup = fixture();
+    const result = await runScreenshotRepro({
+      ...setup,
+      runCapture: fakeRunner({ dir: setup.dir, captures: CAPTURES }),
+      verifyLog: verifyOk,
+      copyFile: () => {
+        throw new Error('ENOSPC: no space left on device');
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.artifactFailures.length).toBeGreaterThan(0);
+    expect(result.report).toContain('Per-run PNG copy failures:');
+    expect(result.report).toContain('ENOSPC');
+  });
+
+  it('rejects an unknown --target before running any capture', async () => {
+    const setup = fixture();
+    let called = false;
+    await expect(
+      runScreenshotRepro({
+        ...setup,
+        targets: ['screenshots:breakout:webkit'],
+        runCapture: async () => {
+          called = true;
+          return 0;
+        },
+        verifyLog: verifyOk,
+      }),
+    ).rejects.toThrow(/unknown repro target\(s\): screenshots:breakout:webkit/);
+    expect(called).toBe(false);
   });
 });
 
@@ -805,13 +1003,45 @@ describe('verify-screenshot-repro CLI', () => {
       manifest: 'docs/screenshots/capture-sha256-manifest.json',
       dir: 'docs/screenshots',
       logDir: 'test-results/screenshot-repro',
+      targets: [],
+      runs: 2,
     });
     expect(
       parseArgs(['--manifest', 'm.json', '--dir', 'shots', '--log-dir', 'logs']),
-    ).toEqual({ help: false, manifest: 'm.json', dir: 'shots', logDir: 'logs' });
+    ).toEqual({
+      help: false,
+      manifest: 'm.json',
+      dir: 'shots',
+      logDir: 'logs',
+      targets: [],
+      runs: 2,
+    });
     expect(parseArgs(['--help']).help).toBe(true);
     expect(() => parseArgs(['--wat'])).toThrow(ScreenshotReproError);
     expect(() => parseArgs(['--dir'])).toThrow(ScreenshotReproError);
+  });
+
+  it('parses repeatable --target values and a positive --runs count', () => {
+    expect(
+      parseArgs([
+        '--target',
+        'screenshots:breakout:webkit',
+        '--target',
+        'screenshots:webkit',
+        '--runs',
+        '4',
+      ]),
+    ).toMatchObject({
+      targets: ['screenshots:breakout:webkit', 'screenshots:webkit'],
+      runs: 4,
+    });
+    expect(() => parseArgs(['--target'])).toThrow(/needs a value/);
+    expect(() => parseArgs(['--target', 'screenshots'])).toThrow(
+      /invalid repro target/,
+    );
+    expect(() => parseArgs(['--runs'])).toThrow(/needs a value/);
+    expect(() => parseArgs(['--runs', '0'])).toThrow(/positive integer/);
+    expect(() => parseArgs(['--runs', '2.5'])).toThrow(/positive integer/);
   });
 
   it('writes the real failure report to the logger and GITHUB_STEP_SUMMARY with exit 1', async () => {
@@ -868,6 +1098,39 @@ describe('verify-screenshot-repro CLI', () => {
     expect(code).toBe(0);
     expect(log.lines.join('\n')).toContain('OK: screenshot repro passed');
     expect(readFileSync(summaryPath, 'utf8')).toContain('OK: screenshot repro passed');
+  });
+
+  it('forwards --target / --runs and live progress to the repro runner', async () => {
+    const setup = fixture();
+    const calls: Array<{ targets?: string[]; runs?: number; repoRoot?: string }> = [];
+    const log = logger();
+
+    const code = await main(['--target', 'screenshots:webkit', '--runs', '4'], {
+      env: {},
+      logger: log,
+      runRepro: async (options) => {
+        calls.push({
+          targets: options.targets,
+          runs: options.runs,
+          repoRoot: options.repoRoot,
+        });
+        options.progress?.('  screenshots:webkit run 1: a.png sha256 abc');
+        return { ok: true, report: 'OK: forwarded' } as Awaited<
+          ReturnType<typeof runScreenshotRepro>
+        >;
+      },
+      appendFile: appendFileSync,
+      repoRoot: setup.root,
+    });
+
+    expect(code).toBe(0);
+    expect(calls).toEqual([
+      { targets: ['screenshots:webkit'], runs: 4, repoRoot: setup.root },
+    ]);
+    expect(log.lines.join('\n')).toContain(
+      'screenshots:webkit run 1: a.png sha256 abc',
+    );
+    expect(log.lines.join('\n')).toContain('OK: forwarded');
   });
 
   it('returns 2 for usage errors and for an invalid manifest', async () => {
