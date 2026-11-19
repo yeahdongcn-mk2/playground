@@ -162,7 +162,43 @@ describe('breakout screenshot determinism guard', () => {
     );
   });
 
-  it('repaints the WebKit READY backdrop without touching the other states', () => {
+  it('freezes the loop for the WebKit terminal captures only', () => {
+    // Issue #328: even after the header / backdrop seams, a live court lets
+    // WebKit pick between 1-LSB card and button rasters across loaded runs.
+    // The debug freeze stops the loop once the terminal overlay is ready, so
+    // the seam composite is built from a canvas that can no longer redraw.
+    for (const name of ['openLevelClear', 'openGameOver']) {
+      expect(functionBody(stripComments(SCRIPT), name)).toContain(
+        "...(IS_WEBKIT ? { freeze: '1' } : {})",
+      );
+    }
+    // READY / playing keep their existing paths, and Chromium never asks for
+    // the freeze; the WebKit spread is the only gate.
+    for (const name of ['openReady', 'openPlaying']) {
+      expect(functionBody(stripComments(SCRIPT), name)).not.toContain(
+        'freeze:',
+      );
+    }
+    expect(functionBody(stripComments(SCRIPT), 'captureDesktop')).not.toContain(
+      'freeze:',
+    );
+
+    // The view flag is debug-only and stops the loop only after a terminal
+    // step; the watcher must sleep the loop and raise the existing pause guard
+    // so a focus / visibility event cannot wake the frozen capture.
+    expect(VIEW).toMatch(
+      /const freezeOnTerminal =\s*debugEnabled\(\) && debugParams\(\)\.get\('freeze'\) === '1';/,
+    );
+    expect(VIEW).toMatch(
+      /if \(freezeOnTerminal && \(result\.levelCleared \|\| result\.gameOver\)\) \{\s*freezeRequested = true;\s*\}/,
+    );
+    expect(VIEW).toMatch(/requestAnimationFrame\(sleepOnTerminal\);/);
+    expect(VIEW).toMatch(
+      /debugStepsPaused = true;\s*activeRuntime\.game\.loop\.sleep\(\);/,
+    );
+  });
+
+  it('repaints the WebKit overlay backdrop for ready and the settled terminal states', () => {
     // The READY overlay appears before Phaser paints the court, so a WebKit
     // screenshot can keep the empty backdrop. openReady must run the seam only
     // in WebKit mode; deleting the call or the guard restores the blank-court
@@ -180,47 +216,109 @@ describe('breakout screenshot determinism guard', () => {
     expect(seam).toContain("overlay.style.webkitBackdropFilter = ''");
     expect(seam.match(/await nextFrame\(\);/g)).toHaveLength(2);
 
-    // playing / levelclear / gameover keep their committed bytes, so the seam
-    // must not leak into the state captures.
-    for (const name of ['openPlaying', 'openLevelClear', 'openGameOver']) {
-      expect(functionBody(SCRIPT, name)).not.toContain('settleReadyBackdrop');
+    // Issue #328: the levelclear / gameover cards share the same blurred
+    // backdrop. Each runs the overlay seam after its own title wait and regular
+    // settle, then the shared header seam last: a later compositing change
+    // would invalidate the header snapshot. playing has no visible overlay, and
+    // a leak into Chromium would change its committed bytes.
+    const stripped = stripComments(SCRIPT);
+    for (const name of ['openLevelClear', 'openGameOver']) {
+      const body = functionBody(stripped, name);
+      const backdropAt = body.indexOf('await settleReadyBackdrop(page);');
+      const headerAt = body.indexOf('await settleSharedHeaderCompositing(page);');
+      expect(backdropAt, `${name} must repaint the overlay backdrop`).toBeGreaterThan(
+        -1,
+      );
+      expect(headerAt, `${name} must settle the header last`).toBeGreaterThan(
+        backdropAt,
+      );
+      expect(headerAt).toBeLessThan(body.indexOf('}', backdropAt));
+    }
+    expect([
+      ...stripped.matchAll(/await settleReadyBackdrop\(page\);/g),
+    ]).toHaveLength(3);
+    expect(functionBody(stripped, 'openPlaying')).not.toContain(
+      'settleReadyBackdrop',
+    );
+    for (const name of ['captureDesktop', 'captureMobile']) {
+      expect(functionBody(stripped, name)).not.toContain('settleReadyBackdrop');
     }
   });
 
-  it('settles the shared header only on the WebKit playing path', () => {
+  it('settles the shared header and overlay on every WebKit settled state', () => {
     // Issue #328: the observed drift is entirely inside the shared site
-    // header's blurred backdrop snapshot, so the playing capture reuses the
-    // reusable #326 / #341 seam instead of carrying a second paint recipe.
+    // header's blurred backdrop snapshot, so playing / levelclear / gameover
+    // reuse the reusable #326 / #341 seam instead of carrying a second paint
+    // recipe.
     expect(SCRIPT).toContain(
       "import { settleSharedHeaderCompositing } from './lib/webkit-compositing-settle.mjs';",
     );
     expect(SCRIPT).toContain('const IS_WEBKIT = ENGINE === WEBKIT_ENGINE;');
 
     const stripped = stripComments(SCRIPT);
-    const openPlaying = functionBody(stripped, 'openPlaying');
-    const markerAt = openPlaying.indexOf("getAttribute('data-debug-steps')");
-    const settleAt = openPlaying.indexOf('await settle(page);');
-    const seamAt = openPlaying.indexOf('await settleSharedHeaderCompositing(page);');
-    expect(markerAt).toBeGreaterThan(-1);
-    expect(seamAt).toBeGreaterThan(markerAt);
-    expect(seamAt).toBeGreaterThan(settleAt);
-    // The seam must be gated by WebKit mode: removing the guard would change
-    // the committed Chromium playing bytes as well.
-    expect(openPlaying).toMatch(
-      /if \(IS_WEBKIT\) \{\s*await settleSharedHeaderCompositing\(page\);\s*\}/,
-    );
+    const states = [
+      {
+        name: 'openPlaying',
+        anchor: "getAttribute('data-debug-steps')",
+      },
+      {
+        name: 'openLevelClear',
+        anchor: "filter({ hasText: '第 1 关清空' })",
+      },
+      {
+        name: 'openGameOver',
+        anchor: "filter({ hasText: '生命用完了' })",
+      },
+    ];
+    for (const { name, anchor } of states) {
+      const body = functionBody(stripped, name);
+      const anchorAt = body.indexOf(anchor);
+      const settleAt = body.indexOf('await settle(page);', anchorAt);
+      const seamAt = body.indexOf(
+        'await settleSharedHeaderCompositing(page);',
+        settleAt,
+      );
+      // The state must fully settle its own overlay / debug marker and run the
+      // regular settle before the header snapshot is rebuilt.
+      expect(anchorAt, `${name} is missing its settled-state anchor`).toBeGreaterThan(-1);
+      expect(settleAt, `${name} is missing its settle after ${anchor}`).toBeGreaterThan(
+        anchorAt,
+      );
+      expect(
+        seamAt,
+        `${name} must settle the header after its own settle`,
+      ).toBeGreaterThan(settleAt);
+      // The seam must be gated by WebKit mode: removing the guard would change
+      // the committed Chromium bytes as well. The gate also has to stay open
+      // through the overlay backdrop seam in the terminal states.
+      const gateAt = body.indexOf('if (IS_WEBKIT) {', settleAt);
+      const gateClose = body.indexOf('}', seamAt);
+      expect(gateAt, `${name} must gate the seams on WebKit`).toBeGreaterThan(
+        settleAt,
+      );
+      expect(gateAt).toBeLessThan(seamAt);
+      expect(gateClose, `${name} must close the WebKit gate`).toBeGreaterThan(
+        seamAt,
+      );
+    }
 
-    // No other state capture runs the header seam, and there is exactly one
-    // call in the script: a leak into ready / levelclear / gameover would
-    // rewrite their committed bytes.
-    for (const name of ['openReady', 'openLevelClear', 'openGameOver']) {
+    // READY keeps its own first-paint backdrop seam; the header seam must not
+    // leak into it.
+    expect(functionBody(stripped, 'openReady')).not.toContain(
+      'settleSharedHeaderCompositing',
+    );
+    // Exactly one call per settled WebKit state (playing / levelclear / gameover).
+    expect([
+      ...stripped.matchAll(/await settleSharedHeaderCompositing\(page\);/g),
+    ]).toHaveLength(3);
+
+    // Chromium never calls the header seam directly; the WebKit gate in the
+    // shared open* helpers is the only route to it.
+    for (const name of ['captureDesktop', 'captureMobile']) {
       expect(functionBody(stripped, name)).not.toContain(
         'settleSharedHeaderCompositing',
       );
     }
-    expect([
-      ...stripped.matchAll(/await settleSharedHeaderCompositing\(page\);/g),
-    ]).toHaveLength(1);
   });
 
   it('asks the shared header seam for the two committed repaint frames', async () => {
@@ -247,7 +345,7 @@ describe('breakout screenshot determinism guard', () => {
     expect(openPlaying).not.toContain('frames:');
   });
 
-  it('opts only the WebKit playing capture into the stable frame path', () => {
+  it('opts the WebKit playing / levelclear / gameover captures into the stable path', () => {
     // capture() must forward its options, otherwise `stable: true` is silently
     // dropped and the header seam writes a single in-flight frame.
     const stripped = stripComments(SCRIPT);
@@ -260,21 +358,32 @@ describe('breakout screenshot determinism guard', () => {
     );
 
     const webkit = functionBody(stripped, 'captureWebkitMobile');
-    const captureAt = webkit.indexOf(
-      "capture(playing, 'after-breakout-playing-webkit.png', false, {",
-    );
-    const stableAt = webkit.indexOf('stable: true');
-    expect(captureAt).toBeGreaterThan(-1);
-    expect(stableAt).toBeGreaterThan(captureAt);
-    // Exactly one capture asks for stable bytes; the other three WebKit states
-    // and the Chromium / before captures keep the single-screenshot path.
-    expect([...stripped.matchAll(/stable: true/g)]).toHaveLength(1);
-    for (const file of [
-      'after-breakout-ready-webkit.png',
-      'after-breakout-levelclear-webkit.png',
-      'after-breakout-gameover-webkit.png',
+    for (const [variable, file] of [
+      ['playing', 'after-breakout-playing-webkit.png'],
+      ['cleared', 'after-breakout-levelclear-webkit.png'],
+      ['over', 'after-breakout-gameover-webkit.png'],
     ]) {
-      expect(webkit).not.toContain(`${file}', false, {`);
+      // Each settled state must pair its header seam with the stable frame
+      // path; a dropped option would commit a single in-flight header raster.
+      expect(webkit).toContain(
+        `capture(${variable}, '${file}', false, {\n    stable: true,\n  });`,
+      );
+    }
+    // Exactly three captures ask for stable bytes.
+    expect([...stripped.matchAll(/stable: true/g)]).toHaveLength(3);
+
+    // READY still uses the single-screenshot path.
+    const readyAt = webkit.indexOf(
+      "capture(ready, 'after-breakout-ready-webkit.png', false);",
+    );
+    expect(readyAt).toBeGreaterThan(-1);
+    expect(webkit.slice(readyAt, webkit.indexOf('await ready.close()'))).not.toContain(
+      'stable: true',
+    );
+
+    // Chromium desktop / mobile captures keep the single-frame path.
+    for (const name of ['captureDesktop', 'captureMobile']) {
+      expect(functionBody(stripped, name)).not.toContain('stable: true');
     }
   });
 });

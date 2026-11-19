@@ -52,10 +52,11 @@ import { settleSharedHeaderCompositing } from './lib/webkit-compositing-settle.m
  * The playing states pin `seed=7` and `?debug=1&steps=120`: the debug seam
  * advances exactly 120 fixed simulation steps (1 s at the engine's 120 Hz step)
  * and then pauses the loop, so their PNGs are reproducible byte-for-byte
- * instead of depending on wall-clock frame timing. The WebKit playing frame
- * additionally settles the shared site header (Issue #328) and requires
- * consecutive byte-identical screenshots before it is written. See
- * docs/screenshots/README.md for the reproducible sha256 procedure.
+ * instead of depending on wall-clock frame timing. The WebKit playing,
+ * levelclear and gameover frames additionally settle the shared site header
+ * (Issue #328) and require consecutive byte-identical screenshots before they
+ * are written. See docs/screenshots/README.md for the reproducible sha256
+ * procedure.
  *
  * The After mode skips the frozen ready / levelclear / gameover desktop and
  * ready / gameover mobile PNGs (and the matching WebKit captures) and prints a
@@ -135,9 +136,10 @@ async function settle(page) {
  * field. The screenshot then keeps the empty court behind the overlay even
  * though the bricks are drawn on the canvas. Toggling the same filter off and
  * on again after the scene is ready forces a fresh backdrop snapshot; the final
- * style is the stylesheet's `blur(5px)`, so the state does not change. Only the
- * READY capture uses this seam: the playing / levelclear / gameover evidence
- * must keep its committed bytes.
+ * style is the stylesheet's `blur(5px)`, so the state does not change. READY
+ * runs this seam for the first-paint court; levelclear / gameover run it after
+ * the title is ready so their overlay backdrop is rebuilt from the settled
+ * court as well. playing has no visible overlay and does not run this route.
  */
 async function settleReadyBackdrop(page) {
   await page.evaluate(async () => {
@@ -213,20 +215,44 @@ async function openPlaying(page) {
     // evidence (1522 px, all inside the header; the paused court / HUD are
     // byte-identical). The fixed-step seam makes the game state deterministic,
     // so rebuild the header snapshot from the settled page instead of accepting
-    // the load-dependent composite. Only the WebKit playing path needs this:
-    // ready / levelclear / gameover and Chromium keep their committed bytes.
+    // the load-dependent composite. Ready runs its own backdrop seam and
+    // Chromium never passes through this guard.
     await settleSharedHeaderCompositing(page);
   }
 }
 
 async function openLevelClear(page) {
-  await openBreakout(page, { bricks: SINGLE_BRICK, ball: BALL_UNDER_BRICK });
+  await openBreakout(page, {
+    bricks: SINGLE_BRICK,
+    ball: BALL_UNDER_BRICK,
+    ...(IS_WEBKIT ? { freeze: '1' } : {}),
+  });
   await page.getByTestId('overlay-title').filter({ hasText: '第 1 关清空' }).waitFor();
+  await settle(page);
+  if (IS_WEBKIT) {
+    // Issue #328: the overlay's blurred stage backdrop is a second compositing
+    // layer; toggling the same filter off and on forces WebKit to re-snapshot
+    // it from the settled court. The shared header seam runs last so no later
+    // compositing change can invalidate its snapshot.
+    await settleReadyBackdrop(page);
+    await settleSharedHeaderCompositing(page);
+  }
 }
 
 async function openGameOver(page) {
-  await openBreakout(page, { lives: '1', ball: BALL_BELOW_COURT });
+  await openBreakout(page, {
+    lives: '1',
+    ball: BALL_BELOW_COURT,
+    ...(IS_WEBKIT ? { freeze: '1' } : {}),
+  });
   await page.getByTestId('overlay-title').filter({ hasText: '生命用完了' }).waitFor();
+  await settle(page);
+  if (IS_WEBKIT) {
+    // Issue #328: same overlay-then-header order as levelclear; only the
+    // WebKit phone captures run it.
+    await settleReadyBackdrop(page);
+    await settleSharedHeaderCompositing(page);
+  }
 }
 
 async function captureDesktop(browser) {
@@ -334,7 +360,8 @@ async function captureWebkitMobile(browser) {
   await openPlaying(playing);
   // The header seam pins the shared compositing snapshot; the stable capture is
   // the backstop that refuses to commit a frame still mid-repaint under load
-  // (Issue #328). Every other state keeps the single-screenshot path.
+  // (Issue #328). The two settled terminal overlays use the same pair below;
+  // ready keeps the single-screenshot path.
   await capture(playing, 'after-breakout-playing-webkit.png', false, {
     stable: true,
   });
@@ -342,12 +369,16 @@ async function captureWebkitMobile(browser) {
 
   const cleared = await context.newPage();
   await openLevelClear(cleared);
-  await capture(cleared, 'after-breakout-levelclear-webkit.png', false);
+  await capture(cleared, 'after-breakout-levelclear-webkit.png', false, {
+    stable: true,
+  });
   await cleared.close();
 
   const over = await context.newPage();
   await openGameOver(over);
-  await capture(over, 'after-breakout-gameover-webkit.png', false);
+  await capture(over, 'after-breakout-gameover-webkit.png', false, {
+    stable: true,
+  });
   await over.close();
 
   await context.close();

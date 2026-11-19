@@ -351,6 +351,12 @@ export async function mountBreakout(
 
   const engine = createEngine();
   const fixedStepCount = debugStepCount();
+  // `?debug=1&freeze=1`: stop the loop once the terminal overlay appears, so a
+  // capture snapshots a canvas that can no longer redraw. Debug-only; normal
+  // play and the other debug scenes never set this flag.
+  const freezeOnTerminal =
+    debugEnabled() && debugParams().get('freeze') === '1';
+  let freezeRequested = false;
   let started = engine.currentStatus !== 'ready';
   let lastStatus: BreakoutStatus = engine.currentStatus;
   let activeScene: BreakoutScene | null = null;
@@ -518,6 +524,9 @@ export async function mountBreakout(
       services.audio.play('blip');
     }
     sync();
+    if (freezeOnTerminal && (result.levelCleared || result.gameOver)) {
+      freezeRequested = true;
+    }
   }
 
   const held = new Set<'left' | 'right'>();
@@ -728,6 +737,22 @@ export async function mountBreakout(
     throw new Error('The Breakout 2D runtime failed to initialize.');
   }
   const activeRuntime = runtime;
+
+  if (freezeOnTerminal) {
+    const sleepOnTerminal = (): void => {
+      if (mountSignal.aborted) {
+        return;
+      }
+      if (freezeRequested) {
+        // Guard the focus / visibility wake-ups so the frozen frame stays put.
+        debugStepsPaused = true;
+        activeRuntime.game.loop.sleep();
+        return;
+      }
+      requestAnimationFrame(sleepOnTerminal);
+    };
+    requestAnimationFrame(sleepOnTerminal);
+  }
 
   root.addEventListener(
     'click',
