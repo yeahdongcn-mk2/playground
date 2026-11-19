@@ -22,6 +22,10 @@ import {
   settleBlankHeader,
   waitForBlankSettled,
 } from './lib/blank-settle.mjs';
+import {
+  settleHubHeroCompositing,
+  settleSharedHeaderCompositing,
+} from './lib/webkit-compositing-settle.mjs';
 import { assertPortAvailable, parsePreviewPort } from './lib/preview-port.mjs';
 import { waitForPreviewServer } from './lib/preview-server.mjs';
 
@@ -188,6 +192,19 @@ async function captureWebkitMobile(browser) {
   await page.goto(`${BASE_URL}/`, { waitUntil: 'networkidle' });
   await page.evaluate(() => document.fonts.ready);
   await page.waitForTimeout(400);
+  // The hub capture happens right after the first navigation, before any route
+  // switch, but WebKit can still commit the shared header's blurred
+  // backdrop-filter from a different compositing pass under host load (Issue
+  // #341). Pin that snapshot with the reusable seam immediately before the
+  // screenshot; the blank scene below reuses the same seam after its own
+  // settle step (Issue #326).
+  await settleSharedHeaderCompositing(page);
+  // The hub page's only large pixel drift is the hero orb core: a loaded WebKit
+  // can composite the reduced-motion `breathe` animation's scale(0.97) instead
+  // of the resting scale(1). The same seam finishes the page's animations and
+  // requires committed frames, so the screenshot cannot capture that residual
+  // transform (Issue #341 t2).
+  await settleHubHeroCompositing(page);
   await captureScreenshot(page, 'after-hub-webkit.png', {
     engine: ENGINE,
     animations: 'allow',
