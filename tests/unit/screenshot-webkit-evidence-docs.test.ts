@@ -118,9 +118,9 @@ const HUB_SNAKE_CAPTURE_COMMIT =
   'c6a8c6c0b6cb70aac968f12d834d00f1073ade61';
 const MINESWEEPER_SCORES = 'after-minesweeper-scores-webkit.png';
 const MINESWEEPER_SCORES_SHA256 =
-  '44768a977454b98f4526033e96c3cdf60012f6278b10912cf7a11071419674fe';
+  '012a7bf09d4f8d8c3b8a38ff34f362def21a2dc2c3a076f5be027d3cdc89fb12';
 const MINESWEEPER_SCORES_CAPTURE_COMMIT =
-  '05818ae0bfe980ac9274d75146d22a4e59f96c8e';
+  '2cc6f87d3bcc5fba0e7db5b02df7e5a73dce1f40';
 
 /**
  * The indented children of one top-level bullet.

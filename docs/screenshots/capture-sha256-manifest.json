@@ -174,11 +174,11 @@
     },
     {
       "file": "after-minesweeper-scores-webkit.png",
-      "sha256": "44768a977454b98f4526033e96c3cdf60012f6278b10912cf7a11071419674fe",
+      "sha256": "012a7bf09d4f8d8c3b8a38ff34f362def21a2dc2c3a076f5be027d3cdc89fb12",
       "command": "npm run screenshots:container -- screenshots:minesweeper:scores:webkit",
       "provenance": {
         "container": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
-        "captureCommit": "05818ae0bfe980ac9274d75146d22a4e59f96c8e"
+        "captureCommit": "2cc6f87d3bcc5fba0e7db5b02df7e5a73dce1f40"
       }
     }
   ]
