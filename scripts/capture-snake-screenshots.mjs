@@ -12,6 +12,7 @@ import {
   launchCaptureBrowser,
   parseCaptureEngine,
   repaintWebkitReadyOverlay,
+  settleCapturePaint,
   settleWebkitReadyPaint,
   stopPreviewServer,
 } from './lib/capture-runtime.mjs';
@@ -99,6 +100,9 @@ const ALLOW_HISTORICAL_OVERWRITE = ARGS.includes(HISTORICAL_OVERWRITE_FLAG);
 const ENGINE = parseCaptureEngine(ARGS);
 const IS_WEBKIT = ENGINE === WEBKIT_ENGINE;
 
+/** READY scene both WebKit pages load; it pins the deterministic first fruit. */
+const SNAKE_READY_URL = `${ORIGIN}/#/games/snake?debug=1&food=11,10`;
+
 // The playing screenshot is deterministic: the debug seam advances exactly
 // PLAYING_TICKS engine ticks after the fixed first fruit and then freezes the
 // run, so the captured snake, next fruit, score and length depend only on this
@@ -168,6 +172,12 @@ async function capture(page, name, fullPage = true, options = {}) {
  * tell an in-flight paint from a finished one (Issue #342 t0). The capture
  * therefore runs the shared WebKit READY seams in this order:
  *
+ * 0. a throwaway warm-up page - WebKit's first page in a fresh browser process
+ *    can rasterise the sticky header and the READY card's blurred backdrop in a
+ *    stable 1-2-LSB variant, which the stable-frame check cannot detect because
+ *    the wrong raster is itself byte-identical across consecutive frames. The
+ *    committed page must not be the browser's first page (the same seam as the
+ *    minesweeper READY capture, Issue #318 t1).
  * 1. {@link settleWebkitReadyPaint} - a scroll round-trip repaints the sticky
  *    site header before the D-pad framing scrolls the page away from the top.
  * 2. the existing D-pad `scrollIntoViewIfNeeded` + `scrollBy(0, -16)` framing
@@ -181,8 +191,25 @@ async function capture(page, name, fullPage = true, options = {}) {
  */
 async function captureWebkitMobile(browser) {
   const mobile = await createPhoneContext(browser, ENGINE);
+
+  // The throwaway page warms the first-page rasterisation path; opening the
+  // actual READY scene (not just the hub) also renders the overlay card and its
+  // blurred backdrop before the committed page is created. Close it in
+  // `finally` so a failed warm-up cannot leave the throwaway page open during
+  // the committed capture.
+  const warmUp = await mobile.newPage();
+  try {
+    await warmUp.goto(SNAKE_READY_URL, { waitUntil: 'networkidle' });
+    await waitForSnakeReady(warmUp);
+    // Let the throwaway page produce two composited frames before closing so
+    // the first-page raster path is actually consumed, not merely requested.
+    await settleCapturePaint(warmUp);
+  } finally {
+    await warmUp.close();
+  }
+
   const mobileGame = await mobile.newPage();
-  await mobileGame.goto(`${ORIGIN}/#/games/snake?debug=1&food=11,10`, { waitUntil: 'networkidle' });
+  await mobileGame.goto(SNAKE_READY_URL, { waitUntil: 'networkidle' });
   await waitForSnakeReady(mobileGame);
   await settleWebkitReadyPaint(mobileGame);
   await mobileGame.getByTestId('dpad').scrollIntoViewIfNeeded();

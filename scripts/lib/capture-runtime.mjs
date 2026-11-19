@@ -891,8 +891,8 @@ export async function settleCapturePaint(page) {
  * {@link settleCapturePaint} then waits for fonts and frames.
  *
  * The 2048, minesweeper and snake READY captures use this seam. The minesweeper
- * caller additionally loads a throwaway warm-up page so the committed READY
- * page is not the browser's first page. The snake caller must run this seam
+ * and snake callers additionally load a throwaway warm-up page so the committed
+ * READY page is not the browser's first page. The snake caller must run this seam
  * before its D-pad framing scroll: that scroll moves the sticky header off the
  * top of the page, and only a round-trip from the top repaints it. The playing /
  * lost / won (or gameover) evidence is already deterministic and must never be
