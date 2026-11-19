@@ -138,7 +138,7 @@ const FILE_PREFIX = CLEAR ? 'minesweeper-clear-scores' : 'minesweeper-scores';
 /**
  * Number of fresh pages sampled before a load-dependent but stable raster
  * variant is fatal. The canonical page is common, so the expected number of
- * samples is low; ten makes the residual miss probability negligible without
+ * samples is low; twenty makes the residual miss probability negligible without
  * letting a sustained bad host state write the wrong evidence.
  */
 const WEBKIT_CAPTURE_ATTEMPTS = 20;
@@ -358,6 +358,7 @@ async function captureWebkitMobile(browser) {
         // load symptom; spend another sample instead of aborting the run. The
         // last attempt rethrows the real error.
         if (attempt === attempts) throw error;
+        observed.push('unstable');
         console.warn(
           `WebKit scores capture attempt ${attempt}/${attempts} did not stabilise ` +
             `(${error instanceof Error ? error.message : String(error)}); sampling a fresh page.`,
@@ -378,7 +379,17 @@ async function captureWebkitMobile(browser) {
           `not the recorded ${expectedSha256}; sampling a fresh page.`,
       );
     } finally {
-      await context.close();
+      // A close failure must not mask the sample's real error or fail a run
+      // whose matched PNG was already written; the next attempt opens a new
+      // context anyway.
+      try {
+        await context.close();
+      } catch (error) {
+        console.warn(
+          `WebKit scores capture could not close the sampled context: ` +
+            `${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     }
   }
   throw new Error(

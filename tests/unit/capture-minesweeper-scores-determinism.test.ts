@@ -319,7 +319,7 @@ describe('minesweeper scores screenshot determinism guard (Issue #341)', () => {
       ...webkit.matchAll(/await createPhoneContext\(browser, ENGINE, \{/g),
     ]).toHaveLength(1);
     expect(webkit).toMatch(
-      /\} finally \{\s*await context\.close\(\);\s*\}/,
+      /\} finally \{\s*try \{\s*await context\.close\(\);\s*\} catch \(error\) \{/,
     );
     // The first sample checks the manifested environment before it spends the
     // resample budget on bytes that a host / wrong-image run can never match.
@@ -341,6 +341,9 @@ describe('minesweeper scores screenshot determinism guard (Issue #341)', () => {
       /if \(expectedSha256 === null \|\| actualSha256 === expectedSha256\) \{\s*await capture\(page, name, \{ capturedBytes: bytes \}\);\s*return;/,
     );
     expect(webkit).toContain('observed.push(actualSha256);');
+    // A sample that never reached two identical frames is still reported as an
+    // observed variant when the budget is exhausted.
+    expect(webkit).toContain("observed.push('unstable');");
     expect(webkit).toContain('console.warn(');
     // Exhausting the budget fails before writing, with the observed variants.
     expect(webkit).toMatch(
@@ -403,15 +406,19 @@ describe('minesweeper scores screenshot determinism guard (Issue #341)', () => {
     expect(SCREENSHOTS_README).toContain(DRIFTED_SHA256);
     expect(SCREENSHOTS_README).toContain('3416');
     expect(SCREENSHOTS_README).toContain('rows 2853–2944');
-    expect(SCREENSHOTS_README).toContain('4 跑');
+    expect(SCREENSHOTS_README).toContain('4 跑分别用了 1 / 2 / 1 / 2 次采样');
+    expect(SCREENSHOTS_README).toContain(
+      '宿主 12×`yes` 并发负载（load average 1.84 → 16.84）',
+    );
     expect(SCREENSHOTS_README).toContain(SCORES_SHA256);
     // The rework's review evidence and mechanism.
     expect(SCREENSHOTS_README).toContain(
       'a8187dcf4fb7d6772e6fbbac3cd6ba7975ea93f854e34f332fb76223f5494fd2',
     );
     expect(SCREENSHOTS_README).toContain('20 次');
-    expect(SCREENSHOTS_README).toContain('6 跑');
-    expect(SCREENSHOTS_README).toContain('1 / 2 / 1 / 3 / 2 / 2 次采样');
+    expect(SCREENSHOTS_README).toContain(
+      '6 跑分别用了 1 / 2 / 1 / 3 / 2 / 2 次采样',
+    );
     expect(SCREENSHOTS_README).toContain('capturedBytes');
     expect(SCREENSHOTS_README).toContain(
       'npm run screenshots:container -- screenshots:minesweeper:scores:webkit',

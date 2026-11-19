@@ -940,8 +940,9 @@ export async function settleCapturePaint(page) {
  * READY page is not the browser's first page. The snake caller must run this
  * seam before its D-pad framing scroll: that scroll moves the sticky header off
  * the top of the page, and only a round-trip from the top repaints it. The
- * breakout playing / lost and snake gameover captures keep their existing
- * single-screenshot paths.
+ * breakout playing capture (its own header seam plus the `{ stable: true }`
+ * two-frame gate), the breakout ready / levelclear / gameover and snake
+ * gameover captures keep their existing paths.
  */
 export async function settleWebkitReadyPaint(page, { offset = 200 } = {}) {
   await page.evaluate((distance) => window.scrollTo(0, distance), offset);

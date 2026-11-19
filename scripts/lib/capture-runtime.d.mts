@@ -254,7 +254,7 @@ export interface SettleWebkitReadyPaintOptions {
 /**
  * Repaint the sticky site header with a scroll round-trip, then settle fonts
  * and frames before a WebKit capture (2048 and snake READY, minesweeper
- * READY/lost/scores-win).
+ * READY/scores-win).
  */
 export function settleWebkitReadyPaint(
   page: Page,

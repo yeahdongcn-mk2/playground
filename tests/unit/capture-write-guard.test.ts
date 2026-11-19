@@ -213,7 +213,11 @@ describe('captureScreenshot write-time environment guard', () => {
       outputDir: dir,
       manifest,
       fingerprint: containerFingerprint() as never,
+      // capturedBytes takes precedence over the stable-frame opt-ins: the
+      // caller already validated this frame, so no second frame is taken.
       capturedBytes: bytes,
+      stable: true,
+      stableFrames: 4,
       log,
     });
 
@@ -221,6 +225,13 @@ describe('captureScreenshot write-time environment guard', () => {
     expect(readdirSync(dir)).toEqual([FILE]);
     expect(screenshotSpy).not.toHaveBeenCalled();
     expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it('reads the expected sha256 and treats an unrecorded file as null', () => {
+    const dir = tempScreenshotDir();
+    const bytes = Buffer.from('manifest lookup bytes');
+    const manifest = sampleManifest({ sha256: sha256(bytes) });
+
     expect(expectedCaptureSha256(FILE, { manifest })).toBe(sha256(bytes));
     expect(expectedCaptureSha256('not-in-manifest.png', { manifest })).toBeNull();
     expect(expectedCaptureSha256(FILE, { manifest: null })).toBeNull();
@@ -288,6 +299,21 @@ describe('captureScreenshot write-time environment guard', () => {
       outputDir: dir,
       manifest: sampleManifest(),
       fingerprint: containerFingerprint() as never,
+      checkOnly: true,
+    });
+
+    expect(readdirSync(dir)).toEqual([]);
+    expect(screenshotSpy).not.toHaveBeenCalled();
+  });
+
+  it('returns immediately for checkOnly on an unrecorded file', async () => {
+    const dir = tempScreenshotDir();
+    const { page, screenshotSpy } = fakePage();
+
+    await captureScreenshot(page, FILE, {
+      engine: 'webkit',
+      outputDir: dir,
+      manifest: null,
       checkOnly: true,
     });
 
