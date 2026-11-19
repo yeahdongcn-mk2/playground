@@ -25,6 +25,7 @@ import {
   parsePreviewPort,
 } from './lib/preview-port.mjs';
 import { waitForPreviewServer } from './lib/preview-server.mjs';
+import { settleSharedHeaderCompositing } from './lib/webkit-compositing-settle.mjs';
 
 /**
  * Capture the Before / After evidence for the Minesweeper best-time leaderboard.
@@ -55,6 +56,14 @@ import { waitForPreviewServer } from './lib/preview-server.mjs';
  * as `after-<prefix>-webkit.png`; it is an After-only mode and the desktop
  * evidence stays Chromium. The clear-records variant is Chromium-only because
  * the current panel always renders the clear action.
+ *
+ * The WebKit leaderboard capture settles the shared site header's composited
+ * backdrop (`settleSharedHeaderCompositing`, Issue #341) after the won board is
+ * ready, then requires two consecutive byte-identical full-page frames before
+ * writing (Issue #341 t3, after a load-dependent 1-LSB drift in the
+ * leaderboard band). The seam and the stable-frame gate stay on this WebKit
+ * path only: `--before`, `--clear` and the Chromium captures keep their
+ * committed single-screenshot bytes.
  *
  * The plain Chromium After mode refuses to overwrite the
  * `after-minesweeper-scores-*.png` files: they are the #45 subtask 1 historical
@@ -141,8 +150,12 @@ async function settle(page) {
   await page.waitForTimeout(300);
 }
 
-async function capture(page, name) {
-  await captureScreenshot(page, name, { engine: ENGINE, fullPage: true });
+async function capture(page, name, options = {}) {
+  await captureScreenshot(page, name, {
+    engine: ENGINE,
+    fullPage: true,
+    ...options,
+  });
 }
 
 async function seedScores(page) {
@@ -247,10 +260,27 @@ async function captureWebkitMobile(browser) {
   const context = await createPhoneContext(browser, ENGINE, {
     viewport: { width: 320, height: 640 },
   });
+  // WebKit's first page in a fresh browser process can rasterise the sticky
+  // header, board gradients and leaderboard rows one 8-bit step away from the
+  // committed evidence (Issue #318, observed again for the scores page in
+  // Issue #341). Load a throwaway copy first so the captured page uses the
+  // settled paint path.
+  const warmUp = await context.newPage();
+  try {
+    await seedScores(warmUp);
+    await openWin(warmUp);
+  } finally {
+    await warmUp.close();
+  }
   const page = await context.newPage();
   await seedScores(page);
   await openWin(page);
-  await capture(page, `after-${FILE_PREFIX}-webkit.png`);
+  // Issue #341: rebuild the shared header's WebKit backdrop snapshot from the
+  // settled page, then require consecutive byte-identical full-page frames
+  // before writing. The seam is WebKit-only (this function only runs for the
+  // `--webkit` engine) and does not apply to `--before` / `--clear` / Chromium.
+  await settleSharedHeaderCompositing(page);
+  await capture(page, `after-${FILE_PREFIX}-webkit.png`, { stable: true });
   await context.close();
 }
 
