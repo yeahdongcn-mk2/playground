@@ -90,10 +90,11 @@ function stripComments(source: string): string {
  * in a band outside the shared header under concurrent host load; the review of
  * PR #363 then observed that the warm-up page and the stable-frame gate alone
  * still let a 1-LSB board-band / primary-button variant through, because that
- * wrong raster persists across frames. The fix settles the shared header,
- * repaints the win overlay's blurred backdrop (hide / restore), captures two
- * consecutive byte-identical full-page frames and resamples a fresh page until
- * those bytes equal the manifest entry. These tests pin the WebKit-only wiring
+ * wrong raster persists across frames. The fix runs a scroll round-trip
+ * (`settleWebkitReadyPaint`), repaints the win overlay's blurred backdrop
+ * (hide / restore), settles the shared header, captures two consecutive
+ * byte-identical full-page frames and resamples a fresh page until those bytes
+ * equal the manifest entry. These tests pin the WebKit-only wiring
  * and the failure paths so a dropped seam, a leaked screenshot option, a
  * swallowed error or a write-before-match cannot silently restore the drifting
  * capture.
@@ -116,7 +117,7 @@ describe('minesweeper scores screenshot determinism guard (Issue #341)', () => {
       'await settleSharedHeaderCompositing(page);',
     );
     const bytesAt = webkit.indexOf(
-      'const bytes = await captureStableBytes(page, { fullPage: true });',
+      'bytes = await captureStableBytes(page, { fullPage: true });',
     );
     const captureAt = webkit.indexOf(
       'await capture(page, name, { capturedBytes: bytes });',
@@ -176,7 +177,7 @@ describe('minesweeper scores screenshot determinism guard (Issue #341)', () => {
       'await repaintWebkitReadyOverlay(page);',
     );
     const bytesAt = webkit.indexOf(
-      'const bytes = await captureStableBytes(page, { fullPage: true });',
+      'bytes = await captureStableBytes(page, { fullPage: true });',
     );
     expect(scrollAt).toBeGreaterThan(-1);
     expect(overlayAt).toBeGreaterThan(scrollAt);
@@ -184,7 +185,7 @@ describe('minesweeper scores screenshot determinism guard (Issue #341)', () => {
     // A rejected seam must abort the capture instead of writing the PNG.
     expect(webkit).not.toContain('.catch');
     expect(webkit).toMatch(
-      /await repaintWebkitReadyOverlay\(page\);\s*(?:\/\/[^\n]*\n\s*)*await settleSharedHeaderCompositing\(page\);\s*const bytes = await captureStableBytes\(/,
+      /await repaintWebkitReadyOverlay\(page\);\s*(?:\/\/[^\n]*\n\s*)*await settleSharedHeaderCompositing\(page\);\s*let bytes;\s*try \{\s*bytes = await captureStableBytes\(/,
     );
     // The seams are imported from the shared capture runtime, together with the
     // helpers that already implement the scroll round-trip and the hide /
@@ -211,9 +212,11 @@ describe('minesweeper scores screenshot determinism guard (Issue #341)', () => {
     expect(webkit).toMatch(
       /try \{\s*await seedScores\(warmUp\);\s*await openWin\(warmUp\);\s*\} finally \{\s*await warmUp\.close\(\);\s*\}/,
     );
-    // Exactly one screenshot is written: the warm-up page never becomes
-    // evidence.
-    expect([...webkit.matchAll(/await capture\(/g)]).toHaveLength(1);
+    // Two capture calls: the first-sample environment check and the final
+    // write. The warm-up page never becomes evidence.
+    expect([...webkit.matchAll(/await capture\(/g)]).toHaveLength(2);
+    expect(webkit).toContain('checkOnly: true');
+    expect(webkit).toContain('capturedBytes: bytes');
   });
 
   it('forwards captured bytes while keeping the default single shot', () => {
@@ -280,7 +283,7 @@ describe('minesweeper scores screenshot determinism guard (Issue #341)', () => {
     // between them, so a rejected repaint aborts the write instead of being
     // ignored.
     expect(webkit).toMatch(
-      /await settleSharedHeaderCompositing\(page\);\s*const bytes = await captureStableBytes\(/,
+      /await settleSharedHeaderCompositing\(page\);\s*let bytes;\s*try \{\s*bytes = await captureStableBytes\(/,
     );
   });
 
@@ -302,11 +305,35 @@ describe('minesweeper scores screenshot determinism guard (Issue #341)', () => {
       /for \(let attempt = 1; attempt <= attempts; attempt \+= 1\)/,
     );
     // A fresh context per attempt resets the per-page raster state; the warm-up
-    // page and seams run inside the attempt loop.
+    // page and seams run inside the attempt loop, so createPhoneContext must be
+    // inside the loop, not hoisted above it.
+    const loopAt = webkit.indexOf(
+      'for (let attempt = 1; attempt <= attempts; attempt += 1)',
+    );
+    const contextAt = webkit.indexOf(
+      'const context = await createPhoneContext(browser, ENGINE, {',
+    );
+    expect(loopAt).toBeGreaterThan(-1);
+    expect(contextAt).toBeGreaterThan(loopAt);
     expect([
       ...webkit.matchAll(/await createPhoneContext\(browser, ENGINE, \{/g),
     ]).toHaveLength(1);
-    expect(webkit).toContain('await context.close();');
+    expect(webkit).toMatch(
+      /\} finally \{\s*await context\.close\(\);\s*\}/,
+    );
+    // The first sample checks the manifested environment before it spends the
+    // resample budget on bytes that a host / wrong-image run can never match.
+    expect(webkit).toMatch(
+      /if \(attempt === 1\) \{[\s\S]*?await capture\(page, name, \{ checkOnly: true \}\);/,
+    );
+    // A page that cannot even reach two identical frames consumes a sample
+    // instead of aborting the run; the last attempt rethrows the real error.
+    expect(webkit).toMatch(
+      /catch \(error\) \{[\s\S]*?if \(attempt === attempts\) throw error;[\s\S]*?continue;/,
+    );
+    // A trimmed checkout has no recorded sha to compare; it is logged rather
+    // than silently downgraded.
+    expect(webkit).toMatch(/console\.warn\(\s*`No manifest sha256 is recorded/);
     expect(webkit).toContain(
       "const actualSha256 = createHash('sha256').update(bytes).digest('hex');",
     );
@@ -324,8 +351,10 @@ describe('minesweeper scores screenshot determinism guard (Issue #341)', () => {
     expect(SCRIPT).toContain(
       "const ALLOW_NEW_BYTES = ARGS.includes('--allow-new-bytes');",
     );
-    expect(SCRIPT).toContain('expectedCaptureSha256,\n  launchCaptureBrowser,');
-    expect(stripped).toContain('const WEBKIT_CAPTURE_ATTEMPTS = 10;');
+    expect(SCRIPT).toMatch(
+      /expectedCaptureSha256,[\s\S]{0,80}launchCaptureBrowser,/,
+    );
+    expect(stripped).toContain('const WEBKIT_CAPTURE_ATTEMPTS = 20;');
   });
 
   it('writes only after two consecutive byte-identical full-page frames', async () => {
@@ -380,7 +409,9 @@ describe('minesweeper scores screenshot determinism guard (Issue #341)', () => {
     expect(SCREENSHOTS_README).toContain(
       'a8187dcf4fb7d6772e6fbbac3cd6ba7975ea93f854e34f332fb76223f5494fd2',
     );
-    expect(SCREENSHOTS_README).toContain('10 次');
+    expect(SCREENSHOTS_README).toContain('20 次');
+    expect(SCREENSHOTS_README).toContain('6 跑');
+    expect(SCREENSHOTS_README).toContain('1 / 2 / 1 / 3 / 2 / 2 次采样');
     expect(SCREENSHOTS_README).toContain('capturedBytes');
     expect(SCREENSHOTS_README).toContain(
       'npm run screenshots:container -- screenshots:minesweeper:scores:webkit',

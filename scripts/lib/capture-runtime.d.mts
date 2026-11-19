@@ -157,10 +157,16 @@ export interface CaptureScreenshotOptions {
   stableAttempts?: number;
   /**
    * Bytes a caller already validated (for example against the manifest sha256
-   * while resampling a fresh page); the writer skips the screenshot and still
-   * applies the environment guard and the atomic write.
+   * while resampling a fresh page). The writer skips the screenshot and, for a
+   * manifested file, still applies the environment guard and the atomic write;
+   * it takes precedence over `stable` / `stableFrames`.
    */
   capturedBytes?: Buffer | Uint8Array;
+  /**
+   * Validate the manifested environment, then return without capturing or
+   * writing (default false). An unrecorded file returns immediately.
+   */
+  checkOnly?: boolean;
   /** Override the target of the context that produced the page (tests / edge cases). */
   target?: CaptureTarget;
   /** Parsed manifest; defaults to reading `manifestPath` from disk. */
@@ -185,17 +191,20 @@ export function captureScreenshot(
   options: CaptureScreenshotOptions,
 ): Promise<void>;
 
+export interface ExpectedCaptureSha256Options {
+  /** Parsed manifest; defaults to reading `manifestPath` from disk. */
+  manifest?: ScreenshotSha256Manifest | null;
+  manifestPath?: string;
+  readFile?: (path: string, encoding: 'utf8') => string;
+}
+
 /**
  * The sha256 recorded for `name` in the screenshot manifest, or null when the
  * file is unrecorded (for example a trimmed checkout).
  */
 export function expectedCaptureSha256(
   name: string,
-  options?: {
-    manifest?: ScreenshotSha256Manifest | null;
-    manifestPath?: string;
-    readFile?: (path: string, encoding: 'utf8') => string;
-  },
+  options?: ExpectedCaptureSha256Options,
 ): string | null;
 
 /** Consecutive whole-image frames the WebKit READY capture must repeat. */
@@ -244,7 +253,8 @@ export interface SettleWebkitReadyPaintOptions {
 
 /**
  * Repaint the sticky site header with a scroll round-trip, then settle fonts
- * and frames before a WebKit READY capture (2048 and minesweeper).
+ * and frames before a WebKit capture (2048 and snake READY, minesweeper
+ * READY/lost/scores-win).
  */
 export function settleWebkitReadyPaint(
   page: Page,
@@ -257,9 +267,10 @@ export interface RepaintWebkitReadyOverlayOptions {
 }
 
 /**
- * Hide the overlay (the READY card or the minesweeper loss panel) for two
- * frames and restore it, then settle, so its backdrop is painted on the
- * canonical path instead of a load-dependent composite.
+ * Hide the overlay (the READY card, the minesweeper loss panel or the
+ * minesweeper scores win card) for two frames and restore it, then settle, so
+ * its backdrop is painted on the canonical path instead of a load-dependent
+ * composite.
  */
 export function repaintWebkitReadyOverlay(
   page: Page,
