@@ -890,10 +890,13 @@ export async function settleCapturePaint(page) {
  * position is restored to 0 so the screenshot still shows the top of the page;
  * {@link settleCapturePaint} then waits for fonts and frames.
  *
- * Both the 2048 and minesweeper READY captures use this seam. The minesweeper
+ * The 2048, minesweeper and snake READY captures use this seam. The minesweeper
  * caller additionally loads a throwaway warm-up page so the committed READY
- * page is not the browser's first page. The playing / lost / won (or gameover)
- * evidence is already deterministic and must never be wired into those scenes.
+ * page is not the browser's first page. The snake caller must run this seam
+ * before its D-pad framing scroll: that scroll moves the sticky header off the
+ * top of the page, and only a round-trip from the top repaints it. The playing /
+ * lost / won (or gameover) evidence is already deterministic and must never be
+ * wired into those scenes.
  */
 export async function settleWebkitReadyPaint(page, { offset = 200 } = {}) {
   await page.evaluate((distance) => window.scrollTo(0, distance), offset);
@@ -915,8 +918,10 @@ export async function settleWebkitReadyPaint(page, { offset = 200 } = {}) {
  * canonical path. The overlay is hidden only between frames, never in a
  * captured image.
  *
- * The 2048 READY capture and the minesweeper lost WebKit capture use this
- * seam; playing / gameover bytes must not change.
+ * The 2048 READY capture, the minesweeper lost WebKit capture and the snake
+ * READY capture use this seam. The snake caller must run it after its D-pad
+ * framing scroll, so the READY card and its backdrop repaint on the canonical
+ * path at the final framed position; playing / gameover bytes must not change.
  */
 export async function repaintWebkitReadyOverlay(
   page,

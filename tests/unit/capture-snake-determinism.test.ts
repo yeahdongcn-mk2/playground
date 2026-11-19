@@ -89,12 +89,84 @@ describe('snake screenshot determinism guard', () => {
     // The guard must run before the committed WebKit capture, not after it.
     const waitAt = SCRIPT.indexOf('await waitForSnakeReady(mobileGame);');
     const captureAt = SCRIPT.indexOf(
-      "await capture(mobileGame, 'after-snake-webkit.png', false);",
+      "await capture(mobileGame, 'after-snake-webkit.png', false, { stable: true });",
     );
     expect(waitAt).toBeGreaterThan(-1);
     expect(captureAt).toBeGreaterThan(waitAt);
     // The ineffective first-page warm-up was replaced by the root-cause fix.
     expect(SCRIPT).not.toContain('const warmup = await mobile.newPage();');
+  });
+
+  it('runs the READY repaint seams in order before the stable WebKit capture', () => {
+    // Issue #342 t0: the shared header and the READY card / blurred backdrop
+    // need the same deterministic seams as 2048, but the snake frame is
+    // framed by a D-pad scroll, so header repaint must happen first and the
+    // overlay repaint after the framing scroll. A reordered or dropped call
+    // must fail this static guard.
+    expect(SCRIPT).toContain(
+      'repaintWebkitReadyOverlay,\n  settleWebkitReadyPaint,',
+    );
+    expect(SCRIPT).toMatch(/\bsettleWebkitReadyPaint,\n\s*stopPreviewServer,/);
+
+    const helperStart = SCRIPT.indexOf('async function captureWebkitMobile(');
+    const helperEnd = SCRIPT.indexOf('\n}\n', helperStart);
+    expect(helperStart).toBeGreaterThan(-1);
+    expect(helperEnd).toBeGreaterThan(helperStart);
+    const body = SCRIPT.slice(helperStart, helperEnd);
+
+    const waitAt = body.indexOf('await waitForSnakeReady(mobileGame);');
+    const headerAt = body.indexOf('await settleWebkitReadyPaint(mobileGame);');
+    const scrollAt = body.indexOf(
+      "await mobileGame.getByTestId('dpad').scrollIntoViewIfNeeded();",
+    );
+    const nudgeAt = body.indexOf('await mobileGame.evaluate(() => window.scrollBy(0, -16));');
+    const overlayAt = body.indexOf('await repaintWebkitReadyOverlay(mobileGame);');
+    const captureAt = body.indexOf(
+      "await capture(mobileGame, 'after-snake-webkit.png', false, { stable: true });",
+    );
+
+    expect(waitAt).toBeGreaterThan(-1);
+    expect(headerAt).toBeGreaterThan(waitAt);
+    expect(scrollAt).toBeGreaterThan(headerAt);
+    expect(nudgeAt).toBeGreaterThan(scrollAt);
+    expect(overlayAt).toBeGreaterThan(nudgeAt);
+    expect(captureAt).toBeGreaterThan(overlayAt);
+
+    // The D-pad framing must not reset the page to the top; only the header
+    // seam runs a scroll round-trip, and it does so before the framing scroll.
+    expect(body).not.toContain('window.scrollTo(0, 0)');
+    expect(body).not.toContain('scrollTo(0, 0)');
+
+    // One seam call each: a second call elsewhere would make the pinned order
+    // above ambiguous.
+    const calls = (source: string, name: string): number =>
+      source.match(new RegExp(`await ${name}\\(`, 'g'))?.length ?? 0;
+    expect(calls(SCRIPT, 'settleWebkitReadyPaint')).toBe(1);
+    expect(calls(SCRIPT, 'repaintWebkitReadyOverlay')).toBe(1);
+  });
+
+  it('passes capture options through and opts only the WebKit frame into stable bytes', () => {
+    // The `stable: true` wiring only works if capture() forwards its fourth
+    // argument to captureScreenshot; a helper that forgets it would silently
+    // write a single in-flight frame.
+    const helperStart = SCRIPT.indexOf('async function capture(');
+    const helperEnd = SCRIPT.indexOf('\n}\n', helperStart);
+    expect(helperStart).toBeGreaterThan(-1);
+    expect(helperEnd).toBeGreaterThan(helperStart);
+    const helper = SCRIPT.slice(helperStart, helperEnd);
+    expect(helper).toContain('async function capture(page, name, fullPage = true, options = {}) {');
+    expect(helper).toContain(
+      'await captureScreenshot(page, name, { engine: ENGINE, fullPage, ...options });',
+    );
+
+    expect(SCRIPT.match(/, \{ stable: true \}\);/g)).toHaveLength(1);
+    expect(SCRIPT).toContain(
+      "await capture(mobileGame, 'after-snake-webkit.png', false, { stable: true });",
+    );
+    // Chromium desktop / mobile and the other WebKit-neighbour captures keep
+    // their existing single-screenshot path.
+    expect(SCRIPT).not.toContain("after-snake-mobile.png', false, {");
+    expect(SCRIPT).not.toContain("after-snake-ready.png', true, {");
   });
 
   it('keeps the expected READY title color in sync with the app.css token', () => {
