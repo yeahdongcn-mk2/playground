@@ -410,6 +410,12 @@ describe('minesweeper scores screenshot determinism guard (Issue #341)', () => {
     expect(SCREENSHOTS_README).toContain(
       '宿主 12×`yes` 并发负载（load average 1.84 → 16.84）',
     );
+    // The review-fix head was accepted again under load; run 1 had to walk
+    // through every known 1-LSB variant before reproducing the manifest bytes.
+    expect(SCREENSHOTS_README).toContain(
+      '评审收尾后再次按同一命令复跑 4 跑',
+    );
+    expect(SCREENSHOTS_README).toContain('9 / 1 / 5 / 1 次采样');
     expect(SCREENSHOTS_README).toContain(SCORES_SHA256);
     // The rework's review evidence and mechanism.
     expect(SCREENSHOTS_README).toContain(
