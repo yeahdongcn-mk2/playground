@@ -5,7 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { DEFAULT_E2E_REPORT_PATH } from '../../scripts/lib/e2e-flakes.mjs';
+import { DEFAULT_E2E_REPORT_PATH, TARGET_CASES } from '../../scripts/lib/e2e-flakes.mjs';
 import {
   PLAYWRIGHT_IMAGE_PIN,
   PLAYWRIGHT_IMAGE_REPOSITORY,
@@ -29,7 +29,8 @@ const REMOVED_STEP_NAMES = [
 const TEST_COMMAND_TOKENS = [
   'npx playwright test',
   '--project=mobile-webkit',
-  '-g "hub and blank canvas"',
+  '--project=chromium',
+  '-g "hub and blank canvas|reset centres the cursor and keyboard keeps working afterwards"',
   `--repeat-each=${REPEAT_COUNT}`,
   '--retries=0',
 ];
@@ -60,7 +61,7 @@ interface Workflow {
 }
 
 const workflow = parse(WORKFLOW_SOURCE) as Workflow;
-const job = workflow.jobs?.['mobile-webkit-first-run'];
+const job = workflow.jobs?.['guarded-first-run'];
 const steps = job?.steps ?? [];
 
 const isFlakeCheck = (step: WorkflowStep): boolean =>
@@ -79,6 +80,33 @@ function requireStep(
     throw new Error(`the flake-watch job is missing ${description}`);
   }
   return step;
+}
+
+/**
+ * Minimal Playwright JSON report for a successful scheduled run: every guarded
+ * case repeated five times with no retries, so each repeat is one `expected`
+ * test.
+ */
+function repeatedReport(): Record<string, unknown> {
+  return {
+    config: {},
+    errors: [],
+    suites: TARGET_CASES.map((target) => ({
+      title: `${target.projectName}.spec.ts`,
+      file: `tests/e2e/${target.projectName}.spec.ts`,
+      specs: Array.from({ length: REPEAT_COUNT }, () => ({
+        title: target.titleFragment,
+        tests: [
+          {
+            projectName: target.projectName,
+            status: 'expected',
+            expectedStatus: 'passed',
+            results: [{ status: 'passed', retry: 0 }],
+          },
+        ],
+      })),
+    })),
+  };
 }
 
 describe('flake-watch workflow', () => {
@@ -182,12 +210,19 @@ describe('flake-watch workflow', () => {
     }
   });
 
-  it('repeats the mobile-webkit hub case five times without retries', () => {
-    const check = requireStep(isFlakeCheck, 'the repeated mobile-webkit check');
+  it('repeats both guarded first-run cases five times without retries', () => {
+    const check = requireStep(isFlakeCheck, 'the repeated first-run check');
     expect(check.id).toBe(TEST_STEP_ID);
 
     for (const token of TEST_COMMAND_TOKENS) {
       expect(check.run, `the check command should contain "${token}"`).toContain(token);
+    }
+    // Both guarded cases must be selected by name, and each project must match
+    // only its own spec (mobile-webkit only *.webkit.spec.ts entry points,
+    // chromium without mobile/webkit specs), so the grep cannot widen silently.
+    for (const target of TARGET_CASES) {
+      expect(check.run, target.label).toContain(target.titleFragment);
+      expect(check.run, target.label).toContain(`--project=${target.projectName}`);
     }
     // A plain substring would also accept --repeat-each=50 or 500, which could
     // outgrow the 30-minute job while this test still passed.
@@ -225,19 +260,17 @@ describe('flake-watch workflow', () => {
     );
   });
 
-  it('summarizes the Playwright JSON report stats in the step summary', () => {
+  it('summarizes each guarded case from the Playwright JSON report', () => {
     const workDir = mkdtempSync(join(tmpdir(), 'flake-watch-summary-'));
     try {
       const reportPath = join(workDir, DEFAULT_E2E_REPORT_PATH);
       mkdirSync(dirname(reportPath), { recursive: true });
-      writeFileSync(
-        reportPath,
-        JSON.stringify({ stats: { expected: 5, unexpected: 2, flaky: 1, skipped: 3 } }),
-      );
+      writeFileSync(reportPath, JSON.stringify(repeatedReport()));
 
       // Run the real script against a report fixture at the canonical path, so
-      // deleting a stat or swapping its label fails here instead of silently
-      // changing the job summary.
+      // a wrong target, a swapped label or a dead branch fails here instead of
+      // silently changing the job summary. The pass/fail/flaky/skipped and
+      // missing-report branches are covered by flake-watch-summary.test.ts.
       const summary = execFileSync(process.execPath, [SUMMARY_SCRIPT], {
         cwd: workDir,
         encoding: 'utf8',
@@ -246,10 +279,12 @@ describe('flake-watch workflow', () => {
       expect(summary).toContain('重复次数：5');
       expect(summary).toContain('重试次数：0');
       expect(summary).toContain('结果：success');
-      expect(summary).toContain('首跑通过：5');
-      expect(summary).toContain('失败：2');
-      expect(summary).toContain('重试后通过：1');
-      expect(summary).toContain('跳过：3');
+      for (const target of TARGET_CASES) {
+        expect(summary, target.label).toContain(`### ${target.label}`);
+        expect(summary, target.label).toContain(`- project：${target.projectName}`);
+        expect(summary, target.label).toContain(`- 标题包含：${target.titleFragment}`);
+      }
+      expect(summary.match(/首跑通过：5/g)).toHaveLength(TARGET_CASES.length);
 
       // A missing report must still produce a summary and name the problem.
       const missing = execFileSync(process.execPath, [SUMMARY_SCRIPT], {

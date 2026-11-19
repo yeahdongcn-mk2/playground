@@ -83,6 +83,23 @@ export interface E2eFlakesAnalysis {
   cases: TargetE2eCase[];
 }
 
+/** First-run outcome counts for one guarded target. */
+export interface TargetFirstRunCounts {
+  passed: number;
+  failed: number;
+  flaky: number;
+  skipped: number;
+  unknown: number;
+  total: number;
+}
+
+/** Counts plus the matched cases for one entry of `TARGET_CASES`. */
+export interface TargetFirstRunSummary {
+  target: E2eFlakeTarget;
+  counts: TargetFirstRunCounts;
+  cases: TargetE2eCase[];
+}
+
 export const DEFAULT_E2E_REPORT_PATH: string;
 export const TARGET_CASES: E2eFlakeTarget[];
 
@@ -92,6 +109,7 @@ export function parseE2eReport(text: string): PlaywrightJsonReport;
 export function readE2eReport(filePath: string): PlaywrightJsonReport;
 export function summarizeResultError(result: PlaywrightJsonTestResult): string | null;
 export function collectTargetCases(report: PlaywrightJsonReport): TargetE2eCase[];
+export function summarizeTargetCases(report: PlaywrightJsonReport): TargetFirstRunSummary[];
 export function analyzeE2eFlakes(report: PlaywrightJsonReport): E2eFlakesAnalysis;
 export function exitCodeForAnalysis(analysis: E2eFlakesAnalysis): number;
 export function describeE2eFlakes(
