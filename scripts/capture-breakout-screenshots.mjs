@@ -228,11 +228,15 @@ async function openLevelClear(page) {
     ...(IS_WEBKIT ? { freeze: '1' } : {}),
   });
   await page.getByTestId('overlay-title').filter({ hasText: '第 1 关清空' }).waitFor();
-  await settle(page);
   if (IS_WEBKIT) {
-    // Issue #328: the overlay's blurred stage backdrop is a second compositing
-    // layer; toggling the same filter off and on forces WebKit to re-snapshot
-    // it from the settled court. The shared header seam runs last so no later
+    // Issue #328: only the WebKit phone capture needs the extra settle after the
+    // terminal overlay appears. Keeping it inside this guard restores
+    // Chromium's pre-t1 timing (no extra 300 ms wait) and leaves its committed
+    // bytes unchanged.
+    await settle(page);
+    // The overlay's blurred stage backdrop is a second compositing layer;
+    // toggling the same filter off and on forces WebKit to re-snapshot it from
+    // the settled court. The shared header seam runs last so no later
     // compositing change can invalidate its snapshot.
     await settleReadyBackdrop(page);
     await settleSharedHeaderCompositing(page);
@@ -246,10 +250,10 @@ async function openGameOver(page) {
     ...(IS_WEBKIT ? { freeze: '1' } : {}),
   });
   await page.getByTestId('overlay-title').filter({ hasText: '生命用完了' }).waitFor();
-  await settle(page);
   if (IS_WEBKIT) {
-    // Issue #328: same overlay-then-header order as levelclear; only the
-    // WebKit phone captures run it.
+    // Issue #328: same gated settle and overlay-then-header order as
+    // levelclear; only the WebKit phone capture runs this path.
+    await settle(page);
     await settleReadyBackdrop(page);
     await settleSharedHeaderCompositing(page);
   }

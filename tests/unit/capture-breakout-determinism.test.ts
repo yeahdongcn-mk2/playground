@@ -45,15 +45,23 @@ function functionBody(source: string, name: string): string {
     throw new Error(`unterminated parameters: ${name}`);
   }
   const open = source.indexOf('{', paramsClose);
-  depth = 0;
+  return source.slice(open, bracedBlock(source, open).close + 1);
+}
+
+/** The body of the brace block that starts at `open`, and its closing brace. */
+function bracedBlock(source: string, open: number): { body: string; close: number } {
+  if (source[open] !== '{') {
+    throw new Error(`expected a brace at ${open}`);
+  }
+  let depth = 0;
   for (let index = open; index < source.length; index += 1) {
     if (source[index] === '{') depth += 1;
     if (source[index] === '}') {
       depth -= 1;
-      if (depth === 0) return source.slice(open, index + 1);
+      if (depth === 0) return { body: source.slice(open + 1, index), close: index };
     }
   }
-  throw new Error(`unterminated function: ${name}`);
+  throw new Error('unterminated brace block');
 }
 
 /** Drop comments so a commented-out call cannot satisfy the static pins. */
@@ -192,19 +200,89 @@ describe('breakout screenshot determinism guard', () => {
     expect(VIEW).toMatch(
       /if \(freezeOnTerminal && \(result\.levelCleared \|\| result\.gameOver\)\) \{\s*freezeRequested = true;\s*\}/,
     );
-    expect(VIEW).toMatch(/requestAnimationFrame\(sleepOnTerminal\);/);
-    expect(VIEW).toMatch(
-      /debugStepsPaused = true;\s*activeRuntime\.game\.loop\.sleep\(\);/,
+    // The flag must have exactly one setter: a second early setter would sleep
+    // the loop before the terminal step even with the watcher intact.
+    const view = stripComments(VIEW);
+    expect([...view.matchAll(/freezeRequested = true;/g)]).toHaveLength(1);
+    // Pin the watcher structure rather than the mere presence of the two API
+    // calls: deleting the initial schedule leaves no watcher at all, deleting
+    // the recursion stops it after the first frame, and emptying or deleting
+    // the `freezeRequested` guard sleeps the loop on the first mounted frame.
+    // All of those mutations previously kept this test green.
+    const watcherGateAt = view.indexOf('if (freezeOnTerminal) {');
+    expect(watcherGateAt).toBeGreaterThan(-1);
+    const watcherBlock = bracedBlock(view, view.indexOf('{', watcherGateAt));
+    const watcher = watcherBlock.body;
+    expect(
+      watcher.match(/requestAnimationFrame\(sleepOnTerminal\);/g),
+    ).toHaveLength(2);
+    expect(watcher).toContain('const sleepOnTerminal = (): void => {');
+    const arrowOpen = watcher.indexOf(
+      '{',
+      watcher.indexOf('const sleepOnTerminal = (): void =>'),
     );
+    const arrowBlock = bracedBlock(watcher, arrowOpen);
+    const arrow = arrowBlock.body;
+    const guardAt = arrow.indexOf('if (freezeRequested) {');
+    const pauseAt = arrow.indexOf('debugStepsPaused = true;');
+    const sleepAt = arrow.indexOf('activeRuntime.game.loop.sleep();');
+    const returnAt = arrow.indexOf('return;', sleepAt);
+    const recursiveAt = arrow.indexOf(
+      'requestAnimationFrame(sleepOnTerminal);',
+      returnAt,
+    );
+    // The sleep must live inside the guard, after the flag is observed, and the
+    // recursion must stay outside it so the watcher keeps polling until the
+    // terminal step.
+    expect(guardAt).toBeGreaterThan(-1);
+    const guard = bracedBlock(arrow, arrow.indexOf('{', guardAt));
+    expect(guard.body).toContain('debugStepsPaused = true;');
+    expect(guard.body).toContain('activeRuntime.game.loop.sleep();');
+    expect(guard.body).toContain('return;');
+    expect(guard.body).not.toContain('requestAnimationFrame(sleepOnTerminal);');
+    expect(pauseAt).toBeGreaterThan(guardAt);
+    expect(sleepAt).toBeGreaterThan(pauseAt);
+    expect(returnAt).toBeGreaterThan(sleepAt);
+    expect(recursiveAt).toBeGreaterThan(guard.close);
+    expect(arrow.indexOf('requestAnimationFrame(sleepOnTerminal);')).toBe(
+      recursiveAt,
+    );
+    // The only other schedule is the initial one, and it must sit after the
+    // arrow: deleting it previously left the recursive call behind and passed.
+    expect(
+      watcher.lastIndexOf('requestAnimationFrame(sleepOnTerminal);'),
+    ).toBeGreaterThan(arrowBlock.close);
   });
 
   it('repaints the WebKit overlay backdrop for ready and the settled terminal states', () => {
     // The READY overlay appears before Phaser paints the court, so a WebKit
-    // screenshot can keep the empty backdrop. openReady must run the seam only
-    // in WebKit mode; deleting the call or the guard restores the blank-court
+    // screenshot can keep the empty backdrop. openReady must wait for that
+    // overlay (title and status) and only then run the gated backdrop seam;
+    // deleting the call, the guard or either wait restores the blank-court
     // drift while every other assertion above stays green.
     const openReady = functionBody(SCRIPT, 'openReady');
-    expect(openReady).toMatch(/if \(IS_WEBKIT\) \{\s*await settleReadyBackdrop\(page\);/);
+    const readyTitleAt = openReady.indexOf(
+      "filter({ hasText: '击碎整面砖墙' })",
+    );
+    const readyStatusAt = openReady.indexOf("filter({ hasText: '待开始' })");
+    const readyGateAt = openReady.indexOf('if (IS_WEBKIT) {');
+    const readyBackdropAt = openReady.indexOf(
+      'await settleReadyBackdrop(page);',
+    );
+    expect(
+      readyTitleAt,
+      'openReady must wait for its overlay title',
+    ).toBeGreaterThan(-1);
+    expect(readyStatusAt, 'openReady must wait for its READY status').toBeGreaterThan(
+      readyTitleAt,
+    );
+    expect(readyGateAt, 'openReady must gate the backdrop seam on WebKit').toBeGreaterThan(
+      readyStatusAt,
+    );
+    expect(readyBackdropAt).toBeGreaterThan(readyGateAt);
+    expect(readyBackdropAt).toBeLessThan(
+      bracedBlock(openReady, openReady.indexOf('{', readyGateAt)).close,
+    );
 
     // The seam must disable and restore the same backdrop-filter between two
     // committed frames; dropping either toggle, the frame waits or the restore
@@ -217,22 +295,45 @@ describe('breakout screenshot determinism guard', () => {
     expect(seam.match(/await nextFrame\(\);/g)).toHaveLength(2);
 
     // Issue #328: the levelclear / gameover cards share the same blurred
-    // backdrop. Each runs the overlay seam after its own title wait and regular
-    // settle, then the shared header seam last: a later compositing change
-    // would invalidate the header snapshot. playing has no visible overlay, and
-    // a leak into Chromium would change its committed bytes.
+    // backdrop. Each waits for its own title, settles inside the WebKit gate,
+    // repaints the overlay backdrop, and only then rebuilds the header snapshot:
+    // moving the backdrop before the settle or outside the gate (both
+    // previously kept this test green) must fail here.
     const stripped = stripComments(SCRIPT);
-    for (const name of ['openLevelClear', 'openGameOver']) {
+    for (const [name, anchor] of [
+      ['openLevelClear', "filter({ hasText: '第 1 关清空' })"],
+      ['openGameOver', "filter({ hasText: '生命用完了' })"],
+    ] as const) {
       const body = functionBody(stripped, name);
-      const backdropAt = body.indexOf('await settleReadyBackdrop(page);');
-      const headerAt = body.indexOf('await settleSharedHeaderCompositing(page);');
-      expect(backdropAt, `${name} must repaint the overlay backdrop`).toBeGreaterThan(
+      const titleAt = body.indexOf(anchor);
+      const gateAt = body.indexOf('if (IS_WEBKIT) {', titleAt);
+      const settleAt = body.indexOf('await settle(page);', gateAt);
+      const backdropAt = body.indexOf(
+        'await settleReadyBackdrop(page);',
+        settleAt,
+      );
+      const headerAt = body.indexOf(
+        'await settleSharedHeaderCompositing(page);',
+        backdropAt,
+      );
+      const gateCloseAt = bracedBlock(body, body.indexOf('{', gateAt)).close;
+      expect(titleAt, `${name} must wait for its overlay title`).toBeGreaterThan(
         -1,
+      );
+      expect(gateAt, `${name} must gate the terminal seams on WebKit`).toBeGreaterThan(
+        titleAt,
+      );
+      expect(settleAt, `${name} must settle after the title`).toBeGreaterThan(
+        gateAt,
+      );
+      expect(backdropAt, `${name} must repaint the overlay backdrop`).toBeGreaterThan(
+        settleAt,
       );
       expect(headerAt, `${name} must settle the header last`).toBeGreaterThan(
         backdropAt,
       );
-      expect(headerAt).toBeLessThan(body.indexOf('}', backdropAt));
+      expect(backdropAt).toBeLessThan(gateCloseAt);
+      expect(headerAt).toBeLessThan(gateCloseAt);
     }
     expect([
       ...stripped.matchAll(/await settleReadyBackdrop\(page\);/g),
@@ -260,17 +361,20 @@ describe('breakout screenshot determinism guard', () => {
       {
         name: 'openPlaying',
         anchor: "getAttribute('data-debug-steps')",
+        settleInsideGate: false,
       },
       {
         name: 'openLevelClear',
         anchor: "filter({ hasText: '第 1 关清空' })",
+        settleInsideGate: true,
       },
       {
         name: 'openGameOver',
         anchor: "filter({ hasText: '生命用完了' })",
+        settleInsideGate: true,
       },
     ];
-    for (const { name, anchor } of states) {
+    for (const { name, anchor, settleInsideGate } of states) {
       const body = functionBody(stripped, name);
       const anchorAt = body.indexOf(anchor);
       const settleAt = body.indexOf('await settle(page);', anchorAt);
@@ -278,8 +382,9 @@ describe('breakout screenshot determinism guard', () => {
         'await settleSharedHeaderCompositing(page);',
         settleAt,
       );
-      // The state must fully settle its own overlay / debug marker and run the
-      // regular settle before the header snapshot is rebuilt.
+      // The state must fully settle its own overlay / debug marker before the
+      // header snapshot is rebuilt; terminal states keep the extra settle
+      // inside the WebKit gate so Chromium timing is unchanged.
       expect(anchorAt, `${name} is missing its settled-state anchor`).toBeGreaterThan(-1);
       expect(settleAt, `${name} is missing its settle after ${anchor}`).toBeGreaterThan(
         anchorAt,
@@ -291,11 +396,19 @@ describe('breakout screenshot determinism guard', () => {
       // The seam must be gated by WebKit mode: removing the guard would change
       // the committed Chromium bytes as well. The gate also has to stay open
       // through the overlay backdrop seam in the terminal states.
-      const gateAt = body.indexOf('if (IS_WEBKIT) {', settleAt);
-      const gateClose = body.indexOf('}', seamAt);
+      const gateAt = body.indexOf('if (IS_WEBKIT) {', anchorAt);
+      const gateClose = bracedBlock(body, body.indexOf('{', gateAt)).close;
       expect(gateAt, `${name} must gate the seams on WebKit`).toBeGreaterThan(
-        settleAt,
+        anchorAt,
       );
+      if (settleInsideGate) {
+        expect(
+          settleAt,
+          `${name} must keep the extra settle inside the WebKit gate`,
+        ).toBeGreaterThan(gateAt);
+      } else {
+        expect(settleAt).toBeLessThan(gateAt);
+      }
       expect(gateAt).toBeLessThan(seamAt);
       expect(gateClose, `${name} must close the WebKit gate`).toBeGreaterThan(
         seamAt,
