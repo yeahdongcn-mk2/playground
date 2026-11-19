@@ -11,8 +11,12 @@
  * site header keeps its own blurred `backdrop-filter` snapshot across a
  * client-side route switch, so its composited pixels can still land one 8-bit
  * step away from the committed frame (Issue #326). `settleBlankHeader` below
- * pins that snapshot after the scene settles.
+ * pins that snapshot after the scene settles by delegating to the reusable
+ * seam in `webkit-compositing-settle.mjs`, so non-blank WebKit captures can
+ * reuse the same toggle / double-rAF sequence (Issue #341).
  */
+
+import { settleSharedHeaderCompositing } from './webkit-compositing-settle.mjs';
 
 /** How close (canvas CSS px) the snapped orb must be to the click target. */
 export const BLANK_TARGET_TOLERANCE = 2;
@@ -108,83 +112,16 @@ export async function waitForBlankSettled(
   );
 }
 
-/** Shared site header whose WebKit backdrop snapshot can outlive a route switch. */
-export const BLANK_HEADER_SELECTOR = '.site-header';
-
 /**
- * Double-rAF waits after each header filter toggle. Each wait resolves in the
- * animation frame after the one that applied the toggle, so the new filter
- * state is painted before the next step; two waits give WebKit an extra frame
- * to rebuild the blurred backdrop before the screenshot.
- */
-export const BLANK_HEADER_SETTLE_FRAMES = 2;
-
-/**
- * In-page half of `settleBlankHeader`.
+ * Blank-canvas entry to the reusable WebKit header compositing seam.
  *
- * The shared site header is outside the game view and keeps its composited
- * `backdrop-filter: blur(18px)` layer across a client-side route switch. On
- * WebKit that snapshot can be committed one 8-bit step away from the committed
- * blank evidence even though the blank canvas itself has settled, so the same
- * build writes `cd4ed3fe…` or `5569689d…` (Issue #326). Waiting for the header
- * fonts and then toggling the same filter off and back on between committed
- * frames rebuilds the snapshot from the current page. The restored value is
- * the stylesheet's filter, so the visible rendering is unchanged; only the
- * compositing timing is pinned.
- *
- * This runs inside `page.evaluate`, so it only uses browser globals and its
- * serialisable options. It returns whether the header was found: a renamed
- * header must fail the capture instead of silently skipping the seam.
+ * The blank capture still owns the blank-specific ordering: it runs only after
+ * `waitForBlankSettled`, immediately before `after-blank-webkit.png`. The
+ * shared module owns the mechanics (waiting for the header fonts, toggling
+ * `backdrop-filter` / `-webkit-backdrop-filter`, double-rAF frame waits and
+ * failing when the header is missing), so a non-blank WebKit capture can call
+ * it without depending on blank-canvas semantics.
  */
-export async function repaintBlankHeader({ selector, frames }) {
-  await document.fonts.ready;
-  const header = document.querySelector(selector);
-  if (!(header instanceof HTMLElement)) {
-    return false;
-  }
-  const nextCommittedFrame = () =>
-    new Promise((resolve) => {
-      requestAnimationFrame(() => requestAnimationFrame(resolve));
-    });
-  const waitForCommittedFrames = async () => {
-    for (let index = 0; index < frames; index += 1) {
-      await nextCommittedFrame();
-    }
-  };
-  header.style.backdropFilter = 'none';
-  header.style.webkitBackdropFilter = 'none';
-  await waitForCommittedFrames();
-  header.style.backdropFilter = '';
-  header.style.webkitBackdropFilter = '';
-  await waitForCommittedFrames();
-  return true;
-}
-
-/**
- * Settle the shared site header after the blank scene has settled and before
- * the WebKit blank capture. The evaluate hook is injectable so a unit test can
- * drive the orchestration without a browser; the in-page repaint itself is
- * runtime-tested in jsdom. Only the WebKit blank path calls this: the hub
- * capture happens before the route switch, and the Chromium blank captures
- * keep their committed bytes.
- */
-export async function settleBlankHeader(
-  page,
-  {
-    evaluate = (capturePage, repaint, options) =>
-      capturePage.evaluate(repaint, options),
-    selector = BLANK_HEADER_SELECTOR,
-    frames = BLANK_HEADER_SETTLE_FRAMES,
-  } = {},
-) {
-  const repainted = await evaluate(page, repaintBlankHeader, {
-    selector,
-    frames,
-  });
-  if (!repainted) {
-    throw new Error(
-      `Blank header "${selector}" was not found, so its WebKit ` +
-        'backdrop-filter could not be settled before the screenshot',
-    );
-  }
+export async function settleBlankHeader(page, options = {}) {
+  await settleSharedHeaderCompositing(page, options);
 }
