@@ -36,8 +36,8 @@ const MANIFEST = JSON.parse(
 
 const SCORES_WEBKIT = 'after-minesweeper-scores-webkit.png';
 const SCORES_SHA256 =
-  '44768a977454b98f4526033e96c3cdf60012f6278b10912cf7a11071419674fe';
-const SCORES_CAPTURE_COMMIT = '05818ae0bfe980ac9274d75146d22a4e59f96c8e';
+  '012a7bf09d4f8d8c3b8a38ff34f362def21a2dc2c3a076f5be027d3cdc89fb12';
+const SCORES_CAPTURE_COMMIT = '2cc6f87d3bcc5fba0e7db5b02df7e5a73dce1f40';
 const DRIFTED_SHA256 =
   'b7f08eac34dbf325f00bbbb195f9726b49b03a207acd9e17e6bf3249eb21c89d';
 
@@ -213,7 +213,11 @@ describe('minesweeper scores screenshot determinism guard (Issue #341)', () => {
     const webkit = functionBody(stripComments(SCRIPT), 'captureWebkitMobile');
     expect(webkit).toContain('await settleSharedHeaderCompositing(page);');
     expect(webkit).not.toContain('.catch');
-    expect(webkit).not.toContain('try {');
+    // The seam call flows straight into the capture with no try/catch between
+    // them, so a rejected repaint aborts the write instead of being ignored.
+    expect(webkit).toMatch(
+      /await settleSharedHeaderCompositing\(page\);\s*await capture\(/,
+    );
   });
 
   it('writes only after two consecutive byte-identical full-page frames', async () => {

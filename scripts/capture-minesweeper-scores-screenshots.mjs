@@ -61,9 +61,9 @@ import { settleSharedHeaderCompositing } from './lib/webkit-compositing-settle.m
  * backdrop (`settleSharedHeaderCompositing`, Issue #341) after the won board is
  * ready, then requires two consecutive byte-identical full-page frames before
  * writing (Issue #341 t3, after a load-dependent 1-LSB drift in the
- * leaderboard band). The seam and the stable-frame gate stay on this WebKit
- * path only: `--before`, `--clear` and the Chromium captures keep their
- * committed single-screenshot bytes.
+ * custom-difficulty primary button's cyan gradient). The seam and the
+ * stable-frame gate stay on this WebKit path only: `--before`, `--clear` and
+ * the Chromium captures keep their committed single-screenshot bytes.
  *
  * The plain Chromium After mode refuses to overwrite the
  * `after-minesweeper-scores-*.png` files: they are the #45 subtask 1 historical
@@ -261,7 +261,7 @@ async function captureWebkitMobile(browser) {
     viewport: { width: 320, height: 640 },
   });
   // WebKit's first page in a fresh browser process can rasterise the sticky
-  // header, board gradients and leaderboard rows one 8-bit step away from the
+  // header, board gradients and control gradients one 8-bit step away from the
   // committed evidence (Issue #318, observed again for the scores page in
   // Issue #341). Load a throwaway copy first so the captured page uses the
   // settled paint path.
