@@ -1012,9 +1012,10 @@ function captureCalls(source: string): Map<string, CaptureCall> {
     });
   }
 
-  // Game scripts: `capture(page, 'name.png', true)` with a positional value.
+  // Game scripts: `capture(page, 'name.png', true)` with a positional value,
+  // optionally followed by a literal options object (e.g. `{ stable: true }`).
   for (const match of source.matchAll(
-    /(?<![A-Za-z])capture\(\s*[^,]+,\s*'([^']+\.png)'\s*(?:,\s*(true|false))?\s*\)/g,
+    /(?<![A-Za-z])capture\(\s*[^,]+,\s*'([^']+\.png)'\s*(?:,\s*(true|false))?(?:,\s*\{[^{}]*\})?\s*\)/g,
   )) {
     calls.set(match[1]!, {
       form: 'positional',

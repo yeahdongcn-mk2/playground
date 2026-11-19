@@ -11,6 +11,8 @@ import {
   engineLabel,
   launchCaptureBrowser,
   parseCaptureEngine,
+  repaintWebkitReadyOverlay,
+  settleWebkitReadyPaint,
   stopPreviewServer,
 } from './lib/capture-runtime.mjs';
 import {
@@ -143,14 +145,14 @@ async function waitForSnakeReady(page) {
   await settle(page);
 }
 
-async function capture(page, name, fullPage = true) {
+async function capture(page, name, fullPage = true, options = {}) {
   const write = guardHistoricalAfterEvidence({
     file: name,
     mode: MODE,
     allowHistoricalOverwrite: ALLOW_HISTORICAL_OVERWRITE,
   });
   if (!write) return;
-  await captureScreenshot(page, name, { engine: ENGINE, fullPage });
+  await captureScreenshot(page, name, { engine: ENGINE, fullPage, ...options });
 }
 
 /**
@@ -159,19 +161,35 @@ async function capture(page, name, fullPage = true) {
  * The READY title no longer inherits the pre-CSS black color through a
  * reduced-motion `color` transition (`snake.css` pins the final color with no
  * transition), and {@link waitForSnakeReady} refuses to capture until the title
- * reports that final color with no running animation. The captured frame is
- * therefore the state a player actually sees and two runs stay byte-identical
- * (Issue #318 t3).
+ * reports that final color with no running animation (Issue #318 t3).
+ *
+ * Under concurrent host load the READY card and its blurred backdrop can still
+ * composite from two subtly different rasters, and a single screenshot cannot
+ * tell an in-flight paint from a finished one (Issue #342 t0). The capture
+ * therefore runs the shared WebKit READY seams in this order:
+ *
+ * 1. {@link settleWebkitReadyPaint} - a scroll round-trip repaints the sticky
+ *    site header before the D-pad framing scrolls the page away from the top.
+ * 2. the existing D-pad `scrollIntoViewIfNeeded` + `scrollBy(0, -16)` framing
+ *    for the 375x667 phone viewport. It must not reset the page to the top.
+ * 3. {@link repaintWebkitReadyOverlay} - hide / restore the overlay for two
+ *    frames so the READY card and its `backdrop-filter` backdrop repaint on the
+ *    canonical path after the framing scroll.
+ * 4. `capture(..., { stable: true })` - write only after two consecutive
+ *    byte-identical screenshots, so an unsettled raster fails the run instead
+ *    of being committed.
  */
 async function captureWebkitMobile(browser) {
   const mobile = await createPhoneContext(browser, ENGINE);
   const mobileGame = await mobile.newPage();
   await mobileGame.goto(`${ORIGIN}/#/games/snake?debug=1&food=11,10`, { waitUntil: 'networkidle' });
   await waitForSnakeReady(mobileGame);
+  await settleWebkitReadyPaint(mobileGame);
   await mobileGame.getByTestId('dpad').scrollIntoViewIfNeeded();
   await mobileGame.evaluate(() => window.scrollBy(0, -16));
   await mobileGame.waitForTimeout(300);
-  await capture(mobileGame, 'after-snake-webkit.png', false);
+  await repaintWebkitReadyOverlay(mobileGame);
+  await capture(mobileGame, 'after-snake-webkit.png', false, { stable: true });
   await mobile.close();
 }
 
