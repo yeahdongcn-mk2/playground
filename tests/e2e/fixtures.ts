@@ -42,6 +42,55 @@ export async function readPosition(
   return { x: Number(x), y: Number(y) };
 }
 
+export interface HoldKeyOptions {
+  /** How long the predicate may take to become true; defaults to 2 seconds. */
+  readonly timeout?: number;
+  /** Human-readable description of the expected move, used in failures. */
+  readonly description?: string;
+}
+
+/**
+ * Keep `key` held and poll the readout until `predicate` accepts the cursor
+ * position. A fixed hold window is not reliable under parallel load: one frame
+ * clamped to `MAX_DELTA` moves the blank-canvas cursor only 36 CSS px, so a
+ * timeout can be too short even though the game is working. Holding the key
+ * for the whole poll lets slower frames simply keep moving the cursor.
+ *
+ * The key is released in `finally` on both success and timeout. On timeout the
+ * error carries the last readout, so a regression (the cursor never moved) is
+ * distinguishable from a harness problem (the readout stopped updating).
+ */
+export async function holdKeyUntilMoved(
+  page: Page,
+  key: string,
+  predicate: (position: GamePosition) => boolean,
+  { timeout = 2_000, description }: HoldKeyOptions = {},
+): Promise<void> {
+  let lastReadout: GamePosition | undefined;
+  await page.keyboard.down(key);
+  try {
+    await expect
+      .poll(
+        async () => {
+          lastReadout = await readPosition(page);
+          return predicate(lastReadout);
+        },
+        { timeout },
+      )
+      .toBe(true);
+  } catch (error) {
+    const label = description ? `${description} (${key})` : key;
+    const readout = lastReadout ? `x=${lastReadout.x} y=${lastReadout.y}` : 'unavailable';
+    throw new Error(
+      `${label} did not reach the expected position while held ` +
+        `(timeout ${timeout}ms, last readout ${readout})`,
+      { cause: error },
+    );
+  } finally {
+    await page.keyboard.up(key);
+  }
+}
+
 export async function canvasBox(
   page: Page,
 ): Promise<{ x: number; y: number; width: number; height: number }> {
