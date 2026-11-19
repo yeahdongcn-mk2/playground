@@ -665,6 +665,28 @@ export async function runScreenshotRepro({
   for (const plan of plans) {
     for (let run = 1; run <= runsPerTarget; run += 1) {
       const logPath = reproLogPath(logDir, plan.target, run);
+      const artifactDir = reproArtifactDir(logDir, plan.target, run);
+
+      // A repeated invocation reuses the same log directory, so this run number
+      // may still hold PNG copies from an earlier invocation. Remove them before
+      // the capture: if this run fails to write a file, its slot must read as
+      // "not retained" instead of exposing stale bytes as if they belonged to
+      // this run.
+      for (const capture of plan.captures) {
+        try {
+          removeFile(reproArtifactPath(logDir, plan.target, run, capture.file));
+        } catch (error) {
+          artifactFailures.push({
+            target: plan.target,
+            run,
+            file: capture.file,
+            path: reproArtifactPath(logDir, plan.target, run, capture.file),
+            message:
+              'cannot remove the stale per-run PNG copy before the capture: ' +
+              errorMessage(error),
+          });
+        }
+      }
 
       // The CI workspace is disposable, so remove the target's manifested
       // files before every run. A capture that silently skips a frozen
@@ -706,7 +728,6 @@ export async function runScreenshotRepro({
         captureFailures.push({ target: plan.target, run, exitCode, logPath, failureReason });
       }
 
-      const artifactDir = reproArtifactDir(logDir, plan.target, run);
       const hashes = [];
       for (const capture of plan.captures) {
         const filePath = resolve(dir, capture.file);

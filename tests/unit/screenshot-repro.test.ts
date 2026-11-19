@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import {
   appendFileSync,
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -688,6 +689,46 @@ describe('screenshot repro two-run check', () => {
     expect(report).toContain('1 of 3 run(s) disagree with the manifest (run 2)');
     const drifted = difference?.runHashes.find((entry) => entry.run === 2);
     expect(readFileSync(drifted?.copyPath ?? '', 'utf8')).toBe('playing-v2');
+  });
+
+  it('clears the previous per-run PNG copy before a run that no longer writes it', async () => {
+    // A repeated invocation reuses the same log directory. If this run fails to
+    // write a file, its copy slot must not keep the previous invocation's bytes,
+    // which a human comparing drift runs could mistake for this run's evidence.
+    const setup = fixture();
+    const target = 'screenshots:2048:webkit';
+    const first = await runScreenshotRepro({
+      ...setup,
+      targets: [target],
+      runs: 1,
+      runCapture: fakeRunner({ dir: setup.dir, captures: CAPTURES }),
+      verifyLog: verifyOk,
+    });
+    expect(first.ok).toBe(true);
+    const stalePath = reproArtifactPath(
+      setup.logDir,
+      target,
+      1,
+      'after-2048-playing-webkit.png',
+    );
+    expect(readFileSync(stalePath, 'utf8')).toBe('playing-v1');
+
+    const second = await runScreenshotRepro({
+      ...setup,
+      targets: [target],
+      runs: 1,
+      runCapture: fakeRunner({
+        dir: setup.dir,
+        captures: CAPTURES,
+        skipWriteRuns: [1],
+      }),
+      verifyLog: verifyOk,
+    });
+
+    expect(second.ok).toBe(false);
+    expect(second.artifactFailures).toEqual([]);
+    expect(existsSync(stalePath)).toBe(false);
+    expect(second.report).toContain('run 1 png: not retained');
   });
 
   it('fails when a per-run PNG copy cannot be retained', async () => {
