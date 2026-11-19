@@ -6,6 +6,13 @@ import {
   isEditableTarget,
   type Point,
 } from '../../core/input';
+import {
+  elapsedUpdateMs,
+  fadeTrail,
+  MAX_TRAIL_DOTS,
+  TRAIL_INTERVAL_MS,
+  type TrailDot,
+} from './trail';
 
 export type InteractionMode = 'idle' | 'keyboard' | 'pointer';
 
@@ -24,19 +31,12 @@ export interface BlankSceneCallbacks {
   onFirstInput(): void;
 }
 
-interface TrailDot {
-  x: number;
-  y: number;
-  life: number;
-}
-
 const ORB_TEXTURE = 'blank-orb';
 const ORB_TEXTURE_SIZE = 128;
 const ORB_SIZE = 76;
 const SPEED = 360;
 const POINTER_SPEED = 820;
 const MAX_DELTA = 100;
-const TRAIL_INTERVAL = 38;
 const STATE_INTERVAL = 100;
 
 /**
@@ -58,6 +58,7 @@ export class BlankScene extends Phaser.Scene {
   private mode: InteractionMode = 'idle';
   private trailClock = 0;
   private stateClock = 0;
+  private lastUpdateTime = 0;
   private firstInputFired = false;
   private disposed = false;
 
@@ -99,6 +100,12 @@ export class BlankScene extends Phaser.Scene {
   }
 
   update(time: number, delta: number): void {
+    // Phaser clamps `delta` for frames slower than its minimum-fps window, so a
+    // slow software-rendered frame would otherwise advance the 1.15 s trail fade
+    // by frames instead of wall-clock time and the screenshot settle loop would
+    // time out (Issue #341 rework). Movement keeps the clamped delta.
+    const elapsed = elapsedUpdateMs(time, this.lastUpdateTime);
+    this.lastUpdateTime = Number.isFinite(time) ? time : this.lastUpdateTime;
     const dt = Math.min(delta, MAX_DELTA) / 1000;
     const { width, height } = this.scale;
     const margin = this.safeMargin(width, height);
@@ -142,13 +149,13 @@ export class BlankScene extends Phaser.Scene {
       }
     }
 
-    this.updateTrail(delta, moved);
+    this.updateTrail(elapsed, moved);
     this.drawScene(time);
     this.orb.setScale(
       this.orbBaseScale * (this.reduceMotion ? 1 : 1 + Math.sin(time / 420) * 0.045),
     );
 
-    this.stateClock += delta;
+    this.stateClock += elapsed;
     if (this.stateClock >= STATE_INTERVAL) {
       this.stateClock = 0;
       this.emitState();
@@ -270,24 +277,16 @@ export class BlankScene extends Phaser.Scene {
     return Math.max(0, Math.min(38, width / 2 - 1, height / 2 - 1));
   }
 
-  private updateTrail(delta: number, moved: boolean): void {
-    const dt = delta / 1000;
-    for (const dot of this.trail) {
-      dot.life -= dt / 1.15;
-    }
-    for (let index = this.trail.length - 1; index >= 0; index -= 1) {
-      if ((this.trail[index]?.life ?? 0) <= 0) {
-        this.trail.splice(index, 1);
-      }
-    }
+  private updateTrail(elapsed: number, moved: boolean): void {
+    fadeTrail(this.trail, elapsed);
 
-    this.trailClock += delta;
-    if (!moved || this.trailClock < TRAIL_INTERVAL) {
+    this.trailClock += elapsed;
+    if (!moved || this.trailClock < TRAIL_INTERVAL_MS) {
       return;
     }
     this.trailClock = 0;
     this.trail.push({ x: this.orb.x, y: this.orb.y, life: 1 });
-    if (this.trail.length > 26) {
+    if (this.trail.length > MAX_TRAIL_DOTS) {
       this.trail.shift();
     }
   }
