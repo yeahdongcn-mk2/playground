@@ -601,6 +601,12 @@ export async function captureScreenshot(
     stableFrames = 1,
     stableIntervalMs = READY_CAPTURE_STABLE_INTERVAL_MS,
     stableAttempts = READY_CAPTURE_STABLE_ATTEMPTS,
+    // A caller that already validated its own stable frame (for example the
+    // minesweeper scores capture, which re-samples a fresh page when a
+    // load-dependent raster variant appears) can hand the exact bytes in
+    // instead of taking another screenshot here. The manifest / environment
+    // guard and the atomic write still apply.
+    capturedBytes,
     target,
     manifest,
     manifestPath = resolve(CAPTURE_REPO_ROOT, DEFAULT_MANIFEST_PATH),
@@ -620,7 +626,9 @@ export async function captureScreenshot(
   if (capture === null) {
     // Unrecorded evidence: keep the existing path byte-for-byte unless the
     // caller explicitly asks for a stability check.
-    if (stable) {
+    if (capturedBytes !== undefined) {
+      writeFileAtomically(path, screenshotBuffer(capturedBytes), fileOperations);
+    } else if (stable) {
       const buffer = await captureStableBytes(page, { fullPage, animations });
       writeFileAtomically(path, buffer, fileOperations);
     } else if (stableFrames !== 1) {
@@ -663,18 +671,21 @@ export async function captureScreenshot(
 
   // The guard passed: capture to memory first, so a failing screenshot never
   // replaces the committed PNG, then write it atomically in the same directory.
-  const buffer = stable
-    ? await captureStableBytes(page, { fullPage, animations })
-    : stableFrames !== 1
-      ? await captureStableFramesBytes(page, {
-          name,
-          fullPage,
-          animations,
-          stableFrames,
-          stableIntervalMs,
-          stableAttempts,
-        })
-      : normalizeScreenshotBytes(await page.screenshot({ fullPage, animations }));
+  const buffer =
+    capturedBytes !== undefined
+      ? screenshotBuffer(capturedBytes)
+      : stable
+        ? await captureStableBytes(page, { fullPage, animations })
+        : stableFrames !== 1
+          ? await captureStableFramesBytes(page, {
+              name,
+              fullPage,
+              animations,
+              stableFrames,
+              stableIntervalMs,
+              stableAttempts,
+            })
+          : normalizeScreenshotBytes(await page.screenshot({ fullPage, animations }));
   writeFileAtomically(path, buffer, fileOperations);
 
   const actualSha256 = createHash('sha256').update(buffer).digest('hex');
@@ -691,6 +702,28 @@ export async function captureScreenshot(
   }
 
   console.log(captureRecord(name, engine, page.viewportSize(), colorScheme, reducedMotion));
+}
+
+/**
+ * The sha256 the manifest records for `name`, or null when the file is not in
+ * the manifest (for example a trimmed checkout).
+ *
+ * Capture scripts that can land on a load-dependent but stable raster variant
+ * use this as the expected value: a fresh page is sampled until it reproduces
+ * the recorded evidence, and the write-time guard still decides whether the
+ * bytes may replace the committed PNG.
+ */
+export function expectedCaptureSha256(
+  name,
+  {
+    manifest,
+    manifestPath = resolve(CAPTURE_REPO_ROOT, DEFAULT_MANIFEST_PATH),
+    readFile = readFileSync,
+  } = {},
+) {
+  const parsedManifest = loadSha256Manifest({ manifest, manifestPath, readFile });
+  if (parsedManifest === null) return null;
+  return findSha256ManifestCapture(parsedManifest, name)?.sha256 ?? null;
 }
 
 /**
