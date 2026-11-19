@@ -6,6 +6,7 @@ import {
   dispatchTouchPointer,
   endCellPress,
   expectCleanBoard,
+  expectFocusedInsideViewport,
   expectInsideViewport,
   expectNoDebugSeam,
   expectNoHorizontalOverflow,
@@ -64,9 +65,14 @@ export function defineMinesweeperMobileTouchCases(): void {
       await expect(page.getByTestId('remaining-mines')).toHaveText('10');
       await expectCleanBoard(page);
       // After a restart the focus must land on a visible control. On a phone the
-      // compact button next to the board is the preferred target.
-      await expect(mobileRestart).toBeFocused();
-      await expectInsideViewport(page, mobileRestart, 'restart button');
+      // compact button next to the board is the preferred target. Wait for the
+      // focus auto-scroll and the post-restart reflow together, instead of
+      // asserting the box before WebKit has scrolled the focused button in.
+      await expectFocusedInsideViewport(
+        page,
+        mobileRestart,
+        'compact restart after touch restart',
+      );
 
       // Holding a flagged cell clears the flag; the first hold sets it again.
       await longPressCell(page, LOSS_MINE_CLICK.row, LOSS_MINE_CLICK.col);
@@ -322,8 +328,13 @@ export function defineMinesweeperMobileTouchCases(): void {
       await sidebarRestart.click();
       await expect(page.getByTestId('status')).toHaveText('待开始');
       const compactRestart = page.getByTestId('mobile-restart-button');
-      await expect(compactRestart).toBeFocused();
-      await expectInsideViewport(page, compactRestart, 'compact restart after restart');
+      // The status text flips before WebKit applies the focus auto-scroll, so
+      // the focused + fully visible condition has to be polled together.
+      await expectFocusedInsideViewport(
+        page,
+        compactRestart,
+        'compact restart after sidebar restart',
+      );
       await expect(sidebarRestart).not.toBeFocused();
     });
 
