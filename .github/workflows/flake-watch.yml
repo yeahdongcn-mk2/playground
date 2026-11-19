@@ -1,6 +1,6 @@
 name: Flake watch
 
-# Watch the guarded mobile-webkit framework case for first-run flakiness.
+# Watch the guarded first-run cases for cold-start flakiness.
 # Keeping this workflow on `schedule` / `workflow_dispatch` only means the
 # repeats never lengthen regular push or pull request CI.
 on:
@@ -13,18 +13,20 @@ permissions:
   contents: read
 
 jobs:
-  mobile-webkit-first-run:
-    name: mobile-webkit first-run stability
+  guarded-first-run:
+    name: guarded first-run stability
     runs-on: ubuntu-latest
-    # Five cold runs of the hub case plus dependency install and the build.
+    # Five cold runs of each guarded case plus dependency install and the
+    # build.
     timeout-minutes: 30
     # Issue #213: reuse the pinned official Playwright image from the `verify`
     # job in ci.yml instead of installing WebKit and its apt dependencies at
-    # runtime. The image already contains WebKit, so the scheduled watch has no
-    # `playwright install`, `--with-deps` or apt step. The tag is derived from
-    # `@playwright/test` in package-lock.json and the digest pins the exact
-    # multi-arch image; tests/unit/flake-watch-workflow.test.ts fails when this
-    # drifts from PLAYWRIGHT_IMAGE_PIN or from the verify job.
+    # runtime. The image already contains Chromium and WebKit, so the
+    # scheduled watch has no `playwright install`, `--with-deps` or apt step.
+    # The tag is derived from `@playwright/test` in package-lock.json and the
+    # digest pins the exact multi-arch image;
+    # tests/unit/flake-watch-workflow.test.ts fails when this drifts from
+    # PLAYWRIGHT_IMAGE_PIN or from the verify job.
     #
     # Image pull happens during container setup, before any step: a missing
     # tag/digest or an unreachable registry fails the job there with the Docker
@@ -49,17 +51,23 @@ jobs:
       - name: Production build
         run: npm run build
 
-      - name: Repeat the mobile-webkit hub case five times
+      - name: Repeat the guarded first-run cases five times
         id: flake-watch
         env:
           CI: 'true'
-        # --retries=0 keeps every repeat a first run, so a cold-start failure
-        # cannot be hidden by a retry. --trace=retain-on-failure keeps the
-        # trace even though retries are disabled.
+        # One command guards both cases without widening the grep:
+        # --project=mobile-webkit matches only the *.webkit.spec.ts entry point
+        # (hub and blank canvas) and --project=chromium matches only
+        # framework.spec.ts (reset centres the cursor), because each project
+        # excludes the other project's specs. --retries=0 keeps every repeat a
+        # first run, so a cold-start failure cannot be hidden by a retry.
+        # --trace=retain-on-failure keeps the trace even though retries are
+        # disabled.
         run: |
           npx playwright test \
             --project=mobile-webkit \
-            -g "hub and blank canvas" \
+            --project=chromium \
+            -g "hub and blank canvas|reset centres the cursor and keyboard keeps working afterwards" \
             --repeat-each=5 \
             --retries=0 \
             --trace=retain-on-failure

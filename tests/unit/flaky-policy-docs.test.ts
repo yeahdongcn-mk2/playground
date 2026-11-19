@@ -42,7 +42,7 @@ interface Workflow {
 const ci = parse(read(CI_WORKFLOW_PATH)) as Workflow;
 const verifySteps = ci.jobs?.verify?.steps ?? [];
 const flakeWatch = parse(read(FLAKE_WATCH_WORKFLOW_PATH)) as Workflow;
-const watchSteps = flakeWatch.jobs?.['mobile-webkit-first-run']?.steps ?? [];
+const watchSteps = flakeWatch.jobs?.['guarded-first-run']?.steps ?? [];
 
 function stepNamed(steps: WorkflowStep[], name: string): WorkflowStep | undefined {
   return steps.find((step) => step.name === name);
@@ -124,12 +124,17 @@ describe('flaky policy docs', () => {
 
     expect(Object.keys(flakeWatch.on ?? {}).sort()).toEqual(['schedule', 'workflow_dispatch']);
 
-    const repeated = stepNamed(watchSteps, 'Repeat the mobile-webkit hub case five times');
+    const repeated = stepNamed(watchSteps, 'Repeat the guarded first-run cases five times');
     expect(repeated).toBeDefined();
-    expect(repeated?.run).toContain('--project=mobile-webkit');
-    expect(repeated?.run).toContain('-g "hub and blank canvas"');
+    for (const target of TARGET_CASES) {
+      expect(repeated?.run, target.label).toContain(`--project=${target.projectName}`);
+      expect(repeated?.run, target.label).toContain(target.titleFragment);
+    }
     expect(repeated?.run).toContain('--repeat-each=5');
     expect(repeated?.run).toContain('--retries=0');
+    // §3 must state that the job summary reports the two cases separately
+    // rather than only showing the combined Playwright stats.
+    expect(POLICY).toContain('按用例分别');
   });
 
   it('documents the CI duration and the residual false-negative cost', () => {
@@ -236,7 +241,7 @@ describe('flaky policy docs', () => {
 
     // Issue #213 also moved the scheduled watch into the same pinned image and
     // container options, with the 30-minute budget unchanged.
-    const watchJob = flakeWatch.jobs?.['mobile-webkit-first-run'];
+    const watchJob = flakeWatch.jobs?.['guarded-first-run'];
     const watchContainer = watchJob?.container;
     const watchImage =
       typeof watchContainer === 'string' ? watchContainer : watchContainer?.image;
@@ -333,7 +338,7 @@ describe('flaky policy docs', () => {
     expect(CAPTURE_DOCKERFILE).toContain(`FROM ${pinned.reference}`);
     const containers = [
       ci.jobs?.verify?.container,
-      flakeWatch.jobs?.['mobile-webkit-first-run']?.container,
+      flakeWatch.jobs?.['guarded-first-run']?.container,
     ];
     for (const container of containers) {
       const image = typeof container === 'string' ? container : container?.image;

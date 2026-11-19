@@ -234,6 +234,35 @@ export function collectTargetCases(report) {
 }
 
 /**
+ * First-run outcome counts for every entry of `TARGET_CASES`.
+ *
+ * The scheduled flake-watch repeats each guarded case (`--repeat-each=5`) with
+ * retries disabled, so every result is a first run. Grouping the report by
+ * target lets the job summary report each case separately instead of only the
+ * combined `stats` block, which cannot say which case failed.
+ */
+export function summarizeTargetCases(report) {
+  const cases = collectTargetCases(report);
+  return TARGET_CASES.map((target) => {
+    const targetCases = cases.filter((entry) => entry.targetLabel === target.label);
+    const counts = {
+      passed: 0,
+      failed: 0,
+      flaky: 0,
+      skipped: 0,
+      unknown: 0,
+      total: targetCases.length,
+    };
+    for (const entry of targetCases) {
+      if (Object.hasOwn(counts, entry.outcome)) {
+        counts[entry.outcome] += 1;
+      }
+    }
+    return { target, counts, cases: targetCases };
+  });
+}
+
+/**
  * Verdict for one target. `missing` means the report contains no case for the
  * target at all, which is a gate failure rather than a silent pass.
  */

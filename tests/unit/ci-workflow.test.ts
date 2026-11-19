@@ -309,7 +309,7 @@ describe('CI workflow', () => {
     expect(existsSync(INSTALL_WRAPPER_PATH)).toBe(true);
 
     const flakeWatch = parse(readFileSync(FLAKE_WATCH_WORKFLOW_PATH, 'utf8')) as Workflow;
-    const watchSteps = flakeWatch.jobs?.['mobile-webkit-first-run']?.steps ?? [];
+    const watchSteps = flakeWatch.jobs?.['guarded-first-run']?.steps ?? [];
     for (const step of [...steps, ...watchSteps]) {
       expect(step.run ?? '').not.toContain('scripts/install-playwright-ci.mjs');
     }
