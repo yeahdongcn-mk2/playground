@@ -87,7 +87,7 @@ describe('flaky policy docs', () => {
     expect(POLICY).toContain('retries: 2');
   });
 
-  it('documents the PR gate step and the two first-run cases it protects', () => {
+  it('documents the PR gate step and the three first-run cases it protects', () => {
     const e2eIndex = verifySteps.findIndex((step) => step.name === 'End-to-end tests');
     const gateIndex = verifySteps.findIndex((step) => step.name === 'Check target e2e flakes');
     expect(e2eIndex).toBeGreaterThanOrEqual(0);
@@ -132,7 +132,7 @@ describe('flaky policy docs', () => {
     }
     expect(repeated?.run).toContain('--repeat-each=5');
     expect(repeated?.run).toContain('--retries=0');
-    // §3 must state that the job summary reports the two cases separately
+    // §3 must state that the job summary reports the guarded cases separately
     // rather than only showing the combined Playwright stats.
     expect(POLICY).toContain('按用例分别');
   });

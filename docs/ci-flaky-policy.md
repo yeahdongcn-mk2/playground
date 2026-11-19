@@ -24,14 +24,15 @@ flaky 不等于 passed：它说明用例首跑不稳定，只是这次被重试�
 node scripts/check-e2e-flakes.mjs
 ```
 
-该检查只读取本次 e2e 的 JSON 报告，按 `scripts/lib/e2e-flakes.mjs` 的显式目标列表 `TARGET_CASES` 逐一判定。当前保护两个首跑用例：
+该检查只读取本次 e2e 的 JSON 报告，按 `scripts/lib/e2e-flakes.mjs` 的显式目标列表 `TARGET_CASES` 逐一判定。当前保护三个首跑用例：
 
 | project | 标题包含 | 用例 |
 | --- | --- | --- |
 | `mobile-webkit` | `hub and blank canvas` | `tests/e2e/framework-mobile-cases.ts` 的「hub and blank canvas fit a phone viewport」 |
 | `chromium` | `reset centres the cursor and keyboard keeps working afterwards` | `tests/e2e/framework.spec.ts` 的「reset centres the cursor and keyboard keeps working afterwards」 |
+| `mobile-webkit` | `restarting from the sidebar focuses the visible compact restart on a phone` | `tests/e2e/minesweeper-mobile-touch-cases.ts` 的「restarting from the sidebar focuses the visible compact restart on a phone」 |
 
-两个目标分别判定，**任一目标**出问题都会让门禁失败（exit 1）：
+三个目标分别判定，**任一目标**出问题都会让门禁失败（exit 1）：
 
 - 目标用例首跑通过：该目标通过。
 - 目标用例 flaky：检查失败，并打印 project / 用例标题、重试次数、首跑错误和报告路径。
@@ -45,22 +46,22 @@ node scripts/check-e2e-flakes.mjs
 
 ## 3. 每日 flake-watch 巡检
 
-PR CI 不重复跑目标用例；两个受保护用例的首跑稳定性由独立的 `.github/workflows/flake-watch.yml`（workflow 名 `Flake watch`）每天巡检：
+PR CI 不重复跑目标用例；三个受保护用例的首跑稳定性由独立的 `.github/workflows/flake-watch.yml`（workflow 名 `Flake watch`）每天巡检：
 
 - 只由 `schedule`（cron `17 3 * * *`，UTC）和手动 `workflow_dispatch` 触发，没有 `push` / `pull_request` 触发；
-- job `guarded first-run stability` 的步骤 `Repeat the guarded first-run cases five times` 用一条命令同时覆盖两个项目。`--project=mobile-webkit` 只匹配 `*.webkit.spec.ts` 入口（`hub and blank canvas`），`--project=chromium` 只匹配 `framework.spec.ts`（`reset centres the cursor`），两个 project 各自只跑自己的 spec：
+- job `guarded first-run stability` 的步骤 `Repeat the guarded first-run cases five times` 用一条命令同时覆盖两个项目。`--project=mobile-webkit` 只匹配 `*.webkit.spec.ts` 入口（`hub and blank canvas` 与 `restarting from the sidebar`），`--project=chromium` 只匹配 `framework.spec.ts`（`reset centres the cursor`），两个 project 各自只跑自己的 spec：
 
 ```bash
 npx playwright test \
   --project=mobile-webkit \
   --project=chromium \
-  -g "hub and blank canvas|reset centres the cursor and keyboard keeps working afterwards" \
+  -g "hub and blank canvas|reset centres the cursor and keyboard keeps working afterwards|restarting from the sidebar focuses the visible compact restart on a phone" \
   --repeat-each=5 \
   --retries=0 \
   --trace=retain-on-failure
 ```
 
-`--repeat-each=5 --retries=0` 让两个用例各 5 次重复都按首跑计，任何一次冷启动失败都不会被重试掩盖。步骤 `Summarize first-run results` 调用 `node scripts/flake-watch-summary.mjs`，读取 `test-results/e2e-report.json` 后**按用例分别**给出该用例 5 次首跑的首跑通过 / 失败 / 重试后通过 / 跳过；报告里某个用例缺失时 summary 会显式标记「缺失」，不会当成通过。两份结果都保存在同一份 JSON 报告里，失败的 trace、截图与报告通过 `test-results/` 上传保留；job summary 同时写明重复次数、重试次数与步骤结果。
+`--repeat-each=5 --retries=0` 让三个用例各 5 次重复都按首跑计，任何一次冷启动失败都不会被重试掩盖。步骤 `Summarize first-run results` 调用 `node scripts/flake-watch-summary.mjs`，读取 `test-results/e2e-report.json` 后**按用例分别**给出该用例 5 次首跑的首跑通过 / 失败 / 重试后通过 / 跳过；报告里某个用例缺失时 summary 会显式标记「缺失」，不会当成通过。三个用例的结果都保存在同一份 JSON 报告里，失败的 trace、截图与报告通过 `test-results/` 上传保留；job summary 同时写明重复次数、重试次数与步骤结果。
 
 该巡检是定时任务，不在 PR 关键路径上；PR 的门禁仍只依赖当次 e2e 的 JSON 报告。
 
@@ -81,7 +82,7 @@ Issue #213 起，`ci.yml` 的 `verify` job 与 `.github/workflows/flake-watch.ym
 - **容器内 git 信任目录**：`actions/checkout` 把 `safe.directory` 写进临时 HOME（日志：`Temporarily overriding HOME=...`），而 `run` 步骤使用容器持久的 `/github/home`；容器以 root 运行在 host 拥有的 workspace mount 上，因此 pre-commit 的 git 调用会报 `dubious ownership`（[run 43561619210](https://github.com/yeahdongcn-mk2/playground/actions/runs/43561619210)）。checkout 之后新增一步 `git config --global --add safe.directory "$GITHUB_WORKSPACE"`，把信任目录持久化。
 - **容器默认 shell**：GitHub container job 的 `run` 默认用 `sh`（dash），不支持 `set -o pipefail`。因此 `Install pre-commit` 与 `WebKit narrow screenshot smoke test` 都显式声明 `shell: bash`，保留 `pipefail` 的失败语义。
 - **已移除的步骤**：官方镜像内置 Chromium、WebKit、Node 与 WebKit 所需的系统依赖，因此 `verify` 不再有 `Configure apt Acquire retries and timeouts`、`Cache Playwright browsers`、`Install Playwright Chromium and WebKit` 三个步骤，也不再使用 `actions/setup-python`；`flake-watch` 同样不再有 `Configure apt Acquire retries and timeouts`、`Cache Playwright browsers`、`Install Playwright WebKit`，也不再缓存 `~/.cache/ms-playwright`。两个 job 的日志里都不会再出现 `playwright install`、`--with-deps` 或 apt GET。
-- **定时巡检**：`flake-watch.yml` 的 `guarded-first-run` job 复用同一个 `container.image` 与 `--ipc=host`，30 分钟预算不变；它现在同时巡检 mobile-webkit 的 `hub and blank canvas` 与 chromium 的 `reset centres the cursor`，同样没有浏览器安装、apt 或 `~/.cache/ms-playwright` 缓存步骤，`--repeat-each=5 --retries=0`、`flake-watch-summary.mjs` 的按用例汇总与 `test-results/` 产物上传保持不变。镜像在容器启动时拉取，首跑之前只剩 checkout、setup-node、`npm ci` 与生产构建。
+- **定时巡检**：`flake-watch.yml` 的 `guarded-first-run` job 复用同一个 `container.image` 与 `--ipc=host`，30 分钟预算不变；它现在同时巡检 mobile-webkit 的 `hub and blank canvas`、`restarting from the sidebar` 与 chromium 的 `reset centres the cursor`，同样没有浏览器安装、apt 或 `~/.cache/ms-playwright` 缓存步骤，`--repeat-each=5 --retries=0`、`flake-watch-summary.mjs` 的按用例汇总与 `test-results/` 产物上传保持不变。镜像在容器启动时拉取，首跑之前只剩 checkout、setup-node、`npm ci` 与生产构建。
 - **flake-watch 热缓存对照**：本改动的 [run 43567248722](https://github.com/yeahdongcn-mk2/playground/actions/runs/43567248722) 从分支 `agent/plan-213-t1` 用 `workflow_dispatch` 触发，job 1m10s（镜像拉取 20s、5 次首跑 33.3s），5 次首跑全部通过（单次 4.7–8.9s），日志无 `playwright install`、`--with-deps` 或 apt GET，远低于 30 分钟预算；浏览器来自镜像的 `PLAYWRIGHT_BROWSERS_PATH=/ms-playwright`，但这次只复用了 `setup-node` 的 npm 依赖缓存，不能作为无缓存场景的验收证据。
 - **flake-watch 无缓存冷启动验收**：先清掉该 job 使用的全部 npm 缓存（`gh cache list --key node-cache-Linux-x64-npm-` 为空），再从分支 `agent/plan-213-t1` 用 `workflow_dispatch` 触发 [run 43569639986](https://github.com/yeahdongcn-mk2/playground/actions/runs/43569639986)（该 run 的 head 为 rebase 前的 `b4d3ce6`，`flake-watch.yml` 与最终版本一致）。`Run actions/setup-node@v4` 日志为 `npm cache is not found`，没有 `Cache hit` / `Cache restored`；`npm ci` 完整安装后，post 步骤才出现 `Cache saved with the key: node-cache-Linux-x64-npm-...`，证明本次是冷缓存首跑。job 1m00s（Initialize containers 24s、`npm ci` 3s、生产构建 1s、5 次首跑 22s），5 次首跑全部通过（单次 5.5 / 3.2 / 3.3 / 3.3 / 3.2 秒），日志无 `playwright install`、`--with-deps` 或 apt GET，远低于 30 分钟预算。
 - **冷/热验收**：本修复的 [run 43563009824](https://github.com/yeahdongcn-mk2/playground/actions/runs/43563009824) 用两次 attempt 验收：attempt 1 为新推无缓存（`npm cache is not found`、`Cache not found for input keys: pre-commit-container-...`，verify job 4m22s，其中 e2e 3m09s），[attempt 2](https://github.com/yeahdongcn-mk2/playground/actions/runs/43563009824/attempts/2) 为有缓存重跑（`Cache restored from key: pre-commit-container-...`，verify job 4m18s，pre-commit 检查 0s，冷缓存为 3s），两次全部步骤通过且远低于 20 分钟。两次日志均没有 `playwright install`、`--with-deps` 或 apt GET；`Install pre-commit`、`Screenshot doc dimensions`、`End-to-end tests`、`Check target e2e flakes`、`WebKit narrow screenshot smoke test` 均成功。
@@ -103,6 +104,6 @@ Issue #213 起，`ci.yml` 的 `verify` job 与 `.github/workflows/flake-watch.ym
 出现 flaky / failed 时先看证据，再决定修复：
 
 1. 先看 Playwright 输出里的 flaky 标注与 `Check target e2e flakes` 打印的首跑错误，确认失败发生在哪一步；再看 `test-results/e2e-report.json`、失败截图与保留的 trace。
-2. 本地复现：`CI=true npm run test:e2e` 后运行 `node scripts/check-e2e-flakes.mjs`；需要看两个受保护用例的首跑稳定性时运行 `npx playwright test --project=mobile-webkit --project=chromium -g "hub and blank canvas|reset centres the cursor and keyboard keeps working afterwards" --repeat-each=5 --retries=0`，或在 Actions 手动触发 `Flake watch`。
+2. 本地复现：`CI=true npm run test:e2e` 后运行 `node scripts/check-e2e-flakes.mjs`；需要看三个受保护用例的首跑稳定性时运行 `npx playwright test --project=mobile-webkit --project=chromium -g "hub and blank canvas|reset centres the cursor and keyboard keeps working afterwards|restarting from the sidebar focuses the visible compact restart on a phone" --repeat-each=5 --retries=0`，或在 Actions 手动触发 `Flake watch`。
 3. 修复根因：改为等待确定的 settle 条件、固定 seed / tick、补充失败诊断或消除共享状态；不要通过放宽断言、跳过用例或加大超时来掩盖 flaky。
 4. 修复后重新运行受影响的检查；如果只是重跑碰巧变绿，不能当作已修复。

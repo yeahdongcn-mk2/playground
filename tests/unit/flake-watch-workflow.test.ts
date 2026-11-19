@@ -30,7 +30,7 @@ const TEST_COMMAND_TOKENS = [
   'npx playwright test',
   '--project=mobile-webkit',
   '--project=chromium',
-  '-g "hub and blank canvas|reset centres the cursor and keyboard keeps working afterwards"',
+  '-g "hub and blank canvas|reset centres the cursor and keyboard keeps working afterwards|restarting from the sidebar focuses the visible compact restart on a phone"',
   `--repeat-each=${REPEAT_COUNT}`,
   '--retries=0',
 ];
@@ -210,14 +210,14 @@ describe('flake-watch workflow', () => {
     }
   });
 
-  it('repeats both guarded first-run cases five times without retries', () => {
+  it('repeats all guarded first-run cases five times without retries', () => {
     const check = requireStep(isFlakeCheck, 'the repeated first-run check');
     expect(check.id).toBe(TEST_STEP_ID);
 
     for (const token of TEST_COMMAND_TOKENS) {
       expect(check.run, `the check command should contain "${token}"`).toContain(token);
     }
-    // Both guarded cases must be selected by name, and each project must match
+    // Every guarded case must be selected by name, and each project must match
     // only its own spec (mobile-webkit only *.webkit.spec.ts entry points,
     // chromium without mobile/webkit specs), so the grep cannot widen silently.
     for (const target of TARGET_CASES) {

@@ -7,8 +7,9 @@ import { readFileSync } from 'node:fs';
  * whole run, so enabling it would also turn the existing flaky cases in other
  * projects into PR failures (issue #164). Instead this module reads the JSON
  * report of the current run and only inspects the explicit targets in
- * `TARGET_CASES`: the framework phone case introduced for issue #117 and the
- * blank canvas reset case from issue #339.
+ * `TARGET_CASES`: the framework phone case introduced for issue #117, the
+ * blank canvas reset case from issue #339 and the minesweeper phone restart
+ * case from issue #344.
  *
  * Retry policy, assertions and timeouts stay untouched: other cases keep
  * being recorded as flaky by `retries: 2`, while a report where a target case
@@ -33,6 +34,12 @@ export const TARGET_CASES = [
     label: 'blank canvas reset（reset centres the cursor）',
     projectName: 'chromium',
     titleFragment: 'reset centres the cursor and keyboard keeps working afterwards',
+  },
+  {
+    label: 'minesweeper 手机端重开焦点（restarting from the sidebar）',
+    projectName: 'mobile-webkit',
+    titleFragment:
+      'restarting from the sidebar focuses the visible compact restart on a phone',
   },
 ];
 
