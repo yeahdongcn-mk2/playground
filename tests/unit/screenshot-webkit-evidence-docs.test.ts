@@ -1,9 +1,11 @@
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const ROOT_README = readFileSync(join(ROOT, 'README.md'), 'utf8');
 const SCREENSHOTS_README = readFileSync(
   join(ROOT, 'docs', 'screenshots', 'README.md'),
   'utf8',
@@ -41,6 +43,16 @@ function subsection(text: string, heading: string): string {
   const candidates = [nextLevel2, nextLevel3].filter((index) => index >= 0);
   const end = candidates.length === 0 ? text.length : Math.min(...candidates);
   return text.slice(start, end);
+}
+
+/** The text of one top-level bullet, up to the next top-level bullet. */
+function topLevelBullet(text: string, prefix: string): string {
+  const start = text.indexOf(prefix);
+  if (start < 0) {
+    throw new Error(`missing top-level bullet: ${prefix}`);
+  }
+  const end = text.indexOf('\n- ', start + prefix.length);
+  return text.slice(start, end === -1 ? undefined : end);
 }
 
 const HISTORICAL = section(SCREENSHOTS_README, HISTORICAL_HEADING);
@@ -121,6 +133,12 @@ const MINESWEEPER_SCORES_SHA256 =
   '012a7bf09d4f8d8c3b8a38ff34f362def21a2dc2c3a076f5be027d3cdc89fb12';
 const MINESWEEPER_SCORES_CAPTURE_COMMIT =
   '2cc6f87d3bcc5fba0e7db5b02df7e5a73dce1f40';
+const SNAKE_CONTAINER_COMMAND =
+  'npm run screenshots:container -- screenshots:snake:webkit';
+const SNAKE_ACCEPTANCE = topLevelBullet(
+  WEBKIT_HISTORICAL,
+  '- 贪食蛇并发负载验收（Issue #342 t1）',
+);
 
 /**
  * The indented children of one top-level bullet.
@@ -358,6 +376,94 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
       expect(capture?.provenance.captureCommit).toBe(
         HUB_SNAKE_CAPTURE_COMMIT,
       );
+    }
+  });
+
+  it('keeps the snake README, manifest and committed PNG in agreement', () => {
+    // The acceptance record must describe the four settle stages in execution
+    // order and the measured 4-run evidence, not just name the file.
+    expect(SNAKE_ACCEPTANCE).toContain(SNAKE_CONTAINER_COMMAND);
+    expect(SNAKE_ACCEPTANCE).toContain(SNAKE_SHA256);
+    const orderedSeams = [
+      'waitForSnakeReady',
+      'settleWebkitReadyPaint',
+      'repaintWebkitReadyOverlay',
+      '{ stable: true }',
+    ];
+    let cursor = -1;
+    for (const seam of orderedSeams) {
+      const next = SNAKE_ACCEPTANCE.indexOf(seam, cursor + 1);
+      expect(next, `missing or out-of-order seam: ${seam}`).toBeGreaterThan(
+        cursor,
+      );
+      cursor = next;
+    }
+    expect(SNAKE_ACCEPTANCE).toContain('连续两帧');
+    expect(SNAKE_ACCEPTANCE).toContain('原子落盘');
+    expect(SNAKE_ACCEPTANCE).toContain('抛错');
+    expect(SNAKE_ACCEPTANCE).toContain('连续 4 跑');
+    expect(SNAKE_ACCEPTANCE).toContain('宿主 CPU 占用进程');
+    expect(SNAKE_ACCEPTANCE).toContain('3.16');
+    expect(SNAKE_ACCEPTANCE).toContain('5.70');
+    expect(SNAKE_ACCEPTANCE).toContain('--log');
+    expect(SNAKE_ACCEPTANCE).toContain('退出 0');
+    expect(SNAKE_ACCEPTANCE).toContain('capture-env 指纹');
+
+    // README manifest table, manifest entry and committed PNG agree byte for
+    // byte; a stale sha in either document or a re-captured PNG fails here.
+    const committedSha256 = createHash('sha256')
+      .update(readFileSync(join(ROOT, 'docs', 'screenshots', SNAKE)))
+      .digest('hex');
+    expect(committedSha256).toBe(SNAKE_SHA256);
+
+    const manifest = JSON.parse(
+      readFileSync(
+        join(ROOT, 'docs', 'screenshots', 'capture-sha256-manifest.json'),
+        'utf8',
+      ),
+    ) as {
+      captures: Array<{
+        file: string;
+        sha256: string;
+        command: string;
+        provenance: { captureCommit: string };
+      }>;
+    };
+    const capture = manifest.captures.find((entry) => entry.file === SNAKE);
+    expect(capture, `missing manifest entry for ${SNAKE}`).toBeDefined();
+    expect(capture?.sha256).toBe(committedSha256);
+    expect(capture?.command).toBe(SNAKE_CONTAINER_COMMAND);
+    expect(capture?.provenance.captureCommit).toBe(HUB_SNAKE_CAPTURE_COMMIT);
+
+    const manifestRow = SCREENSHOTS_README.split('\n').find(
+      (line) =>
+        line.startsWith('|') &&
+        line.includes(`\`${SNAKE}\``) &&
+        line.includes(`\`${SNAKE_SHA256}\``),
+    );
+    expect(
+      manifestRow,
+      'missing docs/screenshots/README.md manifest row for the snake PNG',
+    ).toBeDefined();
+    expect(manifestRow).toContain(`\`${SNAKE_CONTAINER_COMMAND}\``);
+    expect(manifestRow).toContain(`\`${HUB_SNAKE_CAPTURE_COMMIT}\``);
+
+    // The root README command line documents the same command and seams.
+    const commandRow = ROOT_README.split('\n').find((line) =>
+      line.startsWith('| `npm run screenshots:snake:webkit`'),
+    );
+    expect(
+      commandRow,
+      'missing README.md screenshots:snake:webkit command row',
+    ).toBeDefined();
+    expect(commandRow).toContain(SNAKE_CONTAINER_COMMAND);
+    for (const seam of [
+      'settleWebkitReadyPaint',
+      'repaintWebkitReadyOverlay',
+      '{ stable: true }',
+      '连续两帧',
+    ]) {
+      expect(commandRow).toContain(seam);
     }
   });
 
