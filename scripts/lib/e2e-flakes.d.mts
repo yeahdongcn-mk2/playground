@@ -52,7 +52,15 @@ export type TargetCaseOutcome = 'passed' | 'flaky' | 'failed' | 'skipped' | 'unk
 
 export type E2eFlakesStatus = 'passed' | 'flaky' | 'failed' | 'skipped' | 'missing' | 'unknown';
 
+/** One guarded first-run case: project, title fragment and a readable label. */
+export interface E2eFlakeTarget {
+  label: string;
+  projectName: string;
+  titleFragment: string;
+}
+
 export interface TargetE2eCase {
+  targetLabel: string;
   title: string;
   projectName: string;
   file: string;
@@ -62,14 +70,21 @@ export interface TargetE2eCase {
   firstError: string | null;
 }
 
-export interface E2eFlakesAnalysis {
+/** Verdict for one entry of `TARGET_CASES`. */
+export interface TargetE2eFlakesAnalysis {
+  target: E2eFlakeTarget;
   status: E2eFlakesStatus;
   cases: TargetE2eCase[];
 }
 
+export interface E2eFlakesAnalysis {
+  status: E2eFlakesStatus;
+  targets: TargetE2eFlakesAnalysis[];
+  cases: TargetE2eCase[];
+}
+
 export const DEFAULT_E2E_REPORT_PATH: string;
-export const TARGET_PROJECT_NAME: string;
-export const TARGET_TITLE_FRAGMENT: string;
+export const TARGET_CASES: E2eFlakeTarget[];
 
 export class E2eFlakesError extends Error {}
 
