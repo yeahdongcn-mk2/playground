@@ -1115,7 +1115,7 @@ describe('shared hub screenshot ownership and full-page guard (Issues #161, #218
     const source = captureSource('capture-minesweeper-screenshots.mjs');
     const states = [
       ...source.matchAll(
-        /capture\(\w+, touchMobileName\(prefix, '([a-z]+)'\), (true|false)\)/g,
+        /capture\(\w+, touchMobileName\(prefix, '([a-z]+)'\), (true|false)(?:, [A-Za-z_$][\w$]*)?\)/g,
       ),
     ];
 

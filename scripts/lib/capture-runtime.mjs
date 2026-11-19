@@ -401,6 +401,163 @@ export function captureRecord(name, engine, viewport, colorScheme = 'dark', redu
   return `${name}: engine=${engine}, viewport=${size}, theme=${colorScheme}, reducedMotion=${reducedMotion}`;
 }
 
+/** Consecutive whole-image frames the WebKit READY capture must repeat. */
+export const READY_CAPTURE_STABLE_FRAMES = 2;
+
+/** Delay between the frames checked for {@link READY_CAPTURE_STABLE_FRAMES}. */
+export const READY_CAPTURE_STABLE_INTERVAL_MS = 250;
+
+/** Extra frames the stable-frame check may read before giving up. */
+export const READY_CAPTURE_STABLE_ATTEMPTS = 5;
+
+function normalizeScreenshotBytes(bytes) {
+  return Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+}
+
+/**
+ * Read whole-image frames until `stableFrames` consecutive screenshots are
+ * byte-identical (Issue #318).
+ *
+ * A single screenshot can race a pending repaint: the same settled page then
+ * exposes two byte-identical frames, while a capture taken mid-repaint differs
+ * by a handful of 1-LSB pixels. Capturing through this check makes that race
+ * fail loudly instead of committing a transient frame as evidence. It detects
+ * a sampled frame change within this run only; the caller's throwaway warm-up
+ * page is what settles the first-page raster variant across runs.
+ * With the default `stableFrames === 1` this is the previous single-shot
+ * capture, so existing callers and their bytes stay unchanged.
+ */
+async function captureStableFramesBytes(
+  page,
+  {
+    name,
+    fullPage,
+    animations,
+    stableFrames,
+    stableIntervalMs,
+    stableAttempts,
+  },
+) {
+  if (!Number.isInteger(stableFrames) || stableFrames < 1) {
+    throw new TypeError(
+      `captureScreenshot(${name}): stableFrames must be a positive integer, got ${String(stableFrames)}.`,
+    );
+  }
+  if (!Number.isInteger(stableAttempts) || stableAttempts < 0) {
+    throw new TypeError(
+      `captureScreenshot(${name}): stableAttempts must be a non-negative integer, got ${String(stableAttempts)}.`,
+    );
+  }
+  if (!Number.isInteger(stableIntervalMs) || stableIntervalMs <= 0) {
+    throw new TypeError(
+      `captureScreenshot(${name}): stableIntervalMs must be a positive integer, got ${String(stableIntervalMs)}.`,
+    );
+  }
+  let bytes = normalizeScreenshotBytes(
+    await page.screenshot({ fullPage, animations }),
+  );
+  if (stableFrames === 1) {
+    return bytes;
+  }
+
+  let identical = 1;
+  const observed = [createHash('sha256').update(bytes).digest('hex')];
+  for (let attempt = 0; attempt < stableAttempts; attempt += 1) {
+    await page.waitForTimeout(stableIntervalMs);
+    const next = normalizeScreenshotBytes(
+      await page.screenshot({ fullPage, animations }),
+    );
+    observed.push(createHash('sha256').update(next).digest('hex'));
+    if (Buffer.compare(next, bytes) === 0) {
+      identical += 1;
+      if (identical >= stableFrames) {
+        return next;
+      }
+    } else {
+      identical = 1;
+    }
+    bytes = next;
+  }
+
+  throw new Error(
+    `Screenshot ${name} did not produce ${stableFrames} consecutive byte-identical ` +
+      `frames after ${stableAttempts + 1} capture${stableAttempts === 0 ? '' : 's'} ` +
+      `(sha256: ${observed.join(', ')}). ` +
+      'No file was written; wait for the pending repaint or widen the stability window ' +
+      'instead of committing a transient frame.',
+  );
+}
+
+/** Screenshots the stable-capture loop may take before it gives up. */
+export const CAPTURE_STABLE_ATTEMPTS = 4;
+
+/** Coerce a Playwright screenshot result to a Buffer. */
+function screenshotBuffer(bytes) {
+  return Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+}
+
+/**
+ * Capture until two consecutive screenshots are byte-identical (Issue #199).
+ *
+ * A single screenshot can run ahead of WebKit's compositor under concurrent
+ * host load: the sticky header seam removes the first-paint header drift, but
+ * the READY overlay's blurred backdrop and card text can still be rasterised
+ * on a later paint. Taking one screenshot is therefore unprovable; this seam
+ * settles and re-captures until the pixels stop changing, so the bytes written
+ * to disk are a stable raster rather than a sample of an in-flight one. It
+ * throws instead of writing an unstable image when the page never settles.
+ *
+ * The initial screenshot is taken after a settle, and every later screenshot
+ * follows another settle, so a caller that has not pre-settled still starts
+ * from a painted frame. Two consecutive identical frames are treated as
+ * stable: a raster that genuinely persists across a whole settle window is
+ * indistinguishable from a finished one at this layer.
+ *
+ * The loop is opt-in per capture: existing call sites keep their single
+ * screenshot (and therefore their byte-identical evidence) unchanged.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {{
+ *   fullPage?: boolean,
+ *   animations?: 'allow' | 'disabled',
+ *   attempts?: number,
+ *   settle?: (page: import('@playwright/test').Page) => Promise<void>,
+ * }} [options]
+ * @returns {Promise<Buffer>}
+ */
+export async function captureStableBytes(
+  page,
+  {
+    fullPage = false,
+    animations = 'disabled',
+    attempts = CAPTURE_STABLE_ATTEMPTS,
+    settle = settleCapturePaint,
+  } = {},
+) {
+  if (!Number.isInteger(attempts) || attempts < 2) {
+    throw new RangeError(
+      `captureStableBytes needs at least two screenshots; got ${String(attempts)}.`,
+    );
+  }
+
+  await settle(page);
+  let previous = screenshotBuffer(await page.screenshot({ fullPage, animations }));
+  for (let taken = 2; taken <= attempts; taken += 1) {
+    await settle(page);
+    const next = screenshotBuffer(await page.screenshot({ fullPage, animations }));
+    if (next.equals(previous)) {
+      return next;
+    }
+    previous = next;
+  }
+
+  throw new Error(
+    `The capture did not stabilise after ${attempts} screenshots: no two consecutive ` +
+      'screenshots were byte-identical. The page was still repainting; re-run the capture ' +
+      'on an idle machine instead of committing an unstable image.',
+  );
+}
+
 /**
  * Take one screenshot and log the engine / viewport / theme record. Callers
  * pass the same options as `page.screenshot`, so the Chromium bytes stay
@@ -414,17 +571,21 @@ export function captureRecord(name, engine, viewport, colorScheme = 'dark', redu
  * PNG atomically (temporary file + rename) and, when the new sha256 differs
  * from the manifest, prints the manifest / docs checklist while leaving the
  * manifest untouched so `npm run verify:screenshots:sha256` keeps failing.
- * Files the manifest does not record keep the previous `page.screenshot`
- * write path unchanged.
+ * Files the manifest does not record keep the previous single-shot
+ * `page.screenshot` write path when neither `stable` nor `stableFrames > 1`
+ * is set; either opt-in uses the same stable buffer + atomic write as a
+ * manifested file.
  *
- * `stable: true` replaces the single screenshot with {@link captureStableBytes},
- * which waits for two byte-identical consecutive screenshots before writing.
- * Files the manifest records use the same stable buffer for the atomic write;
- * files it does not record keep the single `page.screenshot` path unless
- * `stable` is set.
- * The 2048 WebKit READY capture opts in because its blurred overlay can still
- * be mid-raster under concurrent host load; every other call site keeps the
+ * `stable: true` (Issue #199) replaces the single screenshot with
+ * {@link captureStableBytes}: two consecutive byte-identical screenshots after
+ * {@link settleCapturePaint}, for the 2048 WebKit READY overlay that can still
+ * be mid-raster under concurrent host load. Every other call site keeps the
  * single-screenshot path and therefore its existing bytes.
+ *
+ * `stableFrames > 1` (Issue #318) uses the interval-based
+ * {@link captureStableFramesBytes} instead; the minesweeper WebKit READY
+ * capture passes {@link READY_CAPTURE_STABLE_FRAMES} so two consecutive
+ * identical frames are required before the PNG is written.
  */
 export async function captureScreenshot(
   page,
@@ -437,6 +598,9 @@ export async function captureScreenshot(
     reducedMotion = 'reduce',
     animations = 'disabled',
     stable = false,
+    stableFrames = 1,
+    stableIntervalMs = READY_CAPTURE_STABLE_INTERVAL_MS,
+    stableAttempts = READY_CAPTURE_STABLE_ATTEMPTS,
     target,
     manifest,
     manifestPath = resolve(CAPTURE_REPO_ROOT, DEFAULT_MANIFEST_PATH),
@@ -454,10 +618,20 @@ export async function captureScreenshot(
     parsedManifest === null ? null : findSha256ManifestCapture(parsedManifest, name);
 
   if (capture === null) {
-    // Unrecorded evidence: keep the existing write path byte-for-byte unless
-    // the caller explicitly asked for the stability loop.
+    // Unrecorded evidence: keep the existing path byte-for-byte unless the
+    // caller explicitly asks for a stability check.
     if (stable) {
       const buffer = await captureStableBytes(page, { fullPage, animations });
+      writeFileAtomically(path, buffer, fileOperations);
+    } else if (stableFrames !== 1) {
+      const buffer = await captureStableFramesBytes(page, {
+        name,
+        fullPage,
+        animations,
+        stableFrames,
+        stableIntervalMs,
+        stableAttempts,
+      });
       writeFileAtomically(path, buffer, fileOperations);
     } else {
       await page.screenshot({ path, fullPage, animations });
@@ -489,10 +663,18 @@ export async function captureScreenshot(
 
   // The guard passed: capture to memory first, so a failing screenshot never
   // replaces the committed PNG, then write it atomically in the same directory.
-  // The stability loop is used by captures whose compositor can lag under load.
   const buffer = stable
     ? await captureStableBytes(page, { fullPage, animations })
-    : screenshotBuffer(await page.screenshot({ fullPage, animations }));
+    : stableFrames !== 1
+      ? await captureStableFramesBytes(page, {
+          name,
+          fullPage,
+          animations,
+          stableFrames,
+          stableIntervalMs,
+          stableAttempts,
+        })
+      : normalizeScreenshotBytes(await page.screenshot({ fullPage, animations }));
   writeFileAtomically(path, buffer, fileOperations);
 
   const actualSha256 = createHash('sha256').update(buffer).digest('hex');
@@ -673,11 +855,8 @@ export const CAPTURE_SETTLE_TIMEOUT_MS = 300;
 /**
  * Wait until fonts, two animation frames and a short fallback timeout settle.
  *
- * The deterministic READY seam below and the existing 2048 plays share this
- * contract, so their deterministic conditions are identical. The timeout only
- * keeps the Phaser loop as a fallback; the frames commit the paint triggered by
- * the last state change, so the result does not depend on a fixed wall-clock
- * delay alone.
+ * Shared by the deterministic READY seams so they wait exactly like the
+ * already deterministic playing / gameover captures.
  */
 export async function settleCapturePaint(page) {
   await page.evaluate(() => document.fonts.ready);
@@ -700,91 +879,21 @@ export async function settleCapturePaint(page) {
   await page.waitForTimeout(CAPTURE_SETTLE_TIMEOUT_MS);
 }
 
-/** Screenshots the stable-capture loop may take before it gives up. */
-export const CAPTURE_STABLE_ATTEMPTS = 4;
-
-/** Coerce a Playwright screenshot result to a Buffer. */
-function screenshotBuffer(bytes) {
-  return Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
-}
-
 /**
- * Capture until two consecutive screenshots are byte-identical (Issue #199).
+ * Deterministic first-paint seam for the WebKit READY captures (Issue #199 /
+ * #318).
  *
- * A single screenshot can run ahead of WebKit's compositor under concurrent
- * host load: the sticky header seam removes the first-paint header drift, but
- * the READY overlay's blurred backdrop and card text can still be rasterised
- * on a later paint. Taking one screenshot is therefore unprovable; this seam
- * settles and re-captures until the pixels stop changing, so the bytes written
- * to disk are a stable raster rather than a sample of an in-flight one. It
- * throws instead of writing an unstable image when the page never settles.
+ * A fresh browser can rasterise the sticky site header in two subtly different
+ * ways: the same DOM boxes and board differ by a small number of pixels with a
+ * per-channel difference of one. A scroll round-trip drives the sticky header
+ * through its normal repaint path and converges on one rasterisation. The
+ * position is restored to 0 so the screenshot still shows the top of the page;
+ * {@link settleCapturePaint} then waits for fonts and frames.
  *
- * The initial screenshot is taken after a settle, and every later screenshot
- * follows another settle, so a caller that has not pre-settled still starts
- * from a painted frame. Two consecutive identical frames are treated as
- * stable: a raster that genuinely persists across a whole settle window is
- * indistinguishable from a finished one at this layer.
- *
- * The loop is opt-in per capture: existing call sites keep their single
- * screenshot (and therefore their byte-identical evidence) unchanged.
- *
- * @param {import('@playwright/test').Page} page
- * @param {{
- *   fullPage?: boolean,
- *   animations?: 'allow' | 'disabled',
- *   attempts?: number,
- *   settle?: (page: import('@playwright/test').Page) => Promise<void>,
- * }} [options]
- * @returns {Promise<Buffer>}
- */
-export async function captureStableBytes(
-  page,
-  {
-    fullPage = false,
-    animations = 'disabled',
-    attempts = CAPTURE_STABLE_ATTEMPTS,
-    settle = settleCapturePaint,
-  } = {},
-) {
-  if (!Number.isInteger(attempts) || attempts < 2) {
-    throw new RangeError(
-      `captureStableBytes needs at least two screenshots; got ${String(attempts)}.`,
-    );
-  }
-
-  await settle(page);
-  let previous = screenshotBuffer(await page.screenshot({ fullPage, animations }));
-  for (let taken = 2; taken <= attempts; taken += 1) {
-    await settle(page);
-    const next = screenshotBuffer(await page.screenshot({ fullPage, animations }));
-    if (next.equals(previous)) {
-      return next;
-    }
-    previous = next;
-  }
-
-  throw new Error(
-    `The capture did not stabilise after ${attempts} screenshots: no two consecutive ` +
-      'screenshots were byte-identical. The page was still repainting; re-run the capture ' +
-      'on an idle machine instead of committing an unstable image.',
-  );
-}
-
-/**
- * Deterministic first-paint seam for the WebKit 2048 READY capture (Issue #199).
- *
- * A fresh WebKit browser can rasterise the sticky site header in two subtly
- * different ways on its first paint: about 1833 pixels across the header band
- * differ by at most one channel value, while the DOM boxes and the board stay
- * identical. A scroll round-trip drives the sticky header through its normal
- * repaint path and converges on one rasterisation, after which consecutive
- * fixed-container runs are byte-identical. The position is restored to 0 so the
- * screenshot still shows the top of the page; {@link settleCapturePaint} then
- * waits for fonts and frames.
- *
- * Only the READY capture uses this seam. The playing / gameover evidence is
- * already deterministic and its committed bytes must not change, so this
- * function must never be wired into those scenes.
+ * Both the 2048 and minesweeper READY captures use this seam. The minesweeper
+ * caller additionally loads a throwaway warm-up page so the committed READY
+ * page is not the browser's first page. The playing / lost / won (or gameover)
+ * evidence is already deterministic and must never be wired into those scenes.
  */
 export async function settleWebkitReadyPaint(page, { offset = 200 } = {}) {
   await page.evaluate((distance) => window.scrollTo(0, distance), offset);
@@ -806,8 +915,8 @@ export async function settleWebkitReadyPaint(page, { offset = 200 } = {}) {
  * canonical path. The overlay is hidden only between frames, never in a
  * captured image.
  *
- * Only the READY capture uses this seam; playing / gameover bytes must not
- * change.
+ * The 2048 READY capture and the minesweeper lost WebKit capture use this
+ * seam; playing / gameover bytes must not change.
  */
 export async function repaintWebkitReadyOverlay(
   page,

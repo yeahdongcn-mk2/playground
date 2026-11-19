@@ -104,9 +104,15 @@ interface FakePageOptions {
   bytes?: Buffer;
   context?: object;
   screenshot?: (options: Record<string, unknown>) => Promise<Buffer>;
+  waitForTimeout?: (milliseconds: number) => Promise<void>;
 }
 
-function fakePage({ bytes = Buffer.from('captured png bytes'), context, screenshot }: FakePageOptions = {}) {
+function fakePage({
+  bytes = Buffer.from('captured png bytes'),
+  context,
+  screenshot,
+  waitForTimeout,
+}: FakePageOptions = {}) {
   const screenshotSpy = vi.fn(
     screenshot ??
       (async (options: { path?: string }) => {
@@ -118,13 +124,16 @@ function fakePage({ bytes = Buffer.from('captured png bytes'), context, screensh
         return bytes;
       }),
   );
+  const waitForTimeoutSpy = vi.fn(waitForTimeout ?? (async () => {}));
   return {
     page: {
       context: () => context ?? {},
       viewportSize: () => ({ width: 375, height: 667 }),
       screenshot: screenshotSpy,
+      waitForTimeout: waitForTimeoutSpy,
     } as never,
     screenshotSpy,
+    waitForTimeoutSpy,
   };
 }
 
@@ -464,6 +473,203 @@ describe('captureScreenshot write-time environment guard', () => {
     ).rejects.toThrow(new RegExp(`tracked by ${DEFAULT_MANIFEST_PATH.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
     expect(screenshotSpy).not.toHaveBeenCalled();
     expect(readdirSync(dir)).toEqual([]);
+  });
+});
+
+describe('captureScreenshot whole-image stability check', () => {
+  function sequencePage(frames: Buffer[]) {
+    const queue = [...frames];
+    return fakePage({
+      screenshot: async () => {
+        const frame = queue.shift();
+        if (frame === undefined) {
+          throw new Error('the capture read more frames than the fixture provides');
+        }
+        return frame;
+      },
+    });
+  }
+
+  it('writes only after two consecutive identical frames', async () => {
+    const dir = tempScreenshotDir();
+    const target = join(dir, FILE);
+    writeFileSync(target, 'old committed bytes');
+    const frame = Buffer.from('stable frame');
+    const log = { warn: vi.fn() };
+    const { page, screenshotSpy, waitForTimeoutSpy } = sequencePage([frame, frame]);
+
+    await captureScreenshot(page, FILE, {
+      engine: 'webkit',
+      outputDir: dir,
+      manifest: sampleManifest({ sha256: sha256(frame) }),
+      fingerprint: containerFingerprint() as never,
+      log,
+      stableFrames: 2,
+      stableIntervalMs: 250,
+    });
+
+    expect(readFileSync(target)).toEqual(frame);
+    expect(screenshotSpy).toHaveBeenCalledTimes(2);
+    expect(waitForTimeoutSpy).toHaveBeenCalledWith(250);
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it('keeps reading through a transient frame and writes the stable pair', async () => {
+    const dir = tempScreenshotDir();
+    const target = join(dir, FILE);
+    writeFileSync(target, 'old committed bytes');
+    const transient = Buffer.from('transient frame');
+    const stable = Buffer.from('stable frame');
+    const { page, screenshotSpy } = sequencePage([
+      transient,
+      stable,
+      stable,
+    ]);
+
+    await captureScreenshot(page, FILE, {
+      engine: 'webkit',
+      outputDir: dir,
+      manifest: sampleManifest({ sha256: sha256(stable) }),
+      fingerprint: containerFingerprint() as never,
+      log: { warn: vi.fn() },
+      stableFrames: 2,
+      stableIntervalMs: 250,
+    });
+
+    expect(readFileSync(target)).toEqual(stable);
+    expect(screenshotSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it('refuses to write when no stable pair appears within the attempt budget', async () => {
+    const dir = tempScreenshotDir();
+    const target = join(dir, FILE);
+    writeFileSync(target, 'old committed bytes');
+    const { page, screenshotSpy } = sequencePage([
+      Buffer.from('frame-a'),
+      Buffer.from('frame-b'),
+      Buffer.from('frame-c'),
+    ]);
+
+    await expect(
+      captureScreenshot(page, FILE, {
+        engine: 'webkit',
+        outputDir: dir,
+        manifest: sampleManifest(),
+        fingerprint: containerFingerprint() as never,
+        stableFrames: 2,
+        stableIntervalMs: 250,
+        stableAttempts: 2,
+      }),
+    ).rejects.toThrow(
+      /did not produce 2 consecutive byte-identical frames .*No file was written/s,
+    );
+
+    expect(readFileSync(target, 'utf8')).toBe('old committed bytes');
+    expect(readdirSync(dir)).toEqual([FILE]);
+    expect(screenshotSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it('rejects a non-positive stableFrames request before taking a screenshot', async () => {
+    const dir = tempScreenshotDir();
+    const { page, screenshotSpy } = fakePage();
+
+    await expect(
+      captureScreenshot(page, FILE, {
+        engine: 'webkit',
+        outputDir: dir,
+        manifest: sampleManifest(),
+        fingerprint: containerFingerprint() as never,
+        stableFrames: 0,
+      }),
+    ).rejects.toThrow(/stableFrames must be a positive integer/);
+    expect(screenshotSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('captureScreenshot stable frames for unrecorded files', () => {
+  it('writes an unrecorded file only after two identical frames', async () => {
+    const dir = tempScreenshotDir();
+    const file = 'after-hub-webkit.png';
+    const target = join(dir, file);
+    writeFileSync(target, 'old unrecorded bytes');
+    const frame = Buffer.from('stable frame');
+    const queue = [frame, frame];
+    const { page, screenshotSpy, waitForTimeoutSpy } = fakePage({
+      screenshot: async () => queue.shift() as Buffer,
+    });
+
+    await captureScreenshot(page, file, {
+      engine: 'webkit',
+      outputDir: dir,
+      manifest: null,
+      stableFrames: 2,
+      stableIntervalMs: 250,
+    });
+
+    expect(readFileSync(target)).toEqual(frame);
+    expect(screenshotSpy).toHaveBeenCalledTimes(2);
+    expect(waitForTimeoutSpy).toHaveBeenCalledWith(250);
+    expect(readdirSync(dir)).toEqual([file]);
+  });
+
+  it('keeps an unrecorded file when no stable pair appears', async () => {
+    const dir = tempScreenshotDir();
+    const file = 'after-hub-webkit.png';
+    const target = join(dir, file);
+    writeFileSync(target, 'old unrecorded bytes');
+    const queue = [Buffer.from('frame-a'), Buffer.from('frame-b')];
+    const { page, screenshotSpy } = fakePage({
+      screenshot: async () => queue.shift() as Buffer,
+    });
+
+    await expect(
+      captureScreenshot(page, file, {
+        engine: 'webkit',
+        outputDir: dir,
+        manifest: null,
+        stableFrames: 2,
+        stableIntervalMs: 250,
+        stableAttempts: 1,
+      }),
+    ).rejects.toThrow(/did not produce 2 consecutive byte-identical frames/);
+
+    expect(readFileSync(target, 'utf8')).toBe('old unrecorded bytes');
+    expect(readdirSync(dir)).toEqual([file]);
+    expect(screenshotSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects a negative stableAttempts before taking a screenshot', async () => {
+    const dir = tempScreenshotDir();
+    const { page, screenshotSpy } = fakePage();
+
+    await expect(
+      captureScreenshot(page, FILE, {
+        engine: 'webkit',
+        outputDir: dir,
+        manifest: sampleManifest(),
+        fingerprint: containerFingerprint() as never,
+        stableFrames: 2,
+        stableAttempts: -1,
+      }),
+    ).rejects.toThrow(/stableAttempts must be a non-negative integer/);
+    expect(screenshotSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects a zero stableIntervalMs before taking a screenshot', async () => {
+    const dir = tempScreenshotDir();
+    const { page, screenshotSpy } = fakePage();
+
+    await expect(
+      captureScreenshot(page, FILE, {
+        engine: 'webkit',
+        outputDir: dir,
+        manifest: sampleManifest(),
+        fingerprint: containerFingerprint() as never,
+        stableFrames: 2,
+        stableIntervalMs: 0,
+      }),
+    ).rejects.toThrow(/stableIntervalMs must be a positive integer/);
+    expect(screenshotSpy).not.toHaveBeenCalled();
   });
 });
 

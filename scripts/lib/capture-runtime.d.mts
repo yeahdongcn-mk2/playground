@@ -144,8 +144,17 @@ export interface CaptureScreenshotOptions {
   colorScheme?: string;
   reducedMotion?: string;
   animations?: 'allow' | 'disabled';
-  /** Capture until two consecutive screenshots are byte-identical (default `false`). */
+  /** Use the settle-based stable-capture loop (Issue #199); default false. */
   stable?: boolean;
+  /**
+   * Require this many consecutive byte-identical whole-image frames before
+   * writing (default 1 keeps the previous single-shot capture).
+   */
+  stableFrames?: number;
+  /** Delay between stable-frame screenshots, in milliseconds. */
+  stableIntervalMs?: number;
+  /** Extra frames the stable-frame check may read before failing. */
+  stableAttempts?: number;
   /** Override the target of the context that produced the page (tests / edge cases). */
   target?: CaptureTarget;
   /** Parsed manifest; defaults to reading `manifestPath` from disk. */
@@ -170,13 +179,18 @@ export function captureScreenshot(
   options: CaptureScreenshotOptions,
 ): Promise<void>;
 
+/** Consecutive whole-image frames the WebKit READY capture must repeat. */
+export const READY_CAPTURE_STABLE_FRAMES: number;
+
+/** Delay between the WebKit READY stability frames, in milliseconds. */
+export const READY_CAPTURE_STABLE_INTERVAL_MS: number;
+
+/** Extra frames the WebKit READY stability check may read before failing. */
+export const READY_CAPTURE_STABLE_ATTEMPTS: number;
+
 /** Animation frames the shared capture settle seam waits for. */
 export const CAPTURE_SETTLE_FRAMES: number;
-/** Fallback wait after those frames, in milliseconds. */
-export const CAPTURE_SETTLE_TIMEOUT_MS: number;
-export function settleCapturePaint(page: Page): Promise<void>;
-
-/** Screenshots the stable-capture loop may take before giving up. */
+/** Screenshots the settle-based stable-capture loop may take before giving up. */
 export const CAPTURE_STABLE_ATTEMPTS: number;
 
 export interface CaptureStableBytesOptions {
@@ -190,19 +204,29 @@ export interface CaptureStableBytesOptions {
 
 /**
  * Capture until two consecutive screenshots are byte-identical; throws if the
- * page never settles within `attempts` screenshots. The first screenshot is
- * taken after a settle, and each later one follows another settle.
+ * page never settles within `attempts` screenshots.
  */
 export function captureStableBytes(
   page: Page,
   options?: CaptureStableBytesOptions,
 ): Promise<Buffer>;
 
+
+/** Fallback wait after those frames, in milliseconds. */
+export const CAPTURE_SETTLE_TIMEOUT_MS: number;
+
+/** Wait until fonts, two animation frames and a short fallback timeout settle. */
+export function settleCapturePaint(page: Page): Promise<void>;
+
 export interface SettleWebkitReadyPaintOptions {
   /** Scroll distance used to force the sticky header repaint; defaults to 200. */
   offset?: number;
 }
 
+/**
+ * Repaint the sticky site header with a scroll round-trip, then settle fonts
+ * and frames before a WebKit READY capture (2048 and minesweeper).
+ */
 export function settleWebkitReadyPaint(
   page: Page,
   options?: SettleWebkitReadyPaintOptions,
@@ -214,8 +238,9 @@ export interface RepaintWebkitReadyOverlayOptions {
 }
 
 /**
- * Hide the READY overlay for two frames and restore it, then settle, so the
- * card is painted on the canonical path instead of a load-dependent composite.
+ * Hide the overlay (the READY card or the minesweeper loss panel) for two
+ * frames and restore it, then settle, so its backdrop is painted on the
+ * canonical path instead of a load-dependent composite.
  */
 export function repaintWebkitReadyOverlay(
   page: Page,

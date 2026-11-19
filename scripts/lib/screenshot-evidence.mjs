@@ -17,9 +17,10 @@
  * environment.
  *
  * The capture scripts that only refresh current evidence (2048 playing /
- * gameover, breakout playing, the dedicated minesweeper viewports and the
- * `after-minesweeper-webkit-narrow-*` CI smoke matrix) must stay out of this
- * list so their runs keep writing files.
+ * gameover, the four breakout WebKit phone states, the four
+ * minesweeper WebKit phone states and the dedicated minesweeper viewports, plus
+ * the `after-minesweeper-webkit-narrow-*` CI smoke matrix) must stay out of
+ * this list so their runs keep writing files.
  */
 
 import { readFileSync } from 'node:fs';
@@ -213,38 +214,6 @@ export const HISTORICAL_AFTER_EVIDENCE = Object.freeze(
       trackingIssue: '#137',
       captureCommit: '993f5e7',
       note: '扫雷 won 手机图：#85、#87 侧栏 UI 变更后未重拍，当前构建重跑约 56.1 万像素不同。',
-    },
-    {
-      file: 'after-minesweeper-ready-webkit.png',
-      game: 'minesweeper',
-      issue: '#120',
-      trackingIssue: '#137',
-      captureCommit: '498a14f',
-      note: '扫雷 ready WebKit 手机图：重跑像素差集中在 HUD / 文字行，sha256 与已提交产物不同。',
-    },
-    {
-      file: 'after-minesweeper-playing-webkit.png',
-      game: 'minesweeper',
-      issue: '#120',
-      trackingIssue: '#137',
-      captureCommit: '498a14f',
-      note: '扫雷 playing WebKit 手机图：重跑像素差集中在 HUD / 文字行，sha256 与已提交产物不同。',
-    },
-    {
-      file: 'after-minesweeper-lost-webkit.png',
-      game: 'minesweeper',
-      issue: '#120',
-      trackingIssue: '#137',
-      captureCommit: '498a14f',
-      note: '扫雷 lost WebKit 手机图：重跑像素差集中在 HUD / 文字行，sha256 与已提交产物不同。',
-    },
-    {
-      file: 'after-minesweeper-won-webkit.png',
-      game: 'minesweeper',
-      issue: '#120',
-      trackingIssue: '#137',
-      captureCommit: '498a14f',
-      note: '扫雷 won WebKit 手机图：重跑像素差集中在 HUD / 文字行，sha256 与已提交产物不同。',
     },
   ].map((entry) => Object.freeze(entry)),
 );

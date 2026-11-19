@@ -141,30 +141,6 @@ const EXPECTED_EVIDENCE = [
     issue: '#61',
     commit: '993f5e7',
   },
-  {
-    file: 'after-minesweeper-ready-webkit.png',
-    game: 'minesweeper',
-    issue: '#120',
-    commit: '498a14f',
-  },
-  {
-    file: 'after-minesweeper-playing-webkit.png',
-    game: 'minesweeper',
-    issue: '#120',
-    commit: '498a14f',
-  },
-  {
-    file: 'after-minesweeper-lost-webkit.png',
-    game: 'minesweeper',
-    issue: '#120',
-    commit: '498a14f',
-  },
-  {
-    file: 'after-minesweeper-won-webkit.png',
-    game: 'minesweeper',
-    issue: '#120',
-    commit: '498a14f',
-  },
 ] as const;
 
 /** Captures that must keep refreshing because they are current-build evidence. */
@@ -177,6 +153,10 @@ const REFRESHABLE = [
   'after-2048-gameover-mobile.png',
   'after-2048-playing-webkit.png',
   'after-2048-gameover-webkit.png',
+  'after-minesweeper-ready-webkit.png',
+  'after-minesweeper-playing-webkit.png',
+  'after-minesweeper-lost-webkit.png',
+  'after-minesweeper-won-webkit.png',
   'after-breakout-playing-desktop.png',
   'after-breakout-playing-mobile.png',
   'after-breakout-playing-webkit.png',
@@ -203,8 +183,26 @@ function functionBody(source: string, name: string): string {
   if (start < 0) {
     throw new Error(`missing function: ${name}`);
   }
-  const open = source.indexOf('{', start);
+  // Find the brace after the parameter list, not the first brace in it: a
+  // default such as `options = {}` is part of the signature.
+  const parameters = source.indexOf('(', start);
   let depth = 0;
+  let parametersEnd = -1;
+  for (let index = parameters; index < source.length; index += 1) {
+    if (source[index] === '(') depth += 1;
+    if (source[index] === ')') {
+      depth -= 1;
+      if (depth === 0) {
+        parametersEnd = index;
+        break;
+      }
+    }
+  }
+  if (parametersEnd < 0) {
+    throw new Error(`unterminated parameter list: ${name}`);
+  }
+  const open = source.indexOf('{', parametersEnd);
+  depth = 0;
   for (let index = open; index < source.length; index += 1) {
     if (source[index] === '{') depth += 1;
     if (source[index] === '}') {
@@ -238,7 +236,7 @@ describe('historical After evidence list (Issue #137)', () => {
     expect(files.slice().sort()).toEqual(
       EXPECTED_EVIDENCE.map((entry) => entry.file).slice().sort(),
     );
-    expect(files).toHaveLength(22);
+    expect(files).toHaveLength(18);
 
     for (const expected of EXPECTED_EVIDENCE) {
       const entry = findHistoricalAfterEvidence(expected.file);
@@ -591,16 +589,17 @@ describe('historical evidence command docs', () => {
     expect(SCREENSHOTS_README).toContain(containerCommand(command));
   });
 
-  it('documents the container-only overwrite for the WebKit commands that write protected files', () => {
-    expect(SCREENSHOTS_README).toContain(
-      containerCommand('npm run screenshots:minesweeper:webkit'),
-    );
-    // The 2048 WebKit captures are all collected in the fixed manifest, so
-    // they must not be documented as still needing the historical overwrite
-    // flag.
-    expect(SCREENSHOTS_README).not.toContain(
-      containerCommand('npm run screenshots:2048:webkit'),
-    );
+  it('does not document collected WebKit commands as historical-overwrite targets', () => {
+    for (const command of [
+      'npm run screenshots:webkit',
+      'npm run screenshots:snake:webkit',
+      'npm run screenshots:2048:webkit',
+      'npm run screenshots:breakout:webkit',
+      'npm run screenshots:minesweeper:webkit',
+      'npm run screenshots:minesweeper:scores:webkit',
+    ]) {
+      expect(SCREENSHOTS_README).not.toContain(containerCommand(command));
+    }
   });
 
   it('explains the default skip, the fixed environment and the update checklist', () => {

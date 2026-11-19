@@ -137,6 +137,42 @@
       }
     },
     {
+      "file": "after-minesweeper-ready-webkit.png",
+      "sha256": "56c3f68d51c643d9e23a3e5a17d99b44b9da47c52d0cca451080ec3dc878fe0a",
+      "command": "npm run screenshots:container -- screenshots:minesweeper:webkit",
+      "provenance": {
+        "container": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
+        "captureCommit": "5115db16d93a75636de679102a65f83e50c4cf6b"
+      }
+    },
+    {
+      "file": "after-minesweeper-playing-webkit.png",
+      "sha256": "b64d959f12a3b8a08a0757d8cf1ae4875a21a3d96a6df8a28c4a81ca9290d9fb",
+      "command": "npm run screenshots:container -- screenshots:minesweeper:webkit",
+      "provenance": {
+        "container": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
+        "captureCommit": "5115db16d93a75636de679102a65f83e50c4cf6b"
+      }
+    },
+    {
+      "file": "after-minesweeper-lost-webkit.png",
+      "sha256": "6b888d338c7cea61d82578e3ce7e75e5b29620f3fdfc7f25a848a84fea12f3b4",
+      "command": "npm run screenshots:container -- screenshots:minesweeper:webkit",
+      "provenance": {
+        "container": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
+        "captureCommit": "5115db16d93a75636de679102a65f83e50c4cf6b"
+      }
+    },
+    {
+      "file": "after-minesweeper-won-webkit.png",
+      "sha256": "77e7b244607dbdec71ff31df1a991a6744d813fa800c254eb1ebbaf8567f12a2",
+      "command": "npm run screenshots:container -- screenshots:minesweeper:webkit",
+      "provenance": {
+        "container": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
+        "captureCommit": "5115db16d93a75636de679102a65f83e50c4cf6b"
+      }
+    },
+    {
       "file": "after-minesweeper-scores-webkit.png",
       "sha256": "44768a977454b98f4526033e96c3cdf60012f6278b10912cf7a11071419674fe",
       "command": "npm run screenshots:container -- screenshots:minesweeper:scores:webkit",

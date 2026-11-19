@@ -1,5 +1,8 @@
 import { mkdir } from 'node:fs/promises';
 import {
+  READY_CAPTURE_STABLE_ATTEMPTS,
+  READY_CAPTURE_STABLE_FRAMES,
+  READY_CAPTURE_STABLE_INTERVAL_MS,
   WEBKIT_ENGINE,
   assertAllDeclaredCaptureTargets,
   captureScreenshot,
@@ -11,6 +14,8 @@ import {
   engineLabel,
   launchCaptureBrowser,
   parseCaptureEngine,
+  repaintWebkitReadyOverlay,
+  settleWebkitReadyPaint,
   startPreviewServer,
   stopPreviewServer,
 } from './lib/capture-runtime.mjs';
@@ -49,7 +54,12 @@ import { touchLongPress } from './lib/touch-input.mjs';
  *
  * Add `--webkit` to the after mode to capture the four stable phone states
  * (ready / playing / lost / won) on the WebKit engine as
- * `after-minesweeper-<state>-webkit.png`. The dedicated
+ * `after-minesweeper-<state>-webkit.png`. The ready scene first loads a
+ * throwaway page: WebKit's first page in a fresh browser can rasterise the
+ * sticky header and board gradients in a subtly different 1-LSB variant, while
+ * later pages use the settled paint path. The committed READY capture then runs a
+ * scroll-paint seam and requires two consecutive byte-identical whole-image
+ * frames before writing. The dedicated
  * `--webkit-narrow` / `--webkit-narrow-before` modes capture the Issue #83
  * narrow-screen matrix at 320×640, 360×640, 375×667 and 412×839 into the
  * committed `*-minesweeper-webkit-narrow-<W>x<H>.png` evidence files; the
@@ -257,14 +267,14 @@ async function settle(page) {
   await page.waitForTimeout(300);
 }
 
-async function capture(page, name, fullPage) {
+async function capture(page, name, fullPage, options = {}) {
   const write = guardHistoricalAfterEvidence({
     file: name,
     mode: MODE,
     allowHistoricalOverwrite: ALLOW_HISTORICAL_OVERWRITE,
   });
   if (!write) return;
-  await captureScreenshot(page, name, { engine: ENGINE, fullPage });
+  await captureScreenshot(page, name, { ...options, engine: ENGINE, fullPage });
 }
 
 function debugUrl(mines) {
@@ -387,9 +397,37 @@ async function captureTouchMobile(browser, prefix) {
         reducedMotion: 'reduce',
       });
 
+  if (IS_WEBKIT && prefix === 'after') {
+    // WebKit's first page in a fresh browser can rasterise the sticky header
+    // and the board gradients in a subtly different 1-LSB variant (Issue #318).
+    // Load a throwaway copy first so the committed READY evidence comes from
+    // the next page, which uses the settled paint path. playing / lost / won
+    // already run after that page and keep their existing byte-identical path.
+    const warmUp = await context.newPage();
+    try {
+      await openTouchGame(warmUp, WIN_MINES);
+    } finally {
+      await warmUp.close();
+    }
+  }
+
   const ready = await context.newPage();
   await openTouchGame(ready, WIN_MINES);
-  await capture(ready, touchMobileName(prefix, 'ready'), false);
+  if (IS_WEBKIT && prefix === 'after') {
+    // The scroll round-trip settles the sticky header; the whole-image
+    // stability check then detects a sampled frame change before the PNG is
+    // written (the throwaway page above handles the cross-run board variant).
+    await settleWebkitReadyPaint(ready);
+  }
+  const readyCaptureOptions =
+    IS_WEBKIT && prefix === 'after'
+      ? {
+          stableFrames: READY_CAPTURE_STABLE_FRAMES,
+          stableIntervalMs: READY_CAPTURE_STABLE_INTERVAL_MS,
+          stableAttempts: READY_CAPTURE_STABLE_ATTEMPTS,
+        }
+      : {};
+  await capture(ready, touchMobileName(prefix, 'ready'), false, readyCaptureOptions);
   await ready.close();
 
   const playing = await context.newPage();
@@ -420,7 +458,13 @@ async function captureTouchMobile(browser, prefix) {
     await lost.getByTestId('cell-0-0').click();
   }
   await lost.getByTestId('overlay-title').filter({ hasText: '踩到地雷' }).waitFor();
-  await settle(lost);
+  if (IS_WEBKIT && prefix === 'after') {
+    // The loss overlay's translucent backdrop can keep a 1-LSB variant of the
+    // board behind it; hiding and restoring the overlay forces a fresh snapshot.
+    await repaintWebkitReadyOverlay(lost);
+  } else {
+    await settle(lost);
+  }
   await capture(lost, touchMobileName(prefix, 'lost'), false);
   await lost.close();
 

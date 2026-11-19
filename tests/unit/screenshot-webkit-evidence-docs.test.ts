@@ -68,19 +68,38 @@ const BREAKOUT_COLLECTED_SHA256 = new Map([
   ],
 ]);
 const BREAKOUT_CAPTURE_COMMIT = 'd3f0f30437b69022f29f6c7677f117f84ffc09f1';
-const MINESWEEPER_DRIFT = [
+const MINESWEEPER_COLLECTED = [
   'after-minesweeper-ready-webkit.png',
   'after-minesweeper-playing-webkit.png',
   'after-minesweeper-lost-webkit.png',
   'after-minesweeper-won-webkit.png',
 ];
+const MINESWEEPER_COLLECTED_SHA256 = new Map([
+  [
+    'after-minesweeper-ready-webkit.png',
+    '56c3f68d51c643d9e23a3e5a17d99b44b9da47c52d0cca451080ec3dc878fe0a',
+  ],
+  [
+    'after-minesweeper-playing-webkit.png',
+    'b64d959f12a3b8a08a0757d8cf1ae4875a21a3d96a6df8a28c4a81ca9290d9fb',
+  ],
+  [
+    'after-minesweeper-lost-webkit.png',
+    '6b888d338c7cea61d82578e3ce7e75e5b29620f3fdfc7f25a848a84fea12f3b4',
+  ],
+  [
+    'after-minesweeper-won-webkit.png',
+    '77e7b244607dbdec71ff31df1a991a6744d813fa800c254eb1ebbaf8567f12a2',
+  ],
+]);
+const MINESWEEPER_CAPTURE_COMMIT = '5115db16d93a75636de679102a65f83e50c4cf6b';
 const NARROW_DRIFT = [
   'after-minesweeper-webkit-narrow-320x640.png',
   'after-minesweeper-webkit-narrow-360x640.png',
   'after-minesweeper-webkit-narrow-375x667.png',
   'after-minesweeper-webkit-narrow-412x839.png',
 ];
-const DRIFTED = [...MINESWEEPER_DRIFT, ...NARROW_DRIFT];
+const DRIFTED = [...NARROW_DRIFT];
 const DETERMINISTIC = [
   'after-breakout-playing-webkit.png',
   'after-2048-ready-webkit.png',
@@ -140,6 +159,7 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     );
     expect(WEBKIT_HISTORICAL).toContain('9c39e68');
     expect(WEBKIT_HISTORICAL).toContain('重新捕获');
+    expect(WEBKIT_HISTORICAL).toContain('t1 只重拍扫雷');
     expect(WEBKIT_HISTORICAL).toContain('只重拍扫雷最高用时榜');
     expect(WEBKIT_HISTORICAL).toContain('t3 只重拍大厅与贪食蛇');
     expect(WEBKIT_HISTORICAL).toContain('t4 只重拍打砖块');
@@ -147,7 +167,7 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(WEBKIT_HISTORICAL).toContain('其余已提交 PNG 不改动');
   });
 
-  it('lists the drifted minesweeper and webkit-narrow artifacts', () => {
+  it('lists the drifted webkit-narrow artifacts', () => {
     for (const file of DRIFTED) {
       expect(WEBKIT_HISTORICAL).toContain(file);
       expect(childBullets(WEBKIT_HISTORICAL, '已报告的漂移产物')).toContain(file);
@@ -156,6 +176,11 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     // The breakout READY / levelclear / gameover re-shots are collected, so they
     // must leave the drift list instead of being reported twice.
     for (const file of BREAKOUT_COLLECTED) {
+      expect(childBullets(WEBKIT_HISTORICAL, '已报告的漂移产物')).not.toContain(file);
+    }
+    // The four minesweeper WebKit phone states are collected by Issue #318 t1,
+    // so they must leave the drift bullet instead of being reported twice.
+    for (const file of MINESWEEPER_COLLECTED) {
       expect(childBullets(WEBKIT_HISTORICAL, '已报告的漂移产物')).not.toContain(file);
     }
   });
@@ -225,9 +250,10 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(WEBKIT_HISTORICAL).toContain('won 0.02%');
     expect(WEBKIT_HISTORICAL).toContain('10 / 14 / 12 / 12');
     expect(WEBKIT_HISTORICAL).toContain('两种结果互差 11157 px（每通道最大 1）');
-    expect(WEBKIT_HISTORICAL).toContain('也只在部分状态逐字节一致');
-    expect(WEBKIT_HISTORICAL).toContain('playing / lost / won 在容器内两跑 sha256 相同');
-    expect(WEBKIT_HISTORICAL).toContain('ready 的相邻两跑则可能不同');
+    expect(WEBKIT_HISTORICAL).toContain('返工后');
+    expect(WEBKIT_HISTORICAL).toContain('连续 3 跑');
+    expect(WEBKIT_HISTORICAL).toContain('跨进程变体');
+    expect(WEBKIT_HISTORICAL).toContain('待重绘帧');
     expect(WEBKIT_HISTORICAL).not.toContain('扫雷这 4 张在容器内两跑 sha256 相同');
     expect(WEBKIT_HISTORICAL).toContain(
       '2048 ready 的连续两跑漂移已由 #199 t1 的页眉重绘 + overlay 重绘接缝消除',
@@ -372,6 +398,47 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     }
   });
 
+  it('records the reviewed minesweeper four-state captures in the fixed manifest', () => {
+    expect(WEBKIT_HISTORICAL).toContain('#318 t1');
+    expect(WEBKIT_HISTORICAL).toContain('一次性预热页');
+    expect(WEBKIT_HISTORICAL).toContain('滚动往返');
+    expect(WEBKIT_HISTORICAL).toContain('整幅连续两帧');
+    expect(WEBKIT_HISTORICAL).toContain('c463b380');
+    expect(WEBKIT_HISTORICAL).toContain('105 px');
+    expect(WEBKIT_HISTORICAL).toContain('连续 3 跑');
+    for (const file of MINESWEEPER_COLLECTED) {
+      // Present in the section, but only in the collected prose/table, never in
+      // the drift bullet itself.
+      expect(WEBKIT_HISTORICAL).toContain(file);
+      expect(childBullets(WEBKIT_HISTORICAL, '已报告的漂移产物')).not.toContain(file);
+    }
+
+    const manifest = JSON.parse(
+      readFileSync(
+        join(ROOT, 'docs', 'screenshots', 'capture-sha256-manifest.json'),
+        'utf8',
+      ),
+    ) as {
+      captures: Array<{
+        file: string;
+        sha256: string;
+        command: string;
+        provenance: { captureCommit: string };
+      }>;
+    };
+    for (const file of MINESWEEPER_COLLECTED) {
+      const capture = manifest.captures.find((entry) => entry.file === file);
+      expect(capture, `missing manifest entry for ${file}`).toBeDefined();
+      expect(capture?.sha256).toBe(MINESWEEPER_COLLECTED_SHA256.get(file));
+      expect(capture?.command).toBe(
+        'npm run screenshots:container -- screenshots:minesweeper:webkit',
+      );
+      expect(capture?.provenance.captureCommit).toBe(
+        MINESWEEPER_CAPTURE_COMMIT,
+      );
+    }
+  });
+
   it('makes the CI manifest, not sha256, the authoritative webkit-narrow check', () => {
     expect(WEBKIT_HISTORICAL).toContain('不是 sha256');
     expect(WEBKIT_HISTORICAL).toContain('ci-webkit-narrow-manifest.json');
@@ -405,7 +472,7 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
   it('keeps the webkit-phone and webkit-narrow tables and their commands intact', () => {
     for (const file of [
       ...BREAKOUT_COLLECTED,
-      ...MINESWEEPER_DRIFT,
+      ...MINESWEEPER_COLLECTED,
       'after-2048-ready-webkit.png',
       ...DETERMINISTIC,
     ]) {
@@ -433,6 +500,22 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
       ['after-breakout-ready-webkit.png', 'screenshots:container -- screenshots:breakout:webkit'],
       ['after-breakout-levelclear-webkit.png', 'screenshots:container -- screenshots:breakout:webkit'],
       ['after-breakout-gameover-webkit.png', 'screenshots:container -- screenshots:breakout:webkit'],
+      [
+        'after-minesweeper-ready-webkit.png',
+        'screenshots:container -- screenshots:minesweeper:webkit',
+      ],
+      [
+        'after-minesweeper-playing-webkit.png',
+        'screenshots:container -- screenshots:minesweeper:webkit',
+      ],
+      [
+        'after-minesweeper-lost-webkit.png',
+        'screenshots:container -- screenshots:minesweeper:webkit',
+      ],
+      [
+        'after-minesweeper-won-webkit.png',
+        'screenshots:container -- screenshots:minesweeper:webkit',
+      ],
       [
         MINESWEEPER_SCORES,
         'screenshots:container -- screenshots:minesweeper:scores:webkit',

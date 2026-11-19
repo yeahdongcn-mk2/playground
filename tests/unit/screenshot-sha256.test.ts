@@ -50,6 +50,10 @@ const EXPECTED_FILES = [
   'after-breakout-ready-webkit.png',
   'after-breakout-levelclear-webkit.png',
   'after-breakout-gameover-webkit.png',
+  'after-minesweeper-ready-webkit.png',
+  'after-minesweeper-playing-webkit.png',
+  'after-minesweeper-lost-webkit.png',
+  'after-minesweeper-won-webkit.png',
   'after-minesweeper-scores-webkit.png',
 ];
 
@@ -679,7 +683,7 @@ function runCli(args: string[]): { status: number | null; stdout: string; stderr
 }
 
 describe('capture sha256 manifest', () => {
-  it('lists exactly the eleven fixed-environment WebKit captures with committed hashes', () => {
+  it('lists exactly the fifteen fixed-environment WebKit captures with committed hashes', () => {
     const manifest = committedManifest();
     expect(manifest.captures.map((capture) => capture.file)).toEqual(EXPECTED_FILES);
 
@@ -698,7 +702,9 @@ describe('capture sha256 manifest', () => {
                 ? 'screenshots:minesweeper:scores:webkit'
                 : capture.file.startsWith('after-snake-')
                   ? 'screenshots:snake:webkit'
-                  : 'screenshots:webkit'
+                  : capture.file.startsWith('after-minesweeper')
+                    ? 'screenshots:minesweeper:webkit'
+                    : 'screenshots:webkit'
         }`,
       );
       expect(capture.provenance.container).toBe(
@@ -880,7 +886,20 @@ describe('capture sha256 manifest', () => {
     expect(expectedRecaptureCommand('after-breakout-playing-webkit.png')).toBe(
       'npm run screenshots:container -- screenshots:breakout:webkit',
     );
-    expect(expectedRecaptureCommand('after-minesweeper-scores-webkit.png')).toBe(
+    expect(expectedRecaptureCommand('after-minesweeper-ready-webkit.png')).toBe(
+      'npm run screenshots:container -- screenshots:minesweeper:webkit',
+    );
+    expect(
+      expectedRecaptureCommand('after-minesweeper-ready-desktop.png'),
+    ).toBe('npm run screenshots:container -- screenshots:minesweeper');
+    expect(
+      expectedRecaptureCommand('after-minesweeper-webkit-narrow-320x640.png'),
+    ).toBe(
+      'npm run screenshots:container -- screenshots:minesweeper:webkit-narrow',
+    );
+    expect(
+      expectedRecaptureCommand('after-minesweeper-scores-webkit.png'),
+    ).toBe(
       'npm run screenshots:container -- screenshots:minesweeper:scores:webkit',
     );
     expect(expectedRecaptureCommand('after-snake-webkit.png')).toBe(
