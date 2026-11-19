@@ -24,6 +24,7 @@ import {
   HISTORICAL_OVERWRITE_FLAG,
   guardHistoricalAfterEvidence,
 } from './lib/screenshot-evidence.mjs';
+import { settleSharedHeaderCompositing } from './lib/webkit-compositing-settle.mjs';
 
 /**
  * Capture the Before / After evidence for the breakout integration.
@@ -51,7 +52,9 @@ import {
  * The playing states pin `seed=7` and `?debug=1&steps=120`: the debug seam
  * advances exactly 120 fixed simulation steps (1 s at the engine's 120 Hz step)
  * and then pauses the loop, so their PNGs are reproducible byte-for-byte
- * instead of depending on wall-clock frame timing. See
+ * instead of depending on wall-clock frame timing. The WebKit playing frame
+ * additionally settles the shared site header (Issue #328) and requires
+ * consecutive byte-identical screenshots before it is written. See
  * docs/screenshots/README.md for the reproducible sha256 procedure.
  *
  * The After mode skips the frozen ready / levelclear / gameover desktop and
@@ -158,14 +161,14 @@ async function settleReadyBackdrop(page) {
   await settle(page);
 }
 
-async function capture(page, name, fullPage) {
+async function capture(page, name, fullPage, options = {}) {
   const write = guardHistoricalAfterEvidence({
     file: name,
     mode: MODE,
     allowHistoricalOverwrite: ALLOW_HISTORICAL_OVERWRITE,
   });
   if (!write) return;
-  await captureScreenshot(page, name, { engine: ENGINE, fullPage });
+  await captureScreenshot(page, name, { engine: ENGINE, fullPage, ...options });
 }
 
 function debugUrl(params) {
@@ -204,6 +207,16 @@ async function openPlaying(page) {
     PLAYING_STEPS,
   );
   await settle(page);
+  if (IS_WEBKIT) {
+    // Issue #328: under concurrent host load WebKit can commit the shared site
+    // header's blurred backdrop snapshot one 8-bit step away from the committed
+    // evidence (1522 px, all inside the header; the paused court / HUD are
+    // byte-identical). The fixed-step seam makes the game state deterministic,
+    // so rebuild the header snapshot from the settled page instead of accepting
+    // the load-dependent composite. Only the WebKit playing path needs this:
+    // ready / levelclear / gameover and Chromium keep their committed bytes.
+    await settleSharedHeaderCompositing(page);
+  }
 }
 
 async function openLevelClear(page) {
@@ -319,7 +332,12 @@ async function captureWebkitMobile(browser) {
 
   const playing = await context.newPage();
   await openPlaying(playing);
-  await capture(playing, 'after-breakout-playing-webkit.png', false);
+  // The header seam pins the shared compositing snapshot; the stable capture is
+  // the backstop that refuses to commit a frame still mid-repaint under load
+  // (Issue #328). Every other state keeps the single-screenshot path.
+  await capture(playing, 'after-breakout-playing-webkit.png', false, {
+    stable: true,
+  });
   await playing.close();
 
   const cleared = await context.newPage();

@@ -1,9 +1,16 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { Page } from '@playwright/test';
 import { describe, expect, it } from 'vitest';
 import { FIXED_STEP_MS } from '../../src/games/breakout/engine';
 import { advanceFixedSteps } from '../../src/games/breakout/fixed-steps';
+import {
+  SHARED_HEADER_SELECTOR,
+  SHARED_HEADER_SETTLE_FRAMES,
+  settleSharedHeaderCompositing,
+} from '../../scripts/lib/webkit-compositing-settle.mjs';
+import type { SharedHeaderRepaintOptions } from '../../scripts/lib/webkit-compositing-settle.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SCRIPT = readFileSync(
@@ -19,8 +26,26 @@ function functionBody(source: string, name: string): string {
   if (start < 0) {
     throw new Error(`missing function: ${name}`);
   }
-  const open = source.indexOf('{', start);
+  // Skip the parameter list first: a default value such as `options = {}` holds
+  // a brace that must not be mistaken for the function body.
+  const paramsOpen = source.indexOf('(', start);
   let depth = 0;
+  let paramsClose = -1;
+  for (let index = paramsOpen; index < source.length; index += 1) {
+    if (source[index] === '(') depth += 1;
+    if (source[index] === ')') {
+      depth -= 1;
+      if (depth === 0) {
+        paramsClose = index;
+        break;
+      }
+    }
+  }
+  if (paramsClose < 0) {
+    throw new Error(`unterminated parameters: ${name}`);
+  }
+  const open = source.indexOf('{', paramsClose);
+  depth = 0;
   for (let index = open; index < source.length; index += 1) {
     if (source[index] === '{') depth += 1;
     if (source[index] === '}') {
@@ -29,6 +54,13 @@ function functionBody(source: string, name: string): string {
     }
   }
   throw new Error(`unterminated function: ${name}`);
+}
+
+/** Drop comments so a commented-out call cannot satisfy the static pins. */
+function stripComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/[^\n]*/g, '');
 }
 
 /**
@@ -152,6 +184,97 @@ describe('breakout screenshot determinism guard', () => {
     // must not leak into the state captures.
     for (const name of ['openPlaying', 'openLevelClear', 'openGameOver']) {
       expect(functionBody(SCRIPT, name)).not.toContain('settleReadyBackdrop');
+    }
+  });
+
+  it('settles the shared header only on the WebKit playing path', () => {
+    // Issue #328: the observed drift is entirely inside the shared site
+    // header's blurred backdrop snapshot, so the playing capture reuses the
+    // reusable #326 / #341 seam instead of carrying a second paint recipe.
+    expect(SCRIPT).toContain(
+      "import { settleSharedHeaderCompositing } from './lib/webkit-compositing-settle.mjs';",
+    );
+    expect(SCRIPT).toContain('const IS_WEBKIT = ENGINE === WEBKIT_ENGINE;');
+
+    const stripped = stripComments(SCRIPT);
+    const openPlaying = functionBody(stripped, 'openPlaying');
+    const markerAt = openPlaying.indexOf("getAttribute('data-debug-steps')");
+    const settleAt = openPlaying.indexOf('await settle(page);');
+    const seamAt = openPlaying.indexOf('await settleSharedHeaderCompositing(page);');
+    expect(markerAt).toBeGreaterThan(-1);
+    expect(seamAt).toBeGreaterThan(markerAt);
+    expect(seamAt).toBeGreaterThan(settleAt);
+    // The seam must be gated by WebKit mode: removing the guard would change
+    // the committed Chromium playing bytes as well.
+    expect(openPlaying).toMatch(
+      /if \(IS_WEBKIT\) \{\s*await settleSharedHeaderCompositing\(page\);\s*\}/,
+    );
+
+    // No other state capture runs the header seam, and there is exactly one
+    // call in the script: a leak into ready / levelclear / gameover would
+    // rewrite their committed bytes.
+    for (const name of ['openReady', 'openLevelClear', 'openGameOver']) {
+      expect(functionBody(stripped, name)).not.toContain(
+        'settleSharedHeaderCompositing',
+      );
+    }
+    expect([
+      ...stripped.matchAll(/await settleSharedHeaderCompositing\(page\);/g),
+    ]).toHaveLength(1);
+  });
+
+  it('asks the shared header seam for the two committed repaint frames', async () => {
+    // Four double-rAF waits in total: one SHARED_HEADER_SETTLE_FRAMES budget
+    // after disabling the filter and one after restoring it. The in-page
+    // toggle / frame sequence is runtime-tested in
+    // webkit-compositing-settle.test.ts; this pins the budget the breakout
+    // capture relies on and that it does not override the shared default.
+    expect(SHARED_HEADER_SETTLE_FRAMES).toBe(2);
+    const calls: SharedHeaderRepaintOptions[] = [];
+    const page = {
+      evaluate: async (_pageFunction: unknown, options: SharedHeaderRepaintOptions) => {
+        calls.push(options);
+        return true;
+      },
+    };
+    await settleSharedHeaderCompositing(page as unknown as Page);
+    expect(calls).toEqual([
+      { selector: SHARED_HEADER_SELECTOR, frames: SHARED_HEADER_SETTLE_FRAMES },
+    ]);
+
+    const openPlaying = functionBody(stripComments(SCRIPT), 'openPlaying');
+    expect(openPlaying).toContain('await settleSharedHeaderCompositing(page);');
+    expect(openPlaying).not.toContain('frames:');
+  });
+
+  it('opts only the WebKit playing capture into the stable frame path', () => {
+    // capture() must forward its options, otherwise `stable: true` is silently
+    // dropped and the header seam writes a single in-flight frame.
+    const stripped = stripComments(SCRIPT);
+    expect(stripped).toContain(
+      'async function capture(page, name, fullPage, options = {}) {',
+    );
+    const helper = functionBody(stripped, 'capture');
+    expect(helper).toContain(
+      'await captureScreenshot(page, name, { engine: ENGINE, fullPage, ...options });',
+    );
+
+    const webkit = functionBody(stripped, 'captureWebkitMobile');
+    const captureAt = webkit.indexOf(
+      "capture(playing, 'after-breakout-playing-webkit.png', false, {",
+    );
+    const stableAt = webkit.indexOf('stable: true');
+    expect(captureAt).toBeGreaterThan(-1);
+    expect(stableAt).toBeGreaterThan(captureAt);
+    // Exactly one capture asks for stable bytes; the other three WebKit states
+    // and the Chromium / before captures keep the single-screenshot path.
+    expect([...stripped.matchAll(/stable: true/g)]).toHaveLength(1);
+    for (const file of [
+      'after-breakout-ready-webkit.png',
+      'after-breakout-levelclear-webkit.png',
+      'after-breakout-gameover-webkit.png',
+    ]) {
+      expect(webkit).not.toContain(`${file}', false, {`);
     }
   });
 });
