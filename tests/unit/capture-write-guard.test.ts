@@ -223,6 +223,76 @@ describe('captureScreenshot write-time environment guard', () => {
     expect(log.warn).not.toHaveBeenCalled();
     expect(expectedCaptureSha256(FILE, { manifest })).toBe(sha256(bytes));
     expect(expectedCaptureSha256('not-in-manifest.png', { manifest })).toBeNull();
+    expect(expectedCaptureSha256(FILE, { manifest: null })).toBeNull();
+    // A missing manifest (trimmed checkout) reads as unrecorded, not an error.
+    expect(
+      expectedCaptureSha256(FILE, {
+        manifestPath: join(dir, 'missing-manifest.json'),
+      }),
+    ).toBeNull();
+  });
+
+  it('rejects capturedBytes when the environment fingerprint does not match', async () => {
+    const dir = tempScreenshotDir();
+    const target = join(dir, FILE);
+    writeFileSync(target, 'old committed bytes');
+    const { page, screenshotSpy } = fakePage();
+    const mismatched = containerFingerprint();
+    mismatched.fonts = FONTS.map((font) =>
+      font.name === 'fonts-liberation' ? { ...font, version: '9.9.9' } : font,
+    );
+
+    await expect(
+      captureScreenshot(page, FILE, {
+        engine: 'webkit',
+        outputDir: dir,
+        manifest: sampleManifest(),
+        fingerprint: mismatched as never,
+        capturedBytes: Buffer.from('validated png bytes'),
+      }),
+    ).rejects.toThrow(/Refusing to write .*before writing any bytes/);
+
+    expect(readFileSync(target, 'utf8')).toBe('old committed bytes');
+    expect(readdirSync(dir)).toEqual([FILE]);
+    expect(screenshotSpy).not.toHaveBeenCalled();
+  });
+
+  it('writes capturedBytes for an unrecorded file without a screenshot', async () => {
+    const dir = tempScreenshotDir();
+    const target = join(dir, FILE);
+    const bytes = Buffer.from('unrecorded png bytes');
+    const { page, screenshotSpy } = fakePage({
+      screenshot: async () => {
+        throw new Error('capturedBytes must not take another screenshot');
+      },
+    });
+
+    await captureScreenshot(page, FILE, {
+      engine: 'webkit',
+      outputDir: dir,
+      manifest: null,
+      capturedBytes: bytes,
+    });
+
+    expect(readFileSync(target)).toEqual(bytes);
+    expect(screenshotSpy).not.toHaveBeenCalled();
+    expect(expectedCaptureSha256(FILE, { manifest: null })).toBeNull();
+  });
+
+  it('validates the environment without writing for checkOnly', async () => {
+    const dir = tempScreenshotDir();
+    const { page, screenshotSpy } = fakePage();
+
+    await captureScreenshot(page, FILE, {
+      engine: 'webkit',
+      outputDir: dir,
+      manifest: sampleManifest(),
+      fingerprint: containerFingerprint() as never,
+      checkOnly: true,
+    });
+
+    expect(readdirSync(dir)).toEqual([]);
+    expect(screenshotSpy).not.toHaveBeenCalled();
   });
 
   it('keeps the committed PNG and removes the temporary sibling when the atomic rename fails', async () => {
