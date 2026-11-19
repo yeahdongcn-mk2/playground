@@ -36,7 +36,10 @@ export interface FocusViewportSnapshot {
   /** Target rect, or `null` when the element has no layout box. */
   readonly rect: FocusViewportRect | null;
   readonly viewport: FocusViewportSize;
-  /** Page-side `performance.now()`, used to order the reflow samples. */
+  /**
+   * Page-side `performance.now()`. The failure report shows it relative to the
+   * trigger so the reflow history reveals how long the layout kept moving.
+   */
   readonly at: number;
 }
 
@@ -59,8 +62,9 @@ export interface FocusSettleFailure {
 /**
  * The wait succeeds only when the target owns focus and its whole box is
  * inside the viewport. Left / top keep the existing strict bound; right /
- * bottom keep the existing 0.5px tolerance, so this matches
- * `expectInsideViewport` instead of silently relaxing it.
+ * bottom keep the existing 0.5px tolerance from the same
+ * {@link FOCUS_VIEWPORT_TOLERANCE} constant `expectInsideViewport` uses, so
+ * the two "fully visible" assertions cannot drift apart.
  */
 export function isFocusedInsideViewport(snapshot: FocusViewportSnapshot): boolean {
   if (!snapshot.focused) {
@@ -131,14 +135,21 @@ function describeSnapshot(snapshot: FocusViewportSnapshot): string {
  * Build the timeout message. It includes the last `scrollY`, target rect,
  * viewport and `document.activeElement` testid / tag, plus the trigger and
  * reflow snapshots: an unchanged scrolled-away rect means the focus auto-scroll
- * never landed, while samples that keep moving mean layout was still settling.
+ * never landed, while samples that keep moving mean layout was still settling;
+ * each reflow entry carries the elapsed time since the trigger.
  */
 export function formatFocusSettleFailure(failure: FocusSettleFailure): string {
   const { label, timeout, trigger, latest, reflow, sampleCount } = failure;
   const reflowText =
     reflow.length === 0
       ? 'no focus / scroll / rect change after the trigger'
-      : reflow.map((snapshot) => describeSnapshot(snapshot)).join(' -> ');
+      : reflow
+          .map(
+            (snapshot) =>
+              `+${formatNumber(snapshot.at - trigger.at)}ms ` +
+              describeSnapshot(snapshot),
+          )
+          .join(' -> ');
   return [
     `${label} did not settle as the focused element fully inside the viewport ` +
       `within ${timeout}ms (${sampleCount} samples)`,

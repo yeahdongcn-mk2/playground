@@ -32,37 +32,44 @@ describe('isFocusedInsideViewport', () => {
   });
 
   it('accepts the right / bottom edge with the existing 0.5px tolerance', () => {
+    // Literal boundaries on purpose: deriving them from the constant would let
+    // a relaxed tolerance keep this test green.
     expect(
       isFocusedInsideViewport(
         snapshot({
-          rect: { x: 0, y: 0, width: 375 + FOCUS_VIEWPORT_TOLERANCE, height: 667 },
+          rect: { x: 0, y: 0, width: 375.5, height: 667 },
         }),
       ),
     ).toBe(true);
     expect(
       isFocusedInsideViewport(
         snapshot({
-          rect: { x: 0, y: 0, width: 375, height: 667 + FOCUS_VIEWPORT_TOLERANCE },
+          rect: { x: 0, y: 0, width: 375, height: 667.5 },
         }),
       ),
     ).toBe(true);
   });
 
   it('rejects a target that overflows the right / bottom beyond the tolerance', () => {
+    // Just 0.0001px past the literal 0.5px tolerance must still fail.
     expect(
       isFocusedInsideViewport(
         snapshot({
-          rect: { x: 0, y: 0, width: 375 + FOCUS_VIEWPORT_TOLERANCE + 0.01, height: 100 },
+          rect: { x: 0, y: 0, width: 375.5001, height: 100 },
         }),
       ),
     ).toBe(false);
     expect(
       isFocusedInsideViewport(
         snapshot({
-          rect: { x: 0, y: 0, width: 100, height: 667 + FOCUS_VIEWPORT_TOLERANCE + 0.01 },
+          rect: { x: 0, y: 0, width: 100, height: 667.5001 },
         }),
       ),
     ).toBe(false);
+  });
+
+  it('pins the shared viewport tolerance at exactly 0.5px', () => {
+    expect(FOCUS_VIEWPORT_TOLERANCE).toBe(0.5);
   });
 
   it('keeps the strict left / top bound, so a scrolled-away target fails', () => {
@@ -153,7 +160,9 @@ describe('formatFocusSettleFailure', () => {
     expect(message).toContain('focused=false');
     expect(message).toContain('target=mobile-restart-button');
     expect(message).toContain('reflow:  ');
+    expect(message).toContain('reflow:  +30ms ');
     expect(message).toContain('scrollX=0 scrollY=500');
+    expect(message).toContain(' -> +60ms ');
     expect(message).toContain(' -> ');
   });
 

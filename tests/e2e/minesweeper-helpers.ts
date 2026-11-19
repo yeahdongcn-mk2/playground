@@ -6,6 +6,7 @@ import type {
 } from '../../src/games/minesweeper/engine';
 import { expect } from './fixtures';
 import {
+  FOCUS_VIEWPORT_TOLERANCE,
   formatFocusSettleFailure,
   focusViewportSignature,
   isFocusedInsideViewport,
@@ -267,10 +268,10 @@ export async function expectInsideViewport(
   expect(box.x, `${label} should start inside the viewport`).toBeGreaterThanOrEqual(0);
   expect(box.y, `${label} should start inside the viewport`).toBeGreaterThanOrEqual(0);
   expect(box.x + box.width, `${label} should end inside the viewport`).toBeLessThanOrEqual(
-    viewport.width + 0.5,
+    viewport.width + FOCUS_VIEWPORT_TOLERANCE,
   );
   expect(box.y + box.height, `${label} should end inside the viewport`).toBeLessThanOrEqual(
-    viewport.height + 0.5,
+    viewport.height + FOCUS_VIEWPORT_TOLERANCE,
   );
 }
 
