@@ -228,13 +228,36 @@ test.describe('blank canvas game', () => {
       .toBe(true);
 
     // The reset button keeps focus; arrow keys must still reach the canvas.
+    // Hold the key until the game state proves the cursor moved instead of
+    // sleeping for a fixed wall-clock window: under parallel load a 300ms hold
+    // may only cover one frame clamped to MAX_DELTA (36 CSS px, below the 40 px
+    // threshold), which made the old assertion flaky. The key stays down for
+    // the whole poll, so slower frames simply keep moving the cursor.
     const centred = await readPosition(page);
-    await page.keyboard.down('ArrowLeft');
-    await page.waitForTimeout(300);
-    await page.keyboard.up('ArrowLeft');
-    await expect
-      .poll(async () => (await readPosition(page)).x, { timeout: 2_000 })
-      .toBeLessThan(centred.x - 40);
+    let lastReadout = centred;
+    try {
+      await page.keyboard.down('ArrowLeft');
+      try {
+        await expect
+          .poll(
+            async () => {
+              lastReadout = await readPosition(page);
+              return lastReadout.x;
+            },
+            { timeout: 2_000 },
+          )
+          .toBeLessThan(centred.x - 40);
+      } catch (error) {
+        throw new Error(
+          `ArrowLeft did not move the cursor at least 40px left while held ` +
+            `(centred x=${centred.x}, last readout x=${lastReadout.x} y=${lastReadout.y})`,
+          { cause: error },
+        );
+      }
+      await expect(page.getByTestId('input-mode')).toHaveText('键盘');
+    } finally {
+      await page.keyboard.up('ArrowLeft');
+    }
   });
 
   test('resizes the engine when only its container changes', async ({ page }) => {
