@@ -235,33 +235,15 @@ test.describe('blank canvas game', () => {
     // Hold the key until the game state proves the cursor moved instead of
     // sleeping for a fixed wall-clock window: under parallel load a 300ms hold
     // may only cover one frame clamped to MAX_DELTA (36 CSS px, below the 40 px
-    // threshold), which made the old assertion flaky. The key stays down for
-    // the whole poll, so slower frames simply keep moving the cursor.
+    // threshold), which made the old assertion flaky. The shared helper keeps
+    // the key down for the whole poll (slower frames simply keep moving the
+    // cursor) and releases it in `finally`, with the last readout in failures.
     const centred = await readPosition(page);
-    let lastReadout = centred;
-    try {
-      await page.keyboard.down('ArrowLeft');
-      try {
-        await expect
-          .poll(
-            async () => {
-              lastReadout = await readPosition(page);
-              return lastReadout.x;
-            },
-            { timeout: 2_000 },
-          )
-          .toBeLessThan(centred.x - 40);
-      } catch (error) {
-        throw new Error(
-          `ArrowLeft did not move the cursor at least 40px left while held ` +
-            `(centred x=${centred.x}, last readout x=${lastReadout.x} y=${lastReadout.y})`,
-          { cause: error },
-        );
-      }
-      await expect(page.getByTestId('input-mode')).toHaveText('键盘');
-    } finally {
-      await page.keyboard.up('ArrowLeft');
-    }
+    await holdKeyUntilMoved(page, 'ArrowLeft', (position) => position.x < centred.x - 40, {
+      timeout: 2_000,
+      description: `ArrowLeft reset movement at least 40px left of centred x=${centred.x}`,
+    });
+    await expect(page.getByTestId('input-mode')).toHaveText('键盘');
   });
 
   test('resizes the engine when only its container changes', async ({ page }) => {
