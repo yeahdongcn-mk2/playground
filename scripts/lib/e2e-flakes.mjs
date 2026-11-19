@@ -1,31 +1,46 @@
 import { readFileSync } from 'node:fs';
 
 /**
- * Fail-on-flaky gate for one Playwright case in the `mobile-webkit` project.
+ * Fail-on-flaky gate for the guarded first-run cases.
  *
  * Playwright's own `failOnFlakyTests` / `--fail-on-flaky-tests` applies to the
  * whole run, so enabling it would also turn the existing flaky cases in other
  * projects into PR failures (issue #164). Instead this module reads the JSON
- * report of the current run and only inspects project `mobile-webkit` cases
- * whose title contains `hub and blank canvas`, the framework phone case
- * introduced for issue #117.
+ * report of the current run and only inspects the explicit targets in
+ * `TARGET_CASES`: the framework phone case introduced for issue #117 and the
+ * blank canvas reset case from issue #339.
  *
  * Retry policy, assertions and timeouts stay untouched: other cases keep
- * being recorded as flaky by `retries: 2`, while a report where the target
- * case only passes after a retry makes the dedicated CI step exit non-zero.
+ * being recorded as flaky by `retries: 2`, while a report where a target case
+ * only passes after a retry makes the dedicated CI step exit non-zero.
  */
 
 /** JSON report written by the CI Playwright run (see `playwright.config.ts`). */
 export const DEFAULT_E2E_REPORT_PATH = 'test-results/e2e-report.json';
 
-/** Project that owns the guarded framework phone case. */
-export const TARGET_PROJECT_NAME = 'mobile-webkit';
-
-/** Title fragment that identifies the guarded framework phone case. */
-export const TARGET_TITLE_FRAGMENT = 'hub and blank canvas';
+/**
+ * Explicit list of guarded first-run cases: project, title fragment and a
+ * human-readable label. Adding a case here is the only way to widen the gate;
+ * there is deliberately no global `failOnFlakyTests` switch.
+ */
+export const TARGET_CASES = [
+  {
+    label: 'framework 手机端（hub and blank canvas）',
+    projectName: 'mobile-webkit',
+    titleFragment: 'hub and blank canvas',
+  },
+  {
+    label: 'blank canvas reset（reset centres the cursor）',
+    projectName: 'chromium',
+    titleFragment: 'reset centres the cursor and keyboard keeps working afterwards',
+  },
+];
 
 /** Longest first-run error summary printed for a flaky case. */
 const MAX_ERROR_SUMMARY_LENGTH = 240;
+
+/** Target verdicts that let the gate pass; `failed` is already red in e2e. */
+const PASSING_TARGET_STATUSES = new Set(['passed', 'failed']);
 
 /** Raised when the report cannot be read or is not a Playwright JSON report. */
 export class E2eFlakesError extends Error {
@@ -180,10 +195,11 @@ function retryCountOf(results) {
   return typeof retry === 'number' && Number.isInteger(retry) && retry >= 0 ? retry : passedIndex;
 }
 
-function toTargetCase(spec, suite, test) {
+function toTargetCase(target, spec, suite, test) {
   const results = testResults(test);
   const firstFailure = results.find((result) => result.status !== 'passed') ?? results[0];
   return {
+    targetLabel: target.label,
     title: spec.title,
     projectName: test.projectName,
     file: spec.file ?? suite.file ?? '',
@@ -194,17 +210,23 @@ function toTargetCase(spec, suite, test) {
   };
 }
 
-/** All `mobile-webkit` tests whose spec title contains the target fragment. */
+/**
+ * All cases matching any entry of `TARGET_CASES`, annotated with the target
+ * label they matched. Each target is matched independently by project and
+ * title fragment, so a case with the same title in another project is ignored.
+ */
 export function collectTargetCases(report) {
   const cases = [];
-  for (const suite of walkSuites(Array.isArray(report?.suites) ? report.suites : [])) {
-    if (!Array.isArray(suite.specs)) continue;
-    for (const spec of suite.specs) {
-      if (!isRecord(spec) || typeof spec.title !== 'string') continue;
-      if (!spec.title.includes(TARGET_TITLE_FRAGMENT)) continue;
-      for (const test of Array.isArray(spec.tests) ? spec.tests : []) {
-        if (!isRecord(test) || test.projectName !== TARGET_PROJECT_NAME) continue;
-        cases.push(toTargetCase(spec, suite, test));
+  for (const target of TARGET_CASES) {
+    for (const suite of walkSuites(Array.isArray(report?.suites) ? report.suites : [])) {
+      if (!Array.isArray(suite.specs)) continue;
+      for (const spec of suite.specs) {
+        if (!isRecord(spec) || typeof spec.title !== 'string') continue;
+        if (!spec.title.includes(target.titleFragment)) continue;
+        for (const test of Array.isArray(spec.tests) ? spec.tests : []) {
+          if (!isRecord(test) || test.projectName !== target.projectName) continue;
+          cases.push(toTargetCase(target, spec, suite, test));
+        }
       }
     }
   }
@@ -212,98 +234,124 @@ export function collectTargetCases(report) {
 }
 
 /**
- * Decide what the gate should say about the report.
- *
- * - `passed`: every target case passed on its first attempt.
- * - `flaky`: a target case failed first and only passed after a retry.
- * - `failed`: the target case failed; the e2e step already failed the job, so
- *   this check stays quiet instead of reporting the same failure twice.
- * - `skipped`: the target case was skipped (or marked as an expected failure),
- *   so first-run stability is not proven.
- * - `missing`: the report has no target case (renamed test, changed project or
- *   a filtered run), so the gate cannot confirm first-run stability and must
- *   not silently pass.
- * - `unknown`: the report has target cases but their state is not one of the
- *   states Playwright documents; do not silently pass.
+ * Verdict for one target. `missing` means the report contains no case for the
+ * target at all, which is a gate failure rather than a silent pass.
  */
-export function analyzeE2eFlakes(report) {
-  const cases = collectTargetCases(report);
-
-  if (cases.length === 0) return { status: 'missing', cases };
-  if (cases.some((entry) => entry.outcome === 'flaky')) return { status: 'flaky', cases };
-  if (cases.some((entry) => entry.outcome === 'failed')) return { status: 'failed', cases };
-  if (cases.some((entry) => entry.outcome === 'skipped')) return { status: 'skipped', cases };
-  if (cases.some((entry) => entry.outcome === 'unknown')) return { status: 'unknown', cases };
-  return { status: 'passed', cases };
+function analyzeTarget(target, cases) {
+  const targetCases = cases.filter((entry) => entry.targetLabel === target.label);
+  if (targetCases.length === 0) return { target, status: 'missing', cases: [] };
+  if (targetCases.some((entry) => entry.outcome === 'flaky')) {
+    return { target, status: 'flaky', cases: targetCases };
+  }
+  if (targetCases.some((entry) => entry.outcome === 'failed')) {
+    return { target, status: 'failed', cases: targetCases };
+  }
+  if (targetCases.some((entry) => entry.outcome === 'skipped')) {
+    return { target, status: 'skipped', cases: targetCases };
+  }
+  if (targetCases.some((entry) => entry.outcome === 'unknown')) {
+    return { target, status: 'unknown', cases: targetCases };
+  }
+  return { target, status: 'passed', cases: targetCases };
 }
 
 /**
- * Exit code for an analysis: 0 when there is nothing to fail (target passed on
- * its first attempt, or the e2e step already failed it); 1 for target
- * flakiness, a skipped/unrecognized target or a report without the target case.
+ * Decide what the gate should say about the report.
+ *
+ * Every target is analyzed separately, and the gate fails when any target is:
+ *
+ * - `flaky`: the case failed first and only passed after a retry.
+ * - `skipped`: the case was skipped (or marked as an expected failure), so
+ *   first-run stability is not proven.
+ * - `missing`: the report has no case for the target (renamed test, changed
+ *   project or a filtered run), so the gate must not silently pass.
+ * - `unknown`: the report has target cases but their state is not one of the
+ *   states Playwright documents.
+ *
+ * `passed` and `failed` targets let the gate pass: a failed target already
+ * failed the e2e step, so the dedicated check stays quiet instead of reporting
+ * the same failure twice.
+ */
+export function analyzeE2eFlakes(report) {
+  const cases = collectTargetCases(report);
+  const targets = TARGET_CASES.map((target) => analyzeTarget(target, cases));
+
+  const blocked = targets.find((entry) => !PASSING_TARGET_STATUSES.has(entry.status));
+  let status;
+  if (blocked) {
+    status = blocked.status;
+  } else {
+    status = targets.some((entry) => entry.status === 'failed') ? 'failed' : 'passed';
+  }
+
+  return { status, targets, cases };
+}
+
+/**
+ * Exit code for an analysis: 0 when every target passed first or already
+ * failed the e2e step; 1 when any target is flaky, skipped, missing or
+ * unrecognized.
  */
 export function exitCodeForAnalysis(analysis) {
   return analysis.status === 'passed' || analysis.status === 'failed' ? 0 : 1;
 }
 
+const TARGET_VERDICTS = {
+  passed: '首跑通过',
+  flaky: '重试后通过（flaky），门禁判失败',
+  failed: '失败，e2e 步骤已判失败',
+  skipped: '被跳过或标记为预期失败，门禁无法确认首跑通过',
+  unknown: '状态无法识别，门禁不接受',
+  missing: '报告中缺失，门禁无法确认首跑稳定性',
+};
+
 /** Human-readable lines for one analysis; `reportPath` is only used in hints. */
 export function describeE2eFlakes(analysis, reportPath = DEFAULT_E2E_REPORT_PATH) {
   const prefix = '[e2e-flakes]';
-  const target = `project=${TARGET_PROJECT_NAME} 且标题含「${TARGET_TITLE_FRAGMENT}」`;
-  const location = (entry) => `${entry.projectName} / ${entry.title}`;
+  const targets = Array.isArray(analysis.targets) ? analysis.targets : [];
+  const lines = [];
 
-  if (analysis.status === 'passed') {
-    return [
-      `${prefix} 目标用例首跑通过：${analysis.cases.length} 个用例`,
-      ...analysis.cases.map((entry) => `  ${location(entry)}`),
-    ];
-  }
+  targets.forEach((entry, index) => {
+    const target = entry.target;
+    lines.push(
+      `${prefix} 目标 ${index + 1}/${targets.length}：${target.label}` +
+        `（project=${target.projectName}，标题含「${target.titleFragment}」）` +
+        `— ${TARGET_VERDICTS[entry.status] ?? entry.status}`,
+    );
 
-  if (analysis.status === 'flaky') {
-    const lines = [`${prefix} 目标用例重试后通过，CI 判失败：`];
-    for (const entry of analysis.cases) {
-      if (entry.outcome !== 'flaky') continue;
-      lines.push(`  ${location(entry)}`);
-      lines.push(`  重试次数：${entry.retryCount}`);
-      lines.push(`  首跑错误：${entry.firstError ?? '未知错误'}`);
+    if (entry.status === 'missing') {
+      lines.push(`  报告：${reportPath}`);
+      lines.push('  若用例改名或换了 project，请同步 scripts/lib/e2e-flakes.mjs 的 TARGET_CASES。');
+      return;
     }
-    lines.push(`  报告：${reportPath}`);
-    return lines;
-  }
 
-  if (analysis.status === 'failed') {
-    return [
-      `${prefix} 目标用例失败：`,
-      ...analysis.cases
-        .filter((entry) => entry.outcome === 'failed')
-        .map((entry) => `  ${location(entry)}`),
-      '  e2e 步骤已判失败，本检查不重复报错。',
-    ];
-  }
+    if (entry.status === 'flaky') {
+      for (const item of entry.cases) {
+        if (item.outcome !== 'flaky') continue;
+        lines.push(`  ${item.projectName} / ${item.title}`);
+        lines.push(`  重试次数：${item.retryCount}`);
+        lines.push(`  首跑错误：${item.firstError ?? '未知错误'}`);
+      }
+      lines.push(`  报告：${reportPath}`);
+      return;
+    }
 
-  if (analysis.status === 'skipped') {
-    return [
-      `${prefix} 目标用例被跳过或标记为预期失败，门禁无法确认首跑通过：`,
-      ...analysis.cases
-        .filter((entry) => entry.outcome === 'skipped')
-        .map((entry) => `  ${location(entry)}`),
-      `  报告：${reportPath}`,
-    ];
-  }
+    for (const item of entry.cases) {
+      lines.push(`  ${item.projectName} / ${item.title}`);
+    }
+    if (entry.status === 'failed') {
+      lines.push('  e2e 步骤已判失败，本检查不重复报错。');
+    }
+    if (entry.status === 'skipped' || entry.status === 'unknown') {
+      lines.push(`  报告：${reportPath}`);
+    }
+  });
 
-  if (analysis.status === 'unknown') {
-    return [
-      `${prefix} 目标用例状态无法识别，门禁不接受：`,
-      ...analysis.cases
-        .filter((entry) => entry.outcome === 'unknown')
-        .map((entry) => `  ${location(entry)}`),
-      `  报告：${reportPath}`,
-    ];
-  }
-
-  return [
-    `${prefix} 报告中没有找到 ${target} 的用例，门禁无法确认首跑稳定性：`,
-    `  报告：${reportPath}`,
-    '  若用例改名或换了 project，请同步 scripts/lib/e2e-flakes.mjs 中的常量。',
-  ];
+  const blocked = targets.filter((entry) => !PASSING_TARGET_STATUSES.has(entry.status));
+  lines.push(
+    blocked.length === 0
+      ? `${prefix} 结论：${targets.length} 个目标通过门禁`
+      : `${prefix} 结论：${blocked.length}/${targets.length} 个目标未通过门禁`,
+  );
+  return lines;
 }

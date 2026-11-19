@@ -1,25 +1,35 @@
 import {
   DEFAULT_E2E_REPORT_PATH,
   E2eFlakesError,
+  TARGET_CASES,
   analyzeE2eFlakes,
   describeE2eFlakes,
   exitCodeForAnalysis,
   readE2eReport,
 } from './lib/e2e-flakes.mjs';
 
+const TARGET_LINES = TARGET_CASES.map(
+  (target) => `  - ${target.projectName} / title contains "${target.titleFragment}"`,
+).join('\n');
+
 const USAGE = `Usage: node scripts/check-e2e-flakes.mjs [options]
 
-Fail when the mobile-webkit "hub and blank canvas" case only passes after a
-retry in the Playwright JSON report of the current run. Other projects and
-other cases are ignored, so the existing retry policy stays unchanged.
+Fail when one of the guarded first-run cases only passes after a retry (or is
+skipped, missing or unrecognized) in the Playwright JSON report of the current
+run. Guarded cases:
+${TARGET_LINES}
+
+Other projects and other cases are ignored, so the existing retry policy stays
+unchanged. A target that failed outright is already failing the e2e step, so
+it is not reported twice.
 
 Options:
   --report <path>    Playwright JSON report (default: ${DEFAULT_E2E_REPORT_PATH})
   -h, --help         show this help
 
-Exit codes: 0 no target flakiness (first-run pass or the e2e step already
-failed it), 1 target flaky/skipped/unrecognized or a report without the target
-case, 2 usage error or a missing/unreadable report.`;
+Exit codes: 0 every target passed first or failed outright (the e2e step is
+already red), 1 any target flaky/skipped/unrecognized/missing, 2 usage error or
+a missing/unreadable report.`;
 
 function parseArgs(argv) {
   const options = { report: DEFAULT_E2E_REPORT_PATH };

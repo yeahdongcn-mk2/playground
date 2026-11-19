@@ -24,12 +24,22 @@ flaky 不等于 passed：它说明用例首跑不稳定，只是这次被重试�
 node scripts/check-e2e-flakes.mjs
 ```
 
-该检查只读取本次 e2e 的 JSON 报告，保护 `mobile-webkit` 项目中标题包含 `hub and blank canvas` 的 framework 手机端用例（`tests/e2e/framework-mobile-cases.ts` 的「hub and blank canvas fit a phone viewport」）。门禁结论：
+该检查只读取本次 e2e 的 JSON 报告，按 `scripts/lib/e2e-flakes.mjs` 的显式目标列表 `TARGET_CASES` 逐一判定。当前保护两个首跑用例：
 
-- 目标用例首跑通过：检查通过。
+| project | 标题包含 | 用例 |
+| --- | --- | --- |
+| `mobile-webkit` | `hub and blank canvas` | `tests/e2e/framework-mobile-cases.ts` 的「hub and blank canvas fit a phone viewport」 |
+| `chromium` | `reset centres the cursor and keyboard keeps working afterwards` | `tests/e2e/framework.spec.ts` 的「reset centres the cursor and keyboard keeps working afterwards」 |
+
+两个目标分别判定，**任一目标**出问题都会让门禁失败（exit 1）：
+
+- 目标用例首跑通过：该目标通过。
 - 目标用例 flaky：检查失败，并打印 project / 用例标题、重试次数、首跑错误和报告路径。
 - 目标用例 failed：`End-to-end tests` 已经先失败并中止 workflow，不需要该检查重复报错。
-- 目标用例被跳过、报告缺失或报告里找不到目标用例：检查失败，不能把「没有验证到」当成稳定性通过。
+- 目标用例被跳过、状态无法识别、报告里找不到该目标的用例：检查失败，不能把「没有验证到」当成稳定性通过；任一目标缺失即失败。
+- 报告文件缺失或损坏：属于输入错误，CLI 返回 exit 2。
+
+门禁的放行条件是每个目标都「首跑通过」或「failed」（exit 0）：一个目标 passed、另一个 failed 也放行，因为 failed 的 `End-to-end tests` 步骤已经让 job 判红。
 
 其他项目与其他用例不在这个 gate 的范围内：它们继续使用 `retries: 2`，即使首跑失败、重试后通过，也只记录为 flaky，不会让 `Check target e2e flakes` 失败。
 

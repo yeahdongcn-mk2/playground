@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { resolveCaptureImage } from '../../scripts/lib/capture-env.mjs';
+import { TARGET_CASES } from '../../scripts/lib/e2e-flakes.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (path: string): string => readFileSync(join(ROOT, path), 'utf8');
@@ -86,7 +87,7 @@ describe('flaky policy docs', () => {
     expect(POLICY).toContain('retries: 2');
   });
 
-  it('documents the PR gate step and the target case it protects', () => {
+  it('documents the PR gate step and the two first-run cases it protects', () => {
     const e2eIndex = verifySteps.findIndex((step) => step.name === 'End-to-end tests');
     const gateIndex = verifySteps.findIndex((step) => step.name === 'Check target e2e flakes');
     expect(e2eIndex).toBeGreaterThanOrEqual(0);
@@ -95,8 +96,19 @@ describe('flaky policy docs', () => {
 
     expect(POLICY).toContain('Check target e2e flakes');
     expect(POLICY).toContain('node scripts/check-e2e-flakes.mjs');
-    expect(POLICY).toContain('mobile-webkit');
-    expect(POLICY).toContain('hub and blank canvas');
+    for (const target of TARGET_CASES) {
+      expect(POLICY, target.label).toContain(target.projectName);
+      expect(POLICY, target.label).toContain(target.titleFragment);
+    }
+  });
+
+  it('documents that any flaky, skipped or missing target fails the gate', () => {
+    const section = policySection('常规 PR CI 的门禁范围');
+    expect(section, 'the policy should define the PR gate section').not.toBe('');
+    expect(section).toContain('任一目标');
+    expect(section).toContain('缺失');
+    expect(section).toContain('exit 1');
+    expect(section).toContain('exit 2');
   });
 
   it('keeps other cases on retries: 2 and only records them as flaky', () => {
