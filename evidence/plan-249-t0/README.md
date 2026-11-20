@@ -1,9 +1,10 @@
 # 镇煞风格层 Before / After 对照（#249 t1）
 
-- Before：`c9fbf6f`（本 PR 最初的 base；当前合并基线 `a219ea6` 相对它只新增
-  `bosses.ts` / 测试 / 文档，镇煞视觉层相同）
-- After：截图捕获于 `6cafece`（该提交对 CSS 仅改注释，视觉层与 `de3c22d` 相同）；
-  当前 head 在其后只追加 evidence、测试与文档。
+- Before：`66bf2da`（rebase 后的 main）。截图最初在 `c9fbf6f` 捕获；本节点在
+  `66bf2da` 重拍，四张 PNG 逐字节一致——两者之间只新增 `bosses.ts` 数据、测试与
+  文档，镇煞视觉层相同。
+- After：`4b52054`（rebase 后的分支 head）。截图最初捕获于 rebase 前 `6cafece`；
+  本节点在 rebase 后的 head 重拍，四张 PNG 同样逐字节一致，视觉层未变。
 
 四张 PNG 都是在本地构建产物上用 Playwright 的 Chromium 实拍，不是 mockup：
 
