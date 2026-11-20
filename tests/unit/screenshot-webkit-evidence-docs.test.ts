@@ -701,18 +701,18 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(readyOutside).not.toContain('等待 1 s 的 2 次样本里仍有 1 次 `d8a808b0');
 
     // The deterministic recapture command must keep ready out of the sha256
-    // comparison, which covers only the six playing / gameover files.
-    const recaptureSumLine = deterministic
+    // comparison, which covers only the six playing / gameover files. Pin the
+    // whole invocation list so an inline or continuation re-add of ready (or a
+    // second sha256sum command) cannot slip through.
+    const recaptureSumLines = deterministic
       .split('\n')
-      .find((line) => line.trimStart().startsWith('sha256sum'));
-    expect(recaptureSumLine?.trim()).toBe(
+      .filter((line) => line.trimStart().startsWith('sha256sum'))
+      .map((line) => line.trim());
+    expect(recaptureSumLines).toEqual([
       'sha256sum docs/screenshots/after-2048-{playing,gameover}-{desktop,mobile,webkit}.png',
-    );
+    ]);
     expect(deterministic).toContain('两次运行的 6 个 sha256 应完全一致');
     expect(deterministic).not.toContain('两次运行的 7 个 sha256 应完全一致');
-    expect(deterministic.split('\n')).not.toContain(
-      '    docs/screenshots/after-2048-ready-webkit.png',
-    );
 
     const manifest = JSON.parse(
       readFileSync(
