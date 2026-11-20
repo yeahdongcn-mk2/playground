@@ -71,7 +71,9 @@ describe('hub card art', () => {
   });
 
   it('keeps the other five cards on their existing dedicated art', () => {
-    for (const { id, svgClass } of SHIPPED_ART.slice(0, 5)) {
+    // Select by id rather than by slice position so a future reorder cannot
+    // silently leave one of the five existing cards unpinned.
+    for (const { id, svgClass } of SHIPPED_ART.filter((game) => game.id !== 'zhen-sha')) {
       const html = renderHub([gameById(id)], NO_HISTORY, NOW);
       expect(html).toContain(`class="game-card-art game-card-art--${id}"`);
 

@@ -106,7 +106,7 @@ test.describe('zhen-sha hub card art at 1024x800', () => {
 test.describe('zhen-sha hub card art at 320x640', () => {
   test.use({ viewport: { width: 320, height: 640 } });
 
-  test('keeps the narrow 156px card box and the wider 84% SVG', async ({ page }) => {
+  test('keeps the narrow 156px card box with the 84% width override', async ({ page }) => {
     await page.goto('/');
     await expect(page.getByTestId('game-card-zhen-sha')).toBeVisible();
 
