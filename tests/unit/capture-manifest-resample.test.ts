@@ -197,6 +197,32 @@ describe('captureManifestedScreenshot', () => {
     expect(write).toHaveBeenCalledWith(page.pages[0]?.page, bytesFor('intentional new UI'));
   });
 
+  it('defaults to a fullPage screenshot with animations disabled', async () => {
+    const screenshot = vi.fn(async () => bytesFor('canonical png bytes'));
+    const close = vi.fn(async () => {});
+    const page = { close, screenshot } as unknown as Page;
+    const write = vi.fn(async () => {});
+
+    await captureManifestedScreenshot({
+      name: NAME,
+      engine: 'webkit',
+      fullPage: true,
+      openPage: async () => page,
+      prepare: async () => {},
+      write,
+      expectedSha256: EXPECTED,
+    });
+
+    // The capture scripts omit captureBytes, so this default is the production
+    // screenshot path for every resampled 2048 / minesweeper state.
+    expect(screenshot).toHaveBeenCalledTimes(1);
+    expect(screenshot).toHaveBeenCalledWith({
+      fullPage: true,
+      animations: 'disabled',
+    });
+    expect(write).toHaveBeenCalledWith(page, bytesFor('canonical png bytes'));
+  });
+
   it('samples once for an unrecorded file', async () => {
     const page = pageFactory();
     const write = vi.fn(async () => {});
