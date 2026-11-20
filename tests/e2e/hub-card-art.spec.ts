@@ -14,6 +14,9 @@ interface ZhenShaArtStyle {
   readonly pseudoWidth: number;
   readonly pseudoHeight: number;
   readonly pseudoBackgroundImage: string;
+  readonly pseudoBackgroundPosition: string;
+  readonly pseudoBackgroundRepeat: string;
+  readonly pseudoBackgroundSize: string;
   readonly pseudoFilter: string;
   readonly imageWidth: number;
   readonly imageHeight: number;
@@ -74,6 +77,9 @@ async function readZhenShaArt(page: Page): Promise<ZhenShaArtStyle> {
       pseudoWidth: Number.parseFloat(before.width),
       pseudoHeight: Number.parseFloat(before.height),
       pseudoBackgroundImage: before.backgroundImage,
+      pseudoBackgroundPosition: before.backgroundPosition,
+      pseudoBackgroundRepeat: before.backgroundRepeat,
+      pseudoBackgroundSize: before.backgroundSize,
       pseudoFilter: before.filter,
       imageWidth,
       imageHeight,
@@ -119,6 +125,17 @@ function expectInkAndGold(art: ZhenShaArtStyle): void {
   expect(svg).toContain('#f6c453');
   expect(svg).toContain('#08070a');
   expect(svg).not.toMatch(/<image\b|xlink:href/);
+
+  // Pin how the art fills its box. The data URI alone is not enough: without
+  // `background-size: contain` the 220x132 art would draw at its intrinsic size
+  // instead of fitting the box. The box currently shares the SVG's 220:132
+  // ratio, so dropping `background-position: center` (computed as `50% 50%`)
+  // or `background-repeat: no-repeat` changes no pixels today; these
+  // assertions keep the intended contain / center / no-repeat behaviour if the
+  // box ratio or the art changes.
+  expect(art.pseudoBackgroundPosition).toBe('50% 50%');
+  expect(art.pseudoBackgroundRepeat).toBe('no-repeat');
+  expect(art.pseudoBackgroundSize).toBe('contain');
 
   // The decoded data URI must actually paint: a malformed SVG would still
   // leave the url(...) in computed style, so require real gold/ink pixels.

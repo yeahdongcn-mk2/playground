@@ -119,6 +119,11 @@ describe('hub card art', () => {
     expect(css).toMatch(/\.game-card-art > \.mini-orb\s*\{\s*display:\s*none/);
     expect(css).toMatch(/width:\s*74%/);
     expect(css).toMatch(/aspect-ratio:\s*220\s*\/\s*132/);
+    // Pin how the art fills its box, not only that the data URI exists.
+    // Order follows the CSS declarations in app.css.
+    expect(css).toMatch(/background-position:\s*center/);
+    expect(css).toMatch(/background-repeat:\s*no-repeat/);
+    expect(css).toMatch(/background-size:\s*contain/);
     // The narrow-screen override must stay in app.css too.
     expect(css).toMatch(/width:\s*84%/);
   });
