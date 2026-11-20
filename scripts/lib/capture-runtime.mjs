@@ -424,12 +424,24 @@ function normalizeScreenshotBytes(bytes) {
  * fail loudly instead of committing a transient frame as evidence. It detects
  * a sampled frame change within this run only; the caller's throwaway warm-up
  * page is what settles the first-page raster variant across runs.
- * With the default `stableFrames === 1` this is the previous single-shot
- * capture, so existing callers and their bytes stay unchanged.
+ * `captureScreenshot` defaults `stableFrames` to 1, which keeps that call
+ * site's previous single-shot bytes; this exported helper has no default and
+ * requires the frame count explicitly.
  *
  * Exported for the manifest resampler: a caller that samples a fresh page
  * compares the returned bytes with the manifest sha256, so it needs the same
  * stability gate before deciding whether the sample is worth keeping.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {{
+ *   name: string,
+ *   fullPage?: boolean,
+ *   animations?: 'allow' | 'disabled',
+ *   stableFrames: number,
+ *   stableIntervalMs: number,
+ *   stableAttempts: number,
+ * }} options
+ * @returns {Promise<Buffer>}
  */
 export async function captureStableFramesBytes(
   page,
@@ -582,9 +594,10 @@ export async function captureStableBytes(
  * single-screenshot path and therefore its existing bytes.
  *
  * `stableFrames > 1` (Issue #318) uses the interval-based
- * {@link captureStableFramesBytes} instead; the minesweeper WebKit READY
- * capture passes {@link READY_CAPTURE_STABLE_FRAMES} so two consecutive
- * identical frames are required before the PNG is written.
+ * {@link captureStableFramesBytes} instead, so two consecutive identical
+ * frames are required before the PNG is written. The minesweeper WebKit READY
+ * now runs that gate inside the manifest resampler through `capturedBytes`
+ * (see {@link captureManifestedScreenshot}).
  *
  * `capturedBytes` skips the screenshot and writes the bytes instead; it takes
  * precedence over `stable` / `stableFrames`. A manifested file still runs the

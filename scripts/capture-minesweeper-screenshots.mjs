@@ -453,8 +453,8 @@ function captureReadyFramesBytes(page, name) {
  * apart can cross a displayed second), so each state samples a single settled
  * frame and retries on a different fresh page when the bytes are a known
  * load-dependent variant. The ready state has its own resampled path in
- * `captureTouchMobile`:
- * it keeps the warm-up, scroll round-trip and whole-image stability gate.
+ * `captureTouchMobile`; it keeps the warm-up, scroll round-trip and
+ * whole-image stability gate.
  */
 async function captureWebkitAfterTouchStates(context, prefix) {
   await sampleWebkitTouchState(context, {

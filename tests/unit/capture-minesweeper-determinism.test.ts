@@ -470,6 +470,15 @@ describe('minesweeper WebKit READY determinism guard', () => {
     );
     expect(helper).toContain('capturedBytes: bytes');
     expect(helper).toContain('allowNewBytes: ALLOW_NEW_BYTES,');
+    // The two-frame gate only reaches the resampler when this call forwards
+    // captureBytes; dropping the option silently falls back to a single
+    // screenshot while every other assertion still passes.
+    const manifestCall = helper.indexOf('await captureManifestedScreenshot({');
+    expect(manifestCall).toBeGreaterThanOrEqual(0);
+    expect(helper.indexOf('captureBytes,', manifestCall)).toBeGreaterThan(manifestCall);
+    expect(helper.indexOf('captureBytes,', manifestCall)).toBeLessThan(
+      helper.indexOf('checkEnvironment:', manifestCall),
+    );
   });
 
   it('fails instead of skipping when the shared header is missing', async () => {
