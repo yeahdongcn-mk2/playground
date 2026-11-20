@@ -24,7 +24,7 @@ jobs:
   repro:
     name: fixed-container two-run repro
     runs-on: ubuntu-latest
-    # Six captures (three manifest targets x two runs) plus the dependency
+    # Twelve captures (six manifest targets x two runs) plus the dependency
     # install; the first run also pulls / builds the fixed capture image.
     timeout-minutes: 60
     steps:
