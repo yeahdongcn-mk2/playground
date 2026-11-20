@@ -1,0 +1,110 @@
+name: Screenshot repro under concurrent load
+
+# Daily / manual concurrent-load gate for the fixed-container screenshot
+# evidence (Issue #352).
+#
+# The nightly .github/workflows/capture-repro.yml stays unchanged: it derives
+# every target from docs/screenshots/capture-sha256-manifest.json and runs each
+# one twice without injected load. This workflow repeats a small set of the
+# WebKit targets that only drifted under host concurrency (#328 / #341 / #342)
+# at least four times while CPU-burning workers keep the runner loaded. Any run
+# whose bytes differ from the manifest makes npm run verify:screenshots:repro
+# exit non-zero, so an intermittent, load-only drift fails CI instead of
+# slipping through the two-run nightly.
+#
+# The dispatch inputs are validated by scripts/check-repro-load-inputs.mjs
+# before use: every target must be a manifest target and runs / load must be
+# positive integers (runs >= 4). The normalized values reach the capture step
+# through the validate step's outputs, never as a raw `${{ inputs.* }}`
+# expression inside a `run:` script. The scheduled run has no inputs and gets
+# the documented defaults.
+on:
+  schedule:
+    # Daily at 05:47 UTC, after the 04:41 nightly; off the top of the hour.
+    - cron: '47 5 * * *'
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: Comma-separated manifest capture targets.
+        required: false
+        type: string
+        default: 'screenshots:webkit,screenshots:breakout:webkit,screenshots:snake:webkit'
+      runs:
+        description: Runs per target (integer >= 4).
+        required: false
+        type: string
+        default: '4'
+      load:
+        description: CPU load worker processes (positive integer).
+        required: false
+        type: string
+        default: '8'
+
+permissions:
+  contents: read
+
+jobs:
+  load-repro:
+    name: concurrent-load screenshot repro
+    runs-on: ubuntu-latest
+    # The same twelve captures the nightly runs in its 60-minute budget
+    # (three default targets x four runs), with the injected CPU load on top.
+    # The capture entry stops and awaits every load worker on all paths, so
+    # this doubled bound only covers a hung capture.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Validate dispatch inputs
+        # A bad dispatch fails in seconds instead of after the dependency
+        # install. The step only reads the manifest and prints normalized
+        # step outputs; the capture step consumes those outputs.
+        id: validate
+        env:
+          REPRO_LOAD_INPUT_TARGETS: ${{ inputs.targets }}
+          REPRO_LOAD_INPUT_RUNS: ${{ inputs.runs }}
+          REPRO_LOAD_INPUT_LOAD: ${{ inputs.load }}
+        run: node scripts/check-repro-load-inputs.mjs
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Concurrent-load capture runs
+        # The validated target list is expanded into repeated --target flags
+        # here; every value already matched the manifest target pattern, so the
+        # shell only ever sees validated tokens.
+        env:
+          TARGETS: ${{ steps.validate.outputs.targets }}
+          RUNS: ${{ steps.validate.outputs.runs }}
+          LOAD: ${{ steps.validate.outputs.load }}
+        run: |
+          set -euo pipefail
+          target_args=()
+          IFS=',' read -r -a targets <<< "$TARGETS"
+          for target in "${targets[@]}"; do
+            target_args+=(--target "$target")
+          done
+          npm run verify:screenshots:repro -- "${target_args[@]}" --runs "$RUNS" --load "$LOAD"
+
+      - name: Assert the manifest was not modified
+        # A load-triggered mismatch must never be accepted by editing the
+        # manifest. Run even after a failed repro so the readonly contract is
+        # checked on the failure path too.
+        if: always()
+        run: git diff --exit-code -- docs/screenshots/capture-sha256-manifest.json
+
+      - name: Upload capture and load logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: capture-repro-load-logs
+          path: |
+            test-results/screenshot-repro/
+            test-results/capture-container/
+          if-no-files-found: ignore
+          retention-days: 14
