@@ -9,23 +9,30 @@ const SOURCE = readFileSync(
   'utf8',
 );
 
-function count(pattern: RegExp): number {
-  return [...SOURCE.matchAll(pattern)].length;
+/**
+ * The script with line and block comments removed. A commented-out seam call
+ * must not satisfy the static guards below.
+ */
+function stripComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^[ \t]*\/\/.*$/gm, '');
 }
 
-function indexOfOrFail(needle: string): number {
-  const index = SOURCE.indexOf(needle);
-  expect(index, `missing: ${needle}`).toBeGreaterThan(-1);
-  return index;
+const CODE = stripComments(SOURCE);
+
+function count(pattern: RegExp): number {
+  return [...CODE.matchAll(pattern)].length;
 }
 
 /** The source of one top-level `async function name(...)` declaration. */
-function functionBody(name: string): string {
+function functionCode(name: string): string {
   const marker = `async function ${name}(`;
-  const start = indexOfOrFail(marker);
-  const end = SOURCE.indexOf('\n}\n', start);
+  const start = CODE.indexOf(marker);
+  expect(start, `missing: ${marker}`).toBeGreaterThan(-1);
+  const end = CODE.indexOf('\n}\n', start);
   expect(end, `unterminated: ${marker}`).toBeGreaterThan(start);
-  return SOURCE.slice(start, end);
+  return CODE.slice(start, end);
 }
 
 /**
@@ -46,12 +53,33 @@ function expectInOrder(fn: string, needles: readonly string[]): void {
 }
 
 /**
+ * The unchanged ready contract: the original scroll + overlay seams, then the
+ * two-frame stable capture. The ready state must not enter the fresh-page
+ * resampler or the shared-backdrop rebuild (Issue #341 t3 leaves it on the
+ * pre-existing path; its remaining ready-scene drift belongs to Issue #374).
+ */
+function assertReadyPath(fn: string): void {
+  expectInOrder(fn, [
+    'await open2048(ready, COLOR_BOARD)',
+    'await settleWebkitReadyPaint(ready)',
+    'await repaintWebkitReadyOverlay(ready)',
+    "await capture(ready, 'after-2048-ready-webkit.png', false, { stable: true })",
+  ]);
+  expect(fn).not.toMatch(
+    /sampleWebkitState\(context, \{\s*name: 'after-2048-ready-webkit\.png'/,
+  );
+  expect(fn).not.toContain('settleSharedHeaderCompositing(ready)');
+  expect(fn).not.toContain('settleBackdropLayersCompositing(ready)');
+}
+
+/**
  * Static guard for the committed playing / gameover / ready WebKit PNGs. The
  * engine test proves seed 135 is deterministic for the pinned boards; this test
  * proves the capture script actually passes that seed and keeps every such
  * scene on the same board and direction, so a dropped parameter cannot silently
  * restore random captures while the engine test stays green. It also pins the
- * WebKit READY paint seam to the ready scene only.
+ * WebKit READY paint seam to the ready scene only and the shared-backdrop seams
+ * to the playing / gameover scenes (Issue #341).
  */
 describe('2048 screenshot determinism guard', () => {
   it('pins the debug seed in the URL of every 2048 scene', () => {
@@ -81,39 +109,96 @@ describe('2048 screenshot determinism guard', () => {
     expect(count(/keyboard\.press\('ArrowLeft'\)/g)).toBe(6);
   });
 
-  it('repaints the WebKit header only between ready open and ready capture', () => {
+  it('keeps the ready scene on its original scroll + overlay stable path', () => {
     expect(SOURCE).toContain('settleCapturePaint,\n  settleWebkitReadyPaint,');
     expect(count(/settleWebkitReadyPaint\(/g)).toBe(1);
+    expect(count(/repaintWebkitReadyOverlay\(/g)).toBe(1);
+    // Only the ready scene takes two consecutive identical frames; playing /
+    // gameover compare bytes through the manifest resampler instead.
+    expect(count(/stable: true/g)).toBe(1);
 
-    const webkit = functionBody('captureWebkitMobile');
-    expectInOrder(webkit, [
-      'await open2048(ready, COLOR_BOARD)',
-      'await settleWebkitReadyPaint(ready)',
-      'await repaintWebkitReadyOverlay(ready)',
-      "await capture(ready, 'after-2048-ready-webkit.png', false, { stable: true })",
-      "await capture(playing, 'after-2048-playing-webkit.png', false)",
-      "await capture(over, 'after-2048-gameover-webkit.png', false)",
-    ]);
-    expect(webkit).not.toContain('settleWebkitReadyPaint(playing)');
-    expect(webkit).not.toContain('settleWebkitReadyPaint(over)');
+    const webkit = functionCode('captureWebkitMobile');
+    assertReadyPath(webkit);
   });
 
-  it('waits for a stable raster only on the WebKit ready capture', () => {
-    expect(count(/stable: true/g)).toBe(1);
-    const webkit = functionBody('captureWebkitMobile');
-    expect(webkit).toContain(
-      "await capture(ready, 'after-2048-ready-webkit.png', false, { stable: true })",
+  it('fails the ready guard when a seam or the stable capture is removed', () => {
+    const webkit = functionCode('captureWebkitMobile');
+    for (const seam of [
+      'await settleWebkitReadyPaint(ready);',
+      'await repaintWebkitReadyOverlay(ready);',
+    ]) {
+      const commented = stripComments(webkit.replace(seam, `// ${seam}`));
+      expect(() => assertReadyPath(commented)).toThrow();
+    }
+    const withoutStable = stripComments(
+      webkit.replace("false, { stable: true }", 'false'),
     );
-    expect(webkit).toContain('await repaintWebkitReadyOverlay(ready)');
-    expectInOrder(webkit, [
-      'await open2048(ready, COLOR_BOARD)',
-      'await settleWebkitReadyPaint(ready)',
-      "await capture(ready, 'after-2048-ready-webkit.png', false, { stable: true })",
-    ]);
+    expect(() => assertReadyPath(withoutStable)).toThrow();
+    const rerouted = stripComments(
+      webkit.replace(
+        "await capture(ready, 'after-2048-ready-webkit.png', false, { stable: true })",
+        "await sampleWebkitState(context, { name: 'after-2048-ready-webkit.png' })",
+      ),
+    );
+    expect(() => assertReadyPath(rerouted)).toThrow();
   });
 
   it('keeps every scene on the shared settle contract', () => {
     expect(SOURCE).toContain('await settleCapturePaint(page)');
     expect(SOURCE).toContain('settleCapturePaint,\n  settleWebkitReadyPaint,');
+  });
+
+  it('samples the playing / gameover states from fresh pages until the manifest sha256', () => {
+    expect(CODE).toContain('captureManifestedScreenshot,');
+    expect(CODE).toContain(
+      "const ALLOW_NEW_BYTES = ARGS.includes('--allow-new-bytes');",
+    );
+    // Two resampled states, one capture each, both through the same helper.
+    expect(count(/await sampleWebkitState\(context, \{/g)).toBe(2);
+
+    const helper = functionCode('sampleWebkitState');
+    expect(helper).toContain('await captureManifestedScreenshot({');
+    expect(helper).toContain('openPage: () => context.newPage()');
+    expect(helper).toContain(
+      'checkEnvironment: (page) => capture(page, name, false, { checkOnly: true })',
+    );
+    expect(helper).toMatch(
+      /write: \(page, bytes\) =>\s*capture\(page, name, false, \{ capturedBytes: bytes \}\),/,
+    );
+    expect(helper).toContain('allowNewBytes: ALLOW_NEW_BYTES,');
+
+    const webkit = functionCode('captureWebkitMobile');
+    expectInOrder(webkit, [
+      "name: 'after-2048-playing-webkit.png'",
+      "name: 'after-2048-gameover-webkit.png'",
+    ]);
+  });
+
+  it('settles the playing header and rebuilds the gameover backdrops', () => {
+    expect(CODE).toContain('settleSharedHeaderCompositing,');
+    expect(CODE).toContain('settleBackdropLayersCompositing,');
+    // Playing has no overlay, so it rebuilds only the shared header. Gameover
+    // rebuilds the header and its own translucent backdrop together; a
+    // separate header-only call would resample the overlay into another
+    // variant, so it must stay at exactly one backdrop-pair call.
+    expect([...CODE.matchAll(/await settleSharedHeaderCompositing\(/g)]).toHaveLength(1);
+    expect([...CODE.matchAll(/await settleBackdropLayersCompositing\(/g)]).toHaveLength(1);
+
+    const webkit = functionCode('captureWebkitMobile');
+    expectInOrder(webkit, [
+      "name: 'after-2048-playing-webkit.png'",
+      'await open2048(playing, MERGE_BOARD)',
+      'await settle(playing)',
+      'await settleSharedHeaderCompositing(playing)',
+      "name: 'after-2048-gameover-webkit.png'",
+      'await open2048(over, STUCK_BOARD)',
+      'await settle(over)',
+      'await settleBackdropLayersCompositing(over)',
+    ]);
+    // The gameover pair already rebuilds both layers; one extra header-only
+    // seam before it would be a redundant, contract-confusing sample.
+    expect(webkit).not.toContain('settleSharedHeaderCompositing(over)');
+    expect(webkit).not.toContain('repaintWebkitReadyOverlay(over)');
+    expect(webkit).not.toContain('repaintWebkitReadyOverlay(playing)');
   });
 });

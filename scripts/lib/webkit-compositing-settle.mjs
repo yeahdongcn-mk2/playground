@@ -69,6 +69,89 @@ export async function repaintSharedHeader({ selector, frames }) {
   return true;
 }
 
+/** Overlay whose translucent backdrop can cache the same one-step drift. */
+export const SHARED_OVERLAY_SELECTOR = '[data-testid="overlay"]';
+
+/**
+ * In-page half of `settleBackdropLayersCompositing`.
+ *
+ * Toggling both `backdrop-filter`s in the same animation frame rebuilds the
+ * shared header and the translucent overlay from one committed frame. Hiding
+ * the overlay instead (the ready seam) is not enough for a scene whose card is
+ * already visible: the restored card can re-sample the board into a different
+ * 1-LSB variant. Sequential header / overlay toggles have the same problem in
+ * the opposite order, so both layers are toggled together here.
+ */
+export async function repaintBackdropLayers({
+  selector,
+  overlaySelector,
+  frames,
+}) {
+  await document.fonts.ready;
+  const header = document.querySelector(selector);
+  if (!(header instanceof HTMLElement)) {
+    return { header: false, overlay: false };
+  }
+  const overlay = document.querySelector(overlaySelector);
+  if (!(overlay instanceof HTMLElement)) {
+    return { header: true, overlay: false };
+  }
+  const nextCommittedFrame = () =>
+    new Promise((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(resolve));
+    });
+  const waitForCommittedFrames = async () => {
+    for (let index = 0; index < frames; index += 1) {
+      await nextCommittedFrame();
+    }
+  };
+  header.style.backdropFilter = 'none';
+  header.style.webkitBackdropFilter = 'none';
+  overlay.style.backdropFilter = 'none';
+  overlay.style.webkitBackdropFilter = 'none';
+  await waitForCommittedFrames();
+  header.style.backdropFilter = '';
+  header.style.webkitBackdropFilter = '';
+  overlay.style.backdropFilter = '';
+  overlay.style.webkitBackdropFilter = '';
+  await waitForCommittedFrames();
+  return { header: true, overlay: true };
+}
+
+/**
+ * Settle the shared header and the translucent overlay in one committed frame
+ * before a WebKit screenshot. A missing header or overlay throws, naming the
+ * selector, instead of capturing an unsettled composited layer.
+ */
+export async function settleBackdropLayersCompositing(
+  page,
+  {
+    evaluate = (capturePage, repaint, options) =>
+      capturePage.evaluate(repaint, options),
+    selector = SHARED_HEADER_SELECTOR,
+    overlaySelector = SHARED_OVERLAY_SELECTOR,
+    frames = SHARED_HEADER_SETTLE_FRAMES,
+  } = {},
+) {
+  const repainted = await evaluate(page, repaintBackdropLayers, {
+    selector,
+    overlaySelector,
+    frames,
+  });
+  if (!repainted?.header) {
+    throw new Error(
+      `Shared header "${selector}" was not found, so its WebKit ` +
+        'backdrop-filter could not be settled before the screenshot',
+    );
+  }
+  if (!repainted.overlay) {
+    throw new Error(
+      `Shared overlay "${overlaySelector}" was not found, so its WebKit ` +
+        'backdrop-filter could not be settled before the screenshot',
+    );
+  }
+}
+
 /**
  * Settle the shared site header before a WebKit screenshot. The evaluate hook
  * is injectable so a unit test can drive the orchestration without a browser;

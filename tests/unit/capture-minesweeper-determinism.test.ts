@@ -14,6 +14,7 @@ import {
   settleWebkitReadyPaint,
 } from '../../scripts/lib/capture-runtime.mjs';
 import { findHistoricalAfterEvidence } from '../../scripts/lib/screenshot-evidence.mjs';
+import { settleSharedHeaderCompositing } from '../../scripts/lib/webkit-compositing-settle.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SCRIPT = readFileSync(
@@ -61,9 +62,28 @@ function count(pattern: RegExp): number {
   return [...SCRIPT.matchAll(pattern)].length;
 }
 
+/**
+ * The script with line and block comments removed. A commented-out seam call
+ * must not satisfy the static guards below.
+ */
+function stripComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^[ \t]*\/\/.*$/gm, '');
+}
+
+const CODE = stripComments(SCRIPT);
+
 function indexOfOrFail(haystack: string, needle: string): number {
   const index = haystack.indexOf(needle);
   expect(index, `missing: ${needle}`).toBeGreaterThan(-1);
+  return index;
+}
+
+/** First index of `needle` at or after `from`. */
+function indexAfter(haystack: string, needle: string, from: number): number {
+  const index = haystack.indexOf(needle, from);
+  expect(index, `missing after index ${from}: ${needle}`).toBeGreaterThan(-1);
   return index;
 }
 
@@ -142,8 +162,9 @@ function subsection(text: string, heading: string): string {
  * the board gradients in a subtly different 1-LSB variant. The ready capture
  * first loads a throwaway page, then repaints the header with a scroll
  * round-trip and requires two consecutive identical whole-image frames before
- * writing. This test pins that seam to the ready scene and keeps playing /
- * won on their existing path, and pins the loss overlay backdrop repaint so a
+ * writing. This test pins that seam to the ready scene and pins the shared
+ * header compositing seam (Issue #341) to playing / won, rebuilds the lost
+ * header + overlay backdrop together, and pins the loss overlay repaint so a
  * refactor cannot silently restore the non-deterministic capture.
  */
 describe('minesweeper WebKit READY determinism guard', () => {
@@ -273,28 +294,143 @@ describe('minesweeper WebKit READY determinism guard', () => {
     expect(seam).toBeLessThan(seamGuardEnd);
   });
 
-  it('repaints the loss overlay backdrop only for the WebKit after capture', () => {
-    const lostOpen = indexOfOrFail(SCRIPT, 'const lost = await context.newPage()');
-    const lostCapture = indexOfOrFail(
-      SCRIPT,
-      "await capture(lost, touchMobileName(prefix, 'lost'), false)",
+  it('repaints the loss overlay backdrop before rebuilding both backdrops', () => {
+    // The loss overlay's translucent backdrop can cache a 1-LSB board variant.
+    // The overlay is hidden / restored first, then the shared header and the
+    // loss-card backdrop are rebuilt together; both sit after the loss overlay
+    // has appeared and before the resampled capture.
+    const afterTouch = indexOfOrFail(
+      CODE,
+      'async function captureWebkitAfterTouchStates(context, prefix)',
     );
-    const overlayWait = indexOfOrFail(
-      SCRIPT,
+    const lostOverlay = indexAfter(
+      CODE,
       "await lost.getByTestId('overlay-title').filter({ hasText: '踩到地雷' }).waitFor()",
+      afterTouch,
     );
-    const seam = indexOfOrFail(SCRIPT, 'await repaintWebkitReadyOverlay(lost)');
-    expect(seam).toBeGreaterThan(lostOpen);
-    // Repainting before the loss overlay exists would be a silent no-op.
-    expect(seam).toBeGreaterThan(overlayWait);
-    expect(seam).toBeLessThan(lostCapture);
-    // The pre-existing settle must stay on the Chromium / before path.
-    expect(SCRIPT).toMatch(/} else \{\s*await settle\(lost\);\s*\}/);
-    // The loss overlay's translucent backdrop can keep a 1-LSB variant of the
-    // board; hiding and restoring it forces a fresh snapshot. Only the WebKit
-    // After capture is affected, so the seam must stay behind that guard.
-    expect(SCRIPT).toMatch(
-      /if \(IS_WEBKIT && prefix === 'after'\) \{\s*\/\/[^\n]*\n\s*\/\/[^\n]*\n\s*await repaintWebkitReadyOverlay\(lost\);\s*\}/,
+    const lostRepaint = indexAfter(
+      CODE,
+      'await repaintWebkitReadyOverlay(lost)',
+      afterTouch,
+    );
+    const lostLayers = indexAfter(
+      CODE,
+      'await settleBackdropLayersCompositing(lost)',
+      afterTouch,
+    );
+    expect(lostRepaint).toBeGreaterThan(lostOverlay);
+    expect(lostLayers).toBeGreaterThan(lostRepaint);
+    // A separate header-only seam before the pair would resample the overlay
+    // into another variant; the pair already rebuilds both layers.
+    expect(CODE).not.toContain('settleSharedHeaderCompositing(lost)');
+    // The lost scene is written by the resampled capture, so the state is
+    // named in a sample call after the seams.
+    expect(
+      indexAfter(CODE, "name: touchMobileName(prefix, 'lost')", afterTouch),
+    ).toBeGreaterThan(-1);
+    // The pre-existing settle stays on the Chromium / before path.
+    expect(CODE).toMatch(
+      /await lost\.getByTestId\('overlay-title'\)\.filter\(\{ hasText: '踩到地雷' \}\)\.waitFor\(\);\s*await settle\(lost\);/,
+    );
+  });
+
+  it('settles the shared header before the playing / won reveals', () => {
+    expect(CODE).toContain('settleSharedHeaderCompositing,');
+    expect(CODE).toContain('settleBackdropLayersCompositing,');
+    // playing / won settle before their first reveal; lost rebuilds its header
+    // and overlay backdrop together after the loss overlay repaint. The ready
+    // path keeps its own seam.
+    expect([...CODE.matchAll(/await settleSharedHeaderCompositing\(/g)]).toHaveLength(2);
+    expect([...CODE.matchAll(/await settleBackdropLayersCompositing\(/g)]).toHaveLength(1);
+
+    const afterTouch = indexOfOrFail(
+      CODE,
+      'async function captureWebkitAfterTouchStates(context, prefix)',
+    );
+    for (const state of ['playing', 'won'] as const) {
+      const open = indexAfter(CODE, `await openTouchGame(${state},`, afterTouch);
+      const seam = indexAfter(
+        CODE,
+        `await settleSharedHeaderCompositing(${state})`,
+        afterTouch,
+      );
+      const reveal = indexAfter(CODE, `await touchTap(${state},`, afterTouch);
+      // Settling after the live reveal can roll the playing clock to the next
+      // second under load.
+      expect(seam, `${state} seam must run before the first reveal`).toBeGreaterThan(open);
+      expect(seam, `${state} seam must run before the first reveal`).toBeLessThan(reveal);
+    }
+
+    // The live HUD keeps its settle as the last paint step of the playing
+    // setup, before the resampled capture reads the frame.
+    expect(CODE).toMatch(
+      /await playing\.getByTestId\('timer'\)\.filter\(\{ hasNotText: '0:00' \}\)\.waitFor\(\);\s*await settle\(playing\);/,
+    );
+
+    expect(CODE).toMatch(
+      /await won\.getByTestId\('overlay-title'\)\.filter\(\{ hasText: '扫雷成功' \}\)\.waitFor\(\);\s*await settle\(won\);/,
+    );
+
+    const touch = indexOfOrFail(
+      CODE,
+      'async function captureTouchMobile(browser, prefix)',
+    );
+    // The READY path keeps its warm-up / scroll / whole-image stability seam;
+    // adding the shared header seam there would change the committed bytes.
+    const readyOpen = indexAfter(CODE, 'const ready = await context.newPage()', touch);
+    const readyClose = indexAfter(CODE, 'await ready.close()', readyOpen);
+    expect(CODE.slice(readyOpen, readyClose)).not.toContain(
+      'settleSharedHeaderCompositing',
+    );
+    expect(CODE.slice(readyOpen, readyClose)).toContain('settleWebkitReadyPaint(ready)');
+
+    // The WebKit-after branch resamples playing / lost / won before the
+    // Chromium / before path and then closes the context, so a stray eighth
+    // capture cannot write the shared evidence after the sampled states.
+    const branch = indexOfOrFail(
+      CODE,
+      "  if (IS_WEBKIT && prefix === 'after') {\n    await captureWebkitAfterTouchStates(context, prefix);",
+    );
+    const chromiumPlaying = indexAfter(
+      CODE,
+      'const playing = await context.newPage();',
+      touch,
+    );
+    expect(branch).toBeGreaterThan(touch);
+    expect(branch).toBeLessThan(chromiumPlaying);
+    expect(CODE.slice(branch, chromiumPlaying)).toContain('await context.close();');
+    expect(count(/await captureWebkitAfterTouchStates\(context, prefix\);/g)).toBe(1);
+  });
+
+  it('resamples the WebKit-after phone states from fresh pages', () => {
+    expect(CODE).toContain('captureManifestedScreenshot,');
+    expect(CODE).toContain(
+      "const ALLOW_NEW_BYTES = ARGS.includes('--allow-new-bytes');",
+    );
+    expect(count(/await sampleWebkitTouchState\(context, \{/g)).toBe(3);
+
+    const helperStart = indexOfOrFail(
+      CODE,
+      'async function sampleWebkitTouchState(context, { name, prepare, captureBytes })',
+    );
+    const helperEnd = CODE.indexOf('\n}\n', helperStart);
+    expect(helperEnd).toBeGreaterThan(helperStart);
+    const helper = CODE.slice(helperStart, helperEnd);
+    expect(helper).toContain('await captureManifestedScreenshot({');
+    expect(helper).toContain('openPage: () => context.newPage()');
+    expect(helper).toContain(
+      'checkEnvironment: (page) => capture(page, name, false, { checkOnly: true })',
+    );
+    expect(helper).toContain('capturedBytes: bytes');
+    expect(helper).toContain('allowNewBytes: ALLOW_NEW_BYTES,');
+  });
+
+  it('fails instead of skipping when the shared header is missing', async () => {
+    const missingHeader = {
+      evaluate: async () => false,
+    } as unknown as Page;
+    await expect(settleSharedHeaderCompositing(missingHeader)).rejects.toThrow(
+      'Shared header ".site-header" was not found',
     );
   });
 

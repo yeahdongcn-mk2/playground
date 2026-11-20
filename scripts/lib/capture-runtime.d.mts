@@ -207,6 +207,39 @@ export function expectedCaptureSha256(
   options?: ExpectedCaptureSha256Options,
 ): string | null;
 
+/** Fresh pages the manifest-resample capture may sample before failing. */
+export const MANIFEST_CAPTURE_ATTEMPTS: number;
+
+export interface CaptureManifestedScreenshotOptions {
+  name: string;
+  engine: CaptureEngine;
+  fullPage?: boolean;
+  /** Return one fresh page for this sample. */
+  openPage: () => Promise<Page>;
+  /** Set up the target state and run its paint seams on the sampled page. */
+  prepare: (page: Page) => Promise<void> | void;
+  /** Capture the sample's bytes; defaults to a single screenshot. */
+  captureBytes?: (page: Page) => Promise<Buffer | Uint8Array>;
+  /** Run once on the first sample, before `prepare`; use for the environment preflight. */
+  checkEnvironment?: (page: Page) => Promise<void> | void;
+  /** Write a matched sample; defaults to `captureScreenshot` with `capturedBytes`. */
+  write?: (page: Page, bytes: Buffer) => Promise<void> | void;
+  /** Close one sampled page; defaults to `page.close()`. */
+  closePage?: (page: Page) => Promise<void> | void;
+  attempts?: number;
+  allowNewBytes?: boolean;
+  expectedSha256?: string | null;
+  log?: { warn: (message: string) => void };
+}
+
+/**
+ * Sample fresh pages until the screenshot bytes equal the manifest sha256,
+ * then write the matched bytes; throw without writing when no sample matches.
+ */
+export function captureManifestedScreenshot(
+  options: CaptureManifestedScreenshotOptions,
+): Promise<void>;
+
 /** Consecutive whole-image frames the WebKit READY capture must repeat. */
 export const READY_CAPTURE_STABLE_FRAMES: number;
 
