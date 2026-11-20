@@ -93,12 +93,7 @@ src/games/snake/
 - 截图场景的确定性：固定首果 + seed 7 + 3 个 tick 后的蛇身、下一颗果实、得分与速度；不同 seed 会改变下一颗果实。
 - `state` 返回防御性副本，外部修改不影响引擎。
 
-<<<<<<< HEAD
 运行：`npm run test:unit`（全仓 1529 个用例）。
-
-=======
-运行：`npm run test:unit`（全仓 1529 个用例）。
->>>>>>> 2c57f8c (接入 2048 ready 的预热页与清单字节重采样（Issue #374 t1）)
 `src/games/snake/debug.test.ts` 另行覆盖 seed / ticks 参数解析；截图确定性护栏（脚本常量、view / scene 接线、固定 tick 循环、READY 标题颜色 / 过渡与 WebKit 捕获等待条件，以及提交页之前的同一 READY 场景一次性预热页）在 `tests/unit/capture-snake-determinism.test.ts`。
 
 ### 端到端（24）

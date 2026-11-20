@@ -321,6 +321,41 @@ describe('captureScreenshot write-time environment guard', () => {
     expect(screenshotSpy).not.toHaveBeenCalled();
   });
 
+  it('fails checkOnly with requireRecorded when the file is unrecorded', async () => {
+    const dir = tempScreenshotDir();
+    const { page, screenshotSpy } = fakePage();
+
+    await expect(
+      captureScreenshot(page, FILE, {
+        engine: 'webkit',
+        outputDir: dir,
+        manifest: null,
+        checkOnly: true,
+        requireRecorded: true,
+      }),
+    ).rejects.toThrow(/not tracked by .*requireRecorded/);
+
+    expect(readdirSync(dir)).toEqual([]);
+    expect(screenshotSpy).not.toHaveBeenCalled();
+  });
+
+  it('passes checkOnly with requireRecorded for a manifested file without writing', async () => {
+    const dir = tempScreenshotDir();
+    const { page, screenshotSpy } = fakePage();
+
+    await captureScreenshot(page, FILE, {
+      engine: 'webkit',
+      outputDir: dir,
+      manifest: sampleManifest(),
+      fingerprint: containerFingerprint() as never,
+      checkOnly: true,
+      requireRecorded: true,
+    });
+
+    expect(readdirSync(dir)).toEqual([]);
+    expect(screenshotSpy).not.toHaveBeenCalled();
+  });
+
   it('keeps the committed PNG and removes the temporary sibling when the atomic rename fails', async () => {
     const dir = tempScreenshotDir();
     const target = join(dir, FILE);

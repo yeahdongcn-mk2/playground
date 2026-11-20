@@ -164,9 +164,16 @@ export interface CaptureScreenshotOptions {
   capturedBytes?: Buffer | Uint8Array;
   /**
    * Validate the manifested environment, then return without capturing or
-   * writing (default false). An unrecorded file returns immediately.
+   * writing (default false). An unrecorded file returns immediately unless
+   * `requireRecorded` is set.
    */
   checkOnly?: boolean;
+  /**
+   * With `checkOnly`, fail when the file is not tracked by the manifest
+   * (default false). Callers that borrow a sibling's entry to guard an
+   * unrecorded image use this to fail closed when the entry disappears.
+   */
+  requireRecorded?: boolean;
   /** Override the target of the context that produced the page (tests / edge cases). */
   target?: CaptureTarget;
   /** Parsed manifest; defaults to reading `manifestPath` from disk. */

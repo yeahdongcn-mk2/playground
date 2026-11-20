@@ -1,9 +1,5 @@
 {
-<<<<<<< HEAD
   "unitTests": 1529,
-=======
-  "unitTests": 1529,
->>>>>>> 2c57f8c (接入 2048 ready 的预热页与清单字节重采样（Issue #374 t1）)
   "entryGzipBytes": 11428,
   "totalJsGzipBytes": 420434,
   "checks": {

@@ -146,6 +146,7 @@ describe('2048 screenshot determinism guard', () => {
         'utf8',
       ),
     ) as { captures: { file: string }[] };
+    expect(manifest.captures).toHaveLength(14);
     expect(manifest.captures.map((capture) => capture.file)).not.toContain(
       'after-2048-ready-webkit.png',
     );
@@ -154,14 +155,29 @@ describe('2048 screenshot determinism guard', () => {
     assertReadyPath(webkit);
     expect(count(/open2048\(warmUp, COLOR_BOARD\)/g)).toBe(1);
     expect(count(/await sampleWebkitState\(context, \{/g)).toBe(2);
+    // Only playing / gameover go through the manifest resampler after the
+    // one-page ready capture.
+    const readyCapture =
+      "await capture(ready, 'after-2048-ready-webkit.png', false, { stable: true });";
+    const afterReady = webkit.slice(
+      webkit.indexOf(readyCapture) + readyCapture.length,
+    );
+    expect(afterReady).not.toContain('after-2048-ready-webkit.png');
+    expect(afterReady.match(/name: '([^']+)'/g)).toEqual([
+      "name: 'after-2048-playing-webkit.png'",
+      "name: 'after-2048-gameover-webkit.png'",
+    ]);
 
     // The unrecorded READY image still borrows the manifested playing entry's
     // environment check, so a host run cannot overwrite it before the guard
-    // fails.
+    // fails. `requireRecorded` makes a missing manifest / playing entry a hard
+    // error instead of silently skipping the check.
     const environmentCheck = functionCode('checkReadyCaptureEnvironment');
     expect(environmentCheck).toContain(
-      "await capture(page, 'after-2048-playing-webkit.png', false, { checkOnly: true });",
+      "await capture(page, 'after-2048-playing-webkit.png', false, {",
     );
+    expect(environmentCheck).toContain('checkOnly: true');
+    expect(environmentCheck).toContain('requireRecorded: true');
   });
 
   it('fails the ready guard when a seam, the warm-up or the environment check is removed', () => {

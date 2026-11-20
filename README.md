@@ -396,11 +396,7 @@ games/<game>/scene → 对应引擎（动态 import）
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过（oxlint 覆盖 src、tests 与 scripts；error 与 warning 都会失败，warning 经 --deny-warnings 升级；另跑 scripts/check-boundaries.mjs，失败返回非 0）
-<<<<<<< HEAD
 npm run test:unit    # 1529 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
-=======
-npm run test:unit    # 1529 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
->>>>>>> 2c57f8c (接入 2048 ready 的预热页与清单字节重采样（Issue #374 t1）)
 npm run build        # 通过
 npm run check:budget # 通过（入口 11.16 KB gzip，全部 JS 410.58 KB gzip）
 npm run score        # 通过（打印「指标 / 当前值 / 基线值 / 差值」表与末行 SCORE_JSON；退化退出 1，变好只报差值）
@@ -438,7 +434,6 @@ CI 的 passed / flaky / failed 口径、PR 稳定性门禁范围、每日 `flake
 检查开始前先 checkout、固化容器内 `safe.directory`、`npm ci` 并安装 `pre-commit==4.7.0`。`Score baseline` 只对比 `docs/score-baseline.json`，不传 `--update`；基线退化（含基线损坏）会让 job 直接失败。`flake-watch` 是独立的每日巡检（30 分钟预算），不在 PR 关键路径上。
 
 ### 浏览器覆盖范围
-
 
 扫雷窄屏首屏契约与 framework、扫雷触屏手势 / 触屏难度表单、贪食蛇、俄罗斯方块、2048 与打砖块的手机端用例现在由 Chromium 与 WebKit 两套 Playwright 模拟共同验证；这些手机端用例复用同一份共享用例模块，触摸滑动 / 拖动也不再依赖 Chromium 专用的 CDP 注入：
 

@@ -242,7 +242,7 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
 - 复现命令：
   - `npm run screenshots:container -- screenshots:webkit` → 大厅 / 空白画布（两张均已收录清单，宿主命令会在写出前被拒绝）
   - `npm run screenshots:container -- screenshots:snake:webkit` → 贪食蛇手机 ready（开发服务器 + 固定首果；已收录清单，宿主命令会在写出前被拒绝；脚本固定 READY 标题的 `--text` 颜色并关闭其过渡，提交页在 `waitForSnakeReady` 等待标题计算色为 `rgb(226,232,240)` 且零动画，再依次执行 `settleWebkitReadyPaint` 滚动往返、D-pad 取景、`repaintWebkitReadyOverlay` 遮罩重绘与 `{ stable: true }` 连续两帧原子落盘，不稳定直接抛错；Issue #342 返工先打开同一 READY 场景的一次性预热页，再采集提交页）
-  - `npm run screenshots:container -- screenshots:2048:webkit` → 2048 ready / playing / gameover（playing / gameover 已收录清单；ready 是清单外的负载相关视觉证据，宿主命令仍会在写 ready 前被同一 webkit 环境护栏拒绝）；三条路径都先打开同一 READY 场景的一次性预热页。ready 保留滚动往返 + overlay 重绘接缝与 `{ stable: true }` 连续两帧门禁，单页落盘、不做清单重采样（Issue #374）；playing / gameover 先从 fresh page 重采样到清单 sha256，并在截图前重绘共享页眉 / 同帧重建页眉与结算卡背板（Issue #341 t3）
+  - `npm run screenshots:container -- screenshots:2048:webkit` → 2048 ready / playing / gameover（playing / gameover 已收录清单；ready 是清单外的负载相关视觉证据）。容器内 ready 正常写单页；宿主运行会在写 ready 前用同一 `webkit` 环境校验失败并中止，不会覆盖已提交 PNG。三条路径都先打开同一 READY 场景的一次性预热页。ready 保留滚动往返 + overlay 重绘接缝与 `{ stable: true }` 连续两帧门禁，单页落盘、不做清单重采样（Issue #374）；playing / gameover 先从 fresh page 重采样到清单 sha256，并在截图前重绘共享页眉 / 同帧重建页眉与结算卡背板（Issue #341 t3）
   - `npm run screenshots:container -- screenshots:breakout:webkit` → 打砖块 ready / playing / levelclear / gameover（四张均已收录清单，宿主命令会在 ready 前被拒绝；ready 在 `openReady` 里先执行 `settleReadyBackdrop` 首屏重绘接缝）
   - `npm run screenshots:container -- screenshots:minesweeper:webkit` → 扫雷 ready / playing / lost / won（四张已收录固定环境 sha256 清单；宿主命令会在 ready 前被写前护栏拒绝）；ready 保留原有预热页 + 滚动往返 + 整幅连续两帧门禁，并在此之上进入 fresh page 重采样（Issue #341 t4）；playing / won 在首次揭示前重绘共享页眉，lost 在 overlay 背板重绘后同帧重建页眉与损失卡背板；四张都从 fresh page 重采样到清单 sha256
   - `npm run screenshots:minesweeper:webkit-before` → 同一组 WebKit 手机 Before 状态（需 `BASE_URL` 指向触屏改动前的基线预览；仓库不提交这些 Before 文件）
@@ -490,20 +490,29 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
 
 ### 2048 ready 的负载相关栅格与清单外口径（Issue #374 t1）
 
-- 现象与归因：Issue #374 记录固定容器 + 宿主 12 个 `yes` 负载下 `after-2048-ready-webkit.png` 写成 `d8a808b0…`（相对 `0ea38c8d…` 差 10728 px：共享页眉 1833 px + READY 卡片 / 背板 8895 px，每通道最大 2）或 `672285de…`（仅页眉 1833 px，每通道最大 1）。#199 t1 的滚动往返、overlay 重绘与 `{ stable: true }` 连续两帧门禁让错误栅格跨帧保持字节稳定，因此帧门禁只能证明“帧内稳定”，不能证明取到规范栅格；该变体与 #341 t3 的共享 header 接缝无关。
+- 现象与归因：Issue #374 记录固定容器 + 宿主 12 个 `yes` 负载下 `after-2048-ready-webkit.png` 写成 `d8a808b0…`（相对 `0ea38c8d…` 差 10728 px：共享页眉 1833 px + READY 卡片 / 背板 8895 px，每通道最大 2）或 `672285de…`（仅页眉 1833 px，每通道最大 1）。#199 t1 的滚动往返、overlay 重绘与 `{ stable: true }` 连续两帧门禁让每一次捕获内部的栅格跨帧保持字节稳定；但“这一次捕获选中哪个变体”会随负载 / 进程变化，因此帧门禁只能证明“本次帧内稳定”，不能证明取到规范栅格。该变体与 #341 t3 的共享 header 接缝无关。
 - 为什么不再重采样：复审在 head `649ac5b` 上用同一负载独立复现，run1 的 ready 在 20 个 fresh page 内始终没有出现 `0ea38c8d…`，只采到 `672285de…` / `d8a808b0…` / `1f45d828…`，repro 退出 1。本次修复的诊断在同一固定容器、宿主 12 个 `yes` 下进一步确认：
-  - 同一 browser 进程内连续 24 个 fresh page：第 1 页 = `0ea38c8d…`，第 2–21 页连续 = `672285de…`，第 22 页 = `0ea38c8d…`，第 23–24 页又回到 `672285de…`；错误变体不是每页独立重掷，20 页预算可能整段错过。
+  - 同一 browser 进程内连续 24 个 fresh page（实验页数，仅用于观察变体连续性；实际重采样预算是 20 页）：第 1 页 = `0ea38c8d…`，第 2–21 页连续 = `672285de…`，第 22 页 = `0ea38c8d…`，第 23–24 页又回到 `672285de…`；错误变体不是每页独立重掷，20 页预算可能整段错过。
   - 6 次全新 browser 进程（无预热）的首个 READY 采样只有 1 次 `0ea38c8d…`；另一组「预热 + 首采样」的全新 browser 进程在停止前也全部是 `672285de…`，没有出现规范字节。重启 browser 进程不能可靠换回规范栅格。
   - 在 seam 之后额外等待 1 s 的 2 次样本里仍有 1 次 `d8a808b0…`；等待 3 s 的样本仍是 `d8a808b0…`。变体是已完成并缓存的合成结果，不是等待不够。
   - 这些日志是 `test-results/` 下的本地产物，未入库；`672285de…` 与 `d8a808b0…` 的像素差与上文 #374 / #341 t3 记录一致。
 - 处理：#374 t1 的验收原文允许两条路——让 ready 可靠收敛，或按 #318 口径移出“重跑必须等于清单”的集合。既然 20 页预算在复审的负载下已经实测失败，继续加大预算仍是概率性规避，本次选择第二条：
   - `docs/screenshots/capture-sha256-manifest.json` 不再收录 `after-2048-ready-webkit.png`；`verify:screenshots:sha256` 与夜间 `verify:screenshots:repro` 只对 14 张可稳定复现的证据做逐字节校验。
   - `scripts/capture-2048-screenshots.mjs` 的 ready 路径保留一次性预热页、`settleWebkitReadyPaint` 滚动往返、`repaintWebkitReadyOverlay` overlay 重绘与 `{ stable: true }` 连续两帧门禁，单页写入，不再进入 `captureManifestedScreenshot` 的 fresh-page 清单重采样。
-  - ready 仍属于固定 `webkit` 环境：写盘前调用 `checkReadyCaptureEnvironment`，以已收录的 `after-2048-playing-webkit.png` 条目做 `checkOnly` 环境比较；宿主运行或镜像 / EGL / 字体 / DPR 不一致时在写 ready 前失败，不会用宿主渲染覆盖已提交 PNG。
+  - ready 仍属于固定 `webkit` 环境：写盘前调用 `checkReadyCaptureEnvironment`，以已收录的 `after-2048-playing-webkit.png` 条目做 `checkOnly` 环境比较；宿主运行或镜像 / EGL / 字体 / DPR 不一致时在写 ready 前失败，不会用宿主渲染覆盖已提交 PNG；`requireRecorded` 让清单缺失或 playing 条目不存在时也直接失败，而不是退化成无护栏写入。
   - playing / gameover 的共享 header 接缝、fresh-page 清单重采样与 `--allow-new-bytes` 出口保持不变；已提交 PNG 与清单中另外 14 张记录不变。
 - 单测：`tests/unit/capture-2048-determinism.test.ts` 钉住 ready 为清单外单页捕获（预热页 `try/finally`、两条接缝顺序、playing 条目环境校验、`{ stable: true }`、ready 页 `try/finally`），并断言清单不含该文件、重采样只覆盖 playing / gameover 两张；删除预热页、任一接缝、环境校验或两帧门禁，或把 ready 重新接回清单重采样，都会让用例失败。
 - 验收：见下一条“验收记录”。该口径不把 ready 的负载变体当成可复现证据，也不通过放宽其他图片的校验来换取绿色：`verify:screenshots:sha256` 仍逐张校验 14 张清单记录，`verify:screenshots:repro` 仍对 2048 playing / gameover 与扫雷四态做 4 跑逐字节比较。
-- 验收记录（2026-11-20，固定镜像 `mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f`，宿主 12 个 `yes`，load average 13.92 → 23.08）：`PREVIEW_PORT=4520 npm run verify:screenshots:repro -- --target screenshots:2048:webkit --runs 4` 退出 0；playing 4/4 = `4173dce8…`、gameover 4/4 = `bf7548b7…`，4 跑日志均通过 `--log` 校验。ready 不在比较集合内，并如预期按负载被重写：run1 后为 `d8a808b0…`，4 跑结束后为 `672285de…`；验收后已把工作区的 ready PNG 恢复到已提交的 `0ea38c8d…`，没有把负载变体提交。`npm run verify:screenshots:sha256` 在同一工作区退出 0，校验 14 张清单记录。日志 `test-results/repro-2048-load.log` 与 `test-results/screenshot-repro/screenshots-2048-webkit-run{1..4}.log`（本地产物，未入库）。
+- 验收记录（2026-11-20，固定镜像 `mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f`，宿主 12 个 `yes`，load average 13.92 → 23.08）：`PREVIEW_PORT=4520 npm run verify:screenshots:repro -- --target screenshots:2048:webkit --runs 4` 退出 0；playing 4/4 = `4173dce8…`、gameover 4/4 = `bf7548b7…`，4 跑日志均通过 `--log` 校验。ready 不在比较集合内，并如预期被重写（该次 repro 的 run1 后为 `d8a808b0…`，4 跑结束后为 `672285de…`）。随后在同一负载下单独跑 `PREVIEW_PORT=4530 npm run screenshots:container -- screenshots:2048:webkit` 四次、每次跑后立即取 sha256，得到：
+
+  | 跑次 | 开始时 1 分钟 load | ready | playing | gameover |
+  | --- | --- | --- | --- | --- |
+  | 1 | 3.88 | `d8a808b0…` | `4173dce8…` | `bf7548b7…` |
+  | 2 | 14.44 | `d8a808b0…` | `4173dce8…` | `bf7548b7…` |
+  | 3 | 21.89 | `0ea38c8d…` | `4173dce8…` | `bf7548b7…` |
+  | 4 | 23.69 | `672285de…` | `4173dce8…` | `bf7548b7…` |
+
+  同一组负载下 ready 在 4 次捕获里选中了 3 种字节，且 run3 仍能取到规范 `0ea38c8d…`；playing / gameover 则 4/4 命中清单。这直接说明 ready 的“单次帧内稳定”与“跨次可复现”是两件事，也解释了为什么 20 页预算是概率性的。验收后已把工作区的 ready PNG 恢复到已提交的 `0ea38c8d…`，没有把负载变体提交。`npm run verify:screenshots:sha256` 在同一工作区退出 0，校验 14 张清单记录。日志 `test-results/repro-2048-load.log`、`test-results/ready-variants.log` 与 `test-results/screenshot-repro/screenshots-2048-webkit-run{1..4}.log`（本地产物，未入库）。
 - 证据限制：负载验收只覆盖 Linux WebKit 软件栅格与固定字体 / 镜像；真机 iOS Safari 的合成行为不在本证据内。`screenshots:2048:webkit` 在负载下会把 ready 重写成当时的 1-LSB 变体（这是清单外视觉证据，不参与验收）；CI 只在工作区写该文件，不提交，也不检查它的 git 状态；人工重拍后如需提交，应先确认它代表当前 UI，而不是把负载变体当成规范字节。
 
 ## t7：扫雷触屏与手机布局（Issue #33 / 子任务 2）

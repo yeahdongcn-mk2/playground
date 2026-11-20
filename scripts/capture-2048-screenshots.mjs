@@ -329,7 +329,10 @@ async function sampleWebkitState(context, { name, prepare, captureBytes }) {
  * fingerprint; it does not capture or write.
  */
 async function checkReadyCaptureEnvironment(page) {
-  await capture(page, 'after-2048-playing-webkit.png', false, { checkOnly: true });
+  await capture(page, 'after-2048-playing-webkit.png', false, {
+    checkOnly: true,
+    requireRecorded: true,
+  });
 }
 
 /** Capture the three stable 2048 phone states on the WebKit engine. */
