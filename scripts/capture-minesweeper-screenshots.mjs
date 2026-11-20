@@ -7,6 +7,7 @@ import {
   assertAllDeclaredCaptureTargets,
   captureManifestedScreenshot,
   captureScreenshot,
+  captureStableFramesBytes,
   closeCaptureBrowser,
   createDesktopContext,
   createMobileContext,
@@ -62,26 +63,27 @@ import {
  * `after-minesweeper-<state>-webkit.png`. The ready scene first loads a
  * throwaway page: WebKit's first page in a fresh browser can rasterise the
  * sticky header and board gradients in a subtly different 1-LSB variant, while
- * later pages use the settled paint path. The committed READY capture then runs a
+ * later pages use the settled paint path. Every sampled READY page then runs a
  * scroll-paint seam and requires two consecutive byte-identical whole-image
- * frames before writing. playing / lost / won also run after the warm-up page
- * and keep their game-state path, but each still includes the shared site
- * header: WebKit can commit its blurred backdrop snapshot one 8-bit step away
- * under concurrent host load. playing / won settle the shared header after
- * opening the READY scene and before the first reveal, so the live clock cannot
- * roll to the next displayed second. lost repaints its overlay backdrop and
- * then rebuilds the shared header and that backdrop together right before the
- * capture. The ready scene
- * keeps its existing warm-up / scroll / whole-image stability path; its
- * separate 105 px board drift is not this task.
+ * frames before its bytes are compared with the manifest. That wrong raster can
+ * still be byte-stable (Issue #341: 105 px board variant under concurrent host
+ * load), so the ready capture also samples fresh pages and writes only the
+ * bytes that equal the recorded sha256. playing / lost / won also run after the
+ * warm-up page and keep their game-state path, but each still includes the
+ * shared site header: WebKit can commit its blurred backdrop snapshot one 8-bit
+ * step away under concurrent host load. playing / won settle the shared header
+ * after opening the READY scene and before the first reveal, so the live clock
+ * cannot roll to the next displayed second. lost repaints its overlay backdrop
+ * and then rebuilds the shared header and that backdrop together right before
+ * the capture.
  *
  * A wrong raster can be byte-stable across frames (2048 gameover's overlay
  * backdrop, minesweeper lost's board), so no frame gate can prove the committed
- * variant was taken. The playing / lost / won states are therefore sampled from
- * fresh pages until their bytes equal the manifest sha256; a run that never
- * matches fails before writing instead of replacing the recorded evidence.
- * Pass `--allow-new-bytes` for an intentional visual change and the usual
- * manifest update. The dedicated
+ * variant was taken. The ready / playing / lost / won states are therefore
+ * sampled from fresh pages until their bytes equal the manifest sha256; a run
+ * that never matches fails before writing instead of replacing the recorded
+ * evidence. Pass `--allow-new-bytes` for an intentional visual change and the
+ * usual manifest update. The dedicated
  * `--webkit-narrow` / `--webkit-narrow-before` modes capture the Issue #83
  * narrow-screen matrix at 320×640, 360×640, 375×667 and 412×839 into the
  * committed `*-minesweeper-webkit-narrow-<W>x<H>.png` evidence files; the
@@ -426,13 +428,33 @@ async function sampleWebkitTouchState(context, { name, prepare, captureBytes }) 
 }
 
 /**
+ * Read the READY bytes through the existing whole-image stability gate.
+ *
+ * The resampler compares a sampled page with the manifest sha256, so a frame
+ * that is still mid-repaint would otherwise cost a sample. Keeping the
+ * two-identical-frame check also preserves the READY capture's previous
+ * contract: only a settled sample can be considered for the committed bytes.
+ */
+function captureReadyFramesBytes(page, name) {
+  return captureStableFramesBytes(page, {
+    name,
+    fullPage: false,
+    animations: 'disabled',
+    stableFrames: READY_CAPTURE_STABLE_FRAMES,
+    stableIntervalMs: READY_CAPTURE_STABLE_INTERVAL_MS,
+    stableAttempts: READY_CAPTURE_STABLE_ATTEMPTS,
+  });
+}
+
+/**
  * Capture the WebKit-after playing / lost / won phone states.
  *
  * The live timer forbids the two-frame gate on playing (two screenshots 300 ms
  * apart can cross a displayed second), so each state samples a single settled
  * frame and retries on a different fresh page when the bytes are a known
- * load-dependent variant. The ready state keeps its own warm-up / scroll /
- * whole-image stability path above and is intentionally not sampled here.
+ * load-dependent variant. The ready state has its own resampled path in
+ * `captureTouchMobile`:
+ * it keeps the warm-up, scroll round-trip and whole-image stability gate.
  */
 async function captureWebkitAfterTouchStates(context, prefix) {
   await sampleWebkitTouchState(context, {
@@ -505,44 +527,43 @@ async function captureTouchMobile(browser, prefix) {
   if (IS_WEBKIT && prefix === 'after') {
     // WebKit's first page in a fresh browser can rasterise the sticky header
     // and the board gradients in a subtly different 1-LSB variant (Issue #318).
-    // Load a throwaway copy first so the committed READY evidence comes from
-    // the next page, which uses the settled paint path. playing / lost / won
-    // already run after that page and keep their game-state path; playing /
-    // won settle the shared header before the first reveal, and lost repaints
-    // its overlay backdrop before rebuilding the header and backdrop pair
-    // (Issue #341).
+    // Load a throwaway copy first so the sampled READY page is not the first
+    // page in the process. playing / lost / won already run after that page;
+    // playing / won settle the shared header before the first reveal, and lost
+    // repaints its overlay backdrop before rebuilding the header and backdrop
+    // pair (Issue #341).
     const warmUp = await context.newPage();
     try {
       await openTouchGame(warmUp, WIN_MINES);
     } finally {
       await warmUp.close();
     }
-  }
 
-  const ready = await context.newPage();
-  await openTouchGame(ready, WIN_MINES);
-  if (IS_WEBKIT && prefix === 'after') {
-    // The scroll round-trip settles the sticky header; the whole-image
-    // stability check then detects a sampled frame change before the PNG is
-    // written (the throwaway page above handles the cross-run board variant).
-    await settleWebkitReadyPaint(ready);
-  }
-  const readyCaptureOptions =
-    IS_WEBKIT && prefix === 'after'
-      ? {
-          stableFrames: READY_CAPTURE_STABLE_FRAMES,
-          stableIntervalMs: READY_CAPTURE_STABLE_INTERVAL_MS,
-          stableAttempts: READY_CAPTURE_STABLE_ATTEMPTS,
-        }
-      : {};
-  await capture(ready, touchMobileName(prefix, 'ready'), false, readyCaptureOptions);
-  await ready.close();
+    // The READY board can still commit a byte-stable 1-LSB raster variant
+    // under concurrent host load (Issue #341: 105 px, bbox rows 465–971 /
+    // cols 2–747, outside the shared header). No frame gate can see a stable
+    // wrong raster, so sample fresh pages and write only the bytes that equal
+    // the manifest sha256. The warm-up, scroll round-trip and two-frame
+    // stability gate stay in front of every sample.
+    await sampleWebkitTouchState(context, {
+      name: touchMobileName(prefix, 'ready'),
+      prepare: async (ready) => {
+        await openTouchGame(ready, WIN_MINES);
+        await settleWebkitReadyPaint(ready);
+      },
+      captureBytes: (ready) =>
+        captureReadyFramesBytes(ready, touchMobileName(prefix, 'ready')),
+    });
 
-  if (IS_WEBKIT && prefix === 'after') {
     await captureWebkitAfterTouchStates(context, prefix);
     await context.close();
     return;
   }
+
+  const ready = await context.newPage();
+  await openTouchGame(ready, WIN_MINES);
+  await capture(ready, touchMobileName(prefix, 'ready'), false);
+  await ready.close();
 
   const playing = await context.newPage();
   await openTouchGame(playing, LOSS_MINES);

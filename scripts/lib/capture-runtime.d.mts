@@ -249,6 +249,30 @@ export const READY_CAPTURE_STABLE_INTERVAL_MS: number;
 /** Extra frames the WebKit READY stability check may read before failing. */
 export const READY_CAPTURE_STABLE_ATTEMPTS: number;
 
+export interface CaptureStableFramesBytesOptions {
+  /** Name used in the failure message. */
+  name: string;
+  fullPage?: boolean;
+  animations?: 'allow' | 'disabled';
+  /** Consecutive byte-identical frames required; `1` is a single screenshot. */
+  stableFrames: number;
+  /** Delay between frames, in milliseconds. */
+  stableIntervalMs: number;
+  /** Extra frames read after the first one before failing. */
+  stableAttempts: number;
+}
+
+/**
+ * Screenshot until `stableFrames` consecutive whole-image frames are
+ * byte-identical and return those bytes (throws instead of returning a
+ * transient frame). Exported for the manifest resampler, which compares a
+ * freshly sampled page's bytes with the recorded sha256 before writing.
+ */
+export function captureStableFramesBytes(
+  page: Page,
+  options: CaptureStableFramesBytesOptions,
+): Promise<Buffer>;
+
 /** Animation frames the shared capture settle seam waits for. */
 export const CAPTURE_SETTLE_FRAMES: number;
 /** Screenshots the settle-based stable-capture loop may take before giving up. */

@@ -426,8 +426,12 @@ function normalizeScreenshotBytes(bytes) {
  * page is what settles the first-page raster variant across runs.
  * With the default `stableFrames === 1` this is the previous single-shot
  * capture, so existing callers and their bytes stay unchanged.
+ *
+ * Exported for the manifest resampler: a caller that samples a fresh page
+ * compares the returned bytes with the manifest sha256, so it needs the same
+ * stability gate before deciding whether the sample is worth keeping.
  */
-async function captureStableFramesBytes(
+export async function captureStableFramesBytes(
   page,
   {
     name,
