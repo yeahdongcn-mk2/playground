@@ -92,6 +92,7 @@ describe('hub card art', () => {
 
   it('keeps all six shipped cards on one unique art each and only blank on the default orb', () => {
     const html = renderHub(games, NO_HISTORY, NOW);
+    const renderedSvgClasses: string[] = [];
 
     for (const { id, svgClass } of SHIPPED_ART) {
       const block = cardBlock(html, id);
@@ -101,14 +102,15 @@ describe('hub card art', () => {
       expect(block).not.toContain('mini-orb');
 
       const renderedSvgClass = /<svg class="([^"]+)"/.exec(block)?.[1];
+      if (renderedSvgClass === undefined) {
+        throw new Error(`${id} card is missing its svg class`);
+      }
       expect(renderedSvgClass).toBe(svgClass);
+      renderedSvgClasses.push(renderedSvgClass);
     }
 
-    // Extract the classes from the rendered HTML itself so this checks what
-    // the hub actually emits rather than de-duplicating the test's own list.
-    const renderedSvgClasses = [...html.matchAll(/<svg class="([^"]+)"/g)].map(
-      (match) => match[1],
-    );
+    // Derive the list from each rendered card block, not from the test's own
+    // constant, so the uniqueness check covers what the hub actually emits.
     expect(renderedSvgClasses).toEqual(SHIPPED_ART.map(({ svgClass }) => svgClass));
     expect(new Set(renderedSvgClasses).size).toBe(renderedSvgClasses.length);
     expect(html.match(/game-card-art--zhen-sha/g)).toHaveLength(1);

@@ -12,7 +12,7 @@
 
 ## 机械校验
 
-`playwright` 逐卡截取 `.game-card-art` 后比较 SHA-256 与 bounding box：
+`@playwright/test` 的 Chromium 逐卡截取 `.game-card-art` 后比较 SHA-256 与 bounding box：
 
 - 贪食蛇、俄罗斯方块、2048、打砖块、扫雷五张卡片的像素哈希与布局在 before/after 完全一致；
 - 镇煞卡片像素不同、布局 box 不变（1440 与 320 两个视口）；

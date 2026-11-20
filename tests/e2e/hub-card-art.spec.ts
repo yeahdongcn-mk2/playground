@@ -15,6 +15,7 @@ interface ZhenShaArtStyle {
   readonly svgAriaHidden: string | null;
   readonly svgViewBox: string | null;
   readonly engineColor: string | null;
+  readonly engineBorderColor: string | null;
 }
 
 async function readZhenShaArt(page: Page): Promise<ZhenShaArtStyle> {
@@ -24,6 +25,7 @@ async function readZhenShaArt(page: Page): Promise<ZhenShaArtStyle> {
       throw new Error('zhen-sha card art is missing its dedicated SVG');
     }
     const engine = element.querySelector('.game-card-engine');
+    const engineStyle = engine === null ? null : getComputedStyle(engine);
     const artRect = element.getBoundingClientRect();
     const svgRect = svg.getBoundingClientRect();
     const artStyle = getComputedStyle(element);
@@ -39,14 +41,16 @@ async function readZhenShaArt(page: Page): Promise<ZhenShaArtStyle> {
       svgFilter: getComputedStyle(svg).filter,
       svgAriaHidden: svg.getAttribute('aria-hidden'),
       svgViewBox: svg.getAttribute('viewBox'),
-      engineColor: engine === null ? null : getComputedStyle(engine).color,
+      engineColor: engineStyle?.color ?? null,
+      engineBorderColor: engineStyle?.borderTopColor ?? null,
     };
   });
 }
 
 function expectSvgWidth(art: ZhenShaArtStyle, ratio: number): void {
-  // The committed CSS sets a percentage width with a 240px ceiling; deleting
-  // either rule changes the rendered size and fails here.
+  // The committed CSS sets a percentage width with a 240px ceiling. The
+  // viewports below are chosen so deleting the base 74% rule, the narrow 84%
+  // override or the ceiling each changes this rendered size and fails here.
   const expectedWidth = Math.min(art.artWidth * ratio, 240);
   expect(Math.abs(art.svgWidth - expectedWidth)).toBeLessThanOrEqual(1);
   expect(Math.abs(art.svgHeight - (art.svgWidth * 132) / 220)).toBeLessThanOrEqual(1);
@@ -62,6 +66,7 @@ function expectInkAndGold(art: ZhenShaArtStyle): void {
   expect(art.svgAriaHidden).toBe('true');
   expect(art.svgViewBox).toBe('0 0 220 132');
   expect(art.engineColor).toBe('rgb(246, 196, 83)');
+  expect(art.engineBorderColor).toBe('rgba(246, 196, 83, 0.34)');
 }
 
 test.describe('zhen-sha hub card art at 1440x1000', () => {
@@ -76,6 +81,24 @@ test.describe('zhen-sha hub card art at 1440x1000', () => {
     const art = await readZhenShaArt(page);
     expectInkAndGold(art);
     expect(art.artHeight).toBe(184);
+    expectSvgWidth(art, 0.74);
+  });
+});
+
+test.describe('zhen-sha hub card art at 1024x800', () => {
+  test.use({ viewport: { width: 1024, height: 800 } });
+
+  test('uses the base 74% width where the 240px ceiling does not dominate', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.getByTestId('game-card-zhen-sha')).toBeVisible();
+
+    const art = await readZhenShaArt(page);
+    expectInkAndGold(art);
+    expect(art.artHeight).toBe(184);
+    // This viewport only proves the 74% rule when the percentage is the
+    // smaller term; fail loudly instead of silently capping if the grid
+    // layout grows the card art past that point.
+    expect(art.artWidth * 0.74).toBeLessThan(240);
     expectSvgWidth(art, 0.74);
   });
 });
