@@ -128,6 +128,67 @@ describe('captureManifestedScreenshot', () => {
     }
   });
 
+  it('closes every fresh scores-style context and writes only the matched sample', async () => {
+    // The minesweeper scores path passes a per-sample context through
+    // `closePage` (Issue #376 t0): a wrong raster is a compositor state that can
+    // persist for the context, so each retry gets a fresh context and every one
+    // must be closed, including the matching sample after its write.
+    const contexts: Array<{ close: ReturnType<typeof vi.fn> }> = [];
+    const events: string[] = [];
+    const openPage = async () => {
+      const close = vi.fn(async () => {
+        events.push('close');
+      });
+      const context = { close };
+      contexts.push(context);
+      return { context: () => context } as unknown as Page;
+    };
+    const captureBytes = vi
+      .fn()
+      .mockResolvedValueOnce(bytesFor('wrong board raster'))
+      .mockResolvedValueOnce(bytesFor('canonical png bytes'));
+    const prepare = vi.fn(async () => {
+      events.push('prepare');
+    });
+    const checkEnvironment = vi.fn(async () => {
+      events.push('check');
+    });
+    const write = vi.fn(async () => {
+      events.push('write');
+    });
+
+    await captureManifestedScreenshot({
+      name: NAME,
+      engine: 'webkit',
+      openPage,
+      prepare,
+      captureBytes,
+      checkEnvironment,
+      closePage: (page) => page.context().close(),
+      write,
+      expectedSha256: EXPECTED,
+      log: { warn: vi.fn() },
+    });
+
+    expect(contexts).toHaveLength(2);
+    expect(checkEnvironment).toHaveBeenCalledTimes(1);
+    expect(prepare).toHaveBeenCalledTimes(2);
+    expect(write).toHaveBeenCalledTimes(1);
+    // The first attempt only preflights and prepares; the second writes, and
+    // only after the successful write does the matching context close.
+    expect(events).toEqual([
+      'check',
+      'prepare',
+      'close',
+      'prepare',
+      'write',
+      'close',
+    ]);
+    for (const context of contexts) {
+      expect(context.close).toHaveBeenCalledTimes(1);
+    }
+  });
+
   it('returns without opening another page when the first sample matches', async () => {
     const page = pageFactory();
     const write = vi.fn(async () => {});

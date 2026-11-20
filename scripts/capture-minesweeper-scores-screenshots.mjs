@@ -1,9 +1,10 @@
-import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import {
+  MANIFEST_CAPTURE_ATTEMPTS,
   WEBKIT_ENGINE,
   assertAllDeclaredCaptureTargets,
+  captureManifestedScreenshot,
   captureScreenshot,
   captureStableBytes,
   closeCaptureBrowser,
@@ -11,7 +12,6 @@ import {
   createMobileContext,
   createPhoneContext,
   engineLabel,
-  expectedCaptureSha256,
   launchCaptureBrowser,
   parseCaptureEngine,
   repaintWebkitReadyOverlay,
@@ -69,19 +69,26 @@ import { settleSharedHeaderCompositing } from './lib/webkit-compositing-settle.m
  * translucent backdrop rebuilds the board / card raster on the canonical paint
  * path, and finally settles the shared site header's composited backdrop
  * (`settleSharedHeaderCompositing`, Issue #341). It captures two consecutive
- * byte-identical full-page frames (Issue #341 t3). The review of PR #363 showed
- * that the warm-up page and the stable-frame gate alone can land on a
- * byte-stable but wrong 1-LSB raster of the board band, the win card or the
- * far-down custom-difficulty button under host load; the scroll and overlay
- * seams make the canonical raster more likely, but a wrong raster still
- * survives any frame gate. The capture therefore samples a fresh page and only
- * accepts bytes equal to the manifest entry, and twenty misses fail before writing
- * instead of replacing the evidence. The first sample also runs the manifest
- * environment guard, so a host / wrong-image run fails with the guard's own
- * message instead of exhausting the resamples. Pass `--allow-new-bytes` for an
- * intentional leaderboard UI change. The seams and the resampling stay on this
- * WebKit path only: `--before`, `--clear` and the Chromium captures keep their
- * committed single-screenshot bytes.
+ * byte-identical full-page frames (Issue #341 t3) inside the shared
+ * `captureManifestedScreenshot` resampler (Issue #376 t0): that helper samples
+ * a fresh phone context per attempt, opens a throwaway warm-up page first,
+ * runs the page seams as its `prepare` step, gates the bytes with
+ * `captureStableBytes`, and only hands bytes equal to the manifest entry to the
+ * existing `capturedBytes` write path. Twenty misses fail before writing
+ * instead of replacing the evidence. A trimmed checkout with no recorded entry
+ * falls back to the helper's single sample and normal write, like the other
+ * manifested call sites. The first sample also runs the manifest
+ * environment guard (`checkOnly`), so a host / wrong-image run fails with the
+ * guard's own message instead of exhausting the resamples. Pass
+ * `--allow-new-bytes` for an intentional leaderboard UI change. The review of
+ * PR #363 showed why the seams and the resampling are both needed: the warm-up
+ * page and the stable-frame gate alone can land on a byte-stable but wrong
+ * 1-LSB raster of the board band, the win card or the far-down
+ * custom-difficulty button under host load; the scroll and overlay seams make
+ * the canonical raster more likely, but a wrong raster still survives any frame
+ * gate. The seams and the resampling stay on this WebKit path only:
+ * `--before`, `--clear` and the Chromium captures keep their committed
+ * single-screenshot bytes.
  *
  * The plain Chromium After mode refuses to overwrite the
  * `after-minesweeper-scores-*.png` files: they are the #45 subtask 1 historical
@@ -135,13 +142,6 @@ const ENGINE = parseCaptureEngine(ARGS);
 const IS_WEBKIT = ENGINE === WEBKIT_ENGINE;
 const FILE_PREFIX = CLEAR ? 'minesweeper-clear-scores' : 'minesweeper-scores';
 
-/**
- * Number of fresh pages sampled before a load-dependent but stable raster
- * variant is fatal. The canonical page is common, so the expected number of
- * samples is low; twenty makes the residual miss probability negligible without
- * letting a sustained bad host state write the wrong evidence.
- */
-const WEBKIT_CAPTURE_ATTEMPTS = 20;
 const BASE_URL = process.env.BASE_URL ?? ORIGIN;
 const HISTORICAL_AFTER_EVIDENCE = [
   `${OUTPUT}/after-minesweeper-scores-desktop.png`,
@@ -285,119 +285,98 @@ async function captureMobile(browser) {
 }
 
 /**
+ * Open one fresh WebKit sample page for the leaderboard capture.
+ *
+ * Each retry gets its own phone context: the wrong 1-LSB raster is a
+ * compositor state that can persist for the context, so a reused page would
+ * keep sampling the same variant. WebKit's first page in a fresh browser
+ * process can also rasterise the sticky header, board gradients and control
+ * gradients one 8-bit step away from the committed evidence (Issue #318,
+ * observed again for the scores page in Issue #341), so load a throwaway copy
+ * first and close it before the sampled page is created.
+ */
+async function openWebkitScoresSample(browser) {
+  const context = await createPhoneContext(browser, ENGINE, {
+    viewport: { width: 320, height: 640 },
+  });
+  try {
+    const warmUp = await context.newPage();
+    try {
+      await seedScores(warmUp);
+      await openWin(warmUp);
+    } finally {
+      await warmUp.close();
+    }
+    return await context.newPage();
+  } catch (error) {
+    // `captureManifestedScreenshot` only closes a page it received from
+    // openPage; when the warm-up or the sampled page fails here, close the
+    // fresh context ourselves so a failed sample cannot leak it.
+    try {
+      await context.close();
+    } catch (closeError) {
+      console.warn(
+        'WebKit scores capture could not close a failed sample context: ' +
+          `${closeError instanceof Error ? closeError.message : String(closeError)}`,
+      );
+    }
+    throw error;
+  }
+}
+
+/**
+ * Prepare one sampled WebKit page for the manifest byte comparison.
+ *
+ * The seam order is the Issue #341 t3 contract. The scroll round-trip forces
+ * the page and header to repaint from the settled top before the seams below,
+ * so the full-page capture does not reuse a load-dependent tile raster. The
+ * win overlay's blurred, translucent backdrop can keep a 1-LSB raster of the
+ * board band and of its own card / primary button that the frame gate cannot
+ * see, because that wrong raster persists across frames; hiding and restoring
+ * the overlay forces a fresh snapshot on the canonical paint path, exactly like
+ * the WebKit lost capture (Issue #318 t1). The overlay repaint runs before the
+ * header seam because the header seam must be the last compositing change,
+ * otherwise its rebuilt header snapshot is discarded by the overlay repaint.
+ */
+async function prepareWebkitScoresPage(page) {
+  await seedScores(page);
+  await openWin(page);
+  await settleWebkitReadyPaint(page);
+  await repaintWebkitReadyOverlay(page);
+  await settleSharedHeaderCompositing(page);
+}
+
+/**
  * Capture the 320×640 leaderboard panel on the WebKit engine.
  *
  * Under sustained host load WebKit can rasterise an individual composited tile
  * (shared header, board backdrop, win card / primary button, far-down
  * custom-difficulty button) one 8-bit step away from the recorded evidence.
  * That wrong raster is byte-stable across consecutive frames, so the
- * stable-frame gate alone cannot see it. The seams below make the canonical
- * path much more likely but cannot prove it was taken, so this function samples
- * a fresh page and accepts it only when the bytes equal the manifest entry; a
- * miss fails before writing instead of replacing the committed evidence.
+ * stable-frame gate alone cannot see it. The seams in `prepare` make the
+ * canonical path much more likely but cannot prove it was taken, so the shared
+ * `captureManifestedScreenshot` resampler samples a fresh context for each
+ * attempt and accepts it only when the two-frame full-page bytes equal the
+ * manifest entry; twenty misses (or twenty unstable samples) fail before
+ * writing instead of replacing the committed evidence. The first sample also
+ * runs the manifest environment guard (`checkOnly`), so a host / wrong-image
+ * run fails with the guard's own message instead of exhausting the resamples.
+ * `--allow-new-bytes` is the explicit intentional-UI-change exit.
  */
 async function captureWebkitMobile(browser) {
   const name = `after-${FILE_PREFIX}-webkit.png`;
-  const expectedSha256 = ALLOW_NEW_BYTES ? null : expectedCaptureSha256(name);
-  const attempts = expectedSha256 === null ? 1 : WEBKIT_CAPTURE_ATTEMPTS;
-  if (expectedSha256 === null && !ALLOW_NEW_BYTES) {
-    console.warn(
-      `No manifest sha256 is recorded for ${name}; sampling one page without a byte comparison.`,
-    );
-  }
-  const observed = [];
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const context = await createPhoneContext(browser, ENGINE, {
-      viewport: { width: 320, height: 640 },
-    });
-    try {
-      // WebKit's first page in a fresh browser process can rasterise the sticky
-      // header, board gradients and control gradients one 8-bit step away from
-      // the committed evidence (Issue #318, observed again for the scores page
-      // in Issue #341). Load a throwaway copy first so the sampled page is not
-      // the first page in the process.
-      const warmUp = await context.newPage();
-      try {
-        await seedScores(warmUp);
-        await openWin(warmUp);
-      } finally {
-        await warmUp.close();
-      }
-      const page = await context.newPage();
-      if (attempt === 1) {
-        // Fail fast on a host / wrong-image run: its raster can never match the
-        // fixed-container manifest, and the guard's own explanation is more
-        // useful than exhausting the resample budget.
-        await capture(page, name, { checkOnly: true });
-      }
-      await seedScores(page);
-      await openWin(page);
-      // Issue #341 rework: a scroll round-trip forces the page and header to
-      // repaint from the settled top before the seams below, so the full-page
-      // capture does not reuse a load-dependent tile raster.
-      await settleWebkitReadyPaint(page);
-      // The win overlay's blurred, translucent backdrop can keep a 1-LSB raster
-      // of the board band and of its own card / primary button that the frame
-      // gate cannot see, because that wrong raster persists across frames.
-      // Hiding and restoring the overlay forces a fresh snapshot on the
-      // canonical paint path, exactly like the WebKit lost capture (Issue #318
-      // t1). It runs before the header seam: the header seam must be the last
-      // compositing change, otherwise its rebuilt header snapshot is discarded
-      // by the overlay repaint.
-      await repaintWebkitReadyOverlay(page);
-      // Issue #341: rebuild the shared header's WebKit backdrop snapshot from
-      // the settled page. The seam is WebKit-only (this function only runs for
-      // the `--webkit` engine) and does not apply to `--before` / `--clear` /
-      // Chromium.
-      await settleSharedHeaderCompositing(page);
-      let bytes;
-      try {
-        bytes = await captureStableBytes(page, { fullPage: true });
-      } catch (error) {
-        // A page that never settles within the frame gate is also a transient
-        // load symptom; spend another sample instead of aborting the run. The
-        // last attempt rethrows the real error.
-        if (attempt === attempts) throw error;
-        observed.push('unstable');
-        console.warn(
-          `WebKit scores capture attempt ${attempt}/${attempts} did not stabilise ` +
-            `(${error instanceof Error ? error.message : String(error)}); sampling a fresh page.`,
-        );
-        continue;
-      }
-      const actualSha256 = createHash('sha256').update(bytes).digest('hex');
-      if (expectedSha256 === null || actualSha256 === expectedSha256) {
-        // The bytes already passed the stable-frame check; hand them to the
-        // manifested writer so it still applies the fixed-environment guard and
-        // the atomic write, without taking a third screenshot.
-        await capture(page, name, { capturedBytes: bytes });
-        return;
-      }
-      observed.push(actualSha256);
-      console.warn(
-        `WebKit scores capture attempt ${attempt}/${attempts} produced ${actualSha256}, ` +
-          `not the recorded ${expectedSha256}; sampling a fresh page.`,
-      );
-    } finally {
-      // A close failure must not mask the sample's real error or fail a run
-      // whose matched PNG was already written; the next attempt opens a new
-      // context anyway.
-      try {
-        await context.close();
-      } catch (error) {
-        console.warn(
-          `WebKit scores capture could not close the sampled context: ` +
-            `${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-    }
-  }
-  throw new Error(
-    `The WebKit scores capture did not reproduce the recorded ${name} sha256 ` +
-      `${expectedSha256} in ${attempts} fresh pages (observed: ${observed.join(', ')}). ` +
-      'Nothing was written. Re-run when the host load drops; if the leaderboard UI ' +
-      'changed intentionally, re-run with --allow-new-bytes and update the manifest.',
-  );
+  await captureManifestedScreenshot({
+    name,
+    engine: ENGINE,
+    openPage: () => openWebkitScoresSample(browser),
+    closePage: (page) => page.context().close(),
+    checkEnvironment: (page) => capture(page, name, { checkOnly: true }),
+    prepare: prepareWebkitScoresPage,
+    captureBytes: (page) => captureStableBytes(page, { fullPage: true }),
+    write: (page, bytes) => capture(page, name, { capturedBytes: bytes }),
+    attempts: MANIFEST_CAPTURE_ATTEMPTS,
+    allowNewBytes: ALLOW_NEW_BYTES,
+  });
 }
 
 if (BEFORE && IS_WEBKIT) {
