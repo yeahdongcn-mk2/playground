@@ -108,4 +108,37 @@ export const BOSSES: readonly BossChart[] = [
       },
     ],
   },
+  {
+    id: 'boss-3',
+    phases: [
+      {
+        id: 'boss-3-phase-1',
+        // A brawler that closes the distance: short, blunt tells instead of blades.
+        moves: [
+          { id: 'b3-p1-cross-cut', telegraphMs: 1280, activeMs: 300, parryWindowMs: 150, damage: 9 },
+          { id: 'b3-p1-backfist', telegraphMs: 1150, activeMs: 260, parryWindowMs: 130, damage: 8 },
+          { id: 'b3-p1-knee', telegraphMs: 1220, activeMs: 280, parryWindowMs: 140, damage: 8 },
+          { id: 'b3-p1-spin-kick', telegraphMs: 1350, activeMs: 340, parryWindowMs: 170, damage: 10 },
+          { id: 'b3-p1-shoulder', telegraphMs: 1180, activeMs: 270, parryWindowMs: 135, damage: 8 },
+          { id: 'b3-p1-double-palm', telegraphMs: 1300, activeMs: 310, parryWindowMs: 155, damage: 9 },
+          { id: 'b3-p1-low-kick', telegraphMs: 1120, activeMs: 250, parryWindowMs: 125, damage: 8 },
+          { id: 'b3-p1-elbow', telegraphMs: 1240, activeMs: 290, parryWindowMs: 145, damage: 9 },
+        ],
+      },
+      {
+        id: 'boss-3-phase-2',
+        // No new shapes: the same eight unarmed moves arrive faster and hit harder.
+        moves: [
+          { id: 'b3-p2-cross-cut', telegraphMs: 980, activeMs: 280, parryWindowMs: 140, damage: 11 },
+          { id: 'b3-p2-backfist', telegraphMs: 900, activeMs: 240, parryWindowMs: 120, damage: 10 },
+          { id: 'b3-p2-knee', telegraphMs: 950, activeMs: 260, parryWindowMs: 130, damage: 11 },
+          { id: 'b3-p2-spin-kick', telegraphMs: 1040, activeMs: 320, parryWindowMs: 160, damage: 13 },
+          { id: 'b3-p2-shoulder', telegraphMs: 920, activeMs: 250, parryWindowMs: 125, damage: 10 },
+          { id: 'b3-p2-double-palm', telegraphMs: 1010, activeMs: 290, parryWindowMs: 145, damage: 12 },
+          { id: 'b3-p2-low-kick', telegraphMs: 880, activeMs: 230, parryWindowMs: 115, damage: 10 },
+          { id: 'b3-p2-elbow', telegraphMs: 960, activeMs: 270, parryWindowMs: 135, damage: 12 },
+        ],
+      },
+    ],
+  },
 ];

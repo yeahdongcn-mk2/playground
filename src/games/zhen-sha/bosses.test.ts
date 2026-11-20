@@ -4,14 +4,15 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { BOSSES } from './bosses';
 import type { BossChart, BossMove, BossPhase } from './bosses';
+import { MAX_HITS } from './engine';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SOURCE = readFileSync(join(HERE, 'bosses.ts'), 'utf8');
 
 /**
- * The committed shape of the first two charts. Keeping the full id list here
- * means a rename or a reordered move fails this test instead of silently
- * invalidating saved replays.
+ * The committed shape of all three charts. Keeping the full id list here means
+ * a rename or a reordered move fails this test instead of silently invalidating
+ * saved replays.
  */
 const EXPECTED_CHARTS = [
   {
@@ -74,6 +75,37 @@ const EXPECTED_CHARTS = [
       },
     ],
   },
+  {
+    id: 'boss-3',
+    phases: [
+      {
+        id: 'boss-3-phase-1',
+        moveIds: [
+          'b3-p1-cross-cut',
+          'b3-p1-backfist',
+          'b3-p1-knee',
+          'b3-p1-spin-kick',
+          'b3-p1-shoulder',
+          'b3-p1-double-palm',
+          'b3-p1-low-kick',
+          'b3-p1-elbow',
+        ],
+      },
+      {
+        id: 'boss-3-phase-2',
+        moveIds: [
+          'b3-p2-cross-cut',
+          'b3-p2-backfist',
+          'b3-p2-knee',
+          'b3-p2-spin-kick',
+          'b3-p2-shoulder',
+          'b3-p2-double-palm',
+          'b3-p2-low-kick',
+          'b3-p2-elbow',
+        ],
+      },
+    ],
+  },
 ] as const;
 
 /** Words that sound like an acceptance criterion but cannot be measured. */
@@ -118,6 +150,14 @@ function phaseAt(boss: BossChart, index: number): BossPhase {
   return phase;
 }
 
+function bossAt(id: string): BossChart {
+  const boss = BOSSES.find((candidate) => candidate.id === id);
+  if (boss === undefined) {
+    throw new Error(`missing boss ${id}`);
+  }
+  return boss;
+}
+
 function movesOf(boss: BossChart): readonly BossMove[] {
   return boss.phases.flatMap((phase) => phase.moves);
 }
@@ -131,6 +171,53 @@ function mean(values: readonly number[]): number {
 
 function chartDurationMs(boss: BossChart): number {
   return movesOf(boss).reduce((sum, move) => sum + move.telegraphMs + move.activeMs, 0);
+}
+
+/** A phase's timing/damage numbers with move order removed, for reuse checks. */
+type StatQuad = readonly [number, number, number, number];
+
+function phaseSignature(phase: BossPhase): readonly StatQuad[] {
+  return phase.moves
+    .map((move): StatQuad => [move.telegraphMs, move.activeMs, move.parryWindowMs, move.damage])
+    .sort((left, right) => left[0] - right[0] || left[1] - right[1] || left[2] - right[2] || left[3] - right[3]);
+}
+
+/** Result of replaying the whole chart with one fixed input policy. */
+interface CampaignRun {
+  readonly elapsedMs: number;
+  readonly hits: number;
+  readonly movesFaced: number;
+  readonly failed: boolean;
+}
+
+/**
+ * Walk all three bosses in chart order. `parry` is the only input: either every
+ * move is parried or every move lands. Time advances only by each move's
+ * telegraph plus active duration, so the run never reads a wall clock.
+ */
+function runCampaign(parry: boolean): CampaignRun {
+  let elapsedMs = 0;
+  let hits = 0;
+  let movesFaced = 0;
+  let failed = false;
+
+  for (const boss of BOSSES) {
+    for (const phase of boss.phases) {
+      for (const move of phase.moves) {
+        movesFaced += 1;
+        elapsedMs += move.telegraphMs + move.activeMs;
+        if (!parry) {
+          hits += 1;
+          if (hits >= MAX_HITS) {
+            failed = true;
+            return { elapsedMs, hits, movesFaced, failed };
+          }
+        }
+      }
+    }
+  }
+
+  return { elapsedMs, hits, movesFaced, failed };
 }
 
 function stringFields(): readonly string[] {
@@ -157,8 +244,8 @@ function stringFields(): readonly string[] {
 }
 
 describe('Zhen Sha boss charts', () => {
-  it('starts with the two planned bosses, each holding two ordered phases', () => {
-    expect(BOSSES.map((boss) => boss.id)).toEqual(['boss-1', 'boss-2']);
+  it('starts with the three planned bosses, each holding two ordered phases', () => {
+    expect(BOSSES.map((boss) => boss.id)).toEqual(['boss-1', 'boss-2', 'boss-3']);
     for (const boss of BOSSES) {
       expect(boss.phases.map((phase) => phase.id)).toEqual([
         `${boss.id}-phase-1`,
@@ -238,10 +325,58 @@ describe('Zhen Sha boss charts', () => {
     }
   });
 
-  it('leaves room for a third 20–30 second boss so three charts total 60–90 seconds', () => {
-    const twoBossMs = BOSSES.reduce((sum, boss) => sum + chartDurationMs(boss), 0);
-    expect(twoBossMs + 20_000).toBeLessThanOrEqual(90_000);
-    expect(twoBossMs + 30_000).toBeGreaterThanOrEqual(60_000);
+  it('runs all three charts inside the 60–90 second campaign budget', () => {
+    const totalMs = BOSSES.reduce((sum, boss) => sum + chartDurationMs(boss), 0);
+    expect(totalMs, 'three-boss campaign length').toBeGreaterThanOrEqual(60_000);
+    expect(totalMs, 'three-boss campaign length').toBeLessThanOrEqual(90_000);
+  });
+
+  it('gives the third boss no move ids in common with the first boss', () => {
+    const firstIds = new Set(movesOf(bossAt('boss-1')).map((move) => move.id));
+    const thirdMoves = movesOf(bossAt('boss-3'));
+    expect(thirdMoves.length).toBeGreaterThan(0);
+    expect(thirdMoves.filter((move) => firstIds.has(move.id)).map((move) => move.id)).toEqual([]);
+  });
+
+  it('does not clone the first boss by only reordering its stat quadruples', () => {
+    const first = bossAt('boss-1');
+    const third = bossAt('boss-3');
+    for (let index = 0; index < 2; index += 1) {
+      const firstPhase = phaseAt(first, index);
+      const thirdPhase = phaseAt(third, index);
+      expect(
+        phaseSignature(thirdPhase),
+        `${thirdPhase.id} reuses the numbers of ${firstPhase.id}`,
+      ).not.toEqual(phaseSignature(firstPhase));
+    }
+  });
+
+  it('clears all three bosses on the fixed-input perfect run inside 60–90 seconds', () => {
+    const run = runCampaign(true);
+    const totalMoves = BOSSES.reduce((sum, boss) => sum + movesOf(boss).length, 0);
+
+    expect(run.failed).toBe(false);
+    expect(run.hits).toBe(0);
+    expect(run.movesFaced).toBe(totalMoves);
+    expect(run.elapsedMs).toBeGreaterThanOrEqual(60_000);
+    expect(run.elapsedMs).toBeLessThanOrEqual(90_000);
+  });
+
+  it('fails the all-miss run on the third hit under the existing MAX_HITS rule', () => {
+    const run = runCampaign(false);
+
+    expect(MAX_HITS).toBe(3);
+    expect(run.failed).toBe(true);
+    expect(run.hits).toBe(MAX_HITS);
+    expect(run.movesFaced).toBe(MAX_HITS);
+  });
+
+  it('repeats both fixed-input runs identically without reading a wall clock', () => {
+    const perfect = runCampaign(true);
+    const allMiss = runCampaign(false);
+
+    expect(runCampaign(true)).toEqual(perfect);
+    expect(runCampaign(false)).toEqual(allMiss);
   });
 
   it('keeps every string field free of unverifiable quality words', () => {
