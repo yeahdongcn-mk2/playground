@@ -68,6 +68,9 @@ describe('hub card art', () => {
     expect(art).toContain('#08070a');
     expect(art).not.toContain('mini-orb');
     expect(art).not.toMatch(/<image\b|xlink:href|https?:\/\//);
+    // Pin the new art too, so a lost path or shape cannot slip through the
+    // substring checks above.
+    expect(art.replace(/[ \t]+$/gm, '')).toMatchSnapshot('zhen-sha card art');
   });
 
   it('keeps the other five cards on their existing dedicated art', () => {
