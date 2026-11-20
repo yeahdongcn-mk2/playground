@@ -143,7 +143,8 @@ describe('zhen-sha palette and procedural paper theme', () => {
 
   it('ships no external URLs, bitmap/audio assets or webfonts', () => {
     const externalUrl = /https?:\/\/|ftp:\/\/|(?:^|[^:\w])\/\/[a-z0-9-]+(?:\.[a-z0-9-]+)+/i;
-    const rasterDataUri = /data:image\/(?:png|jpe?g|webp|gif|avif|bmp)|data:(?:font\/|application\/font)/i;
+    const dataUri =
+      /data:(?:image\/(?:png|jpe?g|webp|gif|avif|bmp)|font\/|application\/font)/i;
     const fontFace = /@font-face/i;
     const assetExtension =
       /\.(?:png|jpe?g|webp|gif|avif|bmp|ico|mp3|wav|ogg|oga|m4a|aac|flac|opus|woff2?|ttf|otf|eot)$/i;
@@ -160,7 +161,7 @@ describe('zhen-sha palette and procedural paper theme', () => {
       const label = relative(ROOT, file);
       const contents = readFileSync(file, 'utf8');
       expect(externalUrl.test(contents), `${label} 不应含外部 URL`).toBe(false);
-      expect(rasterDataUri.test(contents), `${label} 不应内联位图或字体数据`).toBe(false);
+      expect(dataUri.test(contents), `${label} 不应内联位图或字体数据`).toBe(false);
       expect(fontFace.test(contents), `${label} 不应含 webfont 声明`).toBe(false);
     }
   });
@@ -187,7 +188,7 @@ describe('zhen-sha palette and procedural paper theme', () => {
     expect(edge).toContain('var(--zhen-paper)');
   });
 
-  it('keeps the settlement overlay above both paper layers', () => {
+  it('stacks the paper layers above the canvas and below the settlement overlay', () => {
     const canvas = zIndex('.zhen-sha-canvas');
     const overlay = zIndex('.zhen-sha-overlay');
     expect(overlay).toBeGreaterThan(canvas);
