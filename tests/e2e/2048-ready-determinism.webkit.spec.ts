@@ -10,19 +10,19 @@ import {
 import { expect, test } from './fixtures';
 
 /**
- * Falsifiable two-run guard for the fixed-container 2048 READY evidence
+ * Falsifiable two-run guard for the 2048 READY WebKit capture path
  * (Issue #199 review).
  *
- * The committed PNG and the nightly repro both compare bytes, but neither can
- * fail a normal PR when the capture runtime stops producing a stable raster.
  * This spec runs the real built page on WebKit twice, in two separate browser
  * processes like the two container runs, applies the same READY seams as
  * `scripts/capture-2048-screenshots.mjs`, and fails unless each run observes
  * the overlay hide / restore seam, produces two byte-identical consecutive
- * screenshots and both runs agree on the sha256. Manifest fidelity is a
- * separate concern: `verify:screenshots:sha256` and the nightly
- * `verify:screenshots:repro` workflow compare every fixed-container target, on
- * every manifest target and under concurrent host load.
+ * screenshots and both runs agree on the sha256. It checks run-to-run
+ * consistency of one commit's raster, not manifest fidelity:
+ * `after-2048-ready-webkit.png` is intentionally outside the sha256 manifest
+ * (Issue #374) because concurrent host load can settle it into byte-stable
+ * 1-LSB variants. The manifest gates playing / gameover through
+ * `verify:screenshots:sha256` and the nightly `verify:screenshots:repro`.
  */
 
 /** Deliberate copy of the capture script's COLOR_BOARD for the committed READY evidence. */

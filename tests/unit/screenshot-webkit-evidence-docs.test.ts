@@ -114,7 +114,6 @@ const NARROW_DRIFT = [
 const DRIFTED = [...NARROW_DRIFT];
 const DETERMINISTIC = [
   'after-breakout-playing-webkit.png',
-  'after-2048-ready-webkit.png',
   'after-2048-playing-webkit.png',
   'after-2048-gameover-webkit.png',
   'after-hub-webkit.png',
@@ -209,14 +208,18 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     // the parent to the fixed note proves the children were not reparented,
     // even if the prose inside a child changes.
     const parent = WEBKIT_HISTORICAL.indexOf('- 已报告的漂移产物');
-    const fixed = WEBKIT_HISTORICAL.indexOf('- 已修复的漂移');
+    const fixed = WEBKIT_HISTORICAL.indexOf(
+      '- 曾修复但负载下仍会漂移、现已移出清单',
+    );
     expect(parent).toBeGreaterThan(-1);
     expect(fixed).toBeGreaterThan(parent);
     const between = WEBKIT_HISTORICAL.slice(parent, fixed);
     for (const file of DRIFTED) {
       expect(between).toContain(file);
     }
-    expect(childBullets(WEBKIT_HISTORICAL, '已修复的漂移')).toBe('');
+    expect(
+      childBullets(WEBKIT_HISTORICAL, '曾修复但负载下仍会漂移、现已移出清单'),
+    ).toBe('');
   });
 
   it('keeps the same-environment deterministic WebKit captures out of the drift list', () => {
@@ -231,8 +234,10 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(WEBKIT_HISTORICAL).toContain('bf7548b7');
   });
 
-  it('records the fixed 2048 ready drift and its dedicated paint seam', () => {
-    expect(WEBKIT_HISTORICAL).toContain('已修复的漂移');
+  it('records the fixed-then-load-dependent 2048 ready drift and its exclusion', () => {
+    expect(WEBKIT_HISTORICAL).toContain(
+      '曾修复但负载下仍会漂移、现已移出清单',
+    );
     expect(WEBKIT_HISTORICAL).toContain('after-2048-ready-webkit.png');
     expect(WEBKIT_HISTORICAL).toContain('4f488a3e');
     expect(WEBKIT_HISTORICAL).toContain('1833 像素');
@@ -242,12 +247,15 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(WEBKIT_HISTORICAL).toContain(
       '0ea38c8d6a1ff580c695cedc6f5165ad4299a7612dd3da32d3c62c06e73b4856',
     );
+    expect(WEBKIT_HISTORICAL).toContain('移出 sha256 清单');
+    expect(WEBKIT_HISTORICAL).toContain('20 页 fresh-page 重采样');
+    expect(WEBKIT_HISTORICAL).toContain('672285de');
+    expect(WEBKIT_HISTORICAL).toContain('d8a808b0');
+    expect(WEBKIT_HISTORICAL).toContain('1f45d828');
+    expect(WEBKIT_HISTORICAL).toContain('单页 `{ stable: true }` 两帧门禁');
+    expect(WEBKIT_HISTORICAL).toContain('playing 条目');
     expect(WEBKIT_HISTORICAL).toContain('capture-sha256-manifest.json');
-    expect(WEBKIT_HISTORICAL).toContain('不再是历史漂移证据');
-    expect(WEBKIT_HISTORICAL).toContain('连续两张截图逐字节一致');
-    expect(WEBKIT_HISTORICAL).toContain('backdrop-filter');
-    expect(WEBKIT_HISTORICAL).toContain('隐藏两帧');
-    expect(WEBKIT_HISTORICAL).toContain('repaintWebkitReadyOverlay');
+    expect(WEBKIT_HISTORICAL).not.toContain('不再是历史漂移证据');
     expect(childBullets(WEBKIT_HISTORICAL, '已报告的漂移产物')).not.toContain(
       'after-2048-ready-webkit.png',
     );
@@ -274,7 +282,7 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(WEBKIT_HISTORICAL).toContain('待重绘帧');
     expect(WEBKIT_HISTORICAL).not.toContain('扫雷这 4 张在容器内两跑 sha256 相同');
     expect(WEBKIT_HISTORICAL).toContain(
-      '2048 ready 的连续两跑漂移已由 #199 t1 的页眉重绘 + overlay 重绘接缝消除',
+      '2048 ready 的空闲 / 跨环境两跑漂移已由 #199 t1',
     );
   });
 

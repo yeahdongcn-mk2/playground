@@ -656,7 +656,7 @@ describe('minesweeper WebKit manifest and README contract', () => {
       expect(row).toContain(`\`${MINESWEEPER_COMMAND}\``);
       expect(row).toContain(`\`${capture?.provenance.captureCommit}\``);
     }
-    expect(manifestSection).toContain('清单覆盖（15 张');
+    expect(manifestSection).toContain('清单覆盖（14 张');
   });
 
   it('advertises the container command for the four webkit-phone rows', () => {
