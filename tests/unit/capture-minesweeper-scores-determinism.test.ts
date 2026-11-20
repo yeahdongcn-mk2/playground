@@ -403,4 +403,44 @@ describe('minesweeper scores screenshot determinism guard (Issue #341 / #376)', 
     // 2cc6f87…: resampling is not a licence to rewrite the evidence.
     expect(capture?.provenance.captureCommit).toBe(SCORES_CAPTURE_COMMIT);
   });
+
+  it('documents the post-reuse fixed-container acceptance (Issue #376 t2)', () => {
+    // The acceptance record must describe the code that ships now: the shared
+    // resampler, the fixed image / command, the host load and the per-run
+    // hashes plus log checks. The pre-reuse disclaimer must not come back, and
+    // the runs made with the old hand-written loop stay marked as history
+    // rather than passing as the current acceptance.
+    expect(SCREENSHOTS_README).toContain('Issue #376 t2');
+    expect(SCREENSHOTS_README).toContain(
+      'mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f',
+    );
+    expect(SCREENSHOTS_README).toContain(
+      'npm run verify:screenshots:repro -- --target screenshots:minesweeper:scores:webkit --runs 4',
+    );
+    expect(SCREENSHOTS_README).toContain('16 个 `yes` 进程');
+    expect(SCREENSHOTS_README).toContain(
+      'load average 由 3.75 升到峰值 27.94',
+    );
+    expect(SCREENSHOTS_README).toContain('2 / 6 / 2 / 4 次采样');
+    expect(SCREENSHOTS_README).toContain(
+      'node scripts/verify-screenshot-sha256.mjs --log test-results/screenshot-repro/screenshots-minesweeper-scores-webkit-run<N>.log',
+    );
+    // The old evidence is still useful, but it has to be labelled as the
+    // pre-reuse hand-written-loop record instead of the current acceptance.
+    expect(SCREENSHOTS_README).toContain('保留作历史对照');
+    expect(SCREENSHOTS_README).toContain('手写 attempt 循环');
+    expect(SCREENSHOTS_README).not.toContain(
+      '以下固定容器验收记录来自此次复用之前的实现',
+    );
+    // The manifest entry itself is unchanged by the acceptance rerun, and the
+    // 4-run hash must sit in the t2 record itself: the same hash appears on
+    // other README lines, so a whole-file containment check cannot pin it.
+    const t2Start = SCREENSHOTS_README.indexOf('Issue #376 t2');
+    const t2End = SCREENSHOTS_README.indexOf('\n- 打砖块复核', t2Start);
+    expect(t2Start).toBeGreaterThan(-1);
+    expect(t2End).toBeGreaterThan(t2Start);
+    expect(SCREENSHOTS_README.slice(t2Start, t2End)).toContain(
+      `4 跑写出的 \`after-minesweeper-scores-webkit.png\` sha256 均为 \`${SCORES_SHA256}\`，等于清单与已提交 PNG`,
+    );
+  });
 });
