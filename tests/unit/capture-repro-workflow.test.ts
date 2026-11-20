@@ -3,7 +3,10 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
-import { deriveReproPlans } from '../../scripts/lib/screenshot-repro.mjs';
+import {
+  deriveReproPlans,
+  REPRO_RUN_COUNT,
+} from '../../scripts/lib/screenshot-repro.mjs';
 import {
   DEFAULT_MANIFEST_PATH,
   parseSha256Manifest,
@@ -57,6 +60,104 @@ function requireStep(
   return step;
 }
 
+/** English number words the job comment may use, from zero to ninety-nine. */
+const NUMBER_WORDS = new Map<string, number>([
+  ['zero', 0],
+  ['one', 1],
+  ['two', 2],
+  ['three', 3],
+  ['four', 4],
+  ['five', 5],
+  ['six', 6],
+  ['seven', 7],
+  ['eight', 8],
+  ['nine', 9],
+  ['ten', 10],
+  ['eleven', 11],
+  ['twelve', 12],
+  ['thirteen', 13],
+  ['fourteen', 14],
+  ['fifteen', 15],
+  ['sixteen', 16],
+  ['seventeen', 17],
+  ['eighteen', 18],
+  ['nineteen', 19],
+  ['twenty', 20],
+  ['thirty', 30],
+  ['forty', 40],
+  ['fifty', 50],
+  ['sixty', 60],
+  ['seventy', 70],
+  ['eighty', 80],
+  ['ninety', 90],
+]);
+
+/**
+ * Read an English number word such as `six`, `Twelve` or `twenty-one`.
+ *
+ * `yaml.parse` drops comments, so the capture-count contract lives in the job
+ * comment text; this parser keeps the assertion symmetric with the words the
+ * workflow author writes.
+ */
+function parseEnglishNumberWord(word: string): number {
+  const normalized = word.toLowerCase();
+  const direct = NUMBER_WORDS.get(normalized);
+  if (direct !== undefined) {
+    return direct;
+  }
+  const parts = normalized.split('-');
+  if (parts.length === 2) {
+    const tens = NUMBER_WORDS.get(parts[0] ?? '');
+    const unit = NUMBER_WORDS.get(parts[1] ?? '');
+    if (
+      tens !== undefined &&
+      tens >= 20 &&
+      tens % 10 === 0 &&
+      unit !== undefined &&
+      unit >= 1 &&
+      unit <= 9
+    ) {
+      return tens + unit;
+    }
+  }
+  throw new Error(`expected an English number word, got ${JSON.stringify(word)}`);
+}
+
+/**
+ * The comment block immediately above the repro job's `timeout-minutes`.
+ *
+ * That note states how many captures the 60-minute budget has to cover, so
+ * anchoring the assertion to `jobs.repro` keeps it from reading an unrelated
+ * job or comment.
+ */
+function reproJobComment(): string {
+  const lines = WORKFLOW_SOURCE.split(/\r?\n/);
+  const jobIndex = lines.findIndex((line) => /^ {2}repro:\s*$/.test(line));
+  if (jobIndex < 0) {
+    throw new Error('the workflow is missing the jobs.repro key');
+  }
+  const nextJobIndex = lines.findIndex(
+    (line, index) => index > jobIndex && /^ {2}[A-Za-z0-9_-]+:\s*$/.test(line),
+  );
+  const jobEnd = nextJobIndex < 0 ? lines.length : nextJobIndex;
+  const timeoutIndex = lines.findIndex(
+    (line, index) =>
+      index > jobIndex && index < jobEnd && /^\s+timeout-minutes:\s*60\s*$/.test(line),
+  );
+  if (timeoutIndex < 0) {
+    throw new Error('the repro job is missing timeout-minutes: 60');
+  }
+  const comment: string[] = [];
+  for (let index = timeoutIndex - 1; index >= 0; index -= 1) {
+    const line = lines[index] ?? '';
+    if (!/^\s*#/.test(line)) {
+      break;
+    }
+    comment.unshift(line);
+  }
+  return comment.join('\n');
+}
+
 describe('capture-repro workflow', () => {
   it('only runs on a daily schedule or manual dispatch', () => {
     expect(Object.keys(workflow.on ?? {}).sort()).toEqual(['schedule', 'workflow_dispatch']);
@@ -83,8 +184,32 @@ describe('capture-repro workflow', () => {
     expect(job?.container).toBeUndefined();
   });
 
-  it('keeps a bounded timeout for six container captures', () => {
+  it('keeps a bounded timeout for twelve container captures', () => {
     expect(job?.['timeout-minutes']).toBe(60);
+  });
+
+  it('states the manifest-derived capture count in the job comment', () => {
+    const comment = reproJobComment();
+    const match =
+      /#[ \t]+([A-Za-z]+(?:-[A-Za-z]+)*) captures \(([A-Za-z]+(?:-[A-Za-z]+)*) manifest targets x two runs\)/.exec(
+        comment,
+      );
+    if (match === null) {
+      throw new Error(
+        'the repro job comment is missing "<N> captures (<M> manifest targets x two runs)"',
+      );
+    }
+    const capturesWord = match[1] ?? '';
+    const targetsWord = match[2] ?? '';
+
+    const manifest = parseSha256Manifest(readFileSync(MANIFEST_PATH, 'utf8'));
+    const targetCount = deriveReproPlans(manifest).length;
+
+    // Every manifest target is captured once per run, so the job note counts
+    // capture invocations (targets x default runs), not manifested PNGs.
+    expect(REPRO_RUN_COUNT).toBe(2);
+    expect(parseEnglishNumberWord(capturesWord)).toBe(targetCount * REPRO_RUN_COUNT);
+    expect(parseEnglishNumberWord(targetsWord)).toBe(targetCount);
   });
 
   it('installs dependencies and runs the reusable repro entry', () => {
