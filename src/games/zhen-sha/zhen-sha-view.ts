@@ -79,6 +79,13 @@ const VIEW_HTML = `
         <div class="zhen-sha-stage" data-testid="zhen-sha-stage">
           <canvas class="zhen-sha-canvas" data-testid="zhen-sha-canvas"
             role="img" aria-label="黑宣纸上的黑煞首领与金棍"></canvas>
+          <!-- Decorative only: no pointer events and no gameplay reads. -->
+          <div class="zhen-sha-marks" aria-hidden="true">
+            <span class="zhen-sha-wordmark">镇煞</span>
+            <span class="zhen-sha-seal">镇煞</span>
+            <span class="zhen-sha-arc-glow"></span>
+            <span class="zhen-sha-arc-edge"></span>
+          </div>
           <div class="zhen-sha-overlay" data-testid="overlay" role="group"
             aria-labelledby="zhen-sha-overlay-title" hidden>
             <div class="zhen-sha-overlay-card">
