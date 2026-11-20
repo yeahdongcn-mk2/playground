@@ -113,8 +113,8 @@
 
 /*
  * Black xuan paper: fixed procedural fibres and wash blooms. The canvas fills
- * an opaque ink base, so the paper grain is a screen-blended layer above it;
- * no image files, external URLs or webfonts are involved.
+ * an opaque ink base every frame, so this background only shows before the
+ * first paint; paper grain is screen-blended above it. No image files/URLs/fonts.
  */
 .zhen-sha-stage::before {
   content: "";
