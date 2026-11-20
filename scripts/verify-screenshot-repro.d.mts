@@ -7,6 +7,8 @@ export interface VerifyReproOptions {
   logDir: string;
   targets: string[];
   runs: number;
+  /** CPU load worker processes kept alive for every run; 0 disables the load. */
+  load: number;
 }
 
 export interface VerifyReproLogger {
@@ -23,6 +25,7 @@ export interface ReproMainDependencies {
     logDir: string;
     targets: string[];
     runs: number;
+    load: number;
     repoRoot: string;
     env: NodeJS.ProcessEnv;
     progress?: (line: string) => void;

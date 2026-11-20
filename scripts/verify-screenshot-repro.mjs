@@ -8,9 +8,12 @@ import {
   DEFAULT_SCREENSHOT_DIR,
 } from './lib/screenshot-sha256.mjs';
 import {
+  DEFAULT_LOAD_COUNT,
   DEFAULT_REPRO_LOG_DIR,
+  MAX_LOAD_COUNT,
   REPRO_RUN_COUNT,
   ScreenshotReproError,
+  normalizeLoadCount,
   normalizeRunCount,
   runScreenshotRepro,
   validateCaptureTarget,
@@ -20,10 +23,15 @@ const USAGE = `Usage: node scripts/verify-screenshot-repro.mjs [options]
 
 Re-run the screenshot targets named by ${DEFAULT_MANIFEST_PATH} in the fixed
 Playwright container. By default every target runs ${REPRO_RUN_COUNT} times;
---target selects a subset (repeatable) and --runs <N> changes the repetition
-count, e.g. for reproducing a load-dependent drift. Every run keeps one capture
+--target selects a subset (repeatable), --runs <N> changes the repetition count
+and --load <N> keeps N CPU-burning worker processes alive for every run, so a
+load-dependent drift can be reproduced on demand. Every run keeps one capture
 log and a copy of each manifested PNG under test-results/screenshot-repro/, so
 drifting runs can be compared after the last run overwrote the shared paths.
+
+The load workers are stopped and awaited at the end of the repro, including
+after a failed capture or an exception. With --load 0 (the default) the entry
+runs exactly as before and starts no extra process.
 
 Every manifested PNG must have the same sha256 in every run and equal the
 manifest. Each run log is also checked with
@@ -31,8 +39,8 @@ node scripts/verify-screenshot-sha256.mjs --log.
 
 The entry never commits, pushes or edits the manifest. On a mismatch it prints
 the differing files with expected / per-run actual sha256, the capture log and
-retained PNG paths, the environment fingerprint and the re-capture steps, and
-appends the same report to $GITHUB_STEP_SUMMARY when set.
+retained PNG paths, the environment fingerprint, the load state and the
+re-capture steps, and appends the same report to $GITHUB_STEP_SUMMARY when set.
 
 Options:
   --manifest <path>  sha256 manifest (default: ${DEFAULT_MANIFEST_PATH})
@@ -41,11 +49,14 @@ Options:
   --target <name>    capture only this manifest target (repeatable;
                      default: every target the manifest names)
   --runs <N>         runs per target, positive integer (default: ${REPRO_RUN_COUNT})
+  --load <N>         CPU burner processes kept alive for every run, integer
+                     0-${MAX_LOAD_COUNT}; 0 disables the load (default: ${DEFAULT_LOAD_COUNT})
   -h, --help         show this help
 
-Exit codes: 0 every run matches the manifest and each log verifies,
+Exit codes: 0 every run matches the manifest, each log verifies and every
+              requested load worker started and stopped,
             1 capture, hash, per-run PNG copy, environment or log verification
-              failure,
+              failure, or a load worker that failed to start / stop,
             2 usage, an unreadable / invalid manifest, or a manifest whose
               recorded environment does not match the fixed capture one.`;
 
@@ -58,9 +69,17 @@ export function parseArgs(argv) {
     logDir: DEFAULT_REPRO_LOG_DIR,
     targets: [],
     runs: REPRO_RUN_COUNT,
+    load: DEFAULT_LOAD_COUNT,
   };
 
-  const valued = new Set(['--manifest', '--dir', '--log-dir', '--target', '--runs']);
+  const valued = new Set([
+    '--manifest',
+    '--dir',
+    '--log-dir',
+    '--target',
+    '--runs',
+    '--load',
+  ]);
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '-h' || arg === '--help') {
@@ -82,8 +101,10 @@ export function parseArgs(argv) {
       options.logDir = value;
     } else if (arg === '--target') {
       options.targets.push(validateCaptureTarget(value));
-    } else {
+    } else if (arg === '--runs') {
       options.runs = normalizeRunCount(value);
+    } else {
+      options.load = normalizeLoadCount(value);
     }
   }
 
@@ -137,6 +158,7 @@ export async function main(
       logDir: resolve(repoRoot, options.logDir),
       targets: options.targets,
       runs: options.runs,
+      load: options.load,
       repoRoot,
       env,
       progress: (line) => logger.log?.(line),

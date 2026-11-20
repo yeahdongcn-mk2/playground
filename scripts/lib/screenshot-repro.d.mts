@@ -81,6 +81,43 @@ export interface ReproArtifactFailure {
   message: string;
 }
 
+export interface ReproLoadFailure {
+  /** 1-based worker number. */
+  index: number;
+  /** Whether the worker failed to spawn, to stop, or exited before stop. */
+  phase: 'start' | 'stop' | 'runtime';
+  message: string;
+}
+
+export interface ReproLoadSummary {
+  /** Requested worker count; 0 means the repro ran without injected load. */
+  requested: number;
+  started: number;
+  stopped: number;
+  exitedEarly: number;
+  active: number;
+  failures: ReproLoadFailure[];
+}
+
+export interface ReproLoadController {
+  requested: number;
+  readonly started: number;
+  readonly failures: ReproLoadFailure[];
+  /** PIDs of the spawned workers, in start order. */
+  readonly pids: number[];
+  snapshot(): ReproLoadSummary;
+  /** Stop and await every worker; idempotent. */
+  stop(): Promise<ReproLoadSummary>;
+}
+
+export interface StartCpuLoadOptions {
+  count?: number | string;
+  spawn?: ReproSpawn;
+  logger?: ReproLogger;
+  /** Grace period after SIGTERM before SIGKILL; defaults to LOAD_KILL_GRACE_MS. */
+  killGraceMs?: number;
+}
+
 export interface ReproResult {
   ok: boolean;
   report: string;
@@ -88,6 +125,7 @@ export interface ReproResult {
   dir: string;
   logDir: string;
   runsPerTarget: number;
+  load: ReproLoadSummary;
   plans: ReproPlan[];
   runs: ReproRun[];
   differences: ReproDifference[];
@@ -153,6 +191,11 @@ export interface RunScreenshotReproOptions {
   targets?: string[];
   /** Runs per target; defaults to REPRO_RUN_COUNT. */
   runs?: number | string;
+  /**
+   * CPU load worker processes kept alive for every selected run; 0 (default)
+   * leaves the repro load-free. Workers are stopped and awaited in a `finally`.
+   */
+  load?: number | string;
   env?: NodeJS.ProcessEnv;
   logger?: ReproLogger;
   /** Live progress lines, one per file and run. */
@@ -163,7 +206,11 @@ export interface RunScreenshotReproOptions {
   mkdir?: (path: string, options: { recursive: true }) => void;
   removeFile?: (path: string) => void;
   spawn?: ReproSpawn;
+  /** Spawn seam for the load workers; defaults to the same `spawn`. */
+  spawnLoadWorker?: ReproSpawn;
   spawnSync?: typeof spawnSync;
+  /** Grace period after SIGTERM before SIGKILL; defaults to LOAD_KILL_GRACE_MS. */
+  killGraceMs?: number;
   runCapture?: (
     options: ReproRunCaptureOptions,
   ) => number | Promise<number>;
@@ -174,6 +221,9 @@ export interface RunScreenshotReproOptions {
 
 export const DEFAULT_REPRO_LOG_DIR: string;
 export const REPRO_RUN_COUNT: number;
+export const DEFAULT_LOAD_COUNT: number;
+export const MAX_LOAD_COUNT: number;
+export const LOAD_KILL_GRACE_MS: number;
 export const SHA256_VERIFIER_PATH: string;
 
 export class ScreenshotReproError extends Error {}
@@ -183,6 +233,9 @@ export function sha256VerifierArgs(options: ReproVerifyLogOptions): string[];
 export function parseCaptureTarget(command: string): string;
 export function validateCaptureTarget(target: string): string;
 export function normalizeRunCount(value: number | string): number;
+export function normalizeLoadCount(value: number | string): number;
+export function loadWorkerArgs(): string[];
+export function startCpuLoad(options?: StartCpuLoadOptions): ReproLoadController;
 export function selectReproPlans(plans: ReproPlan[], targets?: string[]): ReproPlan[];
 export function deriveReproPlans(manifest: ScreenshotSha256Manifest): ReproPlan[];
 export function reproLogPath(logDir: string, target: string, run: number): string;

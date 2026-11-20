@@ -25,7 +25,11 @@ import {
 } from '../../scripts/lib/capture-env.mjs';
 import {
   captureCommandArgs,
+  DEFAULT_LOAD_COUNT,
   deriveReproPlans,
+  loadWorkerArgs,
+  MAX_LOAD_COUNT,
+  normalizeLoadCount,
   normalizeRunCount,
   parseCaptureTarget,
   reproArtifactPath,
@@ -35,9 +39,12 @@ import {
   selectReproPlans,
   sha256VerifierArgs,
   spawnContainerCapture,
+  startCpuLoad,
   validateCaptureTarget,
 } from '../../scripts/lib/screenshot-repro.mjs';
 import type {
+  ReproLoadController,
+  ReproLoadSummary,
   ReproRunCaptureOptions,
   ReproSpawn,
   ReproVerification,
@@ -202,6 +209,119 @@ function fakeChildSpawn({
     }, closeDelayMs);
     return child;
   }) as unknown as ReproSpawn;
+}
+
+interface FakeLoadChild extends EventEmitter {
+  pid: number | undefined;
+  killed: NodeJS.Signals[];
+  closed: boolean;
+  kill: (signal?: NodeJS.Signals) => boolean;
+}
+
+interface FakeLoadSpawn {
+  spawn: ReproSpawn;
+  calls: string[][];
+  children: FakeLoadChild[];
+  closedCount: () => number;
+}
+
+/**
+ * A fake `spawn` for the CPU load workers. `kill` closes after a short delay so
+ * a test can tell whether `stop()` actually waited for the children.
+ *
+ * `ignoreSigterm` / `ignoreSignals` model a worker that keeps burning CPU after
+ * a signal, and `exitAfterMs` models one that the OS or the OOM killer reaps
+ * before `stop()` runs. `errorOnCall` models the asynchronous `'error'` Node
+ * emits for a failed spawn (ENOENT / EAGAIN / EMFILE), which never throws from
+ * `spawn()` itself; `errorWithPid` models an error on an already-started child.
+ * A failed spawn intentionally emits no `'close'` here (real Node sends one
+ * right after the error), so stop() must rely on the error handler to mark the
+ * worker closed.
+ */
+function fakeLoadSpawn({
+  closeDelayMs = 5,
+  failOnCall,
+  errorOnCall,
+  errorMessage = 'spawn EMFILE',
+  errorWithPid = false,
+  order,
+  ignoreSigterm = false,
+  ignoreSignals = false,
+  exitAfterMs,
+}: {
+  closeDelayMs?: number;
+  /** 1-based spawn call that throws instead of returning a child. */
+  failOnCall?: number;
+  /** 1-based spawn call whose child emits `'error'` on a later tick. */
+  errorOnCall?: number;
+  /** Message carried by the injected `'error'` event. */
+  errorMessage?: string;
+  /** Give the child of a matching `errorOnCall` a pid, modelling an error after a real start. */
+  errorWithPid?: boolean;
+  /** Shared event log proving load starts and stops around the captures. */
+  order?: string[];
+  /** Record SIGTERM but keep running until SIGKILL. */
+  ignoreSigterm?: boolean;
+  /** Record every signal but never exit, so `stop()` hits its hard timeout. */
+  ignoreSignals?: boolean;
+  /** Emit `exit`/`close` this many ms after spawn, before `stop()` runs. */
+  exitAfterMs?: number;
+} = {}): FakeLoadSpawn {
+  const calls: string[][] = [];
+  const children: FakeLoadChild[] = [];
+  const spawn = ((command: string, args: readonly string[]) => {
+    const call = calls.length + 1;
+    calls.push([command, ...args]);
+    if (call === failOnCall) {
+      throw new Error('spawn EAGAIN');
+    }
+    const failedSpawn = call === errorOnCall && !errorWithPid;
+    if (!failedSpawn) order?.push('load:start');
+    const child = new EventEmitter() as FakeLoadChild;
+    // A failed spawn has no pid; Node reports it through a later 'error'.
+    child.pid = failedSpawn ? undefined : 42_000 + children.length;
+    child.killed = [];
+    child.closed = false;
+    child.kill = (signal: NodeJS.Signals = 'SIGTERM') => {
+      if (child.pid === undefined) {
+        // A failed spawn has no process handle: Node's kill() returns false
+        // and emits nothing. Record the attempt so a test can tell that
+        // stop() tried to signal a worker that never started.
+        child.killed.push(signal);
+        return false;
+      }
+      child.killed.push(signal);
+      if (ignoreSignals) return true;
+      if (signal === 'SIGTERM' && ignoreSigterm) return true;
+      setTimeout(() => {
+        if (child.closed) return;
+        child.closed = true;
+        order?.push('load:stop');
+        child.emit('exit', null, signal);
+        child.emit('close', null, signal);
+      }, closeDelayMs);
+      return true;
+    };
+    if (call === errorOnCall) {
+      setTimeout(() => child.emit('error', new Error(errorMessage)), 0);
+    }
+    if (exitAfterMs !== undefined) {
+      setTimeout(() => {
+        if (child.closed) return;
+        child.closed = true;
+        child.emit('exit', 0, null);
+        child.emit('close', 0, null);
+      }, exitAfterMs);
+    }
+    children.push(child);
+    return child;
+  }) as unknown as ReproSpawn;
+  return {
+    spawn,
+    calls,
+    children,
+    closedCount: () => children.filter((child) => child.closed).length,
+  };
 }
 
 interface RunnerOptions {
@@ -378,8 +498,12 @@ describe('screenshot repro two-run check', () => {
     expect(() => readFileSync(join(setup.dir, 'after-blank-webkit.png'))).toThrow();
 
     const order: string[] = [];
+    // The fake spawn records every attempted worker start: with the default
+    // --load 0, a regression that starts a worker anyway fails this test.
+    const loadSpawn = fakeLoadSpawn();
     const result = await runScreenshotRepro({
       ...setup,
+      spawnLoadWorker: loadSpawn.spawn,
       runCapture: fakeRunner({ dir: setup.dir, captures: CAPTURES, order }),
       verifyLog: verifyOk,
     });
@@ -390,6 +514,10 @@ describe('screenshot repro two-run check', () => {
     }
     expect(result.report).toContain('OK: screenshot repro passed');
     expect(result.report).toContain('3 file(s) matched');
+    // No --load means no load line and no extra process, exactly as before.
+    expect(result.load.requested).toBe(0);
+    expect(loadSpawn.calls).toHaveLength(0);
+    expect(result.report).not.toContain('load:');
     expect(result.runs.map((run) => `${run.target}:${run.run}`)).toEqual([
       'screenshots:webkit:1',
       'screenshots:webkit:2',
@@ -444,6 +572,7 @@ describe('screenshot repro two-run check', () => {
     expect(report).toContain('Recapture steps:');
     expect(report).toContain('verify-screenshot-sha256.mjs --log');
     expect(report).toContain('capture-sha256-manifest.json');
+    expect(report).not.toContain('Load:');
   });
 
   it('distinguishes a stale manifest from an unstable fixed environment', async () => {
@@ -766,6 +895,555 @@ describe('screenshot repro two-run check', () => {
   });
 });
 
+describe('screenshot repro CPU load injection', () => {
+  it('normalizes --load to a bounded non-negative integer and defaults to 0', () => {
+    expect(DEFAULT_LOAD_COUNT).toBe(0);
+    expect(MAX_LOAD_COUNT).toBe(256);
+    expect(normalizeLoadCount(0)).toBe(0);
+    expect(normalizeLoadCount('0')).toBe(0);
+    expect(normalizeLoadCount(3)).toBe(3);
+    expect(normalizeLoadCount(' 4 ')).toBe(4);
+    expect(normalizeLoadCount(MAX_LOAD_COUNT)).toBe(MAX_LOAD_COUNT);
+    expect(() => normalizeLoadCount(MAX_LOAD_COUNT + 1)).toThrow(
+      new RegExp(`at most ${MAX_LOAD_COUNT}`),
+    );
+    expect(() => normalizeLoadCount('9007199254740992')).toThrow(/too large/);
+    for (const value of [-1, 2.5, 'x', '01', '1e3', '']) {
+      expect(() => normalizeLoadCount(value as number | string), String(value)).toThrow(
+        /non-negative integer/,
+      );
+    }
+  });
+
+  it('runs each load worker as an inline node CPU loop', () => {
+    const [flag, source] = loadWorkerArgs();
+    expect(flag).toBe('-e');
+    expect(source).toContain('for (;;)');
+    expect(source).toContain('Math.sqrt');
+  });
+
+  it('starts N workers and waits for every one to exit on stop', async () => {
+    const fake = fakeLoadSpawn({ closeDelayMs: 10 });
+    const controller: ReproLoadController = startCpuLoad({
+      count: 3,
+      spawn: fake.spawn,
+    });
+
+    expect(controller.started).toBe(3);
+    expect(fake.calls).toHaveLength(3);
+    for (const call of fake.calls) {
+      expect(call[0]).toBe(process.execPath);
+      expect(call.slice(1)).toEqual(loadWorkerArgs());
+    }
+    expect(controller.pids).toHaveLength(3);
+
+    const summary = await controller.stop();
+    expect(summary).toEqual({
+      requested: 3,
+      started: 3,
+      stopped: 3,
+      exitedEarly: 0,
+      active: 0,
+      failures: [],
+    });
+    for (const child of fake.children) {
+      expect(child.killed).toEqual(['SIGTERM']);
+    }
+    // stop() is idempotent and keeps the completed state.
+    expect(await controller.stop()).toEqual(summary);
+  });
+
+  it('escalates to SIGKILL when a worker ignores SIGTERM', async () => {
+    const fake = fakeLoadSpawn({ ignoreSigterm: true, closeDelayMs: 1 });
+    const logged: string[] = [];
+    const controller: ReproLoadController = startCpuLoad({
+      count: 1,
+      spawn: fake.spawn,
+      // Leave a wide margin before stop()'s killGraceMs * 2 hard deadline, so
+      // a late timer pass on a loaded CI host cannot turn this into a
+      // wrong-reason stop failure.
+      killGraceMs: 50,
+      logger: {
+        log: () => {},
+        error: (line: unknown) => {
+          logged.push(String(line));
+        },
+      },
+    });
+
+    const summary = await controller.stop();
+
+    expect(fake.children[0]?.killed).toEqual(['SIGTERM', 'SIGKILL']);
+    expect(logged).toEqual([
+      'load worker 1 did not exit after SIGTERM; sending SIGKILL',
+    ]);
+    expect(summary).toEqual({
+      requested: 1,
+      started: 1,
+      stopped: 1,
+      exitedEarly: 0,
+      active: 0,
+      failures: [],
+    });
+  });
+
+  it('records a stop failure when a worker ignores SIGKILL too', async () => {
+    const fake = fakeLoadSpawn({ ignoreSignals: true });
+    const controller: ReproLoadController = startCpuLoad({
+      count: 1,
+      spawn: fake.spawn,
+      killGraceMs: 5,
+      logger: { log: () => {}, error: () => {} },
+    });
+
+    const summary = await controller.stop();
+
+    expect(fake.children[0]?.killed).toEqual(['SIGTERM', 'SIGKILL']);
+    expect(summary).toEqual({
+      requested: 1,
+      started: 1,
+      stopped: 0,
+      exitedEarly: 0,
+      active: 1,
+      failures: [
+        { index: 1, phase: 'stop', message: 'did not exit within 10ms' },
+      ],
+    });
+  });
+
+  it('records a worker that exits before stop and still stops the others', async () => {
+    const fake = fakeLoadSpawn();
+    const controller: ReproLoadController = startCpuLoad({
+      count: 2,
+      spawn: fake.spawn,
+    });
+
+    fake.children[0]?.emit('exit', 0, null);
+
+    const summary = await controller.stop();
+
+    expect(summary).toEqual({
+      requested: 2,
+      started: 2,
+      stopped: 2,
+      exitedEarly: 1,
+      active: 0,
+      failures: [
+        {
+          index: 1,
+          phase: 'runtime',
+          message: 'exited before stop (code 0, signal null)',
+        },
+      ],
+    });
+    expect(fake.children[0]?.killed).toEqual([]);
+    expect(fake.children[1]?.killed).toEqual(['SIGTERM']);
+  });
+
+  it('records a worker that cannot start and still stops the others', async () => {
+    const fake = fakeLoadSpawn({ failOnCall: 2 });
+    const controller: ReproLoadController = startCpuLoad({
+      count: 3,
+      spawn: fake.spawn,
+    });
+
+    expect(controller.started).toBe(2);
+    expect(fake.calls).toHaveLength(3);
+
+    const summary = await controller.stop();
+    expect(summary).toMatchObject({
+      requested: 3,
+      started: 2,
+      stopped: 2,
+      active: 0,
+    });
+    expect(summary.failures).toEqual([
+      { index: 2, phase: 'start', message: 'spawn EAGAIN' },
+    ]);
+    for (const child of fake.children) {
+      expect(child.killed).toEqual(['SIGTERM']);
+    }
+  });
+
+  it('records an asynchronous spawn failure and never signals its missing process', async () => {
+    // ENOENT / EAGAIN / EMFILE do not throw from spawn(); Node emits 'error'
+    // on a later tick while child.pid is still undefined.
+    const fake = fakeLoadSpawn({ errorOnCall: 2 });
+    const controller: ReproLoadController = startCpuLoad({
+      count: 3,
+      spawn: fake.spawn,
+      // Keep a wrong "signal the failed spawn" path short and explicit
+      // instead of letting it trip the test runner's timeout.
+      killGraceMs: 10,
+    });
+
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+
+    expect(fake.calls).toHaveLength(3);
+    expect(controller.started).toBe(2);
+    expect(controller.pids).toHaveLength(2);
+
+    // The error handler marks the failed spawn closed. Without it, stop()
+    // would try to signal a pid-less child, whose fake kill() emits no
+    // exit/close: the summary below (and the killed assertion) then fails.
+    const summary = await controller.stop();
+    expect(summary).toEqual({
+      requested: 3,
+      started: 2,
+      stopped: 2,
+      exitedEarly: 0,
+      active: 0,
+      failures: [{ index: 2, phase: 'start', message: 'spawn EMFILE' }],
+    });
+    expect(fake.children[0]?.killed).toEqual(['SIGTERM']);
+    expect(fake.children[1]?.killed).toEqual([]);
+    expect(fake.children[2]?.killed).toEqual(['SIGTERM']);
+  });
+
+  it('still stops a started worker after an asynchronous runtime error', async () => {
+    const fake = fakeLoadSpawn({
+      errorOnCall: 1,
+      errorWithPid: true,
+      errorMessage: 'kill EPERM',
+    });
+    const controller: ReproLoadController = startCpuLoad({
+      count: 1,
+      spawn: fake.spawn,
+    });
+
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+
+    expect(controller.started).toBe(1);
+    const summary = await controller.stop();
+    expect(summary).toEqual({
+      requested: 1,
+      started: 1,
+      stopped: 1,
+      exitedEarly: 0,
+      active: 0,
+      failures: [{ index: 1, phase: 'runtime', message: 'kill EPERM' }],
+    });
+    expect(fake.children[0]?.killed).toEqual(['SIGTERM']);
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'starts and reaps real CPU worker processes',
+    async () => {
+      const controller = startCpuLoad({ count: 2 });
+      let summary: ReproLoadSummary | undefined;
+      try {
+        expect(controller.started).toBe(2);
+        expect(controller.pids).toHaveLength(2);
+        for (const pid of controller.pids) {
+          expect(() => process.kill(pid, 0)).not.toThrow();
+        }
+      } finally {
+        // A failed assertion must not leave two 100% CPU node processes behind.
+        summary = await controller.stop();
+      }
+      expect(summary).toMatchObject({
+        requested: 2,
+        started: 2,
+        stopped: 2,
+        exitedEarly: 0,
+        active: 0,
+        failures: [],
+      });
+      for (const pid of controller.pids) {
+        expect(() => process.kill(pid, 0)).toThrow();
+      }
+    },
+  );
+
+  it('keeps the load alive across every run and reports its start/stop state', async () => {
+    const setup = fixture();
+    const order: string[] = [];
+    const fake = fakeLoadSpawn({ order });
+
+    const result = await runScreenshotRepro({
+      ...setup,
+      load: 2,
+      spawnLoadWorker: fake.spawn,
+      runCapture: fakeRunner({ dir: setup.dir, captures: CAPTURES, order }),
+      verifyLog: verifyOk,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(order.slice(0, 2)).toEqual(['load:start', 'load:start']);
+    expect(order.at(-1)).toBe('load:stop');
+    expect(result.load).toEqual({
+      requested: 2,
+      started: 2,
+      stopped: 2,
+      exitedEarly: 0,
+      active: 0,
+      failures: [],
+    });
+    expect(result.report).toContain(
+      'load: 2/2 CPU worker process(es) started, 2 stopped (all exited)',
+    );
+  });
+
+  it('combines --load with --target and --runs for all selected runs', async () => {
+    const setup = fixture();
+    const order: string[] = [];
+    const fake = fakeLoadSpawn({ order });
+
+    const result = await runScreenshotRepro({
+      ...setup,
+      targets: ['screenshots:2048:webkit'],
+      runs: 3,
+      load: 2,
+      spawnLoadWorker: fake.spawn,
+      runCapture: fakeRunner({ dir: setup.dir, captures: CAPTURES, order }),
+      verifyLog: verifyOk,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.runsPerTarget).toBe(3);
+    expect(order.filter((event) => !event.startsWith('load:'))).toEqual([
+      'screenshots:2048:webkit:1',
+      'screenshots:2048:webkit:2',
+      'screenshots:2048:webkit:3',
+    ]);
+    expect(order.slice(0, 2)).toEqual(['load:start', 'load:start']);
+    expect(order.at(-1)).toBe('load:stop');
+    expect(result.report).toContain('1 target(s) x 3 runs');
+    expect(result.report).toContain('load: 2/2');
+  });
+
+  it('stops every load worker after a failed capture and keeps the failure details', async () => {
+    const setup = fixture();
+    const fake = fakeLoadSpawn();
+
+    const result = await runScreenshotRepro({
+      ...setup,
+      load: 3,
+      spawnLoadWorker: fake.spawn,
+      runCapture: fakeRunner({
+        dir: setup.dir,
+        captures: CAPTURES,
+        exitCodes: { 'screenshots:webkit:1': 1 },
+      }),
+      verifyLog: verifyOk,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.captureFailures).toHaveLength(1);
+    expect(fake.closedCount()).toBe(3);
+    expect(result.load).toMatchObject({
+      requested: 3,
+      started: 3,
+      stopped: 3,
+      active: 0,
+    });
+    expect(result.report).toContain('FAIL: screenshot repro failed');
+    expect(result.report).toContain('Capture failures:');
+    expect(result.report).toContain('Load: 3/3 CPU worker process(es) started, 3 stopped');
+  });
+
+  it('reclaims the load when the repro throws mid-run', async () => {
+    const setup = fixture();
+    const fake = fakeLoadSpawn();
+
+    await expect(
+      runScreenshotRepro({
+        ...setup,
+        load: 2,
+        spawnLoadWorker: fake.spawn,
+        runCapture: fakeRunner({ dir: setup.dir, captures: CAPTURES }),
+        verifyLog: verifyOk,
+        progress: () => {
+          throw new Error('progress boom');
+        },
+      }),
+    ).rejects.toThrow('progress boom');
+
+    expect(fake.children).toHaveLength(2);
+    expect(fake.closedCount()).toBe(2);
+    for (const child of fake.children) {
+      expect(child.killed).toEqual(['SIGTERM']);
+    }
+  });
+
+  it('fails the repro and lists the worker when a load worker cannot start', async () => {
+    const setup = fixture();
+    const fake = fakeLoadSpawn({ failOnCall: 2 });
+
+    const result = await runScreenshotRepro({
+      ...setup,
+      load: 3,
+      spawnLoadWorker: fake.spawn,
+      runCapture: fakeRunner({ dir: setup.dir, captures: CAPTURES }),
+      verifyLog: verifyOk,
+    });
+
+    // The captures themselves pass, so only the failed start can turn ok false.
+    expect(result.captureFailures).toEqual([]);
+    expect(result.ok).toBe(false);
+    expect(result.load).toMatchObject({
+      requested: 3,
+      started: 2,
+      stopped: 2,
+      exitedEarly: 0,
+      active: 0,
+    });
+    expect(result.load.failures).toEqual([
+      { index: 2, phase: 'start', message: 'spawn EAGAIN' },
+    ]);
+    expect(result.report).toContain('FAIL: screenshot repro failed');
+    expect(result.report).toContain(
+      'Load: 2/3 CPU worker process(es) started, 2 stopped (all exited), 1 failure(s).',
+    );
+    expect(result.report).toContain('worker 2 (start): spawn EAGAIN');
+  });
+
+  it('fails the repro when a load worker emits an asynchronous spawn error', async () => {
+    const setup = fixture();
+    const fake = fakeLoadSpawn({ errorOnCall: 2, errorMessage: 'spawn EMFILE' });
+    const runner = fakeRunner({ dir: setup.dir, captures: CAPTURES });
+
+    const result = await runScreenshotRepro({
+      ...setup,
+      load: 3,
+      spawnLoadWorker: fake.spawn,
+      // Keep a wrong "signal the failed spawn" path short and explicit
+      // instead of letting it trip the test runner's timeout.
+      killGraceMs: 10,
+      // The error timer is queued during startCpuLoad, before this capture
+      // delay, so it fires first; the delay only guarantees stop() runs after
+      // the error has landed.
+      runCapture: async (options) => {
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 1));
+        return runner(options);
+      },
+      verifyLog: verifyOk,
+    });
+
+    expect(result.captureFailures).toEqual([]);
+    expect(result.ok).toBe(false);
+    expect(result.load).toMatchObject({
+      requested: 3,
+      started: 2,
+      stopped: 2,
+      exitedEarly: 0,
+      active: 0,
+    });
+    expect(result.load.failures).toEqual([
+      { index: 2, phase: 'start', message: 'spawn EMFILE' },
+    ]);
+    expect(result.report).toContain('FAIL: screenshot repro failed');
+    expect(result.report).toContain(
+      'Load: 2/3 CPU worker process(es) started, 2 stopped (all exited), 1 failure(s).',
+    );
+    expect(result.report).toContain('worker 2 (start): spawn EMFILE');
+    // The failed spawn is not a process, so stop() must not signal it. This
+    // assertion fails if the error handler stops marking the failed worker
+    // closed.
+    expect(fake.children[1]?.killed).toEqual([]);
+  });
+
+  it('fails the repro when a load worker cannot be stopped', async () => {
+    const setup = fixture();
+    const fake = fakeLoadSpawn({ ignoreSignals: true });
+
+    const result = await runScreenshotRepro({
+      ...setup,
+      load: 1,
+      spawnLoadWorker: fake.spawn,
+      killGraceMs: 5,
+      logger: { log: () => {}, error: () => {} },
+      runCapture: fakeRunner({ dir: setup.dir, captures: CAPTURES }),
+      verifyLog: verifyOk,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.load).toEqual({
+      requested: 1,
+      started: 1,
+      stopped: 0,
+      exitedEarly: 0,
+      active: 1,
+      failures: [
+        { index: 1, phase: 'stop', message: 'did not exit within 10ms' },
+      ],
+    });
+    expect(result.report).toContain('FAIL: screenshot repro failed');
+    expect(result.report).toContain(
+      'Load: 1/1 CPU worker process(es) started, 0 stopped, 1 still active, 1 failure(s).',
+    );
+    expect(result.report).toContain('worker 1 (stop): did not exit within 10ms');
+  });
+
+  it('fails the repro when a load worker exits before stop', async () => {
+    const setup = fixture();
+    const fake = fakeLoadSpawn({ exitAfterMs: 1 });
+    const runner = fakeRunner({ dir: setup.dir, captures: CAPTURES });
+
+    const result = await runScreenshotRepro({
+      ...setup,
+      targets: ['screenshots:webkit'],
+      runs: 1,
+      load: 1,
+      spawnLoadWorker: fake.spawn,
+      // Wait long enough for the worker's pre-stop exit to land.
+      runCapture: async (options) => {
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
+        return runner(options);
+      },
+      verifyLog: verifyOk,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.load).toMatchObject({
+      requested: 1,
+      started: 1,
+      stopped: 1,
+      exitedEarly: 1,
+      active: 0,
+    });
+    expect(result.load.failures).toEqual([
+      {
+        index: 1,
+        phase: 'runtime',
+        message: 'exited before stop (code 0, signal null)',
+      },
+    ]);
+    expect(result.report).toContain('FAIL: screenshot repro failed');
+    expect(result.report).toContain(
+      'worker 1 (runtime): exited before stop (code 0, signal null)',
+    );
+  });
+
+  it('returns 1 from main when a load worker fails to start', async () => {
+    const setup = fixture();
+    const fake = fakeLoadSpawn({ failOnCall: 1 });
+    const summaryPath = join(setup.root, 'summary.md');
+    const log = logger();
+
+    const code = await main([], {
+      env: { GITHUB_STEP_SUMMARY: summaryPath },
+      logger: log,
+      runRepro: (options) =>
+        runScreenshotRepro({
+          ...options,
+          load: 1,
+          spawnLoadWorker: fake.spawn,
+          runCapture: fakeRunner({ dir: setup.dir, captures: CAPTURES }),
+          verifyLog: verifyOk,
+        }),
+      appendFile: appendFileSync,
+      repoRoot: setup.root,
+    });
+
+    expect(code).toBe(1);
+    expect(log.lines.join('\n')).toContain('worker 1 (start): spawn EAGAIN');
+    expect(readFileSync(summaryPath, 'utf8')).toContain(
+      'worker 1 (start): spawn EAGAIN',
+    );
+  });
+});
+
 describe('screenshot repro subprocess wiring', () => {
   it('writes both child streams from an injected spawn and maps its exit code', async () => {
     const setup = fixture();
@@ -928,6 +1606,9 @@ describe('verify-screenshot-repro direct entry', () => {
     const result = runCli(['--help']);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('Usage: node scripts/verify-screenshot-repro.mjs');
+    // Pin the documented --load range, not just the generic usage banner.
+    expect(result.stdout).toContain('--load <N>');
+    expect(result.stdout).toContain(`0-${MAX_LOAD_COUNT}`);
   });
 
   it('exits 2 for a usage error and for an invalid manifest', () => {
@@ -968,7 +1649,7 @@ describe('verify-screenshot-repro direct entry', () => {
       const env = fakeNpmBin(7);
 
       const result = runCli(
-        ['--manifest', manifestPath, '--dir', dir, '--log-dir', logDir],
+        ['--manifest', manifestPath, '--dir', dir, '--log-dir', logDir, '--load', '2'],
         env,
       );
 
@@ -976,6 +1657,9 @@ describe('verify-screenshot-repro direct entry', () => {
       expect(result.stderr).toContain('FAIL: screenshot repro failed');
       expect(result.stderr).toContain('Capture failures:');
       expect(result.stderr).toContain('exit 7');
+      expect(result.stderr).toContain(
+        'Load: 2/2 CPU worker process(es) started, 2 stopped (all exited).',
+      );
       // The real default verifyLog runs verify-screenshot-sha256.mjs against
       // the fake log, so a stubbed default spawnSync would drop this section.
       expect(result.stderr).toContain('Log verification failures:');
@@ -1005,6 +1689,7 @@ describe('verify-screenshot-repro CLI', () => {
       logDir: 'test-results/screenshot-repro',
       targets: [],
       runs: 2,
+      load: 0,
     });
     expect(
       parseArgs(['--manifest', 'm.json', '--dir', 'shots', '--log-dir', 'logs']),
@@ -1015,13 +1700,14 @@ describe('verify-screenshot-repro CLI', () => {
       logDir: 'logs',
       targets: [],
       runs: 2,
+      load: 0,
     });
     expect(parseArgs(['--help']).help).toBe(true);
     expect(() => parseArgs(['--wat'])).toThrow(ScreenshotReproError);
     expect(() => parseArgs(['--dir'])).toThrow(ScreenshotReproError);
   });
 
-  it('parses repeatable --target values and a positive --runs count', () => {
+  it('parses repeatable --target values, a positive --runs count and --load', () => {
     expect(
       parseArgs([
         '--target',
@@ -1042,6 +1728,16 @@ describe('verify-screenshot-repro CLI', () => {
     expect(() => parseArgs(['--runs'])).toThrow(/needs a value/);
     expect(() => parseArgs(['--runs', '0'])).toThrow(/positive integer/);
     expect(() => parseArgs(['--runs', '2.5'])).toThrow(/positive integer/);
+
+    expect(parseArgs(['--load', '3']).load).toBe(3);
+    expect(parseArgs(['--load', '0']).load).toBe(0);
+    expect(() => parseArgs(['--load'])).toThrow(/needs a value/);
+    expect(() => parseArgs(['--load', '-1'])).toThrow(/needs a value/);
+    expect(() => parseArgs(['--load', '2.5'])).toThrow(/non-negative integer/);
+    expect(() => parseArgs(['--load', 'x'])).toThrow(/non-negative integer/);
+    expect(() => parseArgs(['--load', String(MAX_LOAD_COUNT + 1)])).toThrow(
+      new RegExp(`at most ${MAX_LOAD_COUNT}`),
+    );
   });
 
   it('writes the real failure report to the logger and GITHUB_STEP_SUMMARY with exit 1', async () => {
@@ -1100,32 +1796,46 @@ describe('verify-screenshot-repro CLI', () => {
     expect(readFileSync(summaryPath, 'utf8')).toContain('OK: screenshot repro passed');
   });
 
-  it('forwards --target / --runs and live progress to the repro runner', async () => {
+  it('forwards --target / --runs / --load and live progress to the repro runner', async () => {
     const setup = fixture();
-    const calls: Array<{ targets?: string[]; runs?: number; repoRoot?: string }> = [];
+    const calls: Array<{
+      targets?: string[];
+      runs?: number;
+      load?: number;
+      repoRoot?: string;
+    }> = [];
     const log = logger();
 
-    const code = await main(['--target', 'screenshots:webkit', '--runs', '4'], {
-      env: {},
-      logger: log,
-      runRepro: async (options) => {
-        calls.push({
-          targets: options.targets,
-          runs: options.runs,
-          repoRoot: options.repoRoot,
-        });
-        options.progress?.('  screenshots:webkit run 1: a.png sha256 abc');
-        return { ok: true, report: 'OK: forwarded' } as Awaited<
-          ReturnType<typeof runScreenshotRepro>
-        >;
+    const code = await main(
+      ['--target', 'screenshots:webkit', '--runs', '4', '--load', '2'],
+      {
+        env: {},
+        logger: log,
+        runRepro: async (options) => {
+          calls.push({
+            targets: options.targets,
+            runs: options.runs,
+            load: options.load,
+            repoRoot: options.repoRoot,
+          });
+          options.progress?.('  screenshots:webkit run 1: a.png sha256 abc');
+          return { ok: true, report: 'OK: forwarded' } as Awaited<
+            ReturnType<typeof runScreenshotRepro>
+          >;
+        },
+        appendFile: appendFileSync,
+        repoRoot: setup.root,
       },
-      appendFile: appendFileSync,
-      repoRoot: setup.root,
-    });
+    );
 
     expect(code).toBe(0);
     expect(calls).toEqual([
-      { targets: ['screenshots:webkit'], runs: 4, repoRoot: setup.root },
+      {
+        targets: ['screenshots:webkit'],
+        runs: 4,
+        load: 2,
+        repoRoot: setup.root,
+      },
     ]);
     expect(log.lines.join('\n')).toContain(
       'screenshots:webkit run 1: a.png sha256 abc',
@@ -1169,6 +1879,9 @@ describe('verify-screenshot-repro CLI', () => {
       },
     });
     expect(code).toBe(0);
-    expect(log.lines.join('\n')).toContain('Usage: node scripts/verify-screenshot-repro.mjs');
+    const output = log.lines.join('\n');
+    expect(output).toContain('Usage: node scripts/verify-screenshot-repro.mjs');
+    expect(output).toContain('--load <N>');
+    expect(output).toContain(`0-${MAX_LOAD_COUNT}`);
   });
 });
