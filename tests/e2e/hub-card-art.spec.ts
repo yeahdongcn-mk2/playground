@@ -1,70 +1,85 @@
 import type { Page } from '@playwright/test';
 import { expect, test } from './fixtures';
 
-const ZHEN_SHA_ART = '[data-testid="game-card-zhen-sha"] .game-card-art';
+const ZHEN_SHA_CARD = 'a.game-card[href="#/games/zhen-sha"]';
+const ZHEN_SHA_ART = `${ZHEN_SHA_CARD} .game-card-art`;
 
 interface ZhenShaArtStyle {
   readonly hasModifier: boolean;
-  readonly hasDefaultOrb: boolean;
+  readonly inlineSvgCount: number;
+  readonly orbDisplay: string | null;
   readonly backgroundImage: string;
   readonly artWidth: number;
   readonly artHeight: number;
-  readonly svgWidth: number;
-  readonly svgHeight: number;
-  readonly svgFilter: string;
-  readonly svgAriaHidden: string | null;
-  readonly svgViewBox: string | null;
+  readonly pseudoWidth: number;
+  readonly pseudoHeight: number;
+  readonly pseudoBackgroundImage: string;
+  readonly pseudoFilter: string;
   readonly engineColor: string | null;
   readonly engineBorderColor: string | null;
 }
 
 async function readZhenShaArt(page: Page): Promise<ZhenShaArtStyle> {
   return page.locator(ZHEN_SHA_ART).evaluate((element) => {
-    const svg = element.querySelector('svg.zhen-sha-card-art');
-    if (!(svg instanceof SVGElement)) {
-      throw new Error('zhen-sha card art is missing its dedicated SVG');
-    }
+    const before = getComputedStyle(element, '::before');
+    const orb = element.querySelector('.mini-orb');
     const engine = element.querySelector('.game-card-engine');
     const engineStyle = engine === null ? null : getComputedStyle(engine);
     const artRect = element.getBoundingClientRect();
-    const svgRect = svg.getBoundingClientRect();
     const artStyle = getComputedStyle(element);
 
     return {
       hasModifier: element.classList.contains('game-card-art--zhen-sha'),
-      hasDefaultOrb: element.querySelector('.mini-orb') !== null,
+      inlineSvgCount: element.querySelectorAll('svg').length,
+      orbDisplay: orb instanceof HTMLElement ? getComputedStyle(orb).display : null,
       backgroundImage: artStyle.backgroundImage,
       artWidth: artRect.width,
       artHeight: Number.parseFloat(artStyle.height),
-      svgWidth: svgRect.width,
-      svgHeight: svgRect.height,
-      svgFilter: getComputedStyle(svg).filter,
-      svgAriaHidden: svg.getAttribute('aria-hidden'),
-      svgViewBox: svg.getAttribute('viewBox'),
+      pseudoWidth: Number.parseFloat(before.width),
+      pseudoHeight: Number.parseFloat(before.height),
+      pseudoBackgroundImage: before.backgroundImage,
+      pseudoFilter: before.filter,
       engineColor: engineStyle?.color ?? null,
       engineBorderColor: engineStyle?.borderTopColor ?? null,
     };
   });
 }
 
-function expectSvgWidth(art: ZhenShaArtStyle, ratio: number): void {
+/** The decoded SVG carried by the CSS pseudo-element's data URI. */
+function decodePseudoSvg(backgroundImage: string): string {
+  const match = /url\("data:image\/svg\+xml,([^"]+)"\)/.exec(backgroundImage);
+  if (match?.[1] === undefined) {
+    throw new Error(`zhen-sha CSS is missing its inline SVG data URI: ${backgroundImage}`);
+  }
+  return decodeURIComponent(match[1]);
+}
+
+function expectPseudoArtWidth(art: ZhenShaArtStyle, ratio: number): void {
   // The committed CSS sets a percentage width with a 240px ceiling. The
   // viewports below are chosen so deleting the base 74% rule, the narrow 84%
   // override or the ceiling each changes this rendered size and fails here.
   const expectedWidth = Math.min(art.artWidth * ratio, 240);
-  expect(Math.abs(art.svgWidth - expectedWidth)).toBeLessThanOrEqual(1);
-  expect(Math.abs(art.svgHeight - (art.svgWidth * 132) / 220)).toBeLessThanOrEqual(1);
+  expect(Math.abs(art.pseudoWidth - expectedWidth)).toBeLessThanOrEqual(1);
+  expect(Math.abs(art.pseudoHeight - (art.pseudoWidth * 132) / 220)).toBeLessThanOrEqual(1);
 }
 
 function expectInkAndGold(art: ZhenShaArtStyle): void {
-  expect(art.hasModifier).toBe(true);
-  expect(art.hasDefaultOrb).toBe(false);
+  // The entry JS must stay free of the art: the hub renders the default card
+  // markup and CSS paints the dedicated pseudo-element instead.
+  expect(art.hasModifier).toBe(false);
+  expect(art.inlineSvgCount).toBe(0);
+  expect(art.orbDisplay).toBe('none');
   expect(art.backgroundImage).toMatch(/246,\s*196,\s*83/);
   expect(art.backgroundImage).toMatch(/8,\s*7,\s*10/);
-  expect(art.svgFilter).toContain('drop-shadow');
-  expect(art.svgFilter).toMatch(/246,\s*196,\s*83/);
-  expect(art.svgAriaHidden).toBe('true');
-  expect(art.svgViewBox).toBe('0 0 220 132');
+
+  const svg = decodePseudoSvg(art.pseudoBackgroundImage);
+  expect(svg).toContain("viewBox='0 0 220 132'");
+  expect(svg).toContain('#f6c453');
+  expect(svg).toContain('#08070a');
+  expect(svg).not.toMatch(/<image\b|xlink:href/);
+
+  expect(art.pseudoFilter).toContain('drop-shadow');
+  expect(art.pseudoFilter).toMatch(/246,\s*196,\s*83/);
   expect(art.engineColor).toBe('rgb(246, 196, 83)');
   expect(art.engineBorderColor).toBe('rgba(246, 196, 83, 0.34)');
 }
@@ -72,7 +87,7 @@ function expectInkAndGold(art: ZhenShaArtStyle): void {
 test.describe('zhen-sha hub card art at 1440x1000', () => {
   test.use({ viewport: { width: 1440, height: 1000 } });
 
-  test('keeps the dedicated ink-and-gold art inside the shared 184px card box', async ({
+  test('paints the dedicated ink-and-gold art inside the shared 184px card box', async ({
     page,
   }) => {
     await page.goto('/');
@@ -81,7 +96,7 @@ test.describe('zhen-sha hub card art at 1440x1000', () => {
     const art = await readZhenShaArt(page);
     expectInkAndGold(art);
     expect(art.artHeight).toBe(184);
-    expectSvgWidth(art, 0.74);
+    expectPseudoArtWidth(art, 0.74);
   });
 });
 
@@ -99,7 +114,7 @@ test.describe('zhen-sha hub card art at 1024x800', () => {
     // smaller term; fail loudly instead of silently capping if the grid
     // layout grows the card art past that point.
     expect(art.artWidth * 0.74).toBeLessThan(240);
-    expectSvgWidth(art, 0.74);
+    expectPseudoArtWidth(art, 0.74);
   });
 });
 
@@ -113,6 +128,6 @@ test.describe('zhen-sha hub card art at 320x640', () => {
     const art = await readZhenShaArt(page);
     expectInkAndGold(art);
     expect(art.artHeight).toBe(156);
-    expectSvgWidth(art, 0.84);
+    expectPseudoArtWidth(art, 0.84);
   });
 });

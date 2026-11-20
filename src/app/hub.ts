@@ -202,15 +202,11 @@ function renderLastPlayed(gameId: string, lastPlayed: number | null, now: number
         </p>`;
 }
 
-type CardArt =
-  | 'snake'
-  | 'tetris'
-  | '2048'
-  | 'breakout'
-  | 'minesweeper'
-  | 'zhen-sha'
-  | 'default';
+type CardArt = 'snake' | 'tetris' | '2048' | 'breakout' | 'minesweeper' | 'default';
 
+// zhen-sha 的专属卡面完全由 src/styles/app.css 按
+// `.game-card[href="#/games/zhen-sha"]` 绘制（data URI 水墨圆环 + 金色棍弧），
+// 入口 JS 不再内联 SVG：这里保留默认卡面标记，只由 CSS 覆盖可见内容。
 function cardArtFor(gameId: string): CardArt {
   if (gameId === 'snake') {
     return 'snake';
@@ -226,9 +222,6 @@ function cardArtFor(gameId: string): CardArt {
   }
   if (gameId === 'minesweeper') {
     return 'minesweeper';
-  }
-  if (gameId === 'zhen-sha') {
-    return 'zhen-sha';
   }
   return 'default';
 }
@@ -411,43 +404,6 @@ function renderCardArt(art: CardArt): string {
         <circle cx="150" cy="88" r="5" fill="#f8fafc" />
         <path d="M150 88 L184 54" fill="none" stroke="#67e8f9" stroke-width="1.5"
           stroke-dasharray="3 5" opacity="0.65" />
-      </svg>
-      <span class="mini-grid"></span>
-    `;
-  }
-  if (art === 'zhen-sha') {
-    return `
-      <svg class="zhen-sha-card-art" viewBox="0 0 220 132" aria-hidden="true">
-        <defs>
-          <radialGradient id="zhen-sha-card-ink" cx="50%" cy="50%" r="50%">
-            <stop offset="0" stop-color="#f6c453" stop-opacity="0.36" />
-            <stop offset="0.55" stop-color="#b98a2b" stop-opacity="0.14" />
-            <stop offset="1" stop-color="#08070a" stop-opacity="0" />
-          </radialGradient>
-          <linearGradient id="zhen-sha-card-staff" x1="0" y1="1" x2="1" y2="0">
-            <stop offset="0" stop-color="#8a5a12" />
-            <stop offset="0.5" stop-color="#f6c453" />
-            <stop offset="1" stop-color="#fff4c9" />
-          </linearGradient>
-        </defs>
-        <circle cx="110" cy="66" r="56" fill="url(#zhen-sha-card-ink)" />
-        <circle cx="110" cy="66" r="41" fill="#08070a" fill-opacity="0.72" />
-        <circle cx="110" cy="66" r="41" fill="none" stroke="#f6c453" stroke-opacity="0.5"
-          stroke-width="1.4" />
-        <circle cx="110" cy="66" r="33" fill="none" stroke="#f6c453" stroke-opacity="0.22"
-          stroke-width="1" stroke-dasharray="3 7" />
-        <g fill="#08070a" fill-opacity="0.8">
-          <ellipse cx="70" cy="40" rx="8" ry="4.4" transform="rotate(-24 70 40)" />
-          <ellipse cx="152" cy="94" rx="9" ry="4.2" transform="rotate(-18 152 94)" />
-          <circle cx="164" cy="30" r="2.6" />
-          <circle cx="54" cy="94" r="2" />
-        </g>
-        <path d="M50 102 C84 88 130 74 168 32" fill="none" stroke="url(#zhen-sha-card-staff)"
-          stroke-width="6" stroke-linecap="round" />
-        <path d="M50 102 C84 88 130 74 168 32" fill="none" stroke="#fff6d6" stroke-width="1.5"
-          stroke-linecap="round" stroke-opacity="0.85" />
-        <circle cx="168" cy="32" r="5.5" fill="#f6c453" />
-        <circle cx="168" cy="32" r="2.2" fill="#fff6d6" />
       </svg>
       <span class="mini-grid"></span>
     `;
