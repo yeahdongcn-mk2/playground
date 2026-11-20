@@ -17,14 +17,14 @@
 | 生产文件 | 行数 |
 | --- | ---: |
 | `engine.ts` | 457 |
-| `bosses.ts` | 111 |
+| `bosses.ts` | 144 |
 | `index.ts` | 29 |
 | `zhen-sha-view.ts` | 676 |
 | `zhen-sha.css` | 254 |
-| **合计** | **1,527** |
+| **合计** | **1,560** |
 
 - 生产文件数：5
-- 生产行数：1,527
+- 生产行数：1,560
 - `src/games/registry.ts` 入口：数组条目 `zhenShaGame,` 1 行（配套 `import { zhenShaGame } from './zhen-sha';` 另 1 行，合计 2 行改动），不计入上面的 5 个文件。
 - `engine.test.ts`、`bosses.test.ts`、`zhen-sha-view.test.ts`、`kill-gate-doc.test.ts` 与 e2e 都不计入生产规模。
 
