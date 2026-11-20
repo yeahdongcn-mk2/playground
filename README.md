@@ -396,7 +396,7 @@ games/<game>/scene → 对应引擎（动态 import）
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过（oxlint 覆盖 src、tests 与 scripts；error 与 warning 都会失败，warning 经 --deny-warnings 升级；另跑 scripts/check-boundaries.mjs，失败返回非 0）
-npm run test:unit    # 1551 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
+npm run test:unit    # 1560 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
 npm run build        # 通过
 npm run check:budget # 通过（入口 11.16 KB gzip，全部 JS 410.58 KB gzip）
 npm run score        # 通过（打印「指标 / 当前值 / 基线值 / 差值」表与末行 SCORE_JSON；退化退出 1，变好只报差值）
@@ -405,7 +405,7 @@ npm run test:e2e     # 155 passed（桌面 87 + 手机 36 + WebKit 32）
 
 CI 的 `verify` job 会在 `Bundle budget` 之后、`End-to-end tests` 之前运行 `npm run score`（见上文「CI 检查顺序」）。该步骤只与 `docs/score-baseline.json` 对比：不会运行 `npm run score -- --update`，因此 CI 不会改写基线；基线退化或损坏时 job 直接失败，新基线仍由人显式运行 `--update` 后提交。score 内部的 `verify:doc-counts` 默认会再跑一次单测（见 [docs/framework.md](docs/framework.md) 第 13 节），这是它现有的采集语义。
 
-截图证据的夜间复现由 [.github/workflows/capture-repro.yml](.github/workflows/capture-repro.yml) 按 `docs/screenshots/capture-sha256-manifest.json` 的 `command` 连续两跑并校验环境指纹，失败信息与重拍步骤见 [docs/screenshots/README.md](docs/screenshots/README.md) 的「夜间固定容器两跑复现与排障」；该 workflow 不提交、不改清单。
+截图证据的夜间复现由 [.github/workflows/capture-repro.yml](.github/workflows/capture-repro.yml) 按 `docs/screenshots/capture-sha256-manifest.json` 的 `command` 连续两跑并校验环境指纹；独立的并发负载闸门由 [.github/workflows/capture-repro-load.yml](.github/workflows/capture-repro-load.yml) 对三个受影响的 WebKit target 重复至少 4 跑并注入宿主 CPU 负载。失败信息与重拍步骤见 [docs/screenshots/README.md](docs/screenshots/README.md) 的「夜间固定容器两跑复现与排障」与「并发负载截图复现」；两个 workflow 都不提交、不改清单。
 
 CI 的 passed / flaky / failed 口径、PR 稳定性门禁范围、每日 `flake-watch` 巡检、固定镜像与回退边界见 [docs/ci-flaky-policy.md](docs/ci-flaky-policy.md) 第 2–5 节；截图捕获与 CI 共用的镜像 pin、升级清单见 [docs/screenshots/README.md](docs/screenshots/README.md) 的「固定捕获环境」。
 
