@@ -18,12 +18,12 @@ repos:
       - id: end-of-file-fixer
       - id: check-added-large-files
         # The repository intentionally stores four UI screenshots between
-        # ~1.56 MB and ~2.33 MB under docs/screenshots/. The hook's default
+        # ~1.56 MB and ~2.80 MB under docs/screenshots/. The hook's default
         # 500 KB limit would reject those existing files on every commit.
         # Instead of excluding docs/screenshots/ wholesale (which would also
         # hide accidentally committed giant captures), the ceiling is raised
         # to 4 MB: enough headroom for current documentation evidence, while
-        # still catching abnormal binaries (current largest is ~2.33 MB).
+        # still catching abnormal binaries (current largest is ~2.80 MB).
         # `--enforce-all` makes `pre-commit run --all-files` (and CI) inspect
         # every tracked file, not just files staged as additions.
         args: ['--maxkb=4096', '--enforce-all']

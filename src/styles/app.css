@@ -684,6 +684,39 @@ ol {
   color: #f9a8d4;
 }
 
+/* 镇煞专属卡面（Issue #250 t1）：卡面完全由 CSS 提供，入口 JS 不内联 SVG，
+   entryGzipBytes 因此不增长。用大厅卡片已有的 href 钩子定位，保持默认卡面
+   标记不动；伪元素承载 data URI 水墨圆环 + 金色棍弧。 */
+.game-card[href="#/games/zhen-sha"] .game-card-art {
+  background:
+    radial-gradient(circle at 50% 46%, rgba(246, 196, 83, 0.2), transparent 60%),
+    radial-gradient(circle at 26% 82%, rgba(8, 7, 10, 0.92), transparent 54%),
+    linear-gradient(140deg, #0d0b08, #050408);
+}
+
+.game-card[href="#/games/zhen-sha"] .game-card-art::before {
+  position: relative;
+  z-index: 1;
+  width: 74%;
+  max-width: 240px;
+  aspect-ratio: 220 / 132;
+  background-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%20220%20132'%3E%3Cdefs%3E%3CradialGradient%20id%3D'ink'%20cx%3D'50%25'%20cy%3D'50%25'%20r%3D'50%25'%3E%3Cstop%20offset%3D'0'%20stop-color%3D'%23f6c453'%20stop-opacity%3D'0.36'%2F%3E%3Cstop%20offset%3D'0.55'%20stop-color%3D'%23b98a2b'%20stop-opacity%3D'0.14'%2F%3E%3Cstop%20offset%3D'1'%20stop-color%3D'%2308070a'%20stop-opacity%3D'0'%2F%3E%3C%2FradialGradient%3E%3ClinearGradient%20id%3D'staff'%20x1%3D'0'%20y1%3D'1'%20x2%3D'1'%20y2%3D'0'%3E%3Cstop%20offset%3D'0'%20stop-color%3D'%238a5a12'%2F%3E%3Cstop%20offset%3D'0.5'%20stop-color%3D'%23f6c453'%2F%3E%3Cstop%20offset%3D'1'%20stop-color%3D'%23fff4c9'%2F%3E%3C%2FlinearGradient%3E%3C%2Fdefs%3E%3Ccircle%20cx%3D'110'%20cy%3D'66'%20r%3D'56'%20fill%3D'url(%23ink)'%2F%3E%3Ccircle%20cx%3D'110'%20cy%3D'66'%20r%3D'41'%20fill%3D'%2308070a'%20fill-opacity%3D'0.72'%2F%3E%3Ccircle%20cx%3D'110'%20cy%3D'66'%20r%3D'41'%20fill%3D'none'%20stroke%3D'%23f6c453'%20stroke-opacity%3D'0.5'%20stroke-width%3D'1.4'%2F%3E%3Ccircle%20cx%3D'110'%20cy%3D'66'%20r%3D'33'%20fill%3D'none'%20stroke%3D'%23f6c453'%20stroke-opacity%3D'0.22'%20stroke-width%3D'1'%20stroke-dasharray%3D'3%207'%2F%3E%3Cg%20fill%3D'%2308070a'%20fill-opacity%3D'0.8'%3E%3Cellipse%20cx%3D'70'%20cy%3D'40'%20rx%3D'8'%20ry%3D'4.4'%20transform%3D'rotate(-24%2070%2040)'%2F%3E%3Cellipse%20cx%3D'152'%20cy%3D'94'%20rx%3D'9'%20ry%3D'4.2'%20transform%3D'rotate(-18%20152%2094)'%2F%3E%3Ccircle%20cx%3D'164'%20cy%3D'30'%20r%3D'2.6'%2F%3E%3Ccircle%20cx%3D'54'%20cy%3D'94'%20r%3D'2'%2F%3E%3C%2Fg%3E%3Cpath%20d%3D'M50%20102%20C84%2088%20130%2074%20168%2032'%20fill%3D'none'%20stroke%3D'url(%23staff)'%20stroke-width%3D'6'%20stroke-linecap%3D'round'%2F%3E%3Cpath%20d%3D'M50%20102%20C84%2088%20130%2074%20168%2032'%20fill%3D'none'%20stroke%3D'%23fff6d6'%20stroke-width%3D'1.5'%20stroke-linecap%3D'round'%20stroke-opacity%3D'0.85'%2F%3E%3Ccircle%20cx%3D'168'%20cy%3D'32'%20r%3D'5.5'%20fill%3D'%23f6c453'%2F%3E%3Ccircle%20cx%3D'168'%20cy%3D'32'%20r%3D'2.2'%20fill%3D'%23fff6d6'%2F%3E%3C%2Fsvg%3E");
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+  content: "";
+  filter: drop-shadow(0 12px 26px rgba(246, 196, 83, 0.22));
+}
+
+.game-card[href="#/games/zhen-sha"] .game-card-art > .mini-orb {
+  display: none;
+}
+
+.game-card[href="#/games/zhen-sha"] .game-card-art .game-card-engine {
+  border-color: rgba(246, 196, 83, 0.34);
+  color: #f6c453;
+}
+
 .mini-grid {
   position: absolute;
   inset: 0;
@@ -1421,6 +1454,10 @@ kbd {
 
   .game-card-art {
     height: 156px;
+  }
+
+  .game-card[href="#/games/zhen-sha"] .game-card-art::before {
+    width: 84%;
   }
 
   .footer-links {

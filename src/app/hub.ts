@@ -204,6 +204,9 @@ function renderLastPlayed(gameId: string, lastPlayed: number | null, now: number
 
 type CardArt = 'snake' | 'tetris' | '2048' | 'breakout' | 'minesweeper' | 'default';
 
+// zhen-sha 的专属卡面完全由 src/styles/app.css 按
+// `.game-card[href="#/games/zhen-sha"]` 绘制（data URI 水墨圆环 + 金色棍弧），
+// 入口 JS 不再内联 SVG：这里保留默认卡面标记，只由 CSS 覆盖可见内容。
 function cardArtFor(gameId: string): CardArt {
   if (gameId === 'snake') {
     return 'snake';
