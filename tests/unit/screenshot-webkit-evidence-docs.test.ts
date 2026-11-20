@@ -647,4 +647,62 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     }
     expect(WEBKIT_PHONE).toContain('会在写出这些文件前被写前护栏拒绝');
   });
+
+  it('keeps ready described as a manifest-external single-page capture in the older sections', () => {
+    const sharedSeam = subsection(
+      SCREENSHOTS_README,
+      '### 2048 playing/gameover 与扫雷 lost 等状态的共享 header 接缝（Issue #341 t3）',
+    );
+    const readyOutside = subsection(
+      SCREENSHOTS_README,
+      '### 2048 ready 的负载相关栅格与清单外口径（Issue #374 t1）',
+    );
+    const deterministic = subsection(
+      SCREENSHOTS_README,
+      '### 确定性重截（ready / playing / gameover）',
+    );
+
+    // The shared-header section must describe the shipped READY path: one
+    // warm-up page, both seams and a single-page two-frame gate, environment
+    // checked against the manifested playing entry, and no manifest resample.
+    expect(sharedSeam).toContain('一次性预热页');
+    expect(sharedSeam).toContain('单页落盘');
+    expect(sharedSeam).toContain('checkOnly');
+    expect(sharedSeam).toContain('after-2048-playing-webkit.png');
+    expect(sharedSeam).toContain('不参与 fresh-page 清单字节重采样');
+    expect(sharedSeam).not.toContain('每个 fresh page 上重跑');
+    expect(sharedSeam).not.toMatch(/ready[\s\S]{0,160}按清单 sha256 重采样/);
+
+    // The t4 recapture section must not keep the migration-era claims: ready
+    // is outside the manifest / resampler and its four load captures are not
+    // 4/4 canonical bytes.
+    expect(deterministic).toContain('移出逐字节清单');
+    expect(deterministic).toContain('playing 条目环境校验');
+    expect(deterministic).toContain('不参与 fresh-page 清单字节重采样');
+    expect(deterministic).toContain('`d8a808b0`');
+    expect(deterministic).toContain('`672285de`');
+    expect(deterministic).not.toContain(
+      'Issue #374 在此基础上为 ready 增加一次性预热页与清单字节 fresh-page 重采样',
+    );
+    expect(deterministic).not.toContain(
+      'ready / playing / gameover 再从 fresh page 有界重采样',
+    );
+    expect(deterministic).not.toContain('并纳入固定环境 sha256 清单。');
+
+    // The dedicated #374 section remains the canonical explanation the older
+    // sections cross-reference.
+    expect(readyOutside).toContain('单页写入');
+    expect(readyOutside).toContain('不再进入');
+
+    const manifest = JSON.parse(
+      readFileSync(
+        join(ROOT, 'docs', 'screenshots', 'capture-sha256-manifest.json'),
+        'utf8',
+      ),
+    ) as { captures: { file: string }[] };
+    expect(manifest.captures).toHaveLength(14);
+    expect(manifest.captures.map((entry) => entry.file)).not.toContain(
+      'after-2048-ready-webkit.png',
+    );
+  });
 });
