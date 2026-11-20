@@ -162,28 +162,37 @@ function subsection(text: string, heading: string): string {
  * the board gradients in a subtly different 1-LSB variant. The ready capture
  * first loads a throwaway page, then repaints the header with a scroll
  * round-trip and requires two consecutive identical whole-image frames before
- * writing. This test pins that seam to the ready scene and pins the shared
+ * the bytes are considered. A wrong raster can still be byte-stable (the 105 px
+ * board variant in Issue #341), so the ready page is sampled like playing /
+ * lost / won and only the bytes that equal the manifest sha256 are written.
+ * This test pins that resampling seam to the ready scene, pins the shared
  * header compositing seam (Issue #341) to playing / won, rebuilds the lost
  * header + overlay backdrop together, and pins the loss overlay repaint so a
  * refactor cannot silently restore the non-deterministic capture.
  */
 describe('minesweeper WebKit READY determinism guard', () => {
-  it('warms the first-page paint path before the committed ready page', () => {
+  it('warms the first-page paint path before sampling a ready page', () => {
     const warmUpOpen = indexOfOrFail(
       SCRIPT,
       'const warmUp = await context.newPage()',
     );
     const warmUpLoad = indexOfOrFail(SCRIPT, 'await openTouchGame(warmUp, WIN_MINES)');
     const warmUpClose = indexOfOrFail(SCRIPT, 'await warmUp.close()');
-    const readyOpen = SCRIPT.indexOf('const ready = await context.newPage()', warmUpClose);
-    expect(readyOpen, 'missing: the ready page after the warm-up page').toBeGreaterThan(-1);
+    const readySample = SCRIPT.indexOf(
+      "name: touchMobileName(prefix, 'ready')",
+      warmUpClose,
+    );
+    expect(
+      readySample,
+      'missing: the ready sample after the warm-up page',
+    ).toBeGreaterThan(-1);
 
     expect(warmUpLoad).toBeGreaterThan(warmUpOpen);
     expect(warmUpClose).toBeGreaterThan(warmUpLoad);
-    expect(readyOpen).toBeGreaterThan(warmUpClose);
+    expect(readySample).toBeGreaterThan(warmUpClose);
 
     // The throwaway page must be closed even when opening the game throws:
-    // dropping the try/finally would leak the page (and can shift the committed
+    // dropping the try/finally would leak the page (and can shift the sampled
     // ready page onto a different paint path). This structural assertion fails
     // if `finally` is removed or the close is moved outside the block.
     expect(SCRIPT).toMatch(
@@ -191,30 +200,43 @@ describe('minesweeper WebKit READY determinism guard', () => {
     );
   });
 
-  it('requires two identical whole-image frames for the ready capture', () => {
-    const optionsStart = indexOfOrFail(
-      SCRIPT,
-      'const readyCaptureOptions =',
+  it('requires two identical whole-image frames for every sampled ready page', () => {
+    const helperStart = indexOfOrFail(
+      CODE,
+      'function captureReadyFramesBytes(page, name)',
     );
-    const readyCapture = indexOfOrFail(
-      SCRIPT,
-      "await capture(ready, touchMobileName(prefix, 'ready'), false, readyCaptureOptions)",
-    );
-    const readyOptions = SCRIPT.slice(optionsStart, readyCapture);
-    expect(readyOptions).toContain(
-      "IS_WEBKIT && prefix === 'after'",
-    );
-    expect(readyOptions).toContain('stableFrames: READY_CAPTURE_STABLE_FRAMES,');
-    expect(readyOptions).toContain(
+    const helperEnd = CODE.indexOf('\n}\n', helperStart);
+    expect(helperEnd).toBeGreaterThan(helperStart);
+    const helper = CODE.slice(helperStart, helperEnd);
+    expect(helper).toContain('captureStableFramesBytes(page, {');
+    expect(helper).toContain('fullPage: false,');
+    expect(helper).toContain("animations: 'disabled',");
+    expect(helper).toContain('stableFrames: READY_CAPTURE_STABLE_FRAMES,');
+    expect(helper).toContain(
       'stableIntervalMs: READY_CAPTURE_STABLE_INTERVAL_MS,',
     );
-    expect(readyOptions).toContain(
+    expect(helper).toContain(
       'stableAttempts: READY_CAPTURE_STABLE_ATTEMPTS,',
     );
-    expect(readyOptions).toContain(': {};');
+
+    // The ready sample must pass that helper as its captureBytes: deleting the
+    // wiring would silently fall back to the resampler's single screenshot and
+    // drop the READY capture's stability contract.
+    const readySample = indexOfOrFail(
+      CODE,
+      "name: touchMobileName(prefix, 'ready')",
+    );
+    const captureBytes = indexAfter(CODE, 'captureBytes: (ready) =>', readySample);
+    expect(
+      indexAfter(CODE, 'captureReadyFramesBytes(ready,', captureBytes),
+    ).toBeGreaterThan(captureBytes);
+
     expect(READY_CAPTURE_STABLE_FRAMES).toBe(2);
     expect(READY_CAPTURE_STABLE_INTERVAL_MS).toBe(250);
     expect(READY_CAPTURE_STABLE_ATTEMPTS).toBe(5);
+    expect(RUNTIME).toContain(
+      'export async function captureStableFramesBytes',
+    );
     expect(RUNTIME).toContain(
       'export const READY_CAPTURE_STABLE_FRAMES = 2;',
     );
@@ -226,11 +248,11 @@ describe('minesweeper WebKit READY determinism guard', () => {
     );
   });
 
-  it('forwards the ready options through capture() to captureScreenshot()', () => {
-    // `capture()` is the only bridge from the ready scene's stability options
-    // to `captureScreenshot`. Dropping its `options` parameter or the
-    // `...options` spread silently disables the two-frame check while every
-    // capture run still succeeds, so pin both ends of that wiring.
+  it('forwards the sample options through capture() to captureScreenshot()', () => {
+    // `capture()` is the only bridge from the ready sample's environment
+    // preflight / captured bytes to `captureScreenshot`. Dropping its `options`
+    // parameter or the `...options` spread would silently turn the guarded
+    // write into a plain screenshot of a sampled page.
     expect(SCRIPT).toMatch(
       /async function capture\(\s*page,\s*name,\s*fullPage,\s*options = \{\}\s*\)\s*\{/,
     );
@@ -239,59 +261,60 @@ describe('minesweeper WebKit READY determinism guard', () => {
     );
   });
 
-  it('repaints the WebKit header only between ready open and ready capture', () => {
+  it('repaints the WebKit header before every sampled ready capture', () => {
     expect(SCRIPT).toContain(
       "settleWebkitReadyPaint,\n  startPreviewServer,",
     );
     expect(count(/settleWebkitReadyPaint\(/g)).toBe(1);
 
-    const readyOpen = indexOfOrFail(SCRIPT, 'await openTouchGame(ready, WIN_MINES)');
-    const seam = indexOfOrFail(SCRIPT, 'await settleWebkitReadyPaint(ready)');
-    const readyCapture = indexOfOrFail(
-      SCRIPT,
-      "await capture(ready, touchMobileName(prefix, 'ready'), false, readyCaptureOptions)",
+    const touch = indexOfOrFail(
+      CODE,
+      'async function captureTouchMobile(browser, prefix)',
+    );
+    const readySample = indexAfter(
+      CODE,
+      "name: touchMobileName(prefix, 'ready')",
+      touch,
+    );
+    const readyOpen = indexAfter(
+      CODE,
+      'await openTouchGame(ready, WIN_MINES)',
+      readySample,
+    );
+    const seam = indexAfter(
+      CODE,
+      'await settleWebkitReadyPaint(ready)',
+      readyOpen,
+    );
+    const readyBytes = indexAfter(
+      CODE,
+      'captureBytes: (ready) =>',
+      seam,
     );
     expect(seam).toBeGreaterThan(readyOpen);
-    expect(readyCapture).toBeGreaterThan(seam);
+    expect(readyBytes).toBeGreaterThan(seam);
 
-    // Walk the script's actual WebKit-after guard blocks: the seam must be
-    // inside one of them, not merely after the warm-up guard. Matching each
-    // guard to its closing brace is what makes deleting the seam's own guard
-    // falsifiable.
+    // The scroll round-trip must run inside the ready sample's prepare
+    // callback, which itself belongs to a WebKit-after guard. Matching each
+    // guard to its closing brace makes deleting that guard falsifiable.
+    const seamGuard = enclosingAfterGuard(CODE, seam, 'the ready seam');
+    expect(seam).toBeGreaterThan(seamGuard);
+    expect(seam).toBeLessThan(
+      closingBrace(CODE, seamGuard + AFTER_GUARD_OPEN_BRACE_OFFSET),
+    );
+
     const warmUpOpen = indexOfOrFail(
-      SCRIPT,
+      CODE,
       'const warmUp = await context.newPage()',
     );
     const warmUpGuard = enclosingAfterGuard(
-      SCRIPT,
+      CODE,
       warmUpOpen,
       'the warm-up page',
     );
-    const seamGuard = enclosingAfterGuard(SCRIPT, seam, 'the ready seam');
-    expect(warmUpGuard).not.toBe(seamGuard);
-
-    const warmUpGuardEnd = closingBrace(
-      SCRIPT,
-      warmUpGuard + AFTER_GUARD_OPEN_BRACE_OFFSET,
-    );
-    const seamGuardEnd = closingBrace(
-      SCRIPT,
-      seamGuard + AFTER_GUARD_OPEN_BRACE_OFFSET,
-    );
-    const readyPageOpen = SCRIPT.indexOf(
-      'const ready = await context.newPage()',
-      warmUpGuardEnd,
-    );
-    expect(
-      readyPageOpen,
-      'missing: the committed ready page after the warm-up guard',
-    ).toBeGreaterThan(-1);
-
     expect(warmUpOpen).toBeGreaterThan(warmUpGuard);
-    expect(warmUpOpen).toBeLessThan(warmUpGuardEnd);
-    expect(readyPageOpen).toBeGreaterThan(warmUpGuardEnd);
-    expect(seam).toBeGreaterThan(seamGuard);
-    expect(seam).toBeLessThan(seamGuardEnd);
+    expect(readySample).toBeGreaterThan(warmUpOpen);
+    expect(warmUpGuard).toBe(seamGuard);
   });
 
   it('repaints the loss overlay backdrop before rebuilding both backdrops', () => {
@@ -377,19 +400,38 @@ describe('minesweeper WebKit READY determinism guard', () => {
     );
     // The READY path keeps its warm-up / scroll / whole-image stability seam;
     // adding the shared header seam there would change the committed bytes.
-    const readyOpen = indexAfter(CODE, 'const ready = await context.newPage()', touch);
-    const readyClose = indexAfter(CODE, 'await ready.close()', readyOpen);
-    expect(CODE.slice(readyOpen, readyClose)).not.toContain(
-      'settleSharedHeaderCompositing',
+    const readySample = indexAfter(
+      CODE,
+      "name: touchMobileName(prefix, 'ready')",
+      touch,
     );
-    expect(CODE.slice(readyOpen, readyClose)).toContain('settleWebkitReadyPaint(ready)');
+    const readyCaptureBytes = indexAfter(
+      CODE,
+      'captureBytes: (ready) =>',
+      readySample,
+    );
+    const readySampleBlock = CODE.slice(readySample, readyCaptureBytes);
+    expect(readySampleBlock).toContain('await openTouchGame(ready, WIN_MINES)');
+    expect(readySampleBlock).toContain('await settleWebkitReadyPaint(ready)');
+    expect(readySampleBlock).not.toContain('settleSharedHeaderCompositing');
 
-    // The WebKit-after branch resamples playing / lost / won before the
+    // The WebKit-after branch samples ready / playing / lost / won before the
     // Chromium / before path and then closes the context, so a stray eighth
     // capture cannot write the shared evidence after the sampled states.
-    const branch = indexOfOrFail(
+    const warmUpOpen = indexOfOrFail(
       CODE,
-      "  if (IS_WEBKIT && prefix === 'after') {\n    await captureWebkitAfterTouchStates(context, prefix);",
+      'const warmUp = await context.newPage()',
+    );
+    const branch = CODE.lastIndexOf(
+      "if (IS_WEBKIT && prefix === 'after') {",
+      warmUpOpen,
+    );
+    expect(branch, 'missing: the WebKit-after guard around the warm-up page').toBeGreaterThan(-1);
+    expect(warmUpOpen).toBeGreaterThan(branch);
+    const afterStates = indexAfter(
+      CODE,
+      'await captureWebkitAfterTouchStates(context, prefix);',
+      branch,
     );
     const chromiumPlaying = indexAfter(
       CODE,
@@ -397,17 +439,22 @@ describe('minesweeper WebKit READY determinism guard', () => {
       touch,
     );
     expect(branch).toBeGreaterThan(touch);
-    expect(branch).toBeLessThan(chromiumPlaying);
-    expect(CODE.slice(branch, chromiumPlaying)).toContain('await context.close();');
+    expect(afterStates).toBeGreaterThan(branch);
+    expect(afterStates).toBeLessThan(chromiumPlaying);
+    expect(CODE.slice(afterStates, chromiumPlaying)).toContain('await context.close();');
     expect(count(/await captureWebkitAfterTouchStates\(context, prefix\);/g)).toBe(1);
   });
 
-  it('resamples the WebKit-after phone states from fresh pages', () => {
+  it('resamples the WebKit-after phone states and ready from fresh pages', () => {
     expect(CODE).toContain('captureManifestedScreenshot,');
     expect(CODE).toContain(
       "const ALLOW_NEW_BYTES = ARGS.includes('--allow-new-bytes');",
     );
-    expect(count(/await sampleWebkitTouchState\(context, \{/g)).toBe(3);
+    expect(count(/await sampleWebkitTouchState\(context, \{/g)).toBe(4);
+    expect(CODE).toContain("name: touchMobileName(prefix, 'ready')");
+    for (const state of ['playing', 'lost', 'won']) {
+      expect(CODE).toContain(`name: touchMobileName(prefix, '${state}')`);
+    }
 
     const helperStart = indexOfOrFail(
       CODE,
@@ -423,6 +470,15 @@ describe('minesweeper WebKit READY determinism guard', () => {
     );
     expect(helper).toContain('capturedBytes: bytes');
     expect(helper).toContain('allowNewBytes: ALLOW_NEW_BYTES,');
+    // The two-frame gate only reaches the resampler when this call forwards
+    // captureBytes; dropping the option silently falls back to a single
+    // screenshot while every other assertion still passes.
+    const manifestCall = helper.indexOf('await captureManifestedScreenshot({');
+    expect(manifestCall).toBeGreaterThanOrEqual(0);
+    expect(helper.indexOf('captureBytes,', manifestCall)).toBeGreaterThan(manifestCall);
+    expect(helper.indexOf('captureBytes,', manifestCall)).toBeLessThan(
+      helper.indexOf('checkEnvironment:', manifestCall),
+    );
   });
 
   it('fails instead of skipping when the shared header is missing', async () => {
