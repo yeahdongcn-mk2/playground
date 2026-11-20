@@ -20,11 +20,11 @@
 | `bosses.ts` | 144 |
 | `index.ts` | 29 |
 | `zhen-sha-view.ts` | 676 |
-| `zhen-sha.css` | 254 |
-| **合计** | **1,560** |
+| `zhen-sha.css` | 371 |
+| **合计** | **1,677** |
 
 - 生产文件数：5
-- 生产行数：1,560
+- 生产行数：1,677
 - `src/games/registry.ts` 入口：数组条目 `zhenShaGame,` 1 行（配套 `import { zhenShaGame } from './zhen-sha';` 另 1 行，合计 2 行改动），不计入上面的 5 个文件。
 - `engine.test.ts`、`bosses.test.ts`、`zhen-sha-view.test.ts`、`kill-gate-doc.test.ts` 与 e2e 都不计入生产规模。
 
@@ -62,7 +62,7 @@
 - 视图与手势：`zhen-sha-view.test.ts`（jsdom）覆盖轻点 / 长按 / 松手到引擎输入的映射、HUD 随快照更新、结算与重开、pointer capture 丢失、destroy / abort 的监听与 rAF 清理、页面隐藏暂停、音效事件映射。
 - 入口与路由：懒加载入口不把 view / engine 拉进 shell 包；`#/games/zhen-sha` 可从大厅进入；320×640 首屏三手势提示由 `tests/e2e/zhen-sha.spec.ts` 断言。
 - 构建与预算：`npm run typecheck`、`npm run lint`、`npm run test:unit`、`npm run build`、`npm run check:budget` 可重复执行。
-- 风格层可自动化的部分：核心色数量、`prefers-reduced-motion` 分支、无外部图片 / 字体 / URL 的 grep 约束，可在后续卡补测试。
+- 风格层可自动化的部分：核心色数量、无外部图片 / 字体 / URL 与黑宣纸 / 飞白规则由 `style.test.ts` 守护；`prefers-reduced-motion` 分支仍未实现、未测，由后续子任务补。
 - 本评估文档自身由 `kill-gate-doc.test.ts` 校验：文件数 / 行数必须与生产文件一致，结论、#261、试玩状态与「未新增系统」陈述必须存在。
 
 ### 不可自动验收面
@@ -82,7 +82,7 @@
 对照 #250 的 S/M/L 尺子（M 的复核区间：7–9 个文件、1,400–2,200 行、2 个新概念）：
 
 - 文件数：原型 5 个；完整特性估算 7 个，落在 M 区间下沿。
-- 行数：原型 1,560 行；完整特性估算约 2,154 行，落在 M 区间内。
+- 行数：原型 1,677 行；完整特性估算约 2,154 行，落在 M 区间内。
 - 新概念：2 个，符合 M。
 
 **结论：M。** 后续卡可按 M 规模继续。行数已接近 2,200 行上沿：实现中若超过 2,200 行，或出现第三个新概念，必须回到本文按 L 复核。

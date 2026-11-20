@@ -135,6 +135,9 @@ describe('zhen-sha kill gate engineering assessment', () => {
     for (const name of PRODUCTION_FILES) {
       expect(DOC).toContain(`\`${name}\``);
     }
+    // The conclusion repeats the prototype size in prose as well.
+    expect(DOC).toContain(`原型 ${PRODUCTION_FILES.length} 个`);
+    expect(DOC).toContain(`原型 ${PRODUCTION_LINES.toLocaleString('en-US')} 行`);
   });
 
   it('matches the documented prototype per-file table and total', () => {
@@ -203,6 +206,9 @@ describe('zhen-sha kill gate engineering assessment', () => {
     expect(DOC).toContain('### 可自动验收面');
     expect(DOC).toContain('### 不可自动验收面');
     expect(DOC).toContain('3 人盲测试玩');
+    // #249 requires reduced motion; this subtask leaves it pending, not silent.
+    expect(DOC).toContain('prefers-reduced-motion');
+    expect(DOC).toContain('仍未实现、未测');
   });
 
   it('flags procedural ink as a third-concept sensitivity that forces an L review', () => {
