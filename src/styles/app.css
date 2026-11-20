@@ -684,6 +684,26 @@ ol {
   color: #f9a8d4;
 }
 
+.game-card-art--zhen-sha {
+  background:
+    radial-gradient(circle at 50% 46%, rgba(246, 196, 83, 0.2), transparent 60%),
+    radial-gradient(circle at 26% 82%, rgba(8, 7, 10, 0.92), transparent 54%),
+    linear-gradient(140deg, #0d0b08, #050408);
+}
+
+.zhen-sha-card-art {
+  position: relative;
+  z-index: 1;
+  width: 74%;
+  max-width: 240px;
+  filter: drop-shadow(0 12px 26px rgba(246, 196, 83, 0.22));
+}
+
+.game-card-art--zhen-sha .game-card-engine {
+  border-color: rgba(246, 196, 83, 0.34);
+  color: #f6c453;
+}
+
 .mini-grid {
   position: absolute;
   inset: 0;
@@ -1421,6 +1441,10 @@ kbd {
 
   .game-card-art {
     height: 156px;
+  }
+
+  .zhen-sha-card-art {
+    width: 84%;
   }
 
   .footer-links {
