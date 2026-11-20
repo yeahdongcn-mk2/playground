@@ -494,7 +494,7 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
 - 为什么不再重采样：复审在 head `649ac5b` 上用同一负载独立复现，run1 的 ready 在 20 个 fresh page 内始终没有出现 `0ea38c8d…`，只采到 `672285de…` / `d8a808b0…` / `1f45d828…`，repro 退出 1。本次修复的诊断在同一固定容器、宿主 12 个 `yes` 下进一步确认：
   - 同一 browser 进程内连续 24 个 fresh page（实验页数，仅用于观察变体连续性；实际重采样预算是 20 页）：第 1 页 = `0ea38c8d…`，第 2–21 页连续 = `672285de…`，第 22 页 = `0ea38c8d…`，第 23–24 页又回到 `672285de…`；错误变体不是每页独立重掷，20 页预算可能整段错过。
   - 6 次全新 browser 进程（无预热）的首个 READY 采样只有 1 次 `0ea38c8d…`；另一组「预热 + 首采样」的全新 browser 进程在停止前也全部是 `672285de…`，没有出现规范字节。重启 browser 进程不能可靠换回规范栅格。
-  - 在 seam 之后额外等待 1 s 的 2 次样本里仍有 1 次 `d8a808b0…`；等待 3 s 的样本仍是 `d8a808b0…`。变体是已完成并缓存的合成结果，不是等待不够。
+  - 在 seam 之后额外等待 1 s 的 2 次样本为 `0ea38c8d…`（CANONICAL）/ `672285de…`；等待 3 s 的 2 次样本均为 `d8a808b0…`（`test-results/experiment2-load.log` 的 E3 段：`E3-wait-1000-browser-1` / `E3-wait-1000-browser-2` / `E3-wait-3000-browser-1` / `E3-wait-3000-browser-2`）。变体是已完成并缓存的合成结果，不是等待不够。
   - 这些日志是 `test-results/` 下的本地产物，未入库；`672285de…` 与 `d8a808b0…` 的像素差与上文 #374 / #341 t3 记录一致。
 - 处理：#374 t1 的验收原文允许两条路——让 ready 可靠收敛，或按 #318 口径移出“重跑必须等于清单”的集合。既然 20 页预算在复审的负载下已经实测失败，继续加大预算仍是概率性规避，本次选择第二条：
   - `docs/screenshots/capture-sha256-manifest.json` 不再收录 `after-2048-ready-webkit.png`；`verify:screenshots:sha256` 与夜间 `verify:screenshots:repro` 只对 14 张可稳定复现的证据做逐字节校验。
@@ -678,10 +678,9 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
   ```sh
   npm run screenshots:2048
   npm run screenshots:container -- screenshots:2048:webkit
-  sha256sum docs/screenshots/after-2048-{playing,gameover}-{desktop,mobile,webkit}.png \
-    docs/screenshots/after-2048-ready-webkit.png
+  sha256sum docs/screenshots/after-2048-{playing,gameover}-{desktop,mobile,webkit}.png
   ```
-  两次运行的 7 个 sha256 应完全一致，且等于已提交产物。本 PR 只改动 `after-2048-ready-webkit.png`，playing / gameover 的已提交产物保持不变；After 守卫会跳过 ready 桌面 / 手机历史图，WebKit ready 已由 #199 t1 移出历史清单并曾纳入固定环境 sha256 清单，Issue #374 起又移出逐字节清单（保留单页两帧门禁与 playing 条目环境校验）。该命令不再写共享大厅证据（共享大厅图由 `scripts/capture-screenshots.mjs` 写出，`after-hub-webkit.png` 是独立的 WebKit 视口证据），因此提交时不需要再还原这两张共享图。WebKit 产物在官方 Playwright 容器（`mcr.microsoft.com/playwright:v1.64.1-noble`，与仓库的 Playwright 1.64.1 对应）内捕获，避免宿主 EGL / 字体环境差异。
+  两次运行的 6 个 sha256 应完全一致，且等于已提交产物（`after-2048-ready-webkit.png` 自 Issue #374 起不在逐字节清单内，不参与这条断言）。本 PR 只改动 `after-2048-ready-webkit.png`，playing / gameover 的已提交产物保持不变；After 守卫会跳过 ready 桌面 / 手机历史图，WebKit ready 已由 #199 t1 移出历史清单并曾纳入固定环境 sha256 清单，Issue #374 起又移出逐字节清单（保留单页两帧门禁与 playing 条目环境校验）。该命令不再写共享大厅证据（共享大厅图由 `scripts/capture-screenshots.mjs` 写出，`after-hub-webkit.png` 是独立的 WebKit 视口证据），因此提交时不需要再还原这两张共享图。WebKit 产物在官方 Playwright 容器（`mcr.microsoft.com/playwright:v1.64.1-noble`，与仓库的 Playwright 1.64.1 对应）内捕获，避免宿主 EGL / 字体环境差异。
 - 等待条件：所有状态先等待 `document.fonts.ready` 与两个 `requestAnimationFrame`（让最后的状态变更完成画布绘制）；playing / gameover 另等 gameover 的 `本局 4 分 · 最大方块 16` 结算文本。WebKit ready 还先做一次滚动往返（离开页面顶部再回到顶部）强制定格 sticky 页眉，再把 READY overlay 隐藏两帧后恢复（`repaintWebkitReadyOverlay`），最后用 `captureStableBytes()` 等到连续两张截图逐字节一致才落盘；仍不稳定就失败，不写抖动帧。Issue #374 随后为 ready 增加一次性预热页并把它移出清单：提交页仍重跑上述滚动往返 / overlay 重绘，并以 `captureStableBytes` 连续两帧门禁单页落盘；写盘前用已收录的 `after-2048-playing-webkit.png` 条目做 `checkOnly` 固定环境校验，ready 不参与 fresh-page 清单字节重采样。
 - 共享 header 接缝（Issue #341 t3）：WebKit playing 在 `settle(playing)` 之后、截图之前调用 `settleSharedHeaderCompositing(playing)`；gameover 在 `settle(over)` 之后用 `settleBackdropLayersCompositing(over)` 在同一帧重建共享页眉与 game-over 卡片的半透明背板，不再额外调用 header-only 接缝。playing / gameover 再从 fresh page 有界重采样直到整幅 sha256 命中清单；ready 不在清单内，也不再重采样。同一 12+ `yes` 负载下 playing / gameover 4/4 跑为 `4173dce8` / `bf7548b7`，ready 的 4 次捕获则是 `d8a808b0` / `d8a808b0` / `0ea38c8d` / `672285de`，见「2048 playing/gameover 与扫雷 lost 等状态的共享 header 接缝（Issue #341 t3）」与「2048 ready 的负载相关栅格与清单外口径」。
 - 页脚：`after-2048-playing-desktop.png` / `after-2048-gameover-desktop.png` 是 `fullPage` 截图，包含当前页脚「五款游戏已上线」。这两张按本次确定性接缝重新生成，所以与 t4 时（页脚仍为「四款游戏已上线」）的历史证据不同；ready 桌面图不在本次范围，保持历史产物，其对照口径见「历史 After 证据与当前构建不一致（Issue #137）」。

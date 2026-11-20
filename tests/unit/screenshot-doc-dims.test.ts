@@ -652,7 +652,7 @@ describe('hub screenshot single owner docs (Issue #221)', () => {
     const source = readFileSync(README, 'utf8');
     const mutated = replaceLine(
       source,
-      (line) => line.trimStart().startsWith('两次运行的 7 个 sha256 应完全一致'),
+      (line) => line.trimStart().startsWith('两次运行的 6 个 sha256 应完全一致'),
       OLD_2048_PARAGRAPH,
     );
     expect(mutated).not.toBe(source);

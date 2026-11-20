@@ -694,6 +694,26 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(readyOutside).toContain('单页写入');
     expect(readyOutside).toContain('不再进入');
 
+    // The recorded E3 wait experiment must match the retained log: both 1 s
+    // samples were canonical + 672285de, and both 3 s samples were d8a808b0.
+    expect(readyOutside).toContain('等待 1 s 的 2 次样本为 `0ea38c8d…`（CANONICAL）/ `672285de…`');
+    expect(readyOutside).toContain('等待 3 s 的 2 次样本均为 `d8a808b0…`');
+    expect(readyOutside).not.toContain('等待 1 s 的 2 次样本里仍有 1 次 `d8a808b0');
+
+    // The deterministic recapture command must keep ready out of the sha256
+    // comparison, which covers only the six playing / gameover files.
+    const recaptureSumLine = deterministic
+      .split('\n')
+      .find((line) => line.trimStart().startsWith('sha256sum'));
+    expect(recaptureSumLine?.trim()).toBe(
+      'sha256sum docs/screenshots/after-2048-{playing,gameover}-{desktop,mobile,webkit}.png',
+    );
+    expect(deterministic).toContain('两次运行的 6 个 sha256 应完全一致');
+    expect(deterministic).not.toContain('两次运行的 7 个 sha256 应完全一致');
+    expect(deterministic.split('\n')).not.toContain(
+      '    docs/screenshots/after-2048-ready-webkit.png',
+    );
+
     const manifest = JSON.parse(
       readFileSync(
         join(ROOT, 'docs', 'screenshots', 'capture-sha256-manifest.json'),
