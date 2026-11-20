@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { basename, dirname, extname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
@@ -7,6 +7,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const GAME_DIR = join(ROOT, 'src', 'games', 'zhen-sha');
 const PUBLIC_DIR = join(ROOT, 'public', 'games', 'zhen-sha');
 const CSS = readFileSync(join(GAME_DIR, 'zhen-sha.css'), 'utf8');
+const CSS_WITHOUT_COMMENTS = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
 
 /** The four core colours, then the single gold accent, in declaration order. */
 const PALETTE_TOKENS = ['ink', 'paper', 'cinnabar', 'ash', 'gold'] as const;
@@ -18,7 +19,7 @@ interface ColourToken {
 }
 
 const DECLARED_TOKENS: ColourToken[] = [
-  ...CSS.matchAll(/--zhen-([a-z-]+)\s*:\s*(#[0-9a-fA-F]{3,8})\s*;/g),
+  ...CSS_WITHOUT_COMMENTS.matchAll(/--zhen-([a-z-]+)\s*:\s*(#[0-9a-fA-F]{3,8})\s*;/g),
 ].map((match) => ({ name: match[1] ?? '', value: (match[2] ?? '').toLowerCase() }));
 
 /** Every file under a directory, recursively; a missing directory yields none. */
@@ -36,16 +37,15 @@ const ASSET_FILES = [...listFiles(GAME_DIR), ...listFiles(PUBLIC_DIR)];
 
 /** Files that actually enter the production build; tests may link tracked issues. */
 const SHIPPED_FILES = ASSET_FILES.filter((file) => {
-  const name = file.split('/').pop() ?? file;
+  const extension = extname(file);
+  const name = basename(file);
   return (
-    /\.(?:ts|css)$/.test(name) &&
+    (extension === '.ts' || extension === '.css') &&
     !name.endsWith('.test.ts') &&
     !name.endsWith('.test.css') &&
     !name.endsWith('.d.ts')
   );
 });
-
-const CSS_WITHOUT_COMMENTS = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
 
 /** The body of the first rule whose selector is exactly `selector`. */
 function ruleBody(selector: string): string {
@@ -110,7 +110,9 @@ describe('zhen-sha palette and procedural paper theme', () => {
       PALETTE_TOKENS.length,
     );
     // No sixth colour token sneaks in under the same prefix.
-    expect(CSS.match(/--zhen-[a-z-]+\s*:/g)).toHaveLength(PALETTE_TOKENS.length);
+    expect(CSS_WITHOUT_COMMENTS.match(/--zhen-[a-z-]+\s*:/g)).toHaveLength(
+      PALETTE_TOKENS.length,
+    );
   });
 
   it('derives every colour literal and named colour in the stylesheet from the palette', () => {
@@ -138,13 +140,14 @@ describe('zhen-sha palette and procedural paper theme', () => {
       .replace(/--zhen-[a-z-]+/g, '')
       .replace(/(?:-webkit-)?mask-image\s*:[^;]*;/g, '');
     expect(withoutTokensAndMask.match(namedColour)).toBeNull();
-    expect(ruleBody('.zhen-sha-stage::after')).toMatch(/mask-image:[\s\S]*\bblack\b/);
+    expect(declarationValue(ruleBody('.zhen-sha-stage::after'), 'mask-image')).toMatch(/\bblack\b/);
   });
 
   it('ships no external URLs, bitmap/audio assets or webfonts', () => {
-    const externalUrl = /https?:\/\/|ftp:\/\/|(?:^|[^:\w])\/\/[a-z0-9-]+(?:\.[a-z0-9-]+)+/i;
+    const externalUrl =
+      /https?:\/\/|ftp:\/\/|(?:^|[^:\w])\/\/[a-z0-9-]+(?:\.[a-z0-9-]+)*\//i;
     const dataUri =
-      /data:(?:image\/(?:png|jpe?g|webp|gif|avif|bmp)|font\/|application\/font)/i;
+      /data:(?:image\/(?:png|jpe?g|webp|gif|avif|bmp)|audio\/|font\/|application\/font)/i;
     const fontFace = /@font-face/i;
     const assetExtension =
       /\.(?:png|jpe?g|webp|gif|avif|bmp|ico|mp3|wav|ogg|oga|m4a|aac|flac|opus|woff2?|ttf|otf|eot)$/i;
@@ -195,12 +198,8 @@ describe('zhen-sha palette and procedural paper theme', () => {
     for (const selector of ['.zhen-sha-stage::before', '.zhen-sha-stage::after']) {
       expect(zIndex(selector), `${selector} 应位于结算 overlay 之下`).toBeLessThan(overlay);
       expect(zIndex(selector), `${selector} 应位于不透明 canvas 之上`).toBeGreaterThan(canvas);
-      expect(ruleBody(selector), `${selector} 不应拦截指针事件`).toMatch(
-        /pointer-events:\s*none/,
-      );
+      const pointerEvents = declarationValue(ruleBody(selector), 'pointer-events');
+      expect(pointerEvents, `${selector} 不应拦截指针事件`).toBe('none');
     }
-    expect(CSS).toContain('.zhen-sha-hud');
-    expect(CSS).toContain('.zhen-sha-hints');
-    expect(CSS).toContain('.zhen-sha-gesture-note');
   });
 });

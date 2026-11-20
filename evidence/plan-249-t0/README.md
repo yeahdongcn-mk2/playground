@@ -1,7 +1,9 @@
 # 镇煞风格层 Before / After 对照（#249 t1）
 
-- Before：`c9fbf6f`（rebase 前的 main，PR 基线）
-- After：本目录所在提交（视觉层与 `6cafece` 相同，该提交只改测试 / 文档）
+- Before：`c9fbf6f`（本 PR 最初的 base；当前合并基线 `a219ea6` 相对它只新增
+  `bosses.ts` / 测试 / 文档，镇煞视觉层相同）
+- After：截图捕获于 `6cafece`（该提交对 CSS 仅改注释，视觉层与 `de3c22d` 相同）；
+  当前 head 在其后只追加 evidence、测试与文档。
 
 四张 PNG 都是在本地构建产物上用 Playwright 的 Chromium 实拍，不是 mockup：
 
