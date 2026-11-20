@@ -51,6 +51,8 @@ export const REPRO_RUN_COUNT = 2;
 export const SHA256_VERIFIER_PATH = 'scripts/verify-screenshot-sha256.mjs';
 /** Default number of CPU load worker processes; 0 keeps the repro load-free. */
 export const DEFAULT_LOAD_COUNT = 0;
+/** Upper bound for `--load`, so a typo cannot spawn an unbounded CPU load. */
+export const MAX_LOAD_COUNT = 256;
 /** How long a load worker gets after SIGTERM before SIGKILL is sent. */
 export const LOAD_KILL_GRACE_MS = 5000;
 /** The inline script each load worker runs until the repro stops it. */
@@ -124,10 +126,13 @@ export function normalizeRunCount(value) {
 }
 
 /**
- * Parse a `--load` value: a non-negative integer; 0 disables the load.
+ * Parse a `--load` value: an integer from 0 to MAX_LOAD_COUNT; 0 disables the
+ * load.
  *
  * The CLI default is DEFAULT_LOAD_COUNT, so this parser only accepts a value
- * that was actually passed and rejects an empty or malformed one.
+ * that was actually passed and rejects an empty or malformed one. The upper
+ * bound keeps a typo like `--load 100000` from spawning an unbounded number of
+ * CPU-burning processes on the host.
  */
 export function normalizeLoadCount(value) {
   const text = typeof value === 'number' ? String(value) : String(value ?? '').trim();
@@ -141,6 +146,11 @@ export function normalizeLoadCount(value) {
   if (!Number.isSafeInteger(count)) {
     throw new ScreenshotReproError(
       `--load is too large, got ${JSON.stringify(value)}.`,
+    );
+  }
+  if (count > MAX_LOAD_COUNT) {
+    throw new ScreenshotReproError(
+      `--load is at most ${MAX_LOAD_COUNT}, got ${JSON.stringify(value)}.`,
     );
   }
   return count;

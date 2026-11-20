@@ -222,6 +222,7 @@ export interface RunScreenshotReproOptions {
 export const DEFAULT_REPRO_LOG_DIR: string;
 export const REPRO_RUN_COUNT: number;
 export const DEFAULT_LOAD_COUNT: number;
+export const MAX_LOAD_COUNT: number;
 export const LOAD_KILL_GRACE_MS: number;
 export const SHA256_VERIFIER_PATH: string;
 

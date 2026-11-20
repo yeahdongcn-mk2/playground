@@ -10,6 +10,7 @@ import {
 import {
   DEFAULT_LOAD_COUNT,
   DEFAULT_REPRO_LOG_DIR,
+  MAX_LOAD_COUNT,
   REPRO_RUN_COUNT,
   ScreenshotReproError,
   normalizeLoadCount,
@@ -48,8 +49,8 @@ Options:
   --target <name>    capture only this manifest target (repeatable;
                      default: every target the manifest names)
   --runs <N>         runs per target, positive integer (default: ${REPRO_RUN_COUNT})
-  --load <N>         CPU burner processes kept alive for every run, non-negative
-                     integer; 0 disables the load (default: ${DEFAULT_LOAD_COUNT})
+  --load <N>         CPU burner processes kept alive for every run, integer
+                     0-${MAX_LOAD_COUNT}; 0 disables the load (default: ${DEFAULT_LOAD_COUNT})
   -h, --help         show this help
 
 Exit codes: 0 every run matches the manifest, each log verifies and every
