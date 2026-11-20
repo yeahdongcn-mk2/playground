@@ -758,8 +758,10 @@ export const MANIFEST_CAPTURE_ATTEMPTS = 20;
  * `openPage` returns one fresh page per sample; `prepare` sets up the target
  * state and runs its paint seams. `captureBytes` defaults to a single
  * screenshot, which is required for a state with a live clock (the minesweeper
- * playing timer); states that already use the two-frame gate pass
- * {@link captureStableBytes}. `checkEnvironment` runs once on the first sample,
+ * playing timer); states that keep a two-frame gate pass either the
+ * settle-based {@link captureStableBytes} or the interval-based
+ * {@link captureStableFramesBytes} (the minesweeper WebKit READY).
+ * `checkEnvironment` runs once on the first sample,
  * before the state is prepared, so a host / wrong-image run fails with the
  * write guard's own explanation instead of exhausting the sample budget.
  *
