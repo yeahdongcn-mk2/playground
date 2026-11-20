@@ -432,7 +432,15 @@ describe('minesweeper scores screenshot determinism guard (Issue #341 / #376)', 
     expect(SCREENSHOTS_README).not.toContain(
       '以下固定容器验收记录来自此次复用之前的实现',
     );
-    // The manifest entry itself is unchanged by the acceptance rerun.
-    expect(SCREENSHOTS_README).toContain(SCORES_SHA256);
+    // The manifest entry itself is unchanged by the acceptance rerun, and the
+    // 4-run hash must sit in the t2 record itself: the same hash appears on
+    // other README lines, so a whole-file containment check cannot pin it.
+    const t2Start = SCREENSHOTS_README.indexOf('Issue #376 t2');
+    const t2End = SCREENSHOTS_README.indexOf('\n- 打砖块复核', t2Start);
+    expect(t2Start).toBeGreaterThan(-1);
+    expect(t2End).toBeGreaterThan(t2Start);
+    expect(SCREENSHOTS_README.slice(t2Start, t2End)).toContain(
+      `4 跑写出的 \`after-minesweeper-scores-webkit.png\` sha256 均为 \`${SCORES_SHA256}\`，等于清单与已提交 PNG`,
+    );
   });
 });
