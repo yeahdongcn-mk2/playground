@@ -49,6 +49,12 @@ export const DEFAULT_REPRO_LOG_DIR = 'test-results/screenshot-repro';
 export const REPRO_RUN_COUNT = 2;
 /** The existing log-aware verifier the repro entry delegates to. */
 export const SHA256_VERIFIER_PATH = 'scripts/verify-screenshot-sha256.mjs';
+/** Default number of CPU load worker processes; 0 keeps the repro load-free. */
+export const DEFAULT_LOAD_COUNT = 0;
+/** How long a load worker gets after SIGTERM before SIGKILL is sent. */
+export const LOAD_KILL_GRACE_MS = 5000;
+/** The inline script each load worker runs until the repro stops it. */
+const LOAD_WORKER_SOURCE = 'let value = 0; for (;;) { value = Math.sqrt(value + 1); }';
 
 const CAPTURE_COMMAND_PREFIX = 'npm run screenshots:container -- ';
 const CAPTURE_TARGET_PATTERN = /^screenshots(?::[A-Za-z0-9._-]+)+$/;
@@ -112,6 +118,29 @@ export function normalizeRunCount(value) {
   if (!Number.isSafeInteger(count)) {
     throw new ScreenshotReproError(
       `--runs is too large, got ${JSON.stringify(value)}.`,
+    );
+  }
+  return count;
+}
+
+/**
+ * Parse a `--load` value: a non-negative integer; 0 disables the load.
+ *
+ * The CLI default is DEFAULT_LOAD_COUNT, so this parser only accepts a value
+ * that was actually passed and rejects an empty or malformed one.
+ */
+export function normalizeLoadCount(value) {
+  const text = typeof value === 'number' ? String(value) : String(value ?? '').trim();
+  if (!/^(0|[1-9][0-9]*)$/.test(text)) {
+    throw new ScreenshotReproError(
+      `--load needs a non-negative integer (0 disables the load), ` +
+        `got ${JSON.stringify(value)}.`,
+    );
+  }
+  const count = Number(text);
+  if (!Number.isSafeInteger(count)) {
+    throw new ScreenshotReproError(
+      `--load is too large, got ${JSON.stringify(value)}.`,
     );
   }
   return count;
@@ -222,6 +251,190 @@ export function sha256VerifierArgs({ logPath, dir, manifestPath, repoRoot }) {
     '--log',
     logPath,
   ];
+}
+
+/** The argv (after the node executable) that runs one CPU load worker. */
+export function loadWorkerArgs() {
+  return ['-e', LOAD_WORKER_SOURCE];
+}
+
+/**
+ * Start `count` CPU-burning child processes and keep them running until stop().
+ *
+ * The repro entry wraps every selected run in this controller and calls
+ * `stop()` from a `finally`, so a normal finish, a failed capture and a thrown
+ * exception all reclaim the workers and wait for their exit. Each worker runs
+ * an inline infinite loop through `node -e`, so it needs no separate script
+ * file; SIGTERM stops it, with SIGKILL as a bounded fallback. Start and stop
+ * failures are recorded instead of thrown, so the caller can still report the
+ * capture results and the load state together.
+ *
+ * `spawn`, `logger` and `killGraceMs` are injectable so the unit tests can use
+ * fake child processes without putting real CPU load on the host.
+ */
+export function startCpuLoad({
+  count = DEFAULT_LOAD_COUNT,
+  spawn: spawnChild = spawn,
+  logger = console,
+  killGraceMs = LOAD_KILL_GRACE_MS,
+} = {}) {
+  const requested = normalizeLoadCount(count);
+  const workers = [];
+  const failures = [];
+
+  for (let index = 0; index < requested; index += 1) {
+    const worker = {
+      index: index + 1,
+      child: null,
+      closed: false,
+      stopping: false,
+      exitedEarly: false,
+    };
+
+    let child;
+    try {
+      child = spawnChild(process.execPath, loadWorkerArgs(), { stdio: 'ignore' });
+    } catch (error) {
+      failures.push({
+        index: worker.index,
+        phase: 'start',
+        message: errorMessage(error),
+      });
+      continue;
+    }
+    worker.child = child;
+
+    child.once('error', (error) => {
+      const message = errorMessage(error);
+      failures.push({
+        index: worker.index,
+        phase: child.pid === undefined ? 'start' : 'runtime',
+        message,
+      });
+      // A failed spawn has no process to wait for; a later runtime error (for
+      // example a failed kill) must not make stop() skip the real child.
+      if (child.pid === undefined) worker.closed = true;
+    });
+    child.once('exit', (code, signal) => {
+      worker.closed = true;
+      if (!worker.stopping) {
+        worker.exitedEarly = true;
+        failures.push({
+          index: worker.index,
+          phase: 'runtime',
+          message:
+            `exited before stop (code ${code ?? 'null'}, ` +
+            `signal ${signal ?? 'null'})`,
+        });
+      }
+    });
+    child.once('close', () => {
+      worker.closed = true;
+    });
+    workers.push(worker);
+  }
+
+  const snapshot = () => {
+    // A synchronous spawn throw leaves `child` null; an asynchronous spawn
+    // error leaves it without a pid. Neither counts as a started worker.
+    const spawned = workers.filter(
+      (worker) => worker.child !== null && typeof worker.child.pid === 'number',
+    );
+    const stopped = spawned.filter((worker) => worker.closed).length;
+    return {
+      requested,
+      started: spawned.length,
+      stopped,
+      exitedEarly: workers.filter((worker) => worker.exitedEarly).length,
+      active: spawned.length - stopped,
+      failures: failures.map((failure) => ({ ...failure })),
+    };
+  };
+
+  let stoppedState = null;
+
+  const stop = async () => {
+    if (stoppedState !== null) return stoppedState;
+
+    const waits = workers
+      .filter((worker) => worker.child !== null && !worker.closed)
+      .map((worker) => {
+        // Mark first, synchronously: an exit racing with the kill must not be
+        // misreported as the worker having died on its own.
+        worker.stopping = true;
+        return new Promise((resolvePromise) => {
+          let done = false;
+          let graceTimer = null;
+          let hardTimer = null;
+          const settle = () => {
+            if (done) return;
+            done = true;
+            if (graceTimer !== null) clearTimeout(graceTimer);
+            if (hardTimer !== null) clearTimeout(hardTimer);
+            resolvePromise();
+          };
+          const sendSignal = (signal) => {
+            try {
+              worker.child.kill(signal);
+            } catch (error) {
+              failures.push({
+                index: worker.index,
+                phase: 'stop',
+                message: `cannot send ${signal}: ${errorMessage(error)}`,
+              });
+            }
+          };
+
+          worker.child.once('exit', settle);
+          worker.child.once('close', settle);
+          if (worker.closed) {
+            settle();
+            return;
+          }
+          sendSignal('SIGTERM');
+          graceTimer = setTimeout(() => {
+            if (done) return;
+            logger.error?.(
+              `load worker ${worker.index} did not exit after SIGTERM; sending SIGKILL`,
+            );
+            sendSignal('SIGKILL');
+          }, killGraceMs);
+          hardTimer = setTimeout(() => {
+            if (done) return;
+            failures.push({
+              index: worker.index,
+              phase: 'stop',
+              message: `did not exit within ${killGraceMs * 2}ms`,
+            });
+            settle();
+          }, killGraceMs * 2);
+        });
+      });
+
+    await Promise.all(waits);
+    // 'exit' can fire before 'close'; one event-loop turn lets the close and
+    // reaped-state handlers land before the final snapshot is taken.
+    await new Promise((resolvePromise) => setImmediate(resolvePromise));
+    stoppedState = snapshot();
+    return stoppedState;
+  };
+
+  return {
+    requested,
+    get started() {
+      return snapshot().started;
+    },
+    get failures() {
+      return snapshot().failures;
+    },
+    get pids() {
+      return workers
+        .map((worker) => worker.child?.pid)
+        .filter((pid) => typeof pid === 'number');
+    },
+    snapshot,
+    stop,
+  };
 }
 
 /**
@@ -384,6 +597,18 @@ function differenceDiagnosis(difference) {
   );
 }
 
+/** One-line load state for both the success and the failure report. */
+function formatLoadSummary(load) {
+  const failureText =
+    load.failures.length === 0 ? '' : `, ${load.failures.length} failure(s)`;
+  const activeText =
+    load.active === 0 ? ' (all exited)' : `, ${load.active} still active`;
+  return (
+    `${load.started}/${load.requested} CPU worker process(es) started, ` +
+    `${load.stopped} stopped${activeText}${failureText}`
+  );
+}
+
 function formatFailureReport(result) {
   const lines = [];
   lines.push(
@@ -393,6 +618,13 @@ function formatFailureReport(result) {
       `${result.environmentMismatches.length} environment fingerprint mismatch(es), ` +
       `${result.artifactFailures.length} per-run PNG copy failure(s).`,
   );
+
+  if (result.load.requested > 0) {
+    lines.push('', `Load: ${formatLoadSummary(result.load)}.`);
+    for (const failure of result.load.failures) {
+      lines.push(`  worker ${failure.index} (${failure.phase}): ${failure.message}`);
+    }
+  }
 
   if (result.differences.length > 0) {
     lines.push('', 'Hash differences:');
@@ -510,6 +742,9 @@ function formatSuccessReport(result) {
     `  screenshots: ${result.dir}`,
     `  log directory: ${result.logDir}`,
     `  per-run PNG copies: ${result.logDir}/<target>-run<N>-png/`,
+    ...(result.load.requested > 0
+      ? [`  load: ${formatLoadSummary(result.load)}`]
+      : []),
     '',
     'Per-run sha256:',
   ];
@@ -550,11 +785,16 @@ function formatSuccessReport(result) {
  * matches the manifest and the other runs.
  *
  * `runCapture`, `verifyLog`, `spawn`, `spawnSync`, `hashFile`, `readText`,
- * `copyFile`, `mkdir` and `removeFile` are injectable so unit tests can use
- * temporary fixtures instead of Docker, a browser and the real four-minute
- * captures. The real defaults are used by the CLI entry; `spawn` / `spawnSync`
- * feed the default `runCapture` / `verifyLog` and are ignored when those are
- * supplied.
+ * `copyFile`, `mkdir`, `removeFile`, `spawnLoadWorker` and `killGraceMs` are
+ * injectable so unit tests can use temporary fixtures instead of Docker, a
+ * browser, real CPU load and the real four-minute captures. The real defaults
+ * are used by the CLI entry; `spawn` / `spawnSync` feed the default
+ * `runCapture` / `verifyLog` and are ignored when those are supplied.
+ *
+ * `load` keeps `count` CPU worker processes running around every selected run
+ * (`0` keeps the default load-free behaviour). The workers are stopped and
+ * awaited in a `finally`, so a failed capture or a thrown exception does not
+ * leave them behind.
  *
  * @returns {Promise<{
  *   ok: boolean,
@@ -563,6 +803,14 @@ function formatSuccessReport(result) {
  *   dir: string,
  *   logDir: string,
  *   runsPerTarget: number,
+ *   load: {
+ *     requested: number,
+ *     started: number,
+ *     stopped: number,
+ *     exitedEarly: number,
+ *     active: number,
+ *     failures: Array<{ index: number, phase: 'start' | 'stop' | 'runtime', message: string }>,
+ *   },
  *   plans: Array<{ target: string, captures: Array<{ file: string, sha256: string }> }>,
  *   runs: Array<{
  *     target: string,
@@ -625,6 +873,7 @@ export async function runScreenshotRepro({
   logDir = resolve(repoRoot, DEFAULT_REPRO_LOG_DIR),
   targets = [],
   runs: requestedRuns = REPRO_RUN_COUNT,
+  load = DEFAULT_LOAD_COUNT,
   env = process.env,
   logger = console,
   progress = () => {},
@@ -634,7 +883,9 @@ export async function runScreenshotRepro({
   mkdir = mkdirSync,
   removeFile = (path) => rmSync(path, { force: true }),
   spawn: spawnChild = spawn,
+  spawnLoadWorker = spawnChild,
   spawnSync: spawnSyncVerifier = spawnSync,
+  killGraceMs = LOAD_KILL_GRACE_MS,
   runCapture = (options) => spawnContainerCapture({ ...options, spawn: spawnChild }),
   verifyLog = (options) => spawnSha256Verifier({ ...options, spawnSync: spawnSyncVerifier }),
 } = {}) {
@@ -662,138 +913,153 @@ export async function runScreenshotRepro({
   const verifyFailures = [];
   const artifactFailures = [];
 
-  for (const plan of plans) {
-    for (let run = 1; run <= runsPerTarget; run += 1) {
-      const logPath = reproLogPath(logDir, plan.target, run);
-      const artifactDir = reproArtifactDir(logDir, plan.target, run);
+  // Start the optional CPU load right before the first capture and stop it
+  // in a `finally`, so every selected run sees the same pressure and a
+  // failed capture or exception cannot leave the workers running.
+  const loadController = startCpuLoad({
+    count: load,
+    spawn: spawnLoadWorker,
+    logger,
+    killGraceMs,
+  });
+  let loadState = loadController.snapshot();
 
-      // A repeated invocation reuses the same log directory, so this run number
-      // may still hold PNG copies from an earlier invocation. Remove them before
-      // the capture: if this run fails to write a file, its slot must read as
-      // "not retained" instead of exposing stale bytes as if they belonged to
-      // this run.
-      for (const capture of plan.captures) {
-        try {
-          removeFile(reproArtifactPath(logDir, plan.target, run, capture.file));
-        } catch (error) {
-          artifactFailures.push({
-            target: plan.target,
-            run,
-            file: capture.file,
-            path: reproArtifactPath(logDir, plan.target, run, capture.file),
-            message:
-              'cannot remove the stale per-run PNG copy before the capture: ' +
-              errorMessage(error),
-          });
-        }
-      }
+  try {
+    for (const plan of plans) {
+      for (let run = 1; run <= runsPerTarget; run += 1) {
+        const logPath = reproLogPath(logDir, plan.target, run);
+        const artifactDir = reproArtifactDir(logDir, plan.target, run);
 
-      // The CI workspace is disposable, so remove the target's manifested
-      // files before every run. A capture that silently skips a frozen
-      // historical file (the "Refusing to overwrite historical" write guard)
-      // then fails with an unavailable hash instead of matching the committed
-      // bytes it never refreshed. A local run deletes the same tracked files,
-      // so reproduce on a temp copy and use `git restore docs/screenshots`
-      // after a failure (docs/screenshots/README.md documents this).
-      const removalFailures = [];
-      for (const capture of plan.captures) {
-        try {
-          removeFile(resolve(dir, capture.file));
-        } catch (error) {
-          removalFailures.push(`${capture.file}: ${errorMessage(error)}`);
-        }
-      }
-
-      let exitCode;
-      let failureReason = null;
-      if (removalFailures.length > 0) {
-        failureReason =
-          'cannot remove stale evidence before the capture: ' + removalFailures.join('; ');
-        logger.error?.(`${plan.target} run ${run}: ${failureReason}`);
-        exitCode = 1;
-      } else {
-        try {
-          exitCode = await runCapture({ target: plan.target, run, logPath, repoRoot, env, logger });
-        } catch (error) {
-          logger.error?.(`${plan.target} run ${run}: ${errorMessage(error)}`);
-          exitCode = 1;
-        }
-      }
-      if (!Number.isFinite(exitCode)) {
-        exitCode = 1;
-      }
-      const logText = readOptionalText(logPath, readText);
-
-      if (exitCode !== 0) {
-        captureFailures.push({ target: plan.target, run, exitCode, logPath, failureReason });
-      }
-
-      const hashes = [];
-      for (const capture of plan.captures) {
-        const filePath = resolve(dir, capture.file);
-        let sha256 = null;
-        let hashError = null;
-        try {
-          sha256 = hashFile(filePath);
-        } catch (error) {
-          hashError = errorMessage(error);
-        }
-
-        // Keep this run's bytes before the next run removes and re-captures the
-        // shared evidence paths. Without the copy, a drift comparison after the
-        // repro finishes would only see the last run.
-        let copyPath = null;
-        if (sha256 !== null) {
-          const artifactPath = reproArtifactPath(logDir, plan.target, run, capture.file);
+        // A repeated invocation reuses the same log directory, so this run number
+        // may still hold PNG copies from an earlier invocation. Remove them before
+        // the capture: if this run fails to write a file, its slot must read as
+        // "not retained" instead of exposing stale bytes as if they belonged to
+        // this run.
+        for (const capture of plan.captures) {
           try {
-            mkdir(artifactDir, { recursive: true });
-            copyFile(filePath, artifactPath);
-            copyPath = artifactPath;
+            removeFile(reproArtifactPath(logDir, plan.target, run, capture.file));
           } catch (error) {
             artifactFailures.push({
               target: plan.target,
               run,
               file: capture.file,
-              path: artifactPath,
-              message: errorMessage(error),
+              path: reproArtifactPath(logDir, plan.target, run, capture.file),
+              message:
+                'cannot remove the stale per-run PNG copy before the capture: ' +
+                errorMessage(error),
             });
           }
         }
 
-        hashes.push({ file: capture.file, sha256, error: hashError, copyPath });
-        progress(
-          `  ${plan.target} run ${run}: ${capture.file} ` +
-            `sha256 ${sha256 ?? 'unavailable'}` +
-            `${copyPath === null ? '' : ` (kept: ${copyPath})`}`,
-        );
-      }
+        // The CI workspace is disposable, so remove the target's manifested
+        // files before every run. A capture that silently skips a frozen
+        // historical file (the "Refusing to overwrite historical" write guard)
+        // then fails with an unavailable hash instead of matching the committed
+        // bytes it never refreshed. A local run deletes the same tracked files,
+        // so reproduce on a temp copy and use `git restore docs/screenshots`
+        // after a failure (docs/screenshots/README.md documents this).
+        const removalFailures = [];
+        for (const capture of plan.captures) {
+          try {
+            removeFile(resolve(dir, capture.file));
+          } catch (error) {
+            removalFailures.push(`${capture.file}: ${errorMessage(error)}`);
+          }
+        }
 
-      let verified = { code: 0, stdout: '', stderr: '' };
-      try {
-        verified = await verifyLog({ logPath, dir, manifestPath, repoRoot });
-      } catch (error) {
-        verified = { code: 1, stdout: '', stderr: errorMessage(error) };
-      }
-      const output = `${verified.stdout ?? ''}\n${verified.stderr ?? ''}`;
-      if (verified.code !== 0) {
-        verifyFailures.push({
+        let exitCode;
+        let failureReason = null;
+        if (removalFailures.length > 0) {
+          failureReason =
+            'cannot remove stale evidence before the capture: ' + removalFailures.join('; ');
+          logger.error?.(`${plan.target} run ${run}: ${failureReason}`);
+          exitCode = 1;
+        } else {
+          try {
+            exitCode = await runCapture({ target: plan.target, run, logPath, repoRoot, env, logger });
+          } catch (error) {
+            logger.error?.(`${plan.target} run ${run}: ${errorMessage(error)}`);
+            exitCode = 1;
+          }
+        }
+        if (!Number.isFinite(exitCode)) {
+          exitCode = 1;
+        }
+        const logText = readOptionalText(logPath, readText);
+
+        if (exitCode !== 0) {
+          captureFailures.push({ target: plan.target, run, exitCode, logPath, failureReason });
+        }
+
+        const hashes = [];
+        for (const capture of plan.captures) {
+          const filePath = resolve(dir, capture.file);
+          let sha256 = null;
+          let hashError = null;
+          try {
+            sha256 = hashFile(filePath);
+          } catch (error) {
+            hashError = errorMessage(error);
+          }
+
+          // Keep this run's bytes before the next run removes and re-captures the
+          // shared evidence paths. Without the copy, a drift comparison after the
+          // repro finishes would only see the last run.
+          let copyPath = null;
+          if (sha256 !== null) {
+            const artifactPath = reproArtifactPath(logDir, plan.target, run, capture.file);
+            try {
+              mkdir(artifactDir, { recursive: true });
+              copyFile(filePath, artifactPath);
+              copyPath = artifactPath;
+            } catch (error) {
+              artifactFailures.push({
+                target: plan.target,
+                run,
+                file: capture.file,
+                path: artifactPath,
+                message: errorMessage(error),
+              });
+            }
+          }
+
+          hashes.push({ file: capture.file, sha256, error: hashError, copyPath });
+          progress(
+            `  ${plan.target} run ${run}: ${capture.file} ` +
+              `sha256 ${sha256 ?? 'unavailable'}` +
+              `${copyPath === null ? '' : ` (kept: ${copyPath})`}`,
+          );
+        }
+
+        let verified = { code: 0, stdout: '', stderr: '' };
+        try {
+          verified = await verifyLog({ logPath, dir, manifestPath, repoRoot });
+        } catch (error) {
+          verified = { code: 1, stdout: '', stderr: errorMessage(error) };
+        }
+        const output = `${verified.stdout ?? ''}\n${verified.stderr ?? ''}`;
+        if (verified.code !== 0) {
+          verifyFailures.push({
+            target: plan.target,
+            run,
+            exitCode: verified.code,
+            logPath,
+            output,
+          });
+        }
+
+        runs.push({
           target: plan.target,
           run,
-          exitCode: verified.code,
           logPath,
-          output,
+          exitCode,
+          fingerprints: environmentLines(logText),
+          hashes,
         });
       }
-
-      runs.push({
-        target: plan.target,
-        run,
-        logPath,
-        exitCode,
-        fingerprints: environmentLines(logText),
-        hashes,
-      });
     }
+  } finally {
+    loadState = await loadController.stop();
   }
 
   const differences = [];
@@ -856,12 +1122,15 @@ export async function runScreenshotRepro({
       captureFailures.length === 0 &&
       verifyFailures.length === 0 &&
       artifactFailures.length === 0 &&
-      environmentMismatches.length === 0,
+      environmentMismatches.length === 0 &&
+      loadState.failures.length === 0 &&
+      loadState.active === 0,
     report: '',
     manifestPath,
     dir,
     logDir,
     runsPerTarget,
+    load: loadState,
     plans,
     runs,
     differences,
