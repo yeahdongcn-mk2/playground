@@ -1,60 +1,45 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
-import { gzipSync } from 'node:zlib';
+import { BudgetError, formatGzipKb, measureBudget } from './lib/budget.mjs';
 
-const ENTRY_LIMIT = 50 * 1024;
-const GAME_LIMIT = 450 * 1024;
-const failures = [];
-
-if (!existsSync('dist/index.html')) {
-  console.error('dist/index.html is missing; run `npm run build` first.');
-  process.exit(1);
-}
-
-const html = readFileSync('dist/index.html', 'utf8');
-const entrySrc = /<script[^>]+src="([^"]+\.js)"/.exec(html)?.[1];
-if (!entrySrc) {
-  console.error('Could not find the entry script in dist/index.html.');
-  process.exit(1);
-}
-
-const entryFile = join('dist', entrySrc.replace(/^\//, ''));
-const entry = readFileSync(entryFile);
-const entryGzip = gzipSync(entry).length;
-const engineMarkers = [/\bPhaser\.(?:Game|Scene|AUTO)\b/, /\bTHREE\./];
-
-console.log(`Entry JS: ${(entry.length / 1024).toFixed(2)} KB (${(entryGzip / 1024).toFixed(2)} KB gzip)`);
-if (entryGzip > ENTRY_LIMIT) {
-  failures.push(`entry JS is ${(entryGzip / 1024).toFixed(2)} KB gzip, over the 50 KB budget`);
-}
-for (const marker of engineMarkers) {
-  if (marker.test(entry.toString('utf8'))) {
-    failures.push(`entry JS contains engine marker ${marker}`);
+let report;
+try {
+  report = measureBudget('dist');
+} catch (error) {
+  if (error instanceof BudgetError) {
+    console.error(error.message);
+    process.exit(1);
   }
+  throw error;
 }
 
-const jsFiles = readdirSync('dist/assets').filter((file) => file.endsWith('.js'));
-const totalGzip = jsFiles.reduce(
-  (total, file) => total + gzipSync(readFileSync(join('dist/assets', file))).length,
-  0,
+console.log(
+  `Entry JS: ${formatGzipKb(report.entry.bytes)} (${formatGzipKb(report.entry.gzipBytes)} gzip)`,
 );
-console.log(`All JS chunks: ${(totalGzip / 1024).toFixed(2)} KB gzip (2D game budget 450 KB)`);
-if (totalGzip > GAME_LIMIT) {
-  failures.push(
-    `all JS chunks are ${(totalGzip / 1024).toFixed(2)} KB gzip, over the 450 KB 2D budget`,
+console.log(
+  `All JS chunks: ${formatGzipKb(report.allJs.gzipBytes)} gzip (2D game budget 450 KB)`,
+);
+console.log(`CSS: ${formatGzipKb(report.cssGzipBytes)} gzip`);
+
+const zhenShaChunks = report.zhenSha.chunks;
+if (zhenShaChunks.length === 0) {
+  console.log('Zhen Sha view JS: missing (expected dist/assets/zhen-sha-view-*.js)');
+} else if (zhenShaChunks.length === 1) {
+  const [chunk] = zhenShaChunks;
+  console.log(
+    `Zhen Sha view JS: ${chunk.file} ${formatGzipKb(chunk.gzipBytes)} gzip (per-game budget 35 KB)`,
+  );
+} else {
+  console.log('Zhen Sha view JS:');
+  for (const chunk of zhenShaChunks) {
+    console.log(`  ${chunk.file}: ${formatGzipKb(chunk.gzipBytes)} gzip`);
+  }
+  console.log(
+    `  total: ${formatGzipKb(report.zhenSha.gzipBytes)} gzip (per-game budget 35 KB)`,
   );
 }
 
-const cssFiles = readdirSync('dist/assets').filter((file) => file.endsWith('.css'));
-const cssGzip = cssFiles.reduce(
-  (total, file) => total + gzipSync(readFileSync(join('dist/assets', file))).length,
-  0,
-);
-console.log(`CSS: ${(cssGzip / 1024).toFixed(2)} KB gzip`);
-
-if (failures.length > 0) {
+if (report.failures.length > 0) {
   console.error('Budget check failed:');
-  for (const failure of failures) console.error(`  - ${failure}`);
+  for (const failure of report.failures) console.error(`  - ${failure}`);
   process.exit(1);
 }
 console.log('Budget check OK: shell is engine-free and within the 2D download budget.');
