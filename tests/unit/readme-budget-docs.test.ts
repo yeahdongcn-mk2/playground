@@ -57,11 +57,13 @@ describe('README check:budget documentation', () => {
 
     for (const marker of [
       '入口',
-      'Phaser',
-      'THREE',
-      `<${limitKb(ENTRY_LIMIT)} gzip`,
-      '全部 JS chunk',
-      `<${limitKb(TOTAL_JS_LIMIT)} gzip`,
+      'Phaser.Game',
+      'Scene',
+      'AUTO',
+      'THREE.',
+      `≤${limitKb(ENTRY_LIMIT)} gzip`,
+      '全部 JS chunk 合计',
+      `合计 ≤${limitKb(TOTAL_JS_LIMIT)} gzip`,
       'dist/assets/zhen-sha-view-*.js',
       `合计 ≤${limitKb(PER_GAME_LIMIT)} gzip`,
     ]) {
@@ -76,6 +78,7 @@ describe('README check:budget documentation', () => {
       '0 个匹配视为失败',
       'npm run build',
       '多个匹配按合计判定',
+      'node:zlib',
       'gzipSync',
       '默认级别',
       'Vite',

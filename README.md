@@ -233,7 +233,7 @@ pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和
 | `npm run test:e2e` | 先构建，再用 `vite preview` 跑全部 Playwright 项目（Chromium 桌面 / Pixel 7 + `mobile-webkit`） |
 | `npm run test:e2e:webkit` | 先构建，再只跑 `mobile-webkit` 项目（iPhone SE (3rd gen)）：framework 手机端、扫雷 WebKit 冒烟、触屏手势 / 触屏难度表单、贪食蛇 / 俄罗斯方块 / 2048 / 打砖块的手机端用例，2048 READY 两跑字节守卫，以及 320×640 / 360×640 / 375×667 / 412×839 窄屏契约 |
 | `npm run lint` | oxlint（覆盖 `src`、`tests` 与 `scripts`；error 与 warning 都会失败，warning 经 `--deny-warnings` 升级）+ `scripts/check-boundaries.mjs` 模块依赖方向检查（失败同样返回非 0） |
-| `npm run check:budget` | 检查体积门禁：入口不含 Phaser / THREE 且 <50 KB gzip，`dist/assets` 全部 JS chunk <450 KB gzip，`dist/assets/zhen-sha-view-*.js` 合计 ≤35 KB gzip。0 个匹配视为失败并提示先 `npm run build`，多个匹配按合计判定；所有 gzip 数字由 `node:zlib` 的 `gzipSync` 默认级别测得，Vite build 打印的 gzip 不是门禁输入 |
+| `npm run check:budget` | 检查体积门禁：入口不含引擎标记（Phaser.Game/Scene/AUTO、THREE.）且 ≤50 KB gzip，`dist/assets` 全部 JS chunk 合计 ≤450 KB gzip，`dist/assets/zhen-sha-view-*.js` 合计 ≤35 KB gzip。0 个匹配视为失败并提示先 `npm run build`，多个匹配按合计判定；所有 gzip 数字由 `node:zlib` 的 `gzipSync` 默认级别测得，Vite build 打印的 gzip 不是门禁输入 |
 | `npm run screenshots` | 构建后生成 `docs/screenshots/` 中的界面截图 |
 | `npm run screenshots:webkit` | 构建后用 WebKit 生成大厅与空白画布的 375×667 手机截图；两张图已被固定环境 sha256 清单收录，宿主命令会在写出前被拒绝，重拍用 `npm run screenshots:container -- screenshots:webkit` |
 | `npm run screenshots:snake` | 生成贪食蛇 Before / After 截图（开发服务器 + 固定首果；游玩图固定 seed / tick）；ready / gameover 桌面图与手机图为 #14 历史证据，脚本默认跳过并警告，确需重建时只能在固定容器内用 `npm run screenshots:container -- screenshots:snake --allow-historical-overwrite`，并同步 `capture-sha256-manifest.json` 条目（若收录）；对照口径见 `docs/screenshots/README.md` 的「历史 After 证据与当前构建不一致（Issue #137）」 |
@@ -396,7 +396,7 @@ games/<game>/scene → 对应引擎（动态 import）
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过（oxlint 覆盖 src、tests 与 scripts；error 与 warning 都会失败，warning 经 --deny-warnings 升级；另跑 scripts/check-boundaries.mjs，失败返回非 0）
-npm run test:unit    # 1611 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
+npm run test:unit    # 1616 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
 npm run build        # 通过
 npm run check:budget # 通过，实际输出：
 # Entry JS: 33.45 KB (11.16 KB gzip)
