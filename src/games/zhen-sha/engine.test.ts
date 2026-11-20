@@ -1,6 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_BOSS_CHART,
+  type BossChart,
+  type BossMoveChart,
+} from './boss-chart';
+import {
   BREAK_TICKS,
   FIXED_STEP_MS,
   FIRST_TELEGRAPH_TICKS,
@@ -718,13 +723,165 @@ describe('fixed-step determinism', () => {
   });
 });
 
+/**
+ * Browser, renderer, timer, clock and module-loading APIs that a pure data
+ * module must not use. Shared by the engine and boss-chart source guards.
+ */
+const FORBIDDEN_PURE_SOURCE =
+  /\b(?:document|window|navigator|localStorage|sessionStorage|fetch|Audio|performance|requestAnimationFrame|setTimeout|setInterval|Phaser|THREE|require|globalThis)\b|Date\.now|\bnew\s+Date\b|\bMath\.random\b|(?:^|\n)\s*import\b|(?:^|\n)\s*export\b[^;]*\bfrom\b/;
+
+/** Build a move that satisfies the chart contract, for shape fixtures. */
+function chartMove(
+  bossIndex: number,
+  phaseIndex: number,
+  moveIndex: number,
+): BossMoveChart {
+  return {
+    id: `boss-${bossIndex}-phase-${phaseIndex}-move-${moveIndex}`,
+    telegraphMs: (phaseIndex === 1 ? 1500 : 900) - moveIndex * 10,
+    activeMs: 300,
+    parryWindowMs: 100,
+    damage: phaseIndex,
+  };
+}
+
+/**
+ * A shape smoke test for #246's already-merged 3 × 2 `BOSSES`. The engine card
+ * that consumes this contract must map `BOSSES` here and reconcile its
+ * different `id` / `activeMs` / `damage` semantics, so no production data is
+ * bound yet.
+ */
+const THREE_BY_TWO_CHART: BossChart = {
+  bosses: Array.from({ length: 3 }, (_, bossIndex) => ({
+    name: `测试 boss ${bossIndex + 1}`,
+    phases: Array.from({ length: 2 }, (_, phaseIndex) => ({
+      id: `boss-${bossIndex + 1}-phase-${phaseIndex + 1}`,
+      moves: Array.from({ length: 6 + phaseIndex }, (_, moveIndex) =>
+        chartMove(bossIndex + 1, phaseIndex + 1, moveIndex + 1),
+      ),
+    })),
+  })),
+};
+
+/** Assert the fields and chart-unique phase / move ids the engine relies on. */
+function expectValidChart(chart: BossChart): void {
+  expect(chart.bosses.length).toBeGreaterThan(0);
+  const phaseIds: string[] = [];
+  const moveIds: string[] = [];
+
+  for (const boss of chart.bosses) {
+    expect(boss.name.trim().length).toBeGreaterThan(0);
+    expect(boss.phases.length).toBeGreaterThan(0);
+    for (const phase of boss.phases) {
+      expect(phase.id.trim().length).toBeGreaterThan(0);
+      phaseIds.push(phase.id);
+      expect(phase.moves.length).toBeGreaterThan(0);
+      for (const move of phase.moves) {
+        expect(move.id.trim().length).toBeGreaterThan(0);
+        for (const ms of [move.telegraphMs, move.activeMs, move.parryWindowMs]) {
+          expect(Number.isInteger(ms)).toBe(true);
+          expect(ms).toBeGreaterThan(0);
+        }
+        expect(move.parryWindowMs).toBeLessThan(move.activeMs);
+        expect(Number.isInteger(move.damage)).toBe(true);
+        expect(move.damage).toBeGreaterThan(0);
+        moveIds.push(move.id);
+      }
+    }
+  }
+
+  expect(new Set(phaseIds).size).toBe(phaseIds.length);
+  expect(new Set(moveIds).size).toBe(moveIds.length);
+}
+
+describe('boss chart contract', () => {
+  it('accepts a 3 × 2 fixture with 6–10 moves per phase', () => {
+    expect(THREE_BY_TWO_CHART.bosses).toHaveLength(3);
+    for (const boss of THREE_BY_TWO_CHART.bosses) {
+      expect(boss.phases).toHaveLength(2);
+      for (const phase of boss.phases) {
+        expect(phase.moves.length).toBeGreaterThanOrEqual(6);
+        expect(phase.moves.length).toBeLessThanOrEqual(10);
+      }
+    }
+    // Pin representative fixture values so a broken generator cannot pass.
+    const firstBoss = THREE_BY_TWO_CHART.bosses[0];
+    expect(firstBoss?.phases[0]?.moves[0]).toEqual({
+      id: 'boss-1-phase-1-move-1',
+      telegraphMs: 1490,
+      activeMs: 300,
+      parryWindowMs: 100,
+      damage: 1,
+    });
+    expect(firstBoss?.phases[1]?.moves.at(-1)).toMatchObject({
+      id: 'boss-1-phase-2-move-7',
+      telegraphMs: 830,
+      damage: 2,
+    });
+    expectValidChart(THREE_BY_TWO_CHART);
+  });
+
+  it('ships a 1 × 1 default chart with the kill-gate boss', () => {
+    expect(DEFAULT_BOSS_CHART.bosses).toHaveLength(1);
+    const boss = DEFAULT_BOSS_CHART.bosses[0];
+    expect(boss).toBeDefined();
+    if (boss === undefined) {
+      throw new Error('default chart must have a boss');
+    }
+    expect(boss.name).toBe('黑煞');
+    expect(boss.phases).toHaveLength(1);
+    expect(boss.phases[0]?.moves).toHaveLength(1);
+    expectValidChart(DEFAULT_BOSS_CHART);
+    expect(boss.phases[0]?.moves[0]).toMatchObject({
+      id: 'kill-gate-strike',
+      damage: 1,
+    });
+  });
+
+  it('reproduces the kill gate timing in 120 Hz ticks', () => {
+    const ticksFor = (ms: number): number => (ms * TICKS_PER_SECOND) / 1000;
+    const move = DEFAULT_BOSS_CHART.bosses[0]?.phases[0]?.moves[0];
+    if (move === undefined) {
+      throw new Error('default chart must have a move');
+    }
+
+    // The documented millisecond values.
+    expect(DEFAULT_BOSS_CHART.firstTelegraphMs).toBe(1500);
+    expect(DEFAULT_BOSS_CHART.recoveryMs).toBe(600);
+    expect(move.telegraphMs).toBe(900);
+    expect(move.activeMs).toBe(300);
+    expect(move.parryWindowMs).toBe(100);
+    expect(move.damage).toBe(1);
+
+    // ... and their integer-tick equivalents in the existing engine.
+    expect(
+      ticksFor(DEFAULT_BOSS_CHART.firstTelegraphMs ?? Number.NaN),
+    ).toBe(FIRST_TELEGRAPH_TICKS);
+    expect(ticksFor(DEFAULT_BOSS_CHART.recoveryMs ?? Number.NaN)).toBe(
+      RECOVERY_TICKS,
+    );
+    expect(ticksFor(move.telegraphMs)).toBe(TELEGRAPH_TICKS);
+    expect(ticksFor(move.activeMs)).toBe(NORMAL_BAND_HALF_TICKS * 2);
+    expect(ticksFor(move.parryWindowMs)).toBe(PERFECT_BAND_HALF_TICKS * 2);
+  });
+
+  it('stays pure data with no browser, renderer, timer or engine imports', () => {
+    const source = readFileSync(
+      new URL('./boss-chart.ts', import.meta.url),
+      'utf8',
+    );
+
+    expect(source).not.toMatch(FORBIDDEN_PURE_SOURCE);
+  });
+});
+
 describe('engine source constraints', () => {
   it('stays free of browser, renderer, timer and wall-clock APIs', () => {
-    const source = readFileSync(new URL('./engine.ts', import.meta.url), 'utf8');
-
-    expect(source).not.toMatch(
-      /\b(?:document|window|navigator|localStorage|sessionStorage|fetch|Audio|performance|requestAnimationFrame|setTimeout|setInterval|Phaser|THREE)\b|Date\.now|Math\.random/,
+    const source = readFileSync(
+      new URL('./engine.ts', import.meta.url),
+      'utf8',
     );
-    expect(source).not.toMatch(/^\s*import\b/m);
+
+    expect(source).not.toMatch(FORBIDDEN_PURE_SOURCE);
   });
 });
