@@ -933,7 +933,10 @@ describe('screenshot repro CPU load injection', () => {
     const controller: ReproLoadController = startCpuLoad({
       count: 1,
       spawn: fake.spawn,
-      killGraceMs: 5,
+      // Leave a wide margin before stop()'s killGraceMs * 2 hard deadline, so
+      // a late timer pass on a loaded CI host cannot turn this into a
+      // wrong-reason stop failure.
+      killGraceMs: 50,
       logger: {
         log: () => {},
         error: (line: unknown) => {
@@ -964,6 +967,7 @@ describe('screenshot repro CPU load injection', () => {
       count: 1,
       spawn: fake.spawn,
       killGraceMs: 5,
+      logger: { log: () => {}, error: () => {} },
     });
 
     const summary = await controller.stop();
@@ -1216,6 +1220,7 @@ describe('screenshot repro CPU load injection', () => {
       load: 1,
       spawnLoadWorker: fake.spawn,
       killGraceMs: 5,
+      logger: { log: () => {}, error: () => {} },
       runCapture: fakeRunner({ dir: setup.dir, captures: CAPTURES }),
       verifyLog: verifyOk,
     });
@@ -1469,6 +1474,9 @@ describe('verify-screenshot-repro direct entry', () => {
     const result = runCli(['--help']);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('Usage: node scripts/verify-screenshot-repro.mjs');
+    // Pin the documented --load range, not just the generic usage banner.
+    expect(result.stdout).toContain('--load <N>');
+    expect(result.stdout).toContain(`0-${MAX_LOAD_COUNT}`);
   });
 
   it('exits 2 for a usage error and for an invalid manifest', () => {
@@ -1739,6 +1747,9 @@ describe('verify-screenshot-repro CLI', () => {
       },
     });
     expect(code).toBe(0);
-    expect(log.lines.join('\n')).toContain('Usage: node scripts/verify-screenshot-repro.mjs');
+    const output = log.lines.join('\n');
+    expect(output).toContain('Usage: node scripts/verify-screenshot-repro.mjs');
+    expect(output).toContain('--load <N>');
+    expect(output).toContain(`0-${MAX_LOAD_COUNT}`);
   });
 });
