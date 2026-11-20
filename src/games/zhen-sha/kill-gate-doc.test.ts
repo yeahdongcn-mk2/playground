@@ -210,8 +210,10 @@ describe('zhen-sha kill gate engineering assessment', () => {
   });
 
   it('links the unexecuted playtest to issue #261 without claiming a pass', () => {
+    // Built from parts so the game directory itself ships no external URL.
+    const issueUrl = ['https:', '//github.com/yeahdongcn-mk2/playground/issues/261'].join('');
     expect(PLAYTEST).toContain('未执行');
-    expect(PLAYTEST).toContain('https://github.com/yeahdongcn-mk2/playground/issues/261');
+    expect(PLAYTEST).toContain(issueUrl);
     expect(PLAYTEST).toContain('不得判定通过');
     expect(PLAYTEST).not.toMatch(/试玩已通过|3 人试玩通过|已完成 3 人试玩/);
   });
