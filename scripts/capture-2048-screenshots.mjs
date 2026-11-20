@@ -4,6 +4,7 @@ import {
   assertAllDeclaredCaptureTargets,
   captureManifestedScreenshot,
   captureScreenshot,
+  captureStableBytes,
   closeCaptureBrowser,
   createDesktopContext,
   createMobileContext,
@@ -56,30 +57,36 @@ import {
  * It is an After-only mode; the desktop and hub evidence stay Chromium.
  *
  * Playing and gameover pin `seed=135` in addition to the board, so the tile
- * spawned after ArrowLeft is deterministic. The WebKit ready scene additionally
- * runs two repaint seams before its capture: a scroll round-trip repaints the
- * sticky site header, and hiding the READY overlay for two frames repaints the
- * card and its blurred backdrop. Either can otherwise rasterise in two subtly
- * different ways and break fixed-container byte equality. The ready capture
- * then waits for two byte-identical consecutive screenshots, so a blurred
- * overlay frame still mid-raster under concurrent host load is not written.
- * playing / gameover already pin the board and key press, but the shared site
- * header can still commit either blurred backdrop snapshot one 8-bit step away
- * from the committed evidence under concurrent host load. Playing calls
+ * spawned after ArrowLeft is deterministic. The WebKit path first loads one
+ * throwaway page of the same READY scene: WebKit's first page in a fresh
+ * browser can rasterise the sticky header, canvas and overlay backdrops in a
+ * subtly different 1-LSB variant. Every evidence page is then a later page,
+ * but later pages can still settle into stable 1-LSB variants under load; the
+ * manifest resampler below is what guarantees the committed bytes.
+ *
+ * The WebKit ready scene still runs two repaint seams on every sample: a scroll
+ * round-trip repaints the sticky site header, and hiding the READY overlay for
+ * two frames repaints the card and its blurred backdrop. Either can otherwise
+ * rasterise in two subtly different ways and break fixed-container byte
+ * equality. The ready sample then reads two byte-identical consecutive
+ * screenshots through `captureStableBytes`, so a blurred overlay frame still
+ * mid-raster under concurrent host load is not considered. playing / gameover
+ * already pin the board and key press, but the shared site header can still
+ * commit either blurred backdrop snapshot one 8-bit step away from the
+ * committed evidence under concurrent host load. Playing calls
  * `settleSharedHeaderCompositing` as the last paint step; gameover rebuilds the
  * shared header and its own translucent overlay backdrop together with
  * `settleBackdropLayersCompositing`, because sequential single-layer toggles
- * resample the other layer into a different 1-LSB variant. The ready scene
- * keeps its original scroll + overlay seam and two-frame stable capture
- * untouched (its remaining ready-scene drift belongs to Issue #374).
+ * resample the other layer into a different 1-LSB variant.
  *
  * Under concurrent host load a wrong raster can also be byte-stable across
- * frames (2048 gameover's overlay backdrop), so no frame gate can prove the
- * committed variant was taken. Playing / gameover are therefore sampled from a
- * fresh page until their bytes equal the manifest sha256 (up to
- * `MANIFEST_CAPTURE_ATTEMPTS` pages); a run that never matches fails before
- * writing instead of replacing the evidence. Pass `--allow-new-bytes` for an
- * intentional visual change and the usual manifest update.
+ * frames (2048 ready's overlay / board, gameover's overlay backdrop), so no
+ * frame gate can prove the committed variant was taken. All three states are
+ * therefore sampled from a fresh page until their whole-image bytes equal the
+ * manifest sha256 (up to `MANIFEST_CAPTURE_ATTEMPTS` pages); a run that never
+ * matches fails before writing instead of replacing the evidence. Pass
+ * `--allow-new-bytes` for an intentional visual change and the usual manifest
+ * update.
  * See docs/screenshots/README.md for the reproducible sha256 procedure and its
  * conditions.
  *
@@ -287,8 +294,9 @@ async function captureMobile(browser) {
 /**
  * Capture one WebKit state, resampling a fresh page until its bytes equal the
  * manifest sha256. The page is created from the shared phone context after the
- * committed ready page already ran, so every sample is a later, settled page;
- * each retry is still a fresh compositor state.
+ * throwaway warm-up page already ran, so every sample is a later page; each
+ * retry is still a fresh compositor state and is compared with the manifest
+ * bytes rather than trusted as settled.
  *
  * `checkEnvironment` runs on the first sample only: a host run fails with the
  * write guard's own message before spending the sample budget.
@@ -307,25 +315,48 @@ async function sampleWebkitState(context, { name, prepare, captureBytes }) {
   });
 }
 
+/**
+ * Read the READY sample through the original settle-based two-frame gate.
+ *
+ * The resampler compares a sampled page with the manifest sha256, so a frame
+ * that is still mid-repaint would otherwise cost a sample. Keeping
+ * `captureStableBytes` also preserves the READY capture's previous contract:
+ * only a settled sample can be considered for the committed bytes.
+ */
+async function captureReadyBytes(page) {
+  return captureStableBytes(page, { fullPage: false });
+}
+
 /** Capture the three stable 2048 phone states on the WebKit engine. */
 async function captureWebkitMobile(browser) {
   const context = await createPhoneContext(browser, ENGINE);
   try {
-    const ready = await context.newPage();
-    await open2048(ready, COLOR_BOARD);
-    // WebKit's first paint of the sticky site header can settle in two subtly
-    // different rasters (Issue #199). The ready scene is the first page of
-    // this run; a scroll round-trip repaints the header deterministically
-    // before the capture. The READY card and its blurred backdrop can still
-    // composite from two different rasters under concurrent host load, so
-    // the overlay also goes through a hide / restore repaint. The capture
-    // waits for two byte-identical consecutive screenshots instead of writing
-    // a single in-flight frame. This ready path is intentionally unchanged
-    // (Issue #341 t3); its remaining ready-scene drift belongs to #374.
-    await settleWebkitReadyPaint(ready);
-    await repaintWebkitReadyOverlay(ready);
-    await capture(ready, 'after-2048-ready-webkit.png', false, { stable: true });
-    await ready.close();
+    // WebKit's first page in a fresh browser can rasterise the sticky header,
+    // canvas and overlay backdrops in a subtly different 1-LSB variant (Issue
+    // #318 / #341). Load a throwaway copy of the same READY scene first, so no
+    // evidence sample is the browser's first page.
+    const warmUp = await context.newPage();
+    try {
+      await open2048(warmUp, COLOR_BOARD);
+    } finally {
+      await warmUp.close();
+    }
+
+    // The READY card and its blurred backdrop can commit a byte-stable 1-LSB
+    // variant under concurrent host load (Issue #374). The #199 t1 seams make
+    // that variant stable, but cannot prove the canonical one was taken, so
+    // sample fresh pages and write only bytes equal to the manifest sha256.
+    // Every sample re-opens the READY scene, repeats both seams and keeps the
+    // two-frame stability gate.
+    await sampleWebkitState(context, {
+      name: 'after-2048-ready-webkit.png',
+      prepare: async (ready) => {
+        await open2048(ready, COLOR_BOARD);
+        await settleWebkitReadyPaint(ready);
+        await repaintWebkitReadyOverlay(ready);
+      },
+      captureBytes: captureReadyBytes,
+    });
 
     await sampleWebkitState(context, {
       name: 'after-2048-playing-webkit.png',

@@ -240,7 +240,7 @@ pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和
 | `npm run screenshots:snake:webkit` | 用开发服务器 + WebKit 生成贪食蛇手机 ready 截图（Issue #342 的落定口径：同一 READY 场景一次性预热页先于提交页；提交页等待 READY 标题计算色与零动画，经 `settleWebkitReadyPaint` 滚动往返、D-pad 取景与 `repaintWebkitReadyOverlay` 遮罩重绘后，以 `{ stable: true }` 连续两帧逐字节一致原子落盘，不稳定直接抛错）；该图已被固定环境 sha256 清单收录，宿主命令会在写出前被拒绝，重拍用 `npm run screenshots:container -- screenshots:snake:webkit` |
 | `npm run screenshots:2048` | 构建后生成 2048 大厅与 ready / playing / gameover 截图；ready 桌面整页图与手机图为历史证据，脚本默认跳过并警告，确需重建时只能在固定容器内用 `npm run screenshots:container -- screenshots:2048 --allow-historical-overwrite`，并同步 `capture-sha256-manifest.json` 条目（若收录）；对照口径见 `docs/screenshots/README.md` 的「历史 After 证据与当前构建不一致（Issue #137）」 |
 | `npm run screenshots:2048:before` | 用 `BASE_URL` 指定的 main 预览生成 2048 Before 截图 |
-| `npm run screenshots:2048:webkit` | 构建后用 WebKit 生成 2048 ready / playing / gameover 手机截图；三张图均已被固定环境 sha256 清单收录。ready 保持原有滚动往返 + overlay 重绘接缝与连续两帧稳定截图路径不变（剩余棋盘漂移属 #374）；playing / gameover 在截图前重绘共享页眉 / 同帧重建页眉与结算卡背板（Issue #341 t3），并从 fresh page 采样直到整幅 bytes 的 sha256 等于清单条目（最多 20 次，否则不写盘直接失败；有意改图传 `--allow-new-bytes`）。宿主命令会在首个写盘前被清单护栏拒绝，重拍用 `npm run screenshots:container -- screenshots:2048:webkit` |
+| `npm run screenshots:2048:webkit` | 构建后用 WebKit 生成 2048 ready / playing / gameover 手机截图；三张图均已被固定环境 sha256 清单收录。三条路径都先打开同一 READY 场景的一次性预热页，再从 fresh page 采样直到整幅 bytes 的 sha256 等于清单条目（最多 20 次，否则不写盘直接失败；有意改图传 `--allow-new-bytes`）：ready 每次采样重跑滚动往返 + overlay 重绘接缝，并用 `captureStableBytes` 保留连续两帧稳定门禁（Issue #374）；playing / gameover 在截图前重绘共享页眉 / 同帧重建页眉与结算卡背板（Issue #341 t3）。宿主命令会在首个写盘前被清单护栏拒绝，重拍用 `npm run screenshots:container -- screenshots:2048:webkit` |
 | `npm run screenshots:breakout` | 构建后生成打砖块大厅与 ready / playing / levelclear / gameover 截图；ready / levelclear / gameover 桌面整页图与 ready / gameover 手机图为历史证据，脚本默认跳过并警告，确需重建时只能在固定容器内用 `npm run screenshots:container -- screenshots:breakout --allow-historical-overwrite`，并同步 `capture-sha256-manifest.json` 条目（若收录）；对照口径见 `docs/screenshots/README.md` 的「历史 After 证据与当前构建不一致（Issue #137）」 |
 | `npm run screenshots:breakout:before` | 用 `BASE_URL` 指定的 main 预览生成打砖块 Before 截图 |
 | `npm run screenshots:breakout:webkit` | 构建后用 WebKit 生成打砖块 ready / playing / levelclear / gameover 手机截图；四张均已收录固定环境 sha256 清单（ready 走首屏重绘接缝），宿主命令会在 ready 前被写前护栏拒绝，重拍用 `npm run screenshots:container -- screenshots:breakout:webkit` |
@@ -396,7 +396,11 @@ games/<game>/scene → 对应引擎（动态 import）
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过（oxlint 覆盖 src、tests 与 scripts；error 与 warning 都会失败，warning 经 --deny-warnings 升级；另跑 scripts/check-boundaries.mjs，失败返回非 0）
-npm run test:unit    # 1527 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
+<<<<<<< HEAD
+npm run test:unit    # 1529 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
+=======
+npm run test:unit    # 1529 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
+>>>>>>> 2c57f8c (接入 2048 ready 的预热页与清单字节重采样（Issue #374 t1）)
 npm run build        # 通过
 npm run check:budget # 通过（入口 11.16 KB gzip，全部 JS 410.58 KB gzip）
 npm run score        # 通过（打印「指标 / 当前值 / 基线值 / 差值」表与末行 SCORE_JSON；退化退出 1，变好只报差值）
