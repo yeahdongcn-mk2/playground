@@ -35,14 +35,22 @@ function listFiles(directory: string): string[] {
 const ASSET_FILES = [...listFiles(GAME_DIR), ...listFiles(PUBLIC_DIR)];
 
 /** Files that actually enter the production build; tests may link tracked issues. */
-const SHIPPED_FILES = ASSET_FILES.filter(
-  (file) => !file.endsWith('.test.ts') && !file.endsWith('.test.css') && !file.endsWith('.d.ts'),
-);
+const SHIPPED_FILES = ASSET_FILES.filter((file) => {
+  const name = file.split('/').pop() ?? file;
+  return (
+    /\.(?:ts|css)$/.test(name) &&
+    !name.endsWith('.test.ts') &&
+    !name.endsWith('.test.css') &&
+    !name.endsWith('.d.ts')
+  );
+});
+
+const CSS_WITHOUT_COMMENTS = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
 
 /** The body of the first rule whose selector is exactly `selector`. */
 function ruleBody(selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = new RegExp(`${escaped}\\s*\\{([^}]*)\\}`).exec(CSS);
+  const match = new RegExp(`${escaped}\\s*\\{([^}]*)\\}`).exec(CSS_WITHOUT_COMMENTS);
   const body = match?.[1];
   if (body === undefined) {
     throw new Error(`zhen-sha.css 缺少规则：${selector}`);
@@ -50,12 +58,12 @@ function ruleBody(selector: string): string {
   return body;
 }
 
-const CSS_WITHOUT_COMMENTS = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
-
 /** The value of one declaration inside a rule body, up to its semicolon. */
 function declarationValue(body: string, property: string): string {
-  const match = new RegExp(`(?:^|;)\\s*${property}\\s*:\\s*([^;]*);`).exec(body);
-  const value = match?.[1];
+  const matches = [
+    ...body.matchAll(new RegExp(`(?:^|;)\\s*${property}\\s*:\\s*([^;]*)(?=;)`, 'g')),
+  ];
+  const value = matches.at(-1)?.[1];
   if (value === undefined) {
     throw new Error(`缺失声明：${property}`);
   }
@@ -108,7 +116,7 @@ describe('zhen-sha palette and procedural paper theme', () => {
   it('derives every colour literal and named colour in the stylesheet from the palette', () => {
     const paletteValues = new Set(DECLARED_TOKENS.map((token) => token.value));
     const literals = CSS_WITHOUT_COMMENTS.match(
-      /#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\)|hsla?\([^)]*\)/g,
+      /#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\)|hsla?\([^)]*\)|\b(?:hwb|lab|lch|oklab|oklch|color)\([^)]*\)/g,
     );
     expect(literals).not.toBeNull();
     expect(new Set((literals ?? []).map((literal) => literal.toLowerCase()))).toEqual(
@@ -116,25 +124,34 @@ describe('zhen-sha palette and procedural paper theme', () => {
     );
 
     // Named colours are not hex/rgb/hsl literals, so they need a separate guard.
-    // `transparent` is allowed; `black` is allowed only as a mask alpha stop.
-    const withoutTokensAndMask = CSS_WITHOUT_COMMENTS.replace(/--zhen-[a-z-]+/g, '')
-      .replace(/var\([^)]*\)/g, '')
-      .replace(/(?:-webkit-)?mask-image\s*:[^;]*;/g, '');
+    // `transparent` is allowed, and `black` is exempt only inside the mask.
     const namedColour = new RegExp(`\\b(?:${NAMED_COLOURS.join('|')})\\b`, 'gi');
+    const maskDeclarations =
+      CSS_WITHOUT_COMMENTS.match(/(?:-webkit-)?mask-image\s*:[^;]*;/g) ?? [];
+    const maskWithoutBlack = maskDeclarations.join('\n').replace(/\bblack\b/gi, '');
+    expect(maskWithoutBlack.match(namedColour)).toBeNull();
+
+    const withoutTokensAndMask = CSS_WITHOUT_COMMENTS
+      // Drop only the custom-property reference so fallbacks stay visible.
+      .replace(/var\(\s*--[a-z-]+\s*,?/g, '')
+      .replace(/\)/g, '')
+      .replace(/--zhen-[a-z-]+/g, '')
+      .replace(/(?:-webkit-)?mask-image\s*:[^;]*;/g, '');
     expect(withoutTokensAndMask.match(namedColour)).toBeNull();
     expect(ruleBody('.zhen-sha-stage::after')).toMatch(/mask-image:[\s\S]*\bblack\b/);
   });
 
   it('ships no external URLs, bitmap/audio assets or webfonts', () => {
-    const externalUrl = /https?:\/\/|ftp:\/\//i;
+    const externalUrl = /https?:\/\/|ftp:\/\/|(?:^|[^:\w])\/\/[a-z0-9-]+(?:\.[a-z0-9-]+)+/i;
+    const rasterDataUri = /data:image\/(?:png|jpe?g|webp|gif|avif|bmp)|data:(?:font\/|application\/font)/i;
     const fontFace = /@font-face/i;
     const assetExtension =
-      /\.(?:png|jpe?g|webp|gif|avif|bmp|ico|mp3|wav|ogg|oga|m4a|aac|flac|opus)$/i;
+      /\.(?:png|jpe?g|webp|gif|avif|bmp|ico|mp3|wav|ogg|oga|m4a|aac|flac|opus|woff2?|ttf|otf|eot)$/i;
 
     expect(ASSET_FILES.length).toBeGreaterThan(0);
     for (const file of ASSET_FILES) {
       const label = relative(ROOT, file);
-      expect(assetExtension.test(file), `${label} 不应是图片或音频资产`).toBe(false);
+      expect(assetExtension.test(file), `${label} 不应是图片、音频或字体资产`).toBe(false);
     }
     // Only files that enter the build must be URL/font-free. Tests may link a
     // tracked issue (e.g. the #261 playtest follow-up) as a readable literal.
@@ -143,6 +160,7 @@ describe('zhen-sha palette and procedural paper theme', () => {
       const label = relative(ROOT, file);
       const contents = readFileSync(file, 'utf8');
       expect(externalUrl.test(contents), `${label} 不应含外部 URL`).toBe(false);
+      expect(rasterDataUri.test(contents), `${label} 不应内联位图或字体数据`).toBe(false);
       expect(fontFace.test(contents), `${label} 不应含 webfont 声明`).toBe(false);
     }
   });
@@ -170,10 +188,12 @@ describe('zhen-sha palette and procedural paper theme', () => {
   });
 
   it('keeps the settlement overlay above both paper layers', () => {
+    const canvas = zIndex('.zhen-sha-canvas');
     const overlay = zIndex('.zhen-sha-overlay');
-    expect(overlay).toBeGreaterThan(zIndex('.zhen-sha-canvas'));
+    expect(overlay).toBeGreaterThan(canvas);
     for (const selector of ['.zhen-sha-stage::before', '.zhen-sha-stage::after']) {
       expect(zIndex(selector), `${selector} 应位于结算 overlay 之下`).toBeLessThan(overlay);
+      expect(zIndex(selector), `${selector} 应位于不透明 canvas 之上`).toBeGreaterThan(canvas);
       expect(ruleBody(selector), `${selector} 不应拦截指针事件`).toMatch(
         /pointer-events:\s*none/,
       );
