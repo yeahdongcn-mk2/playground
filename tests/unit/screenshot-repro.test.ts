@@ -212,7 +212,7 @@ function fakeChildSpawn({
 }
 
 interface FakeLoadChild extends EventEmitter {
-  pid: number;
+  pid: number | undefined;
   killed: NodeJS.Signals[];
   closed: boolean;
   kill: (signal?: NodeJS.Signals) => boolean;
@@ -231,11 +231,19 @@ interface FakeLoadSpawn {
  *
  * `ignoreSigterm` / `ignoreSignals` model a worker that keeps burning CPU after
  * a signal, and `exitAfterMs` models one that the OS or the OOM killer reaps
- * before `stop()` runs.
+ * before `stop()` runs. `errorOnCall` models the asynchronous `'error'` Node
+ * emits for a failed spawn (ENOENT / EAGAIN / EMFILE), which never throws from
+ * `spawn()` itself; `errorWithPid` models an error on an already-started child.
+ * A failed spawn intentionally emits no `'close'` here (real Node sends one
+ * right after the error), so stop() must rely on the error handler to mark the
+ * worker closed.
  */
 function fakeLoadSpawn({
   closeDelayMs = 5,
   failOnCall,
+  errorOnCall,
+  errorMessage = 'spawn EMFILE',
+  errorWithPid = false,
   order,
   ignoreSigterm = false,
   ignoreSignals = false,
@@ -244,6 +252,12 @@ function fakeLoadSpawn({
   closeDelayMs?: number;
   /** 1-based spawn call that throws instead of returning a child. */
   failOnCall?: number;
+  /** 1-based spawn call whose child emits `'error'` on a later tick. */
+  errorOnCall?: number;
+  /** Message carried by the injected `'error'` event. */
+  errorMessage?: string;
+  /** Give the child of a matching `errorOnCall` a pid, modelling an error after a real start. */
+  errorWithPid?: boolean;
   /** Shared event log proving load starts and stops around the captures. */
   order?: string[];
   /** Record SIGTERM but keep running until SIGKILL. */
@@ -261,12 +275,21 @@ function fakeLoadSpawn({
     if (call === failOnCall) {
       throw new Error('spawn EAGAIN');
     }
-    order?.push('load:start');
+    const failedSpawn = call === errorOnCall && !errorWithPid;
+    if (!failedSpawn) order?.push('load:start');
     const child = new EventEmitter() as FakeLoadChild;
-    child.pid = 42_000 + children.length;
+    // A failed spawn has no pid; Node reports it through a later 'error'.
+    child.pid = failedSpawn ? undefined : 42_000 + children.length;
     child.killed = [];
     child.closed = false;
     child.kill = (signal: NodeJS.Signals = 'SIGTERM') => {
+      if (child.pid === undefined) {
+        // A failed spawn has no process handle: Node's kill() returns false
+        // and emits nothing. Record the attempt so a test can tell that
+        // stop() tried to signal a worker that never started.
+        child.killed.push(signal);
+        return false;
+      }
       child.killed.push(signal);
       if (ignoreSignals) return true;
       if (signal === 'SIGTERM' && ignoreSigterm) return true;
@@ -279,6 +302,9 @@ function fakeLoadSpawn({
       }, closeDelayMs);
       return true;
     };
+    if (call === errorOnCall) {
+      setTimeout(() => child.emit('error', new Error(errorMessage)), 0);
+    }
     if (exitAfterMs !== undefined) {
       setTimeout(() => {
         if (child.closed) return;
@@ -1039,6 +1065,67 @@ describe('screenshot repro CPU load injection', () => {
     }
   });
 
+  it('records an asynchronous spawn failure and never signals its missing process', async () => {
+    // ENOENT / EAGAIN / EMFILE do not throw from spawn(); Node emits 'error'
+    // on a later tick while child.pid is still undefined.
+    const fake = fakeLoadSpawn({ errorOnCall: 2 });
+    const controller: ReproLoadController = startCpuLoad({
+      count: 3,
+      spawn: fake.spawn,
+      // Keep a wrong "signal the failed spawn" path short and explicit
+      // instead of letting it trip the test runner's timeout.
+      killGraceMs: 10,
+    });
+
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+
+    expect(fake.calls).toHaveLength(3);
+    expect(controller.started).toBe(2);
+    expect(controller.pids).toHaveLength(2);
+
+    // The error handler marks the failed spawn closed. Without it, stop()
+    // would try to signal a pid-less child, whose fake kill() emits no
+    // exit/close: the summary below (and the killed assertion) then fails.
+    const summary = await controller.stop();
+    expect(summary).toEqual({
+      requested: 3,
+      started: 2,
+      stopped: 2,
+      exitedEarly: 0,
+      active: 0,
+      failures: [{ index: 2, phase: 'start', message: 'spawn EMFILE' }],
+    });
+    expect(fake.children[0]?.killed).toEqual(['SIGTERM']);
+    expect(fake.children[1]?.killed).toEqual([]);
+    expect(fake.children[2]?.killed).toEqual(['SIGTERM']);
+  });
+
+  it('still stops a started worker after an asynchronous runtime error', async () => {
+    const fake = fakeLoadSpawn({
+      errorOnCall: 1,
+      errorWithPid: true,
+      errorMessage: 'kill EPERM',
+    });
+    const controller: ReproLoadController = startCpuLoad({
+      count: 1,
+      spawn: fake.spawn,
+    });
+
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+
+    expect(controller.started).toBe(1);
+    const summary = await controller.stop();
+    expect(summary).toEqual({
+      requested: 1,
+      started: 1,
+      stopped: 1,
+      exitedEarly: 0,
+      active: 0,
+      failures: [{ index: 1, phase: 'runtime', message: 'kill EPERM' }],
+    });
+    expect(fake.children[0]?.killed).toEqual(['SIGTERM']);
+  });
+
   it.skipIf(process.platform === 'win32')(
     'starts and reaps real CPU worker processes',
     async () => {
@@ -1209,6 +1296,51 @@ describe('screenshot repro CPU load injection', () => {
       'Load: 2/3 CPU worker process(es) started, 2 stopped (all exited), 1 failure(s).',
     );
     expect(result.report).toContain('worker 2 (start): spawn EAGAIN');
+  });
+
+  it('fails the repro when a load worker emits an asynchronous spawn error', async () => {
+    const setup = fixture();
+    const fake = fakeLoadSpawn({ errorOnCall: 2, errorMessage: 'spawn EMFILE' });
+    const runner = fakeRunner({ dir: setup.dir, captures: CAPTURES });
+
+    const result = await runScreenshotRepro({
+      ...setup,
+      load: 3,
+      spawnLoadWorker: fake.spawn,
+      // Keep a wrong "signal the failed spawn" path short and explicit
+      // instead of letting it trip the test runner's timeout.
+      killGraceMs: 10,
+      // The error timer is queued during startCpuLoad, before this capture
+      // delay, so it fires first; the delay only guarantees stop() runs after
+      // the error has landed.
+      runCapture: async (options) => {
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 1));
+        return runner(options);
+      },
+      verifyLog: verifyOk,
+    });
+
+    expect(result.captureFailures).toEqual([]);
+    expect(result.ok).toBe(false);
+    expect(result.load).toMatchObject({
+      requested: 3,
+      started: 2,
+      stopped: 2,
+      exitedEarly: 0,
+      active: 0,
+    });
+    expect(result.load.failures).toEqual([
+      { index: 2, phase: 'start', message: 'spawn EMFILE' },
+    ]);
+    expect(result.report).toContain('FAIL: screenshot repro failed');
+    expect(result.report).toContain(
+      'Load: 2/3 CPU worker process(es) started, 2 stopped (all exited), 1 failure(s).',
+    );
+    expect(result.report).toContain('worker 2 (start): spawn EMFILE');
+    // The failed spawn is not a process, so stop() must not signal it. This
+    // assertion fails if the error handler stops marking the failed worker
+    // closed.
+    expect(fake.children[1]?.killed).toEqual([]);
   });
 
   it('fails the repro when a load worker cannot be stopped', async () => {
