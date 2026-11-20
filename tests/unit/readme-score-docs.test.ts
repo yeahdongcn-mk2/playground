@@ -5,6 +5,9 @@ import { describe, expect, it } from 'vitest';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const README = readFileSync(join(ROOT, 'README.md'), 'utf8');
+const BASELINE = JSON.parse(readFileSync(join(ROOT, 'docs', 'score-baseline.json'), 'utf8')) as {
+  unitTests: number;
+};
 
 /** The body of one level-2 section, up to the next level-2 heading. */
 function section(text: string, heading: string): string {
@@ -34,6 +37,8 @@ function commandRow(script: string): string {
 describe('README score documentation', () => {
   it('lists npm run score in the command table against the baseline file', () => {
     expect(commandRow('npm run score')).toContain('docs/score-baseline.json');
+    // 门槛只许抬不许降：基线被悄悄调低会重新留下余量（Issue #389）。
+    expect(BASELINE.unitTests).toBeGreaterThanOrEqual(1567);
   });
 
   it('documents the comparison table, SCORE_JSON line, exit code, --update and build step', () => {
