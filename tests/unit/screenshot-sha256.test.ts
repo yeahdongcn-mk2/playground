@@ -45,7 +45,6 @@ const EXPECTED_FILES = [
   'after-blank-webkit.png',
   'after-hub-webkit.png',
   'after-snake-webkit.png',
-  'after-2048-ready-webkit.png',
   'after-2048-playing-webkit.png',
   'after-2048-gameover-webkit.png',
   'after-breakout-playing-webkit.png',
@@ -1001,7 +1000,7 @@ describe('capture sha256 manifest', () => {
     expect(expectedRecaptureCommand('after-blank-webkit.png')).toBe(
       'npm run screenshots:container -- screenshots:webkit',
     );
-    expect(expectedRecaptureCommand('after-2048-ready-webkit.png')).toBe(
+    expect(expectedRecaptureCommand('after-2048-playing-webkit.png')).toBe(
       'npm run screenshots:container -- screenshots:2048:webkit',
     );
     expect(expectedRecaptureCommand('after-breakout-playing-webkit.png')).toBe(

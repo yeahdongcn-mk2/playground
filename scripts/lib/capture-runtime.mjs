@@ -602,9 +602,12 @@ export async function captureStableBytes(
  * `capturedBytes` skips the screenshot and writes the bytes instead; it takes
  * precedence over `stable` / `stableFrames`. A manifested file still runs the
  * environment guard and atomic write, while an unrecorded file has no guard to
- * run. `checkOnly` stops after the guard has passed (or immediately for an
- * unrecorded file) without capturing or writing, so a capture script can fail
- * fast on the wrong environment before spending time on stable sampling.
+ * run. `checkOnly` stops after the guard has passed without capturing or
+ * writing, so a capture script can fail fast on the wrong environment before
+ * spending time on stable sampling. It returns immediately for an unrecorded
+ * file unless `requireRecorded` is set; that option makes the missing entry a
+ * hard error, so a caller borrowing a sibling's manifest entry to guard an
+ * unrecorded image fails closed if the entry disappears.
  */
 export async function captureScreenshot(
   page,
@@ -629,6 +632,11 @@ export async function captureScreenshot(
     // Validate the manifested environment without capturing or writing
     // (the scores resampler checks fail-fast before it samples a page).
     checkOnly = false,
+    // Fail a check-only call when the name is not tracked by the manifest.
+    // A caller that borrows a sibling's entry to guard an unrecorded image
+    // (2048 READY) uses this so a missing manifest / entry fails closed
+    // instead of silently skipping the environment check.
+    requireRecorded = false,
     target,
     manifest,
     manifestPath = resolve(CAPTURE_REPO_ROOT, DEFAULT_MANIFEST_PATH),
@@ -649,7 +657,15 @@ export async function captureScreenshot(
     // Unrecorded evidence: keep the existing path byte-for-byte unless the
     // caller explicitly asks for a stability check. There is no manifest entry
     // to validate, so a check-only call has nothing to do.
-    if (checkOnly) return;
+    if (checkOnly) {
+      if (requireRecorded) {
+        throw new Error(
+          `Refusing to check ${name}: it is not tracked by ${manifestLabelFor({ manifest, manifestPath })}, ` +
+            'and this capture requires a manifested environment baseline (requireRecorded).',
+        );
+      }
+      return;
+    }
     if (capturedBytes !== undefined) {
       writeFileAtomically(path, normalizeScreenshotBytes(capturedBytes), fileOperations);
     } else if (stable) {

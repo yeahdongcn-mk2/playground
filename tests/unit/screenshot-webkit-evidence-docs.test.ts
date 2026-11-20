@@ -114,7 +114,6 @@ const NARROW_DRIFT = [
 const DRIFTED = [...NARROW_DRIFT];
 const DETERMINISTIC = [
   'after-breakout-playing-webkit.png',
-  'after-2048-ready-webkit.png',
   'after-2048-playing-webkit.png',
   'after-2048-gameover-webkit.png',
   'after-hub-webkit.png',
@@ -209,14 +208,18 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     // the parent to the fixed note proves the children were not reparented,
     // even if the prose inside a child changes.
     const parent = WEBKIT_HISTORICAL.indexOf('- 已报告的漂移产物');
-    const fixed = WEBKIT_HISTORICAL.indexOf('- 已修复的漂移');
+    const fixed = WEBKIT_HISTORICAL.indexOf(
+      '- 曾修复但负载下仍会漂移、现已移出清单',
+    );
     expect(parent).toBeGreaterThan(-1);
     expect(fixed).toBeGreaterThan(parent);
     const between = WEBKIT_HISTORICAL.slice(parent, fixed);
     for (const file of DRIFTED) {
       expect(between).toContain(file);
     }
-    expect(childBullets(WEBKIT_HISTORICAL, '已修复的漂移')).toBe('');
+    expect(
+      childBullets(WEBKIT_HISTORICAL, '曾修复但负载下仍会漂移、现已移出清单'),
+    ).toBe('');
   });
 
   it('keeps the same-environment deterministic WebKit captures out of the drift list', () => {
@@ -231,8 +234,10 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(WEBKIT_HISTORICAL).toContain('bf7548b7');
   });
 
-  it('records the fixed 2048 ready drift and its dedicated paint seam', () => {
-    expect(WEBKIT_HISTORICAL).toContain('已修复的漂移');
+  it('records the fixed-then-load-dependent 2048 ready drift and its exclusion', () => {
+    expect(WEBKIT_HISTORICAL).toContain(
+      '曾修复但负载下仍会漂移、现已移出清单',
+    );
     expect(WEBKIT_HISTORICAL).toContain('after-2048-ready-webkit.png');
     expect(WEBKIT_HISTORICAL).toContain('4f488a3e');
     expect(WEBKIT_HISTORICAL).toContain('1833 像素');
@@ -242,12 +247,15 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(WEBKIT_HISTORICAL).toContain(
       '0ea38c8d6a1ff580c695cedc6f5165ad4299a7612dd3da32d3c62c06e73b4856',
     );
+    expect(WEBKIT_HISTORICAL).toContain('移出 sha256 清单');
+    expect(WEBKIT_HISTORICAL).toContain('20 页 fresh-page 重采样');
+    expect(WEBKIT_HISTORICAL).toContain('672285de');
+    expect(WEBKIT_HISTORICAL).toContain('d8a808b0');
+    expect(WEBKIT_HISTORICAL).toContain('1f45d828');
+    expect(WEBKIT_HISTORICAL).toContain('单页 `{ stable: true }` 两帧门禁');
+    expect(WEBKIT_HISTORICAL).toContain('playing 条目');
     expect(WEBKIT_HISTORICAL).toContain('capture-sha256-manifest.json');
-    expect(WEBKIT_HISTORICAL).toContain('不再是历史漂移证据');
-    expect(WEBKIT_HISTORICAL).toContain('连续两张截图逐字节一致');
-    expect(WEBKIT_HISTORICAL).toContain('backdrop-filter');
-    expect(WEBKIT_HISTORICAL).toContain('隐藏两帧');
-    expect(WEBKIT_HISTORICAL).toContain('repaintWebkitReadyOverlay');
+    expect(WEBKIT_HISTORICAL).not.toContain('不再是历史漂移证据');
     expect(childBullets(WEBKIT_HISTORICAL, '已报告的漂移产物')).not.toContain(
       'after-2048-ready-webkit.png',
     );
@@ -274,7 +282,7 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(WEBKIT_HISTORICAL).toContain('待重绘帧');
     expect(WEBKIT_HISTORICAL).not.toContain('扫雷这 4 张在容器内两跑 sha256 相同');
     expect(WEBKIT_HISTORICAL).toContain(
-      '2048 ready 的连续两跑漂移已由 #199 t1 的页眉重绘 + overlay 重绘接缝消除',
+      '2048 ready 的空闲 / 跨环境两跑漂移已由 #199 t1',
     );
   });
 
@@ -638,5 +646,83 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
       );
     }
     expect(WEBKIT_PHONE).toContain('会在写出这些文件前被写前护栏拒绝');
+  });
+
+  it('keeps ready described as a manifest-external single-page capture in the older sections', () => {
+    const sharedSeam = subsection(
+      SCREENSHOTS_README,
+      '### 2048 playing/gameover 与扫雷 lost 等状态的共享 header 接缝（Issue #341 t3）',
+    );
+    const readyOutside = subsection(
+      SCREENSHOTS_README,
+      '### 2048 ready 的负载相关栅格与清单外口径（Issue #374 t1）',
+    );
+    const deterministic = subsection(
+      SCREENSHOTS_README,
+      '### 确定性重截（ready / playing / gameover）',
+    );
+
+    // The shared-header section must describe the shipped READY path: one
+    // warm-up page, both seams and a single-page two-frame gate, environment
+    // checked against the manifested playing entry, and no manifest resample.
+    expect(sharedSeam).toContain('一次性预热页');
+    expect(sharedSeam).toContain('单页落盘');
+    expect(sharedSeam).toContain('checkOnly');
+    expect(sharedSeam).toContain('after-2048-playing-webkit.png');
+    expect(sharedSeam).toContain('不参与 fresh-page 清单字节重采样');
+    expect(sharedSeam).not.toContain('每个 fresh page 上重跑');
+    expect(sharedSeam).not.toMatch(/ready[\s\S]{0,160}按清单 sha256 重采样/);
+
+    // The t4 recapture section must not keep the migration-era claims: ready
+    // is outside the manifest / resampler and its four load captures are not
+    // 4/4 canonical bytes.
+    expect(deterministic).toContain('移出逐字节清单');
+    expect(deterministic).toContain('playing 条目环境校验');
+    expect(deterministic).toContain('不参与 fresh-page 清单字节重采样');
+    expect(deterministic).toContain('`d8a808b0`');
+    expect(deterministic).toContain('`672285de`');
+    expect(deterministic).not.toContain(
+      'Issue #374 在此基础上为 ready 增加一次性预热页与清单字节 fresh-page 重采样',
+    );
+    expect(deterministic).not.toContain(
+      'ready / playing / gameover 再从 fresh page 有界重采样',
+    );
+    expect(deterministic).not.toContain('并纳入固定环境 sha256 清单。');
+
+    // The dedicated #374 section remains the canonical explanation the older
+    // sections cross-reference.
+    expect(readyOutside).toContain('单页写入');
+    expect(readyOutside).toContain('不再进入');
+
+    // The recorded E3 wait experiment must match the retained log: both 1 s
+    // samples were canonical + 672285de, and both 3 s samples were d8a808b0.
+    expect(readyOutside).toContain('等待 1 s 的 2 次样本为 `0ea38c8d…`（CANONICAL）/ `672285de…`');
+    expect(readyOutside).toContain('等待 3 s 的 2 次样本均为 `d8a808b0…`');
+    expect(readyOutside).not.toContain('等待 1 s 的 2 次样本里仍有 1 次 `d8a808b0');
+
+    // The deterministic recapture command must keep ready out of the sha256
+    // comparison, which covers only the six playing / gameover files. Pin the
+    // whole invocation list so an inline or continuation re-add of ready (or a
+    // second sha256sum command) cannot slip through.
+    const recaptureSumLines = deterministic
+      .split('\n')
+      .filter((line) => line.trimStart().startsWith('sha256sum'))
+      .map((line) => line.trim());
+    expect(recaptureSumLines).toEqual([
+      'sha256sum docs/screenshots/after-2048-{playing,gameover}-{desktop,mobile,webkit}.png',
+    ]);
+    expect(deterministic).toContain('两次运行的 6 个 sha256 应完全一致');
+    expect(deterministic).not.toContain('两次运行的 7 个 sha256 应完全一致');
+
+    const manifest = JSON.parse(
+      readFileSync(
+        join(ROOT, 'docs', 'screenshots', 'capture-sha256-manifest.json'),
+        'utf8',
+      ),
+    ) as { captures: { file: string }[] };
+    expect(manifest.captures).toHaveLength(14);
+    expect(manifest.captures.map((entry) => entry.file)).not.toContain(
+      'after-2048-ready-webkit.png',
+    );
   });
 });

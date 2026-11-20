@@ -1,7 +1,14 @@
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import type { Page } from '@playwright/test';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  MANIFEST_CAPTURE_ATTEMPTS,
+  captureManifestedScreenshot,
+  captureStableBytes,
+} from '../../scripts/lib/capture-runtime.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SOURCE = readFileSync(
@@ -53,20 +60,34 @@ function expectInOrder(fn: string, needles: readonly string[]): void {
 }
 
 /**
- * The unchanged ready contract: the original scroll + overlay seams, then the
- * two-frame stable capture. The ready state must not enter the fresh-page
- * resampler or the shared-backdrop rebuild (Issue #341 t3 leaves it on the
- * pre-existing path; its remaining ready-scene drift belongs to Issue #374).
+ * The ready contract after Issue #374: the WebKit READY image is intentionally
+ * outside the sha256 manifest. It keeps one throwaway READY page, both original
+ * paint seams and a settled single-page `{ stable: true }` capture, and its
+ * fixed environment is checked against the manifested playing entry before any
+ * byte is written. It must not go back to fresh-page manifest resampling (the
+ * load-dependent 1-LSB variants are byte-stable, so the budget only fails) and
+ * must not grow a shared-header-only seam.
  */
 function assertReadyPath(fn: string): void {
   expectInOrder(fn, [
-    'await open2048(ready, COLOR_BOARD)',
-    'await settleWebkitReadyPaint(ready)',
-    'await repaintWebkitReadyOverlay(ready)',
-    "await capture(ready, 'after-2048-ready-webkit.png', false, { stable: true })",
+    'const warmUp = await context.newPage();',
+    'await open2048(warmUp, COLOR_BOARD);',
+    'await warmUp.close();',
+    'const ready = await context.newPage();',
+    'await open2048(ready, COLOR_BOARD);',
+    'await settleWebkitReadyPaint(ready);',
+    'await repaintWebkitReadyOverlay(ready);',
+    'await checkReadyCaptureEnvironment(ready);',
+    "await capture(ready, 'after-2048-ready-webkit.png', false, { stable: true });",
   ]);
-  expect(fn).not.toMatch(
-    /sampleWebkitState\(context, \{\s*name: 'after-2048-ready-webkit\.png'/,
+  // The warm-up and the READY page are closed on the throwing path too; a
+  // missing finally would leak the throwaway page into the first-page raster
+  // path or leave a page open across the playing / gameover samples.
+  expect(fn).toMatch(
+    /const warmUp = await context\.newPage\(\);\s*try \{\s*await open2048\(warmUp, COLOR_BOARD\);\s*\}\s*finally \{\s*await warmUp\.close\(\);\s*\}/,
+  );
+  expect(fn).toMatch(
+    /const ready = await context\.newPage\(\);\s*try \{[\s\S]*?\}\s*finally \{\s*await ready\.close\(\);\s*\}/,
   );
   expect(fn).not.toContain('settleSharedHeaderCompositing(ready)');
   expect(fn).not.toContain('settleBackdropLayersCompositing(ready)');
@@ -109,38 +130,87 @@ describe('2048 screenshot determinism guard', () => {
     expect(count(/keyboard\.press\('ArrowLeft'\)/g)).toBe(6);
   });
 
-  it('keeps the ready scene on its original scroll + overlay stable path', () => {
+  it('keeps ready on the warm-up + single-page stable path outside the sha256 manifest', () => {
     expect(SOURCE).toContain('settleCapturePaint,\n  settleWebkitReadyPaint,');
     expect(count(/settleWebkitReadyPaint\(/g)).toBe(1);
     expect(count(/repaintWebkitReadyOverlay\(/g)).toBe(1);
-    // Only the ready scene takes two consecutive identical frames; playing /
-    // gameover compare bytes through the manifest resampler instead.
+    // READY is the only single-page `stable: true` capture left; playing /
+    // gameover use the fresh-page resampler.
     expect(count(/stable: true/g)).toBe(1);
+    expect(CODE).not.toContain('captureReadyBytes');
+    expect(CODE).not.toContain('captureStableBytes,');
+
+    const manifest = JSON.parse(
+      readFileSync(
+        join(ROOT, 'docs', 'screenshots', 'capture-sha256-manifest.json'),
+        'utf8',
+      ),
+    ) as { captures: { file: string }[] };
+    expect(manifest.captures).toHaveLength(14);
+    expect(manifest.captures.map((capture) => capture.file)).not.toContain(
+      'after-2048-ready-webkit.png',
+    );
 
     const webkit = functionCode('captureWebkitMobile');
     assertReadyPath(webkit);
+    expect(count(/open2048\(warmUp, COLOR_BOARD\)/g)).toBe(1);
+    expect(count(/await sampleWebkitState\(context, \{/g)).toBe(2);
+    // Only playing / gameover go through the manifest resampler after the
+    // one-page ready capture.
+    const readyCapture =
+      "await capture(ready, 'after-2048-ready-webkit.png', false, { stable: true });";
+    const afterReady = webkit.slice(
+      webkit.indexOf(readyCapture) + readyCapture.length,
+    );
+    expect(afterReady).not.toContain('after-2048-ready-webkit.png');
+    expect(afterReady.match(/name: '([^']+)'/g)).toEqual([
+      "name: 'after-2048-playing-webkit.png'",
+      "name: 'after-2048-gameover-webkit.png'",
+    ]);
+
+    // The unrecorded READY image still borrows the manifested playing entry's
+    // environment check, so a host run cannot overwrite it before the guard
+    // fails. `requireRecorded` makes a missing manifest / playing entry a hard
+    // error instead of silently skipping the check.
+    const environmentCheck = functionCode('checkReadyCaptureEnvironment');
+    expect(environmentCheck).toContain(
+      "await capture(page, 'after-2048-playing-webkit.png', false, {",
+    );
+    expect(environmentCheck).toContain('checkOnly: true');
+    expect(environmentCheck).toContain('requireRecorded: true');
   });
 
-  it('fails the ready guard when a seam or the stable capture is removed', () => {
+  it('fails the ready guard when a seam, the warm-up or the environment check is removed', () => {
     const webkit = functionCode('captureWebkitMobile');
     for (const seam of [
       'await settleWebkitReadyPaint(ready);',
       'await repaintWebkitReadyOverlay(ready);',
+      'await checkReadyCaptureEnvironment(ready);',
     ]) {
       const commented = stripComments(webkit.replace(seam, `// ${seam}`));
       expect(() => assertReadyPath(commented)).toThrow();
     }
-    const withoutStable = stripComments(
-      webkit.replace("false, { stable: true }", 'false'),
-    );
-    expect(() => assertReadyPath(withoutStable)).toThrow();
-    const rerouted = stripComments(
+    const withoutWarmUp = stripComments(
       webkit.replace(
-        "await capture(ready, 'after-2048-ready-webkit.png', false, { stable: true })",
-        "await sampleWebkitState(context, { name: 'after-2048-ready-webkit.png' })",
+        /const warmUp = await context\.newPage\(\);[\s\S]*?await warmUp\.close\(\);\s*\}\s*/,
+        '',
       ),
     );
-    expect(() => assertReadyPath(rerouted)).toThrow();
+    expect(() => assertReadyPath(withoutWarmUp)).toThrow();
+    const singleShot = stripComments(
+      webkit.replace(
+        "await capture(ready, 'after-2048-ready-webkit.png', false, { stable: true });",
+        "await capture(ready, 'after-2048-ready-webkit.png', false);",
+      ),
+    );
+    expect(() => assertReadyPath(singleShot)).toThrow();
+    const reroutedToResampler = stripComments(
+      webkit.replace(
+        /await checkReadyCaptureEnvironment\(ready\);[\s\S]*?await capture\(ready, 'after-2048-ready-webkit\.png', false, \{ stable: true \}\);/,
+        `await sampleWebkitState(context, {\n      name: 'after-2048-ready-webkit.png',\n      prepare: async (ready) => {\n        await open2048(ready, COLOR_BOARD);\n      },\n    });`,
+      ),
+    );
+    expect(() => assertReadyPath(reroutedToResampler)).toThrow();
   });
 
   it('keeps every scene on the shared settle contract', () => {
@@ -153,7 +223,7 @@ describe('2048 screenshot determinism guard', () => {
     expect(CODE).toContain(
       "const ALLOW_NEW_BYTES = ARGS.includes('--allow-new-bytes');",
     );
-    // Two resampled states, one capture each, both through the same helper.
+    // Two resampled states, one capture each, all through the same helper.
     expect(count(/await sampleWebkitState\(context, \{/g)).toBe(2);
 
     const helper = functionCode('sampleWebkitState');
@@ -166,9 +236,15 @@ describe('2048 screenshot determinism guard', () => {
       /write: \(page, bytes\) =>\s*capture\(page, name, false, \{ capturedBytes: bytes \}\),/,
     );
     expect(helper).toContain('allowNewBytes: ALLOW_NEW_BYTES,');
+    // The helper must rely on `captureManifestedScreenshot`'s manifest lookup
+    // and MANIFEST_CAPTURE_ATTEMPTS default; pinning a single attempt or a null
+    // expected sha here would silently disable the resample contract.
+    expect(helper).not.toContain('attempts:');
+    expect(helper).not.toContain('expectedSha256:');
 
     const webkit = functionCode('captureWebkitMobile');
     expectInOrder(webkit, [
+      "await capture(ready, 'after-2048-ready-webkit.png', false, { stable: true });",
       "name: 'after-2048-playing-webkit.png'",
       "name: 'after-2048-gameover-webkit.png'",
     ]);
@@ -200,5 +276,82 @@ describe('2048 screenshot determinism guard', () => {
     expect(webkit).not.toContain('settleSharedHeaderCompositing(over)');
     expect(webkit).not.toContain('repaintWebkitReadyOverlay(over)');
     expect(webkit).not.toContain('repaintWebkitReadyOverlay(playing)');
+  });
+});
+
+/**
+ * Runtime contract shared by the playing / gameover manifest resamplers: the
+ * settled two-frame bytes are hashed and compared with the manifest, a
+ * byte-stable but drifted raster is discarded on a fresh page, and a run that
+ * never reproduces the recorded sha256 fails before any write.
+ */
+describe('2048 manifested state resampling', () => {
+  const MANIFESTED = 'after-2048-playing-webkit.png';
+  const CANONICAL = Buffer.from('canonical 2048 playing bytes');
+  const EXPECTED = createHash('sha256').update(CANONICAL).digest('hex');
+
+  /** A page double whose screenshots are the supplied bytes. */
+  function stablePage(bytes: Buffer): Page {
+    return {
+      screenshot: vi.fn(async () => bytes),
+      close: vi.fn(async () => {}),
+    } as unknown as Page;
+  }
+
+  /** The same settled two-frame gate the playing / gameover resampler applies. */
+  function captureFrames(page: Page): Promise<Buffer> {
+    return captureStableBytes(page, { fullPage: false, settle: async () => {} });
+  }
+
+  it('discards byte-stable drifted samples and writes only the manifest bytes', async () => {
+    const pages: Page[] = [];
+    const write = vi.fn(async () => {});
+    let sample = 0;
+
+    await captureManifestedScreenshot({
+      name: MANIFESTED,
+      engine: 'webkit',
+      openPage: async () => {
+        sample += 1;
+        const bytes = sample < 3 ? Buffer.from(`drifted playing ${sample}`) : CANONICAL;
+        const page = stablePage(bytes);
+        pages.push(page);
+        return page;
+      },
+      prepare: async () => {},
+      captureBytes: captureFrames,
+      write,
+      expectedSha256: EXPECTED,
+      log: { warn: () => {} },
+    });
+
+    expect(pages).toHaveLength(3);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledWith(pages[2], CANONICAL);
+  });
+
+  it('fails after the sample budget without writing when no sample matches', async () => {
+    const pages: Page[] = [];
+    const write = vi.fn(async () => {});
+
+    await expect(
+      captureManifestedScreenshot({
+        name: MANIFESTED,
+        engine: 'webkit',
+        openPage: async () => {
+          const page = stablePage(Buffer.from('stable but drifted playing raster'));
+          pages.push(page);
+          return page;
+        },
+        prepare: async () => {},
+        captureBytes: captureFrames,
+        write,
+        expectedSha256: '0'.repeat(64),
+        log: { warn: () => {} },
+      }),
+    ).rejects.toThrow(/Nothing was written/);
+
+    expect(write).not.toHaveBeenCalled();
+    expect(pages).toHaveLength(MANIFEST_CAPTURE_ATTEMPTS);
   });
 });
