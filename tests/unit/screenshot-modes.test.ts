@@ -593,15 +593,20 @@ describe('minesweeper screenshot modes', () => {
     expect(output).not.toContain('Captured');
   });
 
-  it('still recognises every retained before mode', () => {
-    for (const flag of RETAINED_BEFORE_FLAGS) {
+  // Each flag spawns its own capture-script check, so give every case a
+  // budget for child-process startup under concurrent load instead of sharing
+  // the 5 s default. The `%s` in the case name names the flag in failures.
+  it.each(RETAINED_BEFORE_FLAGS)(
+    'still recognises every retained before mode (%s)',
+    { timeout: 15_000 },
+    (flag) => {
       const { status, output } = runScript([flag]);
 
       expect(status, flag).toBe(1);
       expect(output, flag).toMatch(/needs? BASE_URL/);
       expect(output, flag).not.toContain('The generic --before mode has been removed');
-    }
-  });
+    },
+  );
 
   it('removes only the generic before npm script', () => {
     const scripts = packageJson.scripts ?? {};
