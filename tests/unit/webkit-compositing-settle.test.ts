@@ -7,10 +7,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   SHARED_HEADER_SELECTOR,
   SHARED_HEADER_SETTLE_FRAMES,
+  SHARED_OVERLAY_SELECTOR,
+  repaintBackdropLayers,
   repaintSharedHeader,
+  settleBackdropLayersCompositing,
   settleSharedHeaderCompositing,
 } from '../../scripts/lib/webkit-compositing-settle.mjs';
-import type { SharedHeaderRepaintOptions } from '../../scripts/lib/webkit-compositing-settle.mjs';
+import type {
+  BackdropLayersRepaintOptions,
+  SharedHeaderRepaintOptions,
+} from '../../scripts/lib/webkit-compositing-settle.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const APP = readFileSync(join(ROOT, 'src', 'app', 'app.ts'), 'utf8');
@@ -217,6 +223,107 @@ describe('WebKit shared header compositing settle seam', () => {
         page,
         repaint: repaintSharedHeader,
         options: { selector: '.custom-header', frames: 3 },
+      },
+    ]);
+  });
+});
+
+
+/**
+ * Ready / gameover need the shared header and the translucent overlay rebuilt
+ * together: toggling either layer on its own moves the other one to a
+ * different 1-LSB variant.
+ */
+describe('WebKit shared backdrop layers compositing settle seam', () => {
+  function installOverlay(): HTMLElement {
+    const overlay = document.createElement('div');
+    overlay.dataset.testid = 'overlay';
+    document.body.append(overlay);
+    return overlay;
+  }
+
+  it('toggles the header and overlay backdrops in the same committed frame', async () => {
+    const header = installHeader();
+    const overlay = installOverlay();
+    stubFonts();
+    const observed: Array<{ header: string; overlay: string }> = [];
+    vi.stubGlobal(
+      'requestAnimationFrame',
+      (callback: FrameRequestCallback) => {
+        observed.push({
+          header: header.style.backdropFilter,
+          overlay: overlay.style.backdropFilter,
+        });
+        callback(0);
+        return 0;
+      },
+    );
+
+    await expect(
+      repaintBackdropLayers({
+        selector: SHARED_HEADER_SELECTOR,
+        overlaySelector: SHARED_OVERLAY_SELECTOR,
+        frames: SHARED_HEADER_SETTLE_FRAMES,
+      }),
+    ).resolves.toEqual({ header: true, overlay: true });
+
+    expect(observed).toEqual([
+      ...Array(SHARED_HEADER_SETTLE_FRAMES * 2).fill({
+        header: 'none',
+        overlay: 'none',
+      }),
+      ...Array(SHARED_HEADER_SETTLE_FRAMES * 2).fill({
+        header: '',
+        overlay: '',
+      }),
+    ]);
+  });
+
+  it('fails instead of silently skipping a missing header or overlay', async () => {
+    document.body.innerHTML = '';
+    stubFonts();
+    const page = {
+      evaluate: (
+        repaint: (
+          options: BackdropLayersRepaintOptions,
+        ) => Promise<{ header: boolean; overlay: boolean }>,
+        options: BackdropLayersRepaintOptions,
+      ) => repaint(options),
+    } as unknown as Page;
+
+    await expect(settleBackdropLayersCompositing(page)).rejects.toThrow(
+      'Shared header ".site-header" was not found',
+    );
+
+    installHeader();
+    await expect(settleBackdropLayersCompositing(page)).rejects.toThrow(
+      'Shared overlay "[data-testid="overlay"]" was not found',
+    );
+  });
+
+  it('passes the selectors and frame budget to the in-page seam', async () => {
+    const calls: Array<{ repaint: unknown; options: unknown }> = [];
+    const page = {
+      evaluate: async (repaint: unknown, options: unknown) => {
+        calls.push({ repaint, options });
+        return { header: true, overlay: true };
+      },
+    } as unknown as Page;
+
+    await settleBackdropLayersCompositing(page, {
+      selector: '.custom-header',
+      overlaySelector: '.custom-overlay',
+      frames: 3,
+    });
+
+    expect(calls).toEqual([
+      {
+        repaint: repaintBackdropLayers,
+        options: {
+          selector: '.custom-header',
+          overlaySelector: '.custom-overlay',
+          frames: 3,
+        },
       },
     ]);
   });

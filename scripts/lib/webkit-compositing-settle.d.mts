@@ -5,6 +5,30 @@ export interface SharedHeaderRepaintOptions {
   frames: number;
 }
 
+export interface BackdropLayersRepaintOptions {
+  selector: string;
+  overlaySelector: string;
+  frames: number;
+}
+
+export interface BackdropLayersRepaintResult {
+  header: boolean;
+  overlay: boolean;
+}
+
+export interface BackdropLayersSettleOptions {
+  evaluate?: (
+    page: Page,
+    repaint: (
+      options: BackdropLayersRepaintOptions,
+    ) => Promise<BackdropLayersRepaintResult>,
+    options: BackdropLayersRepaintOptions,
+  ) => Promise<BackdropLayersRepaintResult>;
+  selector?: string;
+  overlaySelector?: string;
+  frames?: number;
+}
+
 export interface SharedHeaderSettleOptions {
   evaluate?: (
     page: Page,
@@ -39,6 +63,7 @@ export interface HubHeroSettleOptions {
 
 export const SHARED_HEADER_SELECTOR: string;
 export const SHARED_HEADER_SETTLE_FRAMES: number;
+export const SHARED_OVERLAY_SELECTOR: string;
 export const HUB_HERO_SELECTOR: string;
 export const HUB_HERO_SETTLE_FRAMES: number;
 
@@ -49,6 +74,15 @@ export function repaintSharedHeader(
 export function settleSharedHeaderCompositing(
   page: Page,
   options?: SharedHeaderSettleOptions,
+): Promise<void>;
+
+export function repaintBackdropLayers(
+  options: BackdropLayersRepaintOptions,
+): Promise<BackdropLayersRepaintResult>;
+
+export function settleBackdropLayersCompositing(
+  page: Page,
+  options?: BackdropLayersSettleOptions,
 ): Promise<void>;
 
 export function settleHubHeroAnimations(

@@ -735,6 +735,123 @@ export function expectedCaptureSha256(
   return findSha256ManifestCapture(parsedManifest, name)?.sha256 ?? null;
 }
 
+/** Fresh pages the manifest-resample capture may sample before failing. */
+export const MANIFEST_CAPTURE_ATTEMPTS = 20;
+
+/**
+ * Sample fresh pages until the screenshot bytes equal the manifest sha256.
+ *
+ * Under host load WebKit can rasterise the shared header, an overlay backdrop
+ * or a canvas one 8-bit step away from the committed evidence. The wrong raster
+ * is byte-stable across consecutive frames, so a stable-frame gate cannot see
+ * it: only a fresh page (and its fresh compositor state) can produce the
+ * canonical variant again. This helper captures a sample, compares its sha256
+ * with the manifest entry and retries on a different page; the first matching
+ * sample is handed to `write`, which still runs the fixed-environment guard and
+ * the atomic write. A run that never matches fails without writing instead of
+ * replacing the recorded evidence.
+ *
+ * `openPage` returns one fresh page per sample; `prepare` sets up the target
+ * state and runs its paint seams. `captureBytes` defaults to a single
+ * screenshot, which is required for a state with a live clock (the minesweeper
+ * playing timer); states that already use the two-frame gate pass
+ * {@link captureStableBytes}. `checkEnvironment` runs once on the first sample,
+ * before the state is prepared, so a host / wrong-image run fails with the
+ * write guard's own explanation instead of exhausting the sample budget.
+ *
+ * A file not recorded in the manifest samples once and writes normally, which
+ * keeps trimmed checkouts and new evidence on the previous path. Pass
+ * `allowNewBytes` for an intentional UI change: it also samples once and skips
+ * the byte comparison.
+ */
+export async function captureManifestedScreenshot({
+  name,
+  engine,
+  fullPage = false,
+  openPage,
+  prepare,
+  captureBytes = async (page) =>
+    normalizeScreenshotBytes(await page.screenshot({ fullPage, animations: 'disabled' })),
+  checkEnvironment,
+  write = (page, bytes) =>
+    captureScreenshot(page, name, { engine, fullPage, capturedBytes: bytes }),
+  closePage = (page) => page.close(),
+  attempts = MANIFEST_CAPTURE_ATTEMPTS,
+  allowNewBytes = false,
+  expectedSha256 = expectedCaptureSha256(name),
+  log = console,
+}) {
+  if (typeof openPage !== 'function') {
+    throw new TypeError('captureManifestedScreenshot needs an openPage() function.');
+  }
+  if (typeof prepare !== 'function') {
+    throw new TypeError('captureManifestedScreenshot needs a prepare(page) function.');
+  }
+  if (!Number.isInteger(attempts) || attempts < 1) {
+    throw new RangeError(
+      `captureManifestedScreenshot needs a positive integer attempts; got ${String(attempts)}.`,
+    );
+  }
+
+  const expected = allowNewBytes ? null : expectedSha256;
+  const limit = expected === null ? 1 : attempts;
+  const observed = [];
+  for (let attempt = 1; attempt <= limit; attempt += 1) {
+    const page = await openPage();
+    try {
+      if (attempt === 1 && checkEnvironment !== undefined) {
+        await checkEnvironment(page);
+      }
+      await prepare(page);
+      let bytes;
+      try {
+        bytes = normalizeScreenshotBytes(await captureBytes(page));
+      } catch (error) {
+        // A page that never settles inside the frame gate is also a transient
+        // load symptom; spend another sample instead of aborting the run. The
+        // last attempt rethrows the real error.
+        if (attempt === limit) throw error;
+        observed.push('unstable');
+        log.warn(
+          `${name} sample ${attempt}/${limit} did not produce a stable frame ` +
+            `(${error instanceof Error ? error.message : String(error)}); sampling a fresh page.`,
+        );
+        continue;
+      }
+      const actualSha256 = createHash('sha256').update(bytes).digest('hex');
+      if (expected === null || actualSha256 === expected) {
+        await write(page, bytes);
+        return;
+      }
+      observed.push(actualSha256);
+      log.warn(
+        `${name} sample ${attempt}/${limit} produced ${actualSha256}, not the recorded ` +
+          `${expected}; sampling a fresh page.`,
+      );
+    } finally {
+      // A close failure must not mask the sample's real error or fail a run
+      // whose matched PNG was already written; the next sample opens a fresh
+      // page anyway.
+      try {
+        await closePage(page);
+      } catch (error) {
+        log.warn(
+          `${name} could not close the sampled page: ` +
+            `${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+  }
+
+  throw new Error(
+    `The capture did not reproduce the recorded ${name} sha256 ${expected} in ` +
+      `${limit} fresh page${limit === 1 ? '' : 's'} ` +
+      `(observed: ${observed.join(', ') || 'none'}). Nothing was written. ` +
+      'Re-run when the host load drops; if the page changed intentionally, ' +
+      're-run with --allow-new-bytes and update the manifest.',
+  );
+}
+
 /**
  * Read and validate the sha256 manifest that drives the write-time guard.
  *

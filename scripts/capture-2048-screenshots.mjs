@@ -2,6 +2,7 @@ import { mkdir } from 'node:fs/promises';
 import {
   WEBKIT_ENGINE,
   assertAllDeclaredCaptureTargets,
+  captureManifestedScreenshot,
   captureScreenshot,
   closeCaptureBrowser,
   createDesktopContext,
@@ -27,6 +28,10 @@ import {
   HISTORICAL_OVERWRITE_FLAG,
   guardHistoricalAfterEvidence,
 } from './lib/screenshot-evidence.mjs';
+import {
+  settleBackdropLayersCompositing,
+  settleSharedHeaderCompositing,
+} from './lib/webkit-compositing-settle.mjs';
 
 /**
  * Capture the Before / After evidence for the 2048 integration PR.
@@ -58,6 +63,23 @@ import {
  * different ways and break fixed-container byte equality. The ready capture
  * then waits for two byte-identical consecutive screenshots, so a blurred
  * overlay frame still mid-raster under concurrent host load is not written.
+ * playing / gameover already pin the board and key press, but the shared site
+ * header can still commit either blurred backdrop snapshot one 8-bit step away
+ * from the committed evidence under concurrent host load. Playing calls
+ * `settleSharedHeaderCompositing` as the last paint step; gameover rebuilds the
+ * shared header and its own translucent overlay backdrop together with
+ * `settleBackdropLayersCompositing`, because sequential single-layer toggles
+ * resample the other layer into a different 1-LSB variant. The ready scene
+ * keeps its original scroll + overlay seam and two-frame stable capture
+ * untouched (its remaining ready-scene drift belongs to Issue #374).
+ *
+ * Under concurrent host load a wrong raster can also be byte-stable across
+ * frames (2048 gameover's overlay backdrop), so no frame gate can prove the
+ * committed variant was taken. Playing / gameover are therefore sampled from a
+ * fresh page until their bytes equal the manifest sha256 (up to
+ * `MANIFEST_CAPTURE_ATTEMPTS` pages); a run that never matches fails before
+ * writing instead of replacing the evidence. Pass `--allow-new-bytes` for an
+ * intentional visual change and the usual manifest update.
  * See docs/screenshots/README.md for the reproducible sha256 procedure and its
  * conditions.
  *
@@ -105,6 +127,9 @@ const ORIGIN = `http://${HOST}:${PORT}`;
 const OUTPUT = 'docs/screenshots';
 const MODE = ARGS.includes('--before') ? 'before' : 'after';
 const ALLOW_HISTORICAL_OVERWRITE = ARGS.includes(HISTORICAL_OVERWRITE_FLAG);
+// Intentional visual change: write the first sample after one capture instead
+// of resampling until the recorded sha256 is reproduced.
+const ALLOW_NEW_BYTES = ARGS.includes('--allow-new-bytes');
 const ENGINE = parseCaptureEngine(ARGS);
 const IS_WEBKIT = ENGINE === WEBKIT_ENGINE;
 const BASE_URL = process.env.BASE_URL ?? ORIGIN;
@@ -259,48 +284,90 @@ async function captureMobile(browser) {
   await context.close();
 }
 
+/**
+ * Capture one WebKit state, resampling a fresh page until its bytes equal the
+ * manifest sha256. The page is created from the shared phone context after the
+ * committed ready page already ran, so every sample is a later, settled page;
+ * each retry is still a fresh compositor state.
+ *
+ * `checkEnvironment` runs on the first sample only: a host run fails with the
+ * write guard's own message before spending the sample budget.
+ */
+async function sampleWebkitState(context, { name, prepare, captureBytes }) {
+  await captureManifestedScreenshot({
+    name,
+    engine: ENGINE,
+    openPage: () => context.newPage(),
+    prepare,
+    captureBytes,
+    checkEnvironment: (page) => capture(page, name, false, { checkOnly: true }),
+    write: (page, bytes) =>
+      capture(page, name, false, { capturedBytes: bytes }),
+    allowNewBytes: ALLOW_NEW_BYTES,
+  });
+}
+
 /** Capture the three stable 2048 phone states on the WebKit engine. */
 async function captureWebkitMobile(browser) {
   const context = await createPhoneContext(browser, ENGINE);
+  try {
+    const ready = await context.newPage();
+    await open2048(ready, COLOR_BOARD);
+    // WebKit's first paint of the sticky site header can settle in two subtly
+    // different rasters (Issue #199). The ready scene is the first page of
+    // this run; a scroll round-trip repaints the header deterministically
+    // before the capture. The READY card and its blurred backdrop can still
+    // composite from two different rasters under concurrent host load, so
+    // the overlay also goes through a hide / restore repaint. The capture
+    // waits for two byte-identical consecutive screenshots instead of writing
+    // a single in-flight frame. This ready path is intentionally unchanged
+    // (Issue #341 t3); its remaining ready-scene drift belongs to #374.
+    await settleWebkitReadyPaint(ready);
+    await repaintWebkitReadyOverlay(ready);
+    await capture(ready, 'after-2048-ready-webkit.png', false, { stable: true });
+    await ready.close();
 
-  const ready = await context.newPage();
-  await open2048(ready, COLOR_BOARD);
-  // WebKit's first paint of the sticky site header can settle in two subtly
-  // different rasters (Issue #199). The ready scene is the first page of this
-  // run; a scroll round-trip repaints the header deterministically before the
-  // capture. The READY card and its blurred backdrop can still composite from
-  // two different rasters under concurrent host load, so the overlay also goes
-  // through a hide / restore repaint. The capture itself waits for two
-  // byte-identical consecutive screenshots instead of writing a single
-  // in-flight frame. playing / gameover keep their existing byte-identical
-  // path.
-  await settleWebkitReadyPaint(ready);
-  await repaintWebkitReadyOverlay(ready);
-  await capture(ready, 'after-2048-ready-webkit.png', false, { stable: true });
-  await ready.close();
+    await sampleWebkitState(context, {
+      name: 'after-2048-playing-webkit.png',
+      prepare: async (playing) => {
+        await open2048(playing, MERGE_BOARD);
+        await playing.keyboard.press('ArrowLeft');
+        await playing.getByTestId('status').filter({ hasText: '进行中' }).waitFor();
+        await playing.getByTestId('score').filter({ hasText: '60' }).waitFor();
+        await settle(playing);
+        // The fixed seed / step path pins the board, but the shared sticky
+        // header's blurred backdrop snapshot can still land one 8-bit step
+        // away under load (4173dce8…). Rebuild it from the settled page
+        // before writing.
+        await settleSharedHeaderCompositing(playing);
+      },
+    });
 
-  const playing = await context.newPage();
-  await open2048(playing, MERGE_BOARD);
-  await playing.keyboard.press('ArrowLeft');
-  await playing.getByTestId('status').filter({ hasText: '进行中' }).waitFor();
-  await playing.getByTestId('score').filter({ hasText: '60' }).waitFor();
-  await settle(playing);
-  await capture(playing, 'after-2048-playing-webkit.png', false);
-  await playing.close();
-
-  const over = await context.newPage();
-  await open2048(over, STUCK_BOARD);
-  await over.keyboard.press('ArrowLeft');
-  await over.getByTestId('overlay-title').filter({ hasText: '无路可走' }).waitFor();
-  await over
-    .getByTestId('overlay-score')
-    .filter({ hasText: '本局 4 分 · 最大方块 16' })
-    .waitFor();
-  await settle(over);
-  await capture(over, 'after-2048-gameover-webkit.png', false);
-  await over.close();
-
-  await context.close();
+    await sampleWebkitState(context, {
+      name: 'after-2048-gameover-webkit.png',
+      prepare: async (over) => {
+        await open2048(over, STUCK_BOARD);
+        await over.keyboard.press('ArrowLeft');
+        await over
+          .getByTestId('overlay-title')
+          .filter({ hasText: '无路可走' })
+          .waitFor();
+        await over
+          .getByTestId('overlay-score')
+          .filter({ hasText: '本局 4 分 · 最大方块 16' })
+          .waitFor();
+        await settle(over);
+        // Same shared-header snapshot risk as playing, on the committed
+        // bf7548b7… bytes. The game-over card's translucent backdrop has its
+        // own 1-LSB variants, so rebuild the header and that backdrop in one
+        // committed frame; a separate header-only seam would resample the
+        // overlay to another variant.
+        await settleBackdropLayersCompositing(over);
+      },
+    });
+  } finally {
+    await context.close();
+  }
 }
 
 if (MODE === 'before' && IS_WEBKIT) {

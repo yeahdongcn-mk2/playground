@@ -5,6 +5,7 @@ import {
   READY_CAPTURE_STABLE_INTERVAL_MS,
   WEBKIT_ENGINE,
   assertAllDeclaredCaptureTargets,
+  captureManifestedScreenshot,
   captureScreenshot,
   closeCaptureBrowser,
   createDesktopContext,
@@ -35,6 +36,10 @@ import {
   guardHistoricalAfterEvidence,
 } from './lib/screenshot-evidence.mjs';
 import { touchLongPress } from './lib/touch-input.mjs';
+import {
+  settleBackdropLayersCompositing,
+  settleSharedHeaderCompositing,
+} from './lib/webkit-compositing-settle.mjs';
 
 /**
  * Capture the Before / After evidence for the minesweeper integration.
@@ -59,7 +64,24 @@ import { touchLongPress } from './lib/touch-input.mjs';
  * sticky header and board gradients in a subtly different 1-LSB variant, while
  * later pages use the settled paint path. The committed READY capture then runs a
  * scroll-paint seam and requires two consecutive byte-identical whole-image
- * frames before writing. The dedicated
+ * frames before writing. playing / lost / won also run after the warm-up page
+ * and keep their game-state path, but each still includes the shared site
+ * header: WebKit can commit its blurred backdrop snapshot one 8-bit step away
+ * under concurrent host load. playing / won settle the shared header after
+ * opening the READY scene and before the first reveal, so the live clock cannot
+ * roll to the next displayed second. lost repaints its overlay backdrop and
+ * then rebuilds the shared header and that backdrop together right before the
+ * capture. The ready scene
+ * keeps its existing warm-up / scroll / whole-image stability path; its
+ * separate 105 px board drift is not this task.
+ *
+ * A wrong raster can be byte-stable across frames (2048 gameover's overlay
+ * backdrop, minesweeper lost's board), so no frame gate can prove the committed
+ * variant was taken. The playing / lost / won states are therefore sampled from
+ * fresh pages until their bytes equal the manifest sha256; a run that never
+ * matches fails before writing instead of replacing the recorded evidence.
+ * Pass `--allow-new-bytes` for an intentional visual change and the usual
+ * manifest update. The dedicated
  * `--webkit-narrow` / `--webkit-narrow-before` modes capture the Issue #83
  * narrow-screen matrix at 320×640, 360×640, 375×667 and 412×839 into the
  * committed `*-minesweeper-webkit-narrow-<W>x<H>.png` evidence files; the
@@ -156,6 +178,9 @@ const PORT = parsePreviewPort(process.env.PREVIEW_PORT, DEFAULT_PREVIEW_PORT);
 const ORIGIN = `http://${HOST}:${PORT}`;
 const OUTPUT = 'docs/screenshots';
 const ALLOW_HISTORICAL_OVERWRITE = ARGS.includes(HISTORICAL_OVERWRITE_FLAG);
+// Intentional visual change: write the first sample after one capture instead
+// of resampling until the recorded sha256 is reproduced.
+const ALLOW_NEW_BYTES = ARGS.includes('--allow-new-bytes');
 const ENGINE = parseCaptureEngine(ARGS);
 const IS_WEBKIT = ENGINE === WEBKIT_ENGINE;
 const WEBKIT_NARROW = ARGS.includes(WEBKIT_NARROW_FLAG);
@@ -378,6 +403,86 @@ function touchMobileName(prefix, state) {
 }
 
 /**
+ * Capture one WebKit state, resampling a fresh page until its bytes equal the
+ * manifest sha256. The page comes from the shared phone context, so the
+ * throwaway warm-up page already moved the context past the first-page raster
+ * path and every sample is a later, settled page.
+ *
+ * `checkEnvironment` runs on the first sample only: a host run fails with the
+ * write guard's own message before spending the sample budget.
+ */
+async function sampleWebkitTouchState(context, { name, prepare, captureBytes }) {
+  await captureManifestedScreenshot({
+    name,
+    engine: ENGINE,
+    openPage: () => context.newPage(),
+    prepare,
+    captureBytes,
+    checkEnvironment: (page) => capture(page, name, false, { checkOnly: true }),
+    write: (page, bytes) =>
+      capture(page, name, false, { capturedBytes: bytes }),
+    allowNewBytes: ALLOW_NEW_BYTES,
+  });
+}
+
+/**
+ * Capture the WebKit-after playing / lost / won phone states.
+ *
+ * The live timer forbids the two-frame gate on playing (two screenshots 300 ms
+ * apart can cross a displayed second), so each state samples a single settled
+ * frame and retries on a different fresh page when the bytes are a known
+ * load-dependent variant. The ready state keeps its own warm-up / scroll /
+ * whole-image stability path above and is intentionally not sampled here.
+ */
+async function captureWebkitAfterTouchStates(context, prefix) {
+  await sampleWebkitTouchState(context, {
+    name: touchMobileName(prefix, 'playing'),
+    prepare: async (playing) => {
+      await openTouchGame(playing, LOSS_MINES);
+      // Rebuild the shared header snapshot while the page is still in READY,
+      // before the first reveal starts the live clock. Running the same seam
+      // after the clock starts can push the displayed second over during a
+      // loaded run and change the committed bytes.
+      await settleSharedHeaderCompositing(playing);
+      await touchTap(playing, playing.getByTestId('cell-7-4'));
+      await touchLongPress(playing, playing.getByTestId('cell-0-0'));
+      await playing.getByTestId('status').filter({ hasText: '进行中' }).waitFor();
+      await playing.getByTestId('remaining-mines').filter({ hasText: '9' }).waitFor();
+      await playing.getByTestId('timer').filter({ hasNotText: '0:00' }).waitFor();
+      await settle(playing);
+    },
+  });
+
+  await sampleWebkitTouchState(context, {
+    name: touchMobileName(prefix, 'lost'),
+    prepare: async (lost) => {
+      await openTouchGame(lost, LOSS_MINES);
+      await touchTap(lost, lost.getByTestId('cell-7-4'));
+      await touchTap(lost, lost.getByTestId('cell-0-0'));
+      await lost.getByTestId('overlay-title').filter({ hasText: '踩到地雷' }).waitFor();
+      // The loss overlay's translucent backdrop can keep a 1-LSB variant of
+      // the board behind it; hiding and restoring the overlay forces a fresh
+      // snapshot. The loss card's backdrop and the shared header can then each
+      // commit one 8-bit step away, so rebuild both in one committed frame
+      // instead of running a separate header-only seam first.
+      await repaintWebkitReadyOverlay(lost);
+      await settleBackdropLayersCompositing(lost);
+    },
+  });
+
+  await sampleWebkitTouchState(context, {
+    name: touchMobileName(prefix, 'won'),
+    prepare: async (won) => {
+      await openTouchGame(won, WIN_MINES);
+      await settleSharedHeaderCompositing(won);
+      await touchTap(won, won.getByTestId('cell-8-8'));
+      await won.getByTestId('overlay-title').filter({ hasText: '扫雷成功' }).waitFor();
+      await settle(won);
+    },
+  });
+}
+
+/**
  * Capture the same phone game states before and after the touch work. The
  * before mode must still use the mouse (a right click) to flag: that input is
  * exactly what the touch task adds, so the baseline cannot express the state
@@ -402,7 +507,10 @@ async function captureTouchMobile(browser, prefix) {
     // and the board gradients in a subtly different 1-LSB variant (Issue #318).
     // Load a throwaway copy first so the committed READY evidence comes from
     // the next page, which uses the settled paint path. playing / lost / won
-    // already run after that page and keep their existing byte-identical path.
+    // already run after that page and keep their game-state path; playing /
+    // won settle the shared header before the first reveal, and lost repaints
+    // its overlay backdrop before rebuilding the header and backdrop pair
+    // (Issue #341).
     const warmUp = await context.newPage();
     try {
       await openTouchGame(warmUp, WIN_MINES);
@@ -429,6 +537,12 @@ async function captureTouchMobile(browser, prefix) {
       : {};
   await capture(ready, touchMobileName(prefix, 'ready'), false, readyCaptureOptions);
   await ready.close();
+
+  if (IS_WEBKIT && prefix === 'after') {
+    await captureWebkitAfterTouchStates(context, prefix);
+    await context.close();
+    return;
+  }
 
   const playing = await context.newPage();
   await openTouchGame(playing, LOSS_MINES);
@@ -458,13 +572,7 @@ async function captureTouchMobile(browser, prefix) {
     await lost.getByTestId('cell-0-0').click();
   }
   await lost.getByTestId('overlay-title').filter({ hasText: '踩到地雷' }).waitFor();
-  if (IS_WEBKIT && prefix === 'after') {
-    // The loss overlay's translucent backdrop can keep a 1-LSB variant of the
-    // board behind it; hiding and restoring the overlay forces a fresh snapshot.
-    await repaintWebkitReadyOverlay(lost);
-  } else {
-    await settle(lost);
-  }
+  await settle(lost);
   await capture(lost, touchMobileName(prefix, 'lost'), false);
   await lost.close();
 
