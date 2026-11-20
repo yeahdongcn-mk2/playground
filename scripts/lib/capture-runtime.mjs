@@ -491,11 +491,6 @@ async function captureStableFramesBytes(
 /** Screenshots the stable-capture loop may take before it gives up. */
 export const CAPTURE_STABLE_ATTEMPTS = 4;
 
-/** Coerce a Playwright screenshot result to a Buffer. */
-function screenshotBuffer(bytes) {
-  return Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
-}
-
 /**
  * Capture until two consecutive screenshots are byte-identical (Issue #199).
  *
@@ -541,10 +536,10 @@ export async function captureStableBytes(
   }
 
   await settle(page);
-  let previous = screenshotBuffer(await page.screenshot({ fullPage, animations }));
+  let previous = normalizeScreenshotBytes(await page.screenshot({ fullPage, animations }));
   for (let taken = 2; taken <= attempts; taken += 1) {
     await settle(page);
-    const next = screenshotBuffer(await page.screenshot({ fullPage, animations }));
+    const next = normalizeScreenshotBytes(await page.screenshot({ fullPage, animations }));
     if (next.equals(previous)) {
       return next;
     }
@@ -586,6 +581,13 @@ export async function captureStableBytes(
  * {@link captureStableFramesBytes} instead; the minesweeper WebKit READY
  * capture passes {@link READY_CAPTURE_STABLE_FRAMES} so two consecutive
  * identical frames are required before the PNG is written.
+ *
+ * `capturedBytes` skips the screenshot and writes the bytes instead; it takes
+ * precedence over `stable` / `stableFrames`. A manifested file still runs the
+ * environment guard and atomic write, while an unrecorded file has no guard to
+ * run. `checkOnly` stops after the guard has passed (or immediately for an
+ * unrecorded file) without capturing or writing, so a capture script can fail
+ * fast on the wrong environment before spending time on stable sampling.
  */
 export async function captureScreenshot(
   page,
@@ -601,6 +603,15 @@ export async function captureScreenshot(
     stableFrames = 1,
     stableIntervalMs = READY_CAPTURE_STABLE_INTERVAL_MS,
     stableAttempts = READY_CAPTURE_STABLE_ATTEMPTS,
+    // A caller that already validated its own stable frame (for example the
+    // minesweeper scores capture, which re-samples a fresh page when a
+    // load-dependent raster variant appears) can hand the exact bytes in
+    // instead of taking another screenshot here. The manifest / environment
+    // guard and the atomic write still apply.
+    capturedBytes,
+    // Validate the manifested environment without capturing or writing
+    // (the scores resampler checks fail-fast before it samples a page).
+    checkOnly = false,
     target,
     manifest,
     manifestPath = resolve(CAPTURE_REPO_ROOT, DEFAULT_MANIFEST_PATH),
@@ -619,8 +630,12 @@ export async function captureScreenshot(
 
   if (capture === null) {
     // Unrecorded evidence: keep the existing path byte-for-byte unless the
-    // caller explicitly asks for a stability check.
-    if (stable) {
+    // caller explicitly asks for a stability check. There is no manifest entry
+    // to validate, so a check-only call has nothing to do.
+    if (checkOnly) return;
+    if (capturedBytes !== undefined) {
+      writeFileAtomically(path, normalizeScreenshotBytes(capturedBytes), fileOperations);
+    } else if (stable) {
       const buffer = await captureStableBytes(page, { fullPage, animations });
       writeFileAtomically(path, buffer, fileOperations);
     } else if (stableFrames !== 1) {
@@ -661,20 +676,25 @@ export async function captureScreenshot(
     );
   }
 
+  if (checkOnly) return;
+
   // The guard passed: capture to memory first, so a failing screenshot never
   // replaces the committed PNG, then write it atomically in the same directory.
-  const buffer = stable
-    ? await captureStableBytes(page, { fullPage, animations })
-    : stableFrames !== 1
-      ? await captureStableFramesBytes(page, {
-          name,
-          fullPage,
-          animations,
-          stableFrames,
-          stableIntervalMs,
-          stableAttempts,
-        })
-      : normalizeScreenshotBytes(await page.screenshot({ fullPage, animations }));
+  const buffer =
+    capturedBytes !== undefined
+      ? normalizeScreenshotBytes(capturedBytes)
+      : stable
+        ? await captureStableBytes(page, { fullPage, animations })
+        : stableFrames !== 1
+          ? await captureStableFramesBytes(page, {
+              name,
+              fullPage,
+              animations,
+              stableFrames,
+              stableIntervalMs,
+              stableAttempts,
+            })
+          : normalizeScreenshotBytes(await page.screenshot({ fullPage, animations }));
   writeFileAtomically(path, buffer, fileOperations);
 
   const actualSha256 = createHash('sha256').update(buffer).digest('hex');
@@ -691,6 +711,28 @@ export async function captureScreenshot(
   }
 
   console.log(captureRecord(name, engine, page.viewportSize(), colorScheme, reducedMotion));
+}
+
+/**
+ * The sha256 the manifest records for `name`, or null when the file is not in
+ * the manifest (for example a trimmed checkout).
+ *
+ * Capture scripts that can land on a load-dependent but stable raster variant
+ * use this as the expected value: a fresh page is sampled until it reproduces
+ * the recorded evidence, and the write-time guard still decides whether the
+ * bytes may replace the committed PNG.
+ */
+export function expectedCaptureSha256(
+  name,
+  {
+    manifest,
+    manifestPath = resolve(CAPTURE_REPO_ROOT, DEFAULT_MANIFEST_PATH),
+    readFile = readFileSync,
+  } = {},
+) {
+  const parsedManifest = loadSha256Manifest({ manifest, manifestPath, readFile });
+  if (parsedManifest === null) return null;
+  return findSha256ManifestCapture(parsedManifest, name)?.sha256 ?? null;
 }
 
 /**
@@ -890,13 +932,17 @@ export async function settleCapturePaint(page) {
  * position is restored to 0 so the screenshot still shows the top of the page;
  * {@link settleCapturePaint} then waits for fonts and frames.
  *
- * The 2048, minesweeper and snake READY captures use this seam. The minesweeper
+ * The 2048, minesweeper and snake READY captures use this seam, as does the
+ * minesweeper scores win capture (`captureWebkitMobile` in
+ * `capture-minesweeper-scores-screenshots.mjs`), which scrolls the visible win
+ * overlay before repainting that overlay and the shared header. The minesweeper
  * and snake callers additionally load a throwaway warm-up page so the committed
- * READY page is not the browser's first page. The snake caller must run this seam
- * before its D-pad framing scroll: that scroll moves the sticky header off the
- * top of the page, and only a round-trip from the top repaints it. The playing /
- * lost / won (or gameover) evidence is already deterministic and must never be
- * wired into those scenes.
+ * READY page is not the browser's first page. The snake caller must run this
+ * seam before its D-pad framing scroll: that scroll moves the sticky header off
+ * the top of the page, and only a round-trip from the top repaints it. The
+ * breakout playing capture (its own header seam plus the `{ stable: true }`
+ * two-frame gate), the breakout ready / levelclear / gameover and snake
+ * gameover captures keep their existing paths.
  */
 export async function settleWebkitReadyPaint(page, { offset = 200 } = {}) {
   await page.evaluate((distance) => window.scrollTo(0, distance), offset);
@@ -918,10 +964,11 @@ export async function settleWebkitReadyPaint(page, { offset = 200 } = {}) {
  * canonical path. The overlay is hidden only between frames, never in a
  * captured image.
  *
- * The 2048 READY capture, the minesweeper lost WebKit capture and the snake
- * READY capture use this seam. The snake caller must run it after its D-pad
- * framing scroll, so the READY card and its backdrop repaint on the canonical
- * path at the final framed position; playing / gameover bytes must not change.
+ * The 2048 READY capture, the minesweeper lost WebKit capture, the minesweeper
+ * scores win capture and the snake READY capture use this seam. The scores and
+ * snake callers must run it after their scroll seams, so the overlay card (or
+ * win card) and its backdrop repaint on the canonical path at the final
+ * position; playing / gameover bytes must not change.
  */
 export async function repaintWebkitReadyOverlay(
   page,
