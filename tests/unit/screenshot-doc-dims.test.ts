@@ -386,7 +386,12 @@ describe('committed hub screenshot full-page docs (Issue #161)', () => {
       'after-hub-desktop.png',
     );
 
-    const mistyped = source.replace('| 整页 1440×3468 |', '| 整页 1440×3469 |');
+    const desktopSize = readPngDimensions(join(SCREENSHOT_DIR, 'after-hub-desktop.png'));
+    const mistyped = source.replace(
+      `| 整页 ${desktopSize.width}×${desktopSize.height} |`,
+      `| 整页 ${desktopSize.width}×${desktopSize.height + 1} |`,
+    );
+    expect(mistyped, 'missing the after-hub-desktop full-page row to mistype').not.toBe(source);
     const desktop = parseDocDimensions(mistyped).find((row) =>
       row.files.includes('after-hub-desktop.png'),
     );

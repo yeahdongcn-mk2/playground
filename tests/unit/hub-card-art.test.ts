@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { renderHub } from '../../src/app/hub';
@@ -109,6 +110,11 @@ describe('hub card art', () => {
     expect(svg).toMatch(/r='56'/);
     expect(svg).toMatch(/stroke-width='6'/);
     expect(svg).not.toMatch(/<image\b|xlink:href/);
+    // Pin the complete decoded art too, not only the signature substrings:
+    // any path, color or attribute change in the data URI must fail here.
+    expect(createHash('sha256').update(svg).digest('hex')).toBe(
+      '88000153001c83db9d8170914755f2247a3cc8e99cea892dcf63f7495451a04a',
+    );
 
     expect(css).toMatch(/\.game-card-art > \.mini-orb\s*\{\s*display:\s*none/);
     expect(css).toMatch(/width:\s*74%/);

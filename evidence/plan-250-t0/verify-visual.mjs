@@ -113,10 +113,16 @@ try {
         if (width === 320 && Number.parseFloat(style.height) !== 156) {
           failures.push(`320px: narrow card art height is ${style.height}, expected 156px`);
         }
-        if (width === 320 && style.pseudoWidth / style.artWidth < 0.7) {
-          failures.push(
-            `320px: narrow zhen-sha art ratio is ${style.pseudoWidth / style.artWidth}`,
-          );
+        if (width === 320) {
+          // Mirror the e2e expectation: the narrow rule is 84% of the card
+          // art, capped at 240px. Comparing against min(...) catches a lost
+          // 84% override instead of accepting any width above 70%.
+          const expectedWidth = Math.min(style.artWidth * 0.84, 240);
+          if (Math.abs(style.pseudoWidth - expectedWidth) > 1) {
+            failures.push(
+              `320px: narrow pseudo art width is ${style.pseudoWidth}, expected ${expectedWidth}`,
+            );
+          }
         }
 
         console.log(

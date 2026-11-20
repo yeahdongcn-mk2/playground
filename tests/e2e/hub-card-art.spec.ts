@@ -15,18 +15,54 @@ interface ZhenShaArtStyle {
   readonly pseudoHeight: number;
   readonly pseudoBackgroundImage: string;
   readonly pseudoFilter: string;
+  readonly imageWidth: number;
+  readonly imageHeight: number;
+  readonly goldPixels: number;
+  readonly inkPixels: number;
   readonly engineColor: string | null;
   readonly engineBorderColor: string | null;
 }
 
 async function readZhenShaArt(page: Page): Promise<ZhenShaArtStyle> {
-  return page.locator(ZHEN_SHA_ART).evaluate((element) => {
+  return page.locator(ZHEN_SHA_ART).evaluate(async (element) => {
     const before = getComputedStyle(element, '::before');
     const orb = element.querySelector('.mini-orb');
     const engine = element.querySelector('.game-card-engine');
     const engineStyle = engine === null ? null : getComputedStyle(engine);
     const artRect = element.getBoundingClientRect();
     const artStyle = getComputedStyle(element);
+
+    // Decode the data URI and paint it once, so the assertion proves the art
+    // actually renders instead of only checking the computed-style string.
+    const dataUri =
+      /url\("(data:image\/svg\+xml,[^"]+)"\)/.exec(before.backgroundImage)?.[1] ?? null;
+    let imageWidth = 0;
+    let imageHeight = 0;
+    let goldPixels = 0;
+    let inkPixels = 0;
+    if (dataUri !== null) {
+      const image = new Image();
+      image.src = dataUri;
+      await image.decode();
+      imageWidth = image.naturalWidth;
+      imageHeight = image.naturalHeight;
+      const canvas = document.createElement('canvas');
+      canvas.width = imageWidth;
+      canvas.height = imageHeight;
+      const context = canvas.getContext('2d');
+      if (context !== null) {
+        context.drawImage(image, 0, 0);
+        const { data } = context.getImageData(0, 0, imageWidth, imageHeight);
+        for (let index = 0; index < data.length; index += 4) {
+          const red = data[index] ?? 0;
+          const green = data[index + 1] ?? 0;
+          const blue = data[index + 2] ?? 0;
+          const alpha = data[index + 3] ?? 0;
+          if (red > 200 && green > 140 && blue < 130 && alpha > 40) goldPixels += 1;
+          if (red < 20 && green < 20 && blue < 20 && alpha > 80) inkPixels += 1;
+        }
+      }
+    }
 
     return {
       hasModifier: element.classList.contains('game-card-art--zhen-sha'),
@@ -39,6 +75,10 @@ async function readZhenShaArt(page: Page): Promise<ZhenShaArtStyle> {
       pseudoHeight: Number.parseFloat(before.height),
       pseudoBackgroundImage: before.backgroundImage,
       pseudoFilter: before.filter,
+      imageWidth,
+      imageHeight,
+      goldPixels,
+      inkPixels,
       engineColor: engineStyle?.color ?? null,
       engineBorderColor: engineStyle?.borderTopColor ?? null,
     };
@@ -58,6 +98,8 @@ function expectPseudoArtWidth(art: ZhenShaArtStyle, ratio: number): void {
   // The committed CSS sets a percentage width with a 240px ceiling. The
   // viewports below are chosen so deleting the base 74% rule, the narrow 84%
   // override or the ceiling each changes this rendered size and fails here.
+  // At 320px the ceiling binds; the exact 84% literal is pinned separately by
+  // the unit test that extracts the app.css rule.
   const expectedWidth = Math.min(art.artWidth * ratio, 240);
   expect(Math.abs(art.pseudoWidth - expectedWidth)).toBeLessThanOrEqual(1);
   expect(Math.abs(art.pseudoHeight - (art.pseudoWidth * 132) / 220)).toBeLessThanOrEqual(1);
@@ -77,6 +119,13 @@ function expectInkAndGold(art: ZhenShaArtStyle): void {
   expect(svg).toContain('#f6c453');
   expect(svg).toContain('#08070a');
   expect(svg).not.toMatch(/<image\b|xlink:href/);
+
+  // The decoded data URI must actually paint: a malformed SVG would still
+  // leave the url(...) in computed style, so require real gold/ink pixels.
+  expect(art.imageWidth).toBeGreaterThan(0);
+  expect(art.imageHeight).toBeGreaterThan(0);
+  expect(art.goldPixels).toBeGreaterThan(100);
+  expect(art.inkPixels).toBeGreaterThan(500);
 
   expect(art.pseudoFilter).toContain('drop-shadow');
   expect(art.pseudoFilter).toMatch(/246,\s*196,\s*83/);

@@ -117,7 +117,7 @@
 - 目的：`scripts/capture-screenshots.mjs` 已为 Chromium 大厅显式补上 `fullPage: true`；本节记录重拍后的两张共享整页证据，并让 `npm run verify:screenshots:doc-dims` 逐张校验它们。
 - 单一 owner（Issue #221）：`after-hub-desktop.png` / `after-hub-mobile.png` 只由 `scripts/capture-screenshots.mjs` 经 `npm run screenshots:container -- screenshots` 写入；`npm run screenshots:2048`、`npm run screenshots:breakout`、`npm run screenshots:minesweeper`、`npm run screenshots:snake` 及其 WebKit / before / 窄屏变体都不再重写这两张共享证据。游戏 PR 改大厅卡片时必须单独跑上面的 owner 命令重拍，并在同一改动中同步本表的捕获命令、sha256 与整页尺寸。
 - 捕获环境 / 命令：固定 Playwright 容器（镜像 tag / digest、字体与 EGL 变量见「固定捕获环境」）内执行 `npm run screenshots:container -- screenshots`（生产构建 + `vite preview`，端口 4174）。同一构建、端口空闲时连跑两次。
-- 捕获提交：`6217a208f55ca7ed2f4d8eb4f5a1c383c60f6d26`（分支 `agent/plan-161-t1`，该提交只含这两张 PNG；文档与测试在后续提交）。
+- 捕获提交：`9c40640483f4d9ac6ced12fb6b7af7d9d234416a`（分支 `agent/plan-250-t0`，该提交只含这两张 PNG；文档与测试在后续提交。Issue #250 t1 的镇煞卡面改动触发了本次重拍）。
 - 确定性口径：两次运行写出的两张图 sha256 完全一致，并与该提交的 PNG 一致；桌面 / 手机的完整 sha256 记录在下方表格的「捕获命令 / sha256」列，由 `npm run verify:screenshots:doc-dims` 一并校验。这是同一构建、同一捕获环境的确定性结果，不是跨构建的像素基准。
 - 页脚漂移：桌面整页图会截入共享页脚，旧提交捕获的桌面 After 图带旧页脚，用当前构建重跑必然不同；按「历史 After 证据与当前构建不一致（Issue #137）」的口径，不要求新图等于历史 PNG，本节 sha256 只对上述两次同构建运行有效。
 - 视口 / 主题：桌面 1440×1000 CSS px、DPR 1；手机 390×844 CSS px、DPR 2、`isMobile: true`、`hasTouch: true`；深色主题、`reducedMotion: reduce`。两张均为整页截图（`fullPage: true`），手机整页高度按同一次捕获实测记录。
@@ -125,8 +125,8 @@
 
 | 文件 | 场景 | 视口 / 主题 | 整页尺寸 | 捕获命令 / sha256 |
 | --- | --- | --- | --- | --- |
-| `after-hub-desktop.png` | 大厅（Chromium 桌面，含页脚） | 1440×1000 / 深色 / DPR 1，fullPage: true | 整页 1440×3468 | `npm run screenshots:container -- screenshots` / `7232a8977654561531fd1a1acf507d62ebf9486e78fb16b1714f5b732e7fc168` |
-| `after-hub-mobile.png` | 大厅（Chromium 手机） | 390×844（DPR 2）/ 深色，fullPage: true | 整页 780×13194 | `npm run screenshots:container -- screenshots` / `d2fa7877424f0552010f63bb3731d4b82b0771c7ce70e7f72c233b467419f448` |
+| `after-hub-desktop.png` | 大厅（Chromium 桌面，含页脚） | 1440×1000 / 深色 / DPR 1，fullPage: true | 整页 1440×3496 | `npm run screenshots:container -- screenshots` / `b868bd53d1065756f2b63324e26e3a739e1f1b36b37c0ab441f94d22dc6c740a` |
+| `after-hub-mobile.png` | 大厅（Chromium 手机） | 390×844（DPR 2）/ 深色，fullPage: true | 整页 780×14100 | `npm run screenshots:container -- screenshots` / `6a680519290b4467635fe054437352b1724c0bc6762682f795e9b58c782f4c3c` |
 
 ## zhen-sha：镇煞游戏首屏命名证据（Issue #274 / t1）
 
