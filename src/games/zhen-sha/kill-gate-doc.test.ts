@@ -102,6 +102,15 @@ function parsePrototypeTable(): { files: PrototypeRow[]; total: number } {
   return { files, total };
 }
 
+/** A `原型 <number>` metric claimed by the conclusion's bullet list. */
+function conclusionPrototypeNumber(pattern: RegExp, label: string): number {
+  const raw = pattern.exec(section('### 结论'))?.[1];
+  if (raw === undefined) {
+    throw new Error(`docs/zhen-sha-kill-gate.md 的结论段缺少可解析的「${label}」`);
+  }
+  return Number(raw.replaceAll(',', ''));
+}
+
 /** The explicit `结论：M` / `结论：L` claim, rejecting an ambiguous `M 或 L`. */
 function parseConclusion(text: string): string | undefined {
   const match = /结论[：:]\s*\*{0,2}([^\n*。.]*?)\s*\*{0,2}\s*(?:[。.]|$)/m.exec(text);
@@ -138,6 +147,15 @@ describe('zhen-sha kill gate engineering assessment', () => {
       ).toBe(countLines(readFileSync(join(GAME_DIR, row.name), 'utf8')));
     }
     expect(table.total).toBe(PRODUCTION_LINES);
+  });
+
+  it('matches the conclusion bullets to the measured prototype size', () => {
+    expect(
+      conclusionPrototypeNumber(/文件数[：:]\s*原型\s*([\d,]+)\s*个/, '文件数'),
+    ).toBe(PRODUCTION_FILES.length);
+    expect(
+      conclusionPrototypeNumber(/行数[：:]\s*原型\s*([\d,]+)\s*行/, '行数'),
+    ).toBe(PRODUCTION_LINES);
   });
 
   it('lists the registry entry separately from the prototype count', () => {
