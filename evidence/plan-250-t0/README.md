@@ -1,10 +1,14 @@
 # 镇煞大厅卡面 Before / After 证据
 
 - baseline：`origin/main` @ `e088b32`
-- after：`agent/plan-250-t0`（本分支提交）
+- after：`agent/plan-250-t0` @ `510f22b`（引入卡面的提交；后续提交只调整测试与证据脚本，UI 与基线对照不变）
 - 场景：大厅 `#games` 游戏卡片区；同一 Chromium、`reducedMotion: reduce`、DPR 1
 - 视口：1440×1000（滚到游戏区顶部）与 320×640（滚到镇煞卡片）
 - 文件：`{before,after}-{1440x1000,320x640}.png`
+
+本目录是本 PR 的复现材料，用于在 PR 描述中给出 Before/After 对照，不替代
+`docs/screenshots/` 的固定容器截图与 sha256 清单；仓库级大厅截图仍由
+`docs/screenshots/README.md` 规定的 owner 命令生成。
 
 ## 机械校验
 
@@ -16,3 +20,4 @@
 - 320px 下卡面高度 156px，镇煞 SVG 240×144，金色 `#f6c453` 与墨黑 `#08070a` 已生效。
 
 复现：`node evidence/plan-250-t0/verify-visual.mjs <before-url> <after-url>`。
+脚本只从已声明的 `@playwright/test` 导入浏览器，不从传递依赖 `playwright` 导入。

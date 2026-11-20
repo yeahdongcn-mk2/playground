@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { chromium } from 'playwright';
+import { chromium } from '@playwright/test';
 
 const beforeUrl = process.argv[2];
 const afterUrl = process.argv[3];
