@@ -81,11 +81,36 @@
 - 目的：每晚在固定的 Playwright 容器里重跑清单收录的证据，证明「同一构建、同一固定容器连续两跑逐字节一致、且等于入库清单」，把跨机器 / 引擎漂移在夜间暴露出来，而不是等到重拍时才由人发现。
 - 触发与入口：`.github/workflows/capture-repro.yml` 只在 `schedule`（每日 04:41 UTC）与 `workflow_dispatch` 触发，权限为 `contents: read`、超时 60 分钟，运行在普通 `ubuntu-latest`；固定容器由入口自己启动，所以该 job 故意没有 `container:` 键。入口是 `npm run verify:screenshots:repro`（`node scripts/verify-screenshot-repro.mjs`）。
 - 目标来源：目标不写在 workflow 里，而是从 `docs/screenshots/capture-sha256-manifest.json` 的每个 `captures[].command` 派生（当前每条都是 `npm run screenshots:container -- <target>`），同一个 command 的多个文件只对应一次目标捕获；新增清单条目会自动进入夜间复现，不需要改 workflow。清单记录的环境（平台 / 镜像 / 字体 / EGL / DPR）与固定捕获环境不一致时，入口以 2 退出，与运行期哈希 / 指纹漂移的 1 区分。
-- 连续两跑 / 可重复复现：默认每个唯一 target 连续运行两次 `npm run screenshots:container -- <target>`，两跑之间立即对该 target 对应的清单文件做 sha256；只有 `run 1 == run 2 == 清单` 才退出 0，两份日志还必须分别通过 `node scripts/verify-screenshot-sha256.mjs --log <日志>`（即 `npm run verify:screenshots:sha256 -- --log <日志>`）的环境指纹 / 平台校验。可选 `--target <screenshots:target>`（可重复，只跑选中的清单 target）与 `--runs <N>`（每个 target 的跑次，正整数，默认 2）用于在固定容器内重复复现负载相关漂移；入口逐跑打印并汇总每个清单文件的 sha256，并把每跑 PNG 副本保留到 `test-results/screenshot-repro/<target>-run<N>-png/`，因为下一跑会删除并重拍同一证据路径（target 里的 `:` 换成 `-`）；每跑开始前会先删除该跑目录里的同名旧副本，避免上一次调用留下的 PNG 在本次未写出文件时被误当成这一跑的字节。每跑的捕获日志保存到 `test-results/screenshot-repro/`，例如 `screenshots-webkit-run1.log`、`screenshots-2048-webkit-run2.log`，容器入口自身的日志在 `test-results/capture-container/`，失败时两个目录都会作为 artifact 上传。每跑开始前入口会删除该 target 的清单文件，再运行 capture；因此被既有写保护跳过的历史证据（日志出现 `Refusing to overwrite historical`）会以 sha256 `unavailable` 失败，而不是拿工作区里已提交的字节静默通过。CI runner 用完即弃，但本地运行会删除并重写工作区里已提交的 PNG，所以本地复现应使用临时副本，失败后执行 `git restore docs/screenshots` 恢复证据。需要真正重拍时按下方排障步骤显式加 `--allow-historical-overwrite`。
+- 连续两跑 / 可重复复现：默认每个唯一 target 连续运行两次 `npm run screenshots:container -- <target>`，两跑之间立即对该 target 对应的清单文件做 sha256；只有 `run 1 == run 2 == 清单` 才退出 0，两份日志还必须分别通过 `node scripts/verify-screenshot-sha256.mjs --log <日志>`（即 `npm run verify:screenshots:sha256 -- --log <日志>`）的环境指纹 / 平台校验。可选 `--target <screenshots:target>`（可重复，只跑选中的清单 target）与 `--runs <N>`（每个 target 的跑次，正整数，默认 2）用于在固定容器内重复复现漂移；需要同时注入宿主并发负载时按下一节「并发负载截图复现」加 `--load <N>`（默认 0 关闭）；入口逐跑打印并汇总每个清单文件的 sha256，并把每跑 PNG 副本保留到 `test-results/screenshot-repro/<target>-run<N>-png/`，因为下一跑会删除并重拍同一证据路径（target 里的 `:` 换成 `-`）；每跑开始前会先删除该跑目录里的同名旧副本，避免上一次调用留下的 PNG 在本次未写出文件时被误当成这一跑的字节。每跑的捕获日志保存到 `test-results/screenshot-repro/`，例如 `screenshots-webkit-run1.log`、`screenshots-2048-webkit-run2.log`，容器入口自身的日志在 `test-results/capture-container/`，失败时两个目录都会作为 artifact 上传。每跑开始前入口会删除该 target 的清单文件，再运行 capture；因此被既有写保护跳过的历史证据（日志出现 `Refusing to overwrite historical`）会以 sha256 `unavailable` 失败，而不是拿工作区里已提交的字节静默通过。CI runner 用完即弃，但本地运行会删除并重写工作区里已提交的 PNG，所以本地复现应使用临时副本，失败后执行 `git restore docs/screenshots` 恢复证据。需要真正重拍时按下方排障步骤显式加 `--allow-historical-overwrite`。
 - 失败汇总：入口把差异文件、期望 / 逐跑实际 sha256（run 1..N）、每跑的日志 / 保留 PNG 路径、每跑的环境指纹与重拍步骤写到步骤输出，并追加到 `$GITHUB_STEP_SUMMARY`；各跑日志的环境指纹不一致、capture 退出非 0、每跑 PNG 副本写入失败或日志校验失败也会各自列成一节。对照顺序是：先看各跑是否彼此一致，再看是否等于清单——都一致却与清单不同，通常意味着需要显式刷新证据，而不是环境抖动；各跑不一致则是固定环境内的真实抖动（见 Issue #328 小节）。
 - 排障 / 重拍步骤：1）在本地或临时副本运行 `npm run verify:screenshots:repro` 复现；2）若某个 target 漂移，先检查平台（`linux/amd64`）、镜像 tag / digest 与字体 / EGL 指纹，再对该 target 执行 `npm run screenshots:container -- <target>` 重拍；3）用带 `--log` 的 `verify:screenshots:sha256` 分别校验两次日志；4）确认新字节是预期结果后，在同一改动里显式更新 `docs/screenshots/capture-sha256-manifest.json` 的 `sha256` / `provenance` 与本 README 的表格，并说明重拍原因。不要只改清单掩盖环境差异。
 - 只读边界：CI 以只读权限运行，不执行 `git commit` / `git push`，也不编辑清单；capture 只按既有命令写工作区里的正常证据路径（runner 用完即弃），清单内容由「Assert the manifest was not modified」步骤用 `git diff --exit-code -- docs/screenshots/capture-sha256-manifest.json` 断言未变，即使复现失败也会运行。重拍与清单更新始终由人（或显式的证据刷新改动）完成。
 - 单测：`tests/unit/screenshot-repro.test.ts` 用临时目录与注入的捕获 / 校验函数覆盖目标派生、`--target` / `--runs` 解析与 target / 跑次选择、逐跑 sha256 汇总与保留 PNG 副本、多跑漂移的失败报告与漂移跑次识别、两跑顺序、两跑一致退出 0、哈希漂移与陈旧清单的差异文案、环境指纹不一致、日志校验失败与 capture 退出的失败汇总、每跑前删除旧证据后漏写 / 第二跑复用 / 删除失败 / 副本写入失败 / 重复调用时清理同名旧副本的失败路径，以及 CLI 的退出码与 `$GITHUB_STEP_SUMMARY` 追加；真实子进程用例用 PATH 里的假 `npm` 覆盖默认 spawn 的日志落盘与 `captureFailures` 映射、默认 verifyLog 的 `verifyFailures` 映射，并真正执行 `node scripts/verify-screenshot-repro.mjs` 覆盖直接入口的 `process.exitCode`（`--help` / 非法参数 / 非法清单 / capture 失败）；`tests/unit/capture-repro-workflow.test.ts` 钉住 workflow 的触发条件、只读权限、超时、无 `container:`、清单派生、不写仓库 / 清单、失败仍上传日志，以及本节与主 README 的文档契约。
+
+## 并发负载截图复现（Issue #352）
+
+- 目的：夜间两跑不保证 runner 同时有其它负载，而 #328 / #341 / #342 的 WebKit 像素漂移只在宿主并发时出现。本节记录独立的并发负载闸门：对受影响的 WebKit 清单 target 重复至少 4 跑，并在捕获期间保持 CPU 负载，任一跑偏离清单即非 0 退出。
+- 触发：`.github/workflows/capture-repro-load.yml` 只在 `schedule`（每日 05:47 UTC，在 04:41 夜间两跑之后）与 `workflow_dispatch` 触发；权限 `contents: read`、超时 120 分钟，运行在普通 `ubuntu-latest`，与夜间一样没有 job 级 `container:`，固定容器仍由入口自己启动。
+- dispatch 输入：都可选，留空取默认值；输入先由 `node scripts/check-repro-load-inputs.mjs` 校验（只接受清单 target、`runs >= 4`、`load` 为正整数且不超过上限），再经 `$GITHUB_OUTPUT` 传给捕获步骤，不把未校验的 dispatch 值拼进 `run:`。
+
+| 输入 | 默认值 | 含义 |
+| --- | --- | --- |
+| `targets` | `screenshots:webkit,screenshots:breakout:webkit,screenshots:snake:webkit` | 逗号分隔的清单 target；默认是三个受并发负载影响的 WebKit target |
+| `runs` | `4` | 每个 target 的跑次，正整数且至少 4 |
+| `load` | `8` | 捕获期间保持的 CPU 占用进程数，正整数 |
+
+- 本地命令：下面这条即默认值（`--target` 可重复；入口自身的 `--runs` 默认仍是 2、`--load` 默认 0，夜间两跑直接使用这两个默认值）：
+
+  ```bash
+  npm run verify:screenshots:repro -- --target screenshots:webkit --target screenshots:breakout:webkit --target screenshots:snake:webkit --runs 4 --load 8
+  ```
+
+  负载进程在正常结束、capture 失败或异常时都会统一 SIGTERM（超时升级 SIGKILL）回收并等待退出，不会在本次复现结束后继续残留；同一个 `--load` 调用的各跑共享这批负载进程。
+- 失败输出：任一跑与清单不同、各跑环境指纹不一致、capture 退出非 0、每跑 PNG 副本写入失败、逐跑日志校验失败或负载进程启动 / 提前退出 / 停止失败都以非 0 退出（失败报告退出 1；用法或清单非法退出 2）。报告列出每个差异文件的期望与逐跑实际 sha256、每跑日志与保留 PNG 路径（例如 `test-results/screenshot-repro/screenshots-webkit-run1.log` 与同目录的 `screenshots-webkit-run1-png/`；target 里的 `:` 换成 `-`）、环境指纹、本次请求 / 启动 / 停止的负载进程数以及重拍步骤，并追加到 `$GITHUB_STEP_SUMMARY`；workflow 失败时仍上传 `capture-repro-load-logs` artifact，包含 `test-results/screenshot-repro/` 与 `test-results/capture-container/`。重拍仍按上一节：`npm run screenshots:container -- <target>`，再用 `node scripts/verify-screenshot-sha256.mjs --log <log>` 校验，确认后才显式更新清单与本 README。
+- 默认夜间不变：`.github/workflows/capture-repro.yml` 仍是每日 04:41 UTC 一次、按清单 `command` 派生 target、每个 target 连续两跑、超时 60 分钟；新闸门是独立 workflow，不替换也不改动夜间 job 的触发、目标集合、跑次或时长。
+- 清单只读：两个 workflow 都用 `git diff --exit-code -- docs/screenshots/capture-sha256-manifest.json` 断言清单未被修改，失败路径（`if: always()`）也会检查；负载闸门只读取清单，不放宽断言、不自动改写清单。若某个 target 在并发负载下确实无法收敛，按既有口径把它移出本 workflow 的 `targets` 默认集合（或按 #137 / #199 的显式刷新流程移出清单）并在本节记录原因与证据，不在闸门里降低校验。
+- 证据边界：`--load` 注入的是宿主（GitHub runner 或本地机器）上的 CPU 占用进程，捕获仍在 `linux/amd64` 的固定 Playwright 容器内执行；因此该闸门只覆盖「Linux WebKit 固定容器」这类已收录清单证据的宿主并发敏感性，不覆盖容器内 CPU 竞争、Chromium 桌面 / 手机宿主捕获、其它引擎 / 平台或跨构建像素差异。arm64 等其它平台仍按「固定捕获环境」的拆分流程另建清单与闸门。
+- 单测：`tests/unit/capture-repro-load-workflow.test.ts` 钉住新 workflow 的触发、输入、校验顺序、只读权限与失败仍上传日志，并断言夜间两跑契约不变；`tests/unit/repro-load-inputs.test.ts` 覆盖输入校验与 CLI；`tests/unit/capture-repro-load-docs.test.ts` 钉住本节的 workflow 文件名、三个默认 target、`runs >= 4`、`--target` / `--runs` / `--load`、失败输出、artifact、夜间不变、清单只读与证据边界，并校验本地命令与 workflow / CLI 参数一致、主 README 链接到新 workflow。
 
 ## 通用大厅整页证据（Issue #161 / 子任务 1）
 
