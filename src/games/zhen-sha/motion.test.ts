@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const CSS_PATH = join(ROOT, 'src', 'games', 'zhen-sha', 'zhen-sha.css');
 const CSS = readFileSync(CSS_PATH, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
-const REDUCED_MOTION_QUERY = /@media\s*\(\s*prefers-reduced-motion\s*:\s*reduce\s*\)/;
+const REDUCED_MOTION_QUERY = /@media\s*\(\s*prefers-reduced-motion\s*:\s*reduce\s*\)/i;
 
 /*
  * The parsing helpers below deliberately mirror style.test.ts instead of
@@ -65,12 +65,25 @@ function keyframes(name: string): string {
 
 /** The single `prefers-reduced-motion: reduce` block start, body and end. */
 function reducedMotionRange(): { start: number; body: string; end: number } {
-  return blockRangeAfter(new RegExp(`${REDUCED_MOTION_QUERY.source}\\s*\\{`));
+  return blockRangeAfter(new RegExp(`${REDUCED_MOTION_QUERY.source}\\s*\\{`, 'i'));
 }
 
 /** The body of the single `prefers-reduced-motion: reduce` media block. */
 function reducedMotionBlock(): string {
   return reducedMotionRange().body;
+}
+
+/** Every `@media` block in source order: its normalised prelude and body. */
+function mediaBlocks(): { prelude: string; body: string }[] {
+  return [...CSS.matchAll(/@media\s*([^{]+)\{/gi)].map((match) => ({
+    prelude: normalizeSelector(match[1] ?? ''),
+    body: balancedBlockFrom((match.index ?? 0) + match[0].length - 1),
+  }));
+}
+
+/** A media prelude with insignificant whitespace removed and case folded. */
+function compactPrelude(prelude: string): string {
+  return prelude.toLowerCase().replace(/\s+/g, '');
 }
 
 /** The body of the first rule whose selector is exactly `selector`. */
@@ -127,6 +140,24 @@ function declarationsIn(body: string): { property: string; value: string }[] {
     property: (match[1] ?? '').toLowerCase(),
     value: (match[2] ?? '').trim(),
   }));
+}
+
+/**
+ * Whatever is left in a rule body after removing every declaration the parser
+ * recognises, ignoring only separators and whitespace. A non-empty result means
+ * a declaration-shaped token was skipped (for example an escaped property name
+ * such as `background\2d image`), so no exact-set assertion over
+ * `declarationsIn` can be complete.
+ */
+function undeclaredTextIn(body: string): string {
+  let last = 0;
+  let leftover = '';
+  for (const match of body.matchAll(/(?:^|;)\s*[a-z-]+\s*:\s*[^;]*(?=;|$)/gi)) {
+    leftover += body.slice(last, match.index);
+    last = (match.index ?? 0) + match[0].length;
+  }
+  leftover += body.slice(last);
+  return leftover.replace(/[\s;]/g, '');
 }
 
 /** An animation property name without its vendor prefix. */
@@ -319,7 +350,18 @@ describe('zhen-sha procedural motion layer', () => {
   });
 
   it('stops the mist, jitter and scanlines under reduced motion', () => {
-    expect(CSS.match(new RegExp(REDUCED_MOTION_QUERY.source, 'g'))).toHaveLength(1);
+    // A second reduced-motion block written as `@media screen and
+    // (prefers-reduced-motion: reduce)` would be invisible to the canonical
+    // lookup below and could override the static paper with a longhand. Require
+    // every media query that mentions the preference to be the canonical one,
+    // ignoring only case and whitespace, so `@media screen and (...)` or a
+    // `no-preference` variant cannot slip in.
+    expect(
+      mediaBlocks()
+        .map(({ prelude }) => compactPrelude(prelude))
+        .filter((prelude) => prelude.includes('prefers-reduced-motion')),
+      'prefers-reduced-motion 媒体查询只能有一条规范写法',
+    ).toEqual(['(prefers-reduced-motion:reduce)']);
 
     const { body: reduced, start: reducedStart, end: reducedEnd } = reducedMotionRange();
     const rules = rulesIn(reduced);
@@ -385,6 +427,21 @@ describe('zhen-sha procedural motion layer', () => {
     expect(afterReduced, 'reduced-motion 媒体块之后不应再声明动画').not.toMatch(
       /(?:^|[;{])\s*(?:-(?:webkit|moz|ms|o)-)?animation(?:-[a-z-]+)?\s*:/i,
     );
+
+    // A later stage / pseudo-element rule could also undo the static paper with
+    // a longhand (for example `.zhen-sha-stage::before { background-image:
+    // none; }`). The reduced block is the last word on those selectors, so pin
+    // them instead of enumerating every static property in a blacklist.
+    const laterStageRules = rulesIn(afterReduced).filter((rule) =>
+      rule.selector
+        .split(',')
+        .map(normalizeSelector)
+        .some((selector) => /\.zhen-sha-stage(?![\w-])/.test(selector)),
+    );
+    expect(
+      laterStageRules.map((rule) => rule.selector),
+      'reduced-motion 媒体块之后不应再出现 stage / 伪元素规则',
+    ).toEqual([]);
   });
 
   it('keeps the static ink paper, gold highlights and judgement feedback', () => {
@@ -392,9 +449,35 @@ describe('zhen-sha procedural motion layer', () => {
 
     // Only motion and its scanline alpha are overridden; colours, borders,
     // contrast, stacking and sizing stay exactly as the base rules define them.
-    expect(reduced).not.toMatch(
-      /(?:^|[;{])\s*(?:background|border|box-shadow|color|opacity|filter|transform|mix-blend-mode|z-index|display|position|inset|width|height|padding|margin|content|visibility|(?:-webkit-)?mask-image|font|letter-spacing|line-height|animation-(?:delay|duration|iteration-count|timing-function|direction))\s*:/,
-    );
+    // The reduced-motion test above pins the selector list and the single
+    // animation declaration; here the complete set additionally proves that no
+    // other declaration sneaks in. Pin it instead of blacklisting property
+    // names: longhands such as `background-image: none`, `background-size: 0 0`
+    // or `border-color` were never named in the old blacklist, so a
+    // property-name blacklist can never be complete.
+    expect(
+      rulesIn(reduced).map((rule) => ({
+        selector: rule.selector,
+        declarations: declarationsIn(rule.body),
+      })),
+      'reduced-motion 块只应覆盖 --fx-scan 与 animation: none',
+    ).toEqual([
+      {
+        selector: '.zhen-sha-stage',
+        declarations: [{ property: '--fx-scan', value: 'transparent' }],
+      },
+      {
+        selector: '.zhen-sha-stage::before, .zhen-sha-stage::after',
+        declarations: [{ property: 'animation', value: 'none' }],
+      },
+    ]);
+
+    // The exact set above is only complete when every token in each rule body
+    // was parsed as a declaration; escape tricks such as `background\2d image`
+    // would otherwise be invisible to `declarationsIn`.
+    for (const rule of rulesIn(reduced)) {
+      expect(undeclaredTextIn(rule.body), `${rule.selector} 的声明应能被完整解析`).toBe('');
+    }
 
     // style.test.ts guards the base declarations; here the point is that the
     // reduced-motion block leaves them in force rather than overriding them.
