@@ -15,8 +15,8 @@ const REDUCED_MOTION_QUERY = /@media\s*\(\s*prefers-reduced-motion\s*:\s*reduce\
  * would change the documented production file count and line total.
  */
 
-/** The text between an opening brace and its matching closing brace. */
-function balancedBlockFrom(openBraceIndex: number): string {
+/** The index of the `}` that closes the block opened at `openBraceIndex`. */
+function matchingBraceIndex(openBraceIndex: number): number {
   let depth = 0;
   for (let index = openBraceIndex; index < CSS.length; index += 1) {
     if (CSS[index] === '{') {
@@ -24,15 +24,20 @@ function balancedBlockFrom(openBraceIndex: number): string {
     } else if (CSS[index] === '}') {
       depth -= 1;
       if (depth === 0) {
-        return CSS.slice(openBraceIndex + 1, index);
+        return index;
       }
     }
   }
   throw new Error('zhen-sha.css 中存在未闭合的块');
 }
 
-/** The body of the first block whose opening `{` the pattern ends on. */
-function blockAfter(pattern: RegExp): string {
+/** The text between an opening brace and its matching closing brace. */
+function balancedBlockFrom(openBraceIndex: number): string {
+  return CSS.slice(openBraceIndex + 1, matchingBraceIndex(openBraceIndex));
+}
+
+/** The start, body and end index of the first block the pattern ends on. */
+function blockRangeAfter(pattern: RegExp): { start: number; body: string; end: number } {
   const match = pattern.exec(CSS);
   if (match === null) {
     throw new Error(`zhen-sha.css 缺少 ${String(pattern)}`);
@@ -41,7 +46,16 @@ function blockAfter(pattern: RegExp): string {
   if (CSS[openBrace] !== '{') {
     throw new Error(`${String(pattern)} 没有匹配到块起始花括号`);
   }
-  return balancedBlockFrom(openBrace);
+  return {
+    start: match.index,
+    body: balancedBlockFrom(openBrace),
+    end: matchingBraceIndex(openBrace) + 1,
+  };
+}
+
+/** The body of the first block whose opening `{` the pattern ends on. */
+function blockAfter(pattern: RegExp): string {
+  return blockRangeAfter(pattern).body;
 }
 
 /** The body of one `@keyframes <name> { ... }` block. */
@@ -49,9 +63,14 @@ function keyframes(name: string): string {
   return blockAfter(new RegExp(`@keyframes\\s+${name}\\s*\\{`));
 }
 
+/** The single `prefers-reduced-motion: reduce` block start, body and end. */
+function reducedMotionRange(): { start: number; body: string; end: number } {
+  return blockRangeAfter(new RegExp(`${REDUCED_MOTION_QUERY.source}\\s*\\{`));
+}
+
 /** The body of the single `prefers-reduced-motion: reduce` media block. */
 function reducedMotionBlock(): string {
-  return blockAfter(new RegExp(`${REDUCED_MOTION_QUERY.source}\\s*\\{`));
+  return reducedMotionRange().body;
 }
 
 /** The body of the first rule whose selector is exactly `selector`. */
@@ -65,10 +84,25 @@ function ruleBody(selector: string): string {
   return body;
 }
 
+/** A selector with its surrounding and repeated whitespace normalised. */
+function normalizeSelector(selector: string): string {
+  return selector.trim().replace(/\s+/g, ' ');
+}
+
+/**
+ * The bodies of every rule whose selector list contains `selector` exactly,
+ * including rules nested in media queries and duplicate selector lists.
+ */
+function ruleBodies(selector: string): string[] {
+  return [...CSS.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .filter((match) => (match[1] ?? '').split(',').map(normalizeSelector).includes(selector))
+    .map((match) => match[2] ?? '');
+}
+
 /** Every selector/body pair inside a block, in source order. */
 function rulesIn(block: string): { selector: string; body: string }[] {
   return [...block.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((match) => ({
-    selector: (match[1] ?? '').trim().replace(/\s+/g, ' '),
+    selector: normalizeSelector(match[1] ?? ''),
     body: match[2] ?? '',
   }));
 }
@@ -76,7 +110,7 @@ function rulesIn(block: string): { selector: string; body: string }[] {
 /** The value of one declaration inside a rule body, up to its semicolon. */
 function declarationValue(body: string, property: string): string {
   const matches = [
-    ...body.matchAll(new RegExp(`(?:^|;)\\s*${property}\\s*:\\s*([^;]*)(?=;)`, 'g')),
+    ...body.matchAll(new RegExp(`(?:^|;)\\s*${property}\\s*:\\s*([^;]*)(?=;|$)`, 'g')),
   ];
   const value = matches.at(-1)?.[1];
   if (value === undefined) {
@@ -98,6 +132,13 @@ function declarationsIn(body: string): { property: string; value: string }[] {
 /** An animation property name without its vendor prefix. */
 function unprefixedAnimationProperty(property: string): string {
   return property.replace(/^-(?:webkit|moz|ms|o)-/, '');
+}
+
+/** The `animation` / `animation-*` property names declared in a rule body. */
+function animationPropertiesIn(body: string): string[] {
+  return declarationsIn(body)
+    .map(({ property }) => unprefixedAnimationProperty(property))
+    .filter((property) => property === 'animation' || property.startsWith('animation-'));
 }
 
 /** The comma-separated items of a value, split only at nesting depth zero. */
@@ -204,29 +245,51 @@ describe('zhen-sha procedural motion layer', () => {
 
   it('runs the loops on the decorative pseudo-elements, never on game content', () => {
     const paper = ruleBody('.zhen-sha-stage::before');
-    expect(paper).toMatch(/animation:\s*[^;]*zhen-sha-ink-mist/);
-    expect(paper).toMatch(/animation:\s*[^;]*zhen-sha-scanlines/);
-    expect(paper).toMatch(/infinite/);
+    // The paper layer runs two comma-separated loops in one shorthand. Split
+    // them so each name is bound to its own `infinite`: in a shared shorthand
+    // one `infinite` would still satisfy a whole-rule search.
+    const paperAnimations = topLevelItems(declarationValue(paper, 'animation'));
+    expect(paperAnimations, '纸面层应同时跑墨雾与扫描线两条循环').toHaveLength(2);
+    for (const name of ['zhen-sha-ink-mist', 'zhen-sha-scanlines']) {
+      const loops = paperAnimations.filter((animation) =>
+        new RegExp(`(?:^|\\s)${name}(?:\\s|$)`).test(animation),
+      );
+      expect(loops, `${name} 应恰好是一条纸面循环`).toHaveLength(1);
+      expect(loops[0], `${name} 循环必须带 infinite`).toMatch(/\binfinite\b/);
+    }
 
     const edge = ruleBody('.zhen-sha-stage::after');
-    expect(edge).toMatch(/animation:\s*[^;]*zhen-sha-jitter/);
-    expect(edge).toMatch(/infinite/);
+    const edgeAnimation = declarationValue(edge, 'animation');
+    expect(edgeAnimation, '边缘层应跑抖动循环').toMatch(/zhen-sha-jitter\b/);
+    expect(edgeAnimation, '边缘抖动必须带 infinite').toMatch(/\binfinite\b/);
 
     // Content, HUD, hints and the settlement overlay stay free of looping
     // animation, including the judgement feedback that must survive reduced
-    // motion.
+    // motion. Check every rule for the selector and both the `animation`
+    // shorthand and `animation-*` longhands, so `animation-name` cannot slip
+    // through.
     for (const selector of [
       '.zhen-sha-stage',
+      '.zhen-sha-stage.is-pressed',
       '.zhen-sha-canvas',
       '.zhen-sha-layout',
       '.zhen-sha-hud',
       '.zhen-sha-stat',
       '.zhen-sha-pip',
+      '.zhen-sha-pip.is-filled',
       '.zhen-sha-hints',
+      '.zhen-sha-hints li',
+      '.zhen-sha-gesture-note',
+      '.zhen-sha-note',
       '.zhen-sha-overlay',
+      '.zhen-sha-overlay[hidden]',
+      '.zhen-sha-overlay-body',
       '.zhen-sha-overlay-card',
+      '.zhen-sha-overlay-card h2',
     ]) {
-      expect(ruleBody(selector), `${selector} 不应参与循环动画`).not.toMatch(/animation\s*:/);
+      const bodies = ruleBodies(selector);
+      expect(bodies.length, `${selector} 应至少有一条规则`).toBeGreaterThan(0);
+      expect(bodies.flatMap(animationPropertiesIn), `${selector} 不应参与循环动画`).toEqual([]);
     }
   });
 
@@ -258,7 +321,7 @@ describe('zhen-sha procedural motion layer', () => {
   it('stops the mist, jitter and scanlines under reduced motion', () => {
     expect(CSS.match(new RegExp(REDUCED_MOTION_QUERY.source, 'g'))).toHaveLength(1);
 
-    const reduced = reducedMotionBlock();
+    const { body: reduced, start: reducedStart, end: reducedEnd } = reducedMotionRange();
     const rules = rulesIn(reduced);
 
     // The block may only turn the two decorative pseudo-elements off and make
@@ -296,14 +359,32 @@ describe('zhen-sha procedural motion layer', () => {
     // The reduced block must not keep any of the zhen-sha animation names alive.
     expect(reduced).not.toMatch(/zhen-sha-ink-mist|zhen-sha-scanlines|zhen-sha-jitter/);
 
-    // It must come after the last running declaration so the cascade override
-    // wins; searching backwards from the media block skips its own
-    // `animation: none`.
-    const reduceIndex = CSS.search(REDUCED_MOTION_QUERY);
-    expect(reduceIndex).toBeGreaterThan(-1);
-    const lastRunningAnimation = CSS.lastIndexOf('animation:', reduceIndex);
-    expect(lastRunningAnimation).toBeGreaterThan(-1);
-    expect(reduceIndex).toBeGreaterThan(lastRunningAnimation);
+    // Only the two decorative pseudo-element rules may run animation before the
+    // override; a third selector (for example a higher-specificity
+    // `.zhen-sha-stage.is-playing::before`) would beat the reduced rule in the
+    // cascade even though it comes earlier in the file.
+    const runningRules = rulesIn(CSS.slice(0, reducedStart)).filter(
+      (rule) => animationPropertiesIn(rule.body).length > 0,
+    );
+    expect(runningRules.map((rule) => rule.selector)).toEqual([
+      '.zhen-sha-stage::before',
+      '.zhen-sha-stage::after',
+    ]);
+
+    // `animation: none` in the media block is normal, so a running declaration
+    // with `!important` would beat it regardless of source order.
+    expect(CSS.slice(0, reducedStart), 'running animation 不得用 !important').not.toMatch(
+      /animation(?:-[a-z-]+)?\s*:[^;}]*!\s*important/i,
+    );
+
+    // Nothing after the media block may declare animation / animation-*
+    // again: a later rule of equal specificity would cascade over
+    // `animation: none` and silently restart a loop under reduced motion.
+    // Slicing after the block also pins it after every running declaration.
+    const afterReduced = CSS.slice(reducedEnd);
+    expect(afterReduced, 'reduced-motion 媒体块之后不应再声明动画').not.toMatch(
+      /(?:^|[;{])\s*(?:-(?:webkit|moz|ms|o)-)?animation(?:-[a-z-]+)?\s*:/i,
+    );
   });
 
   it('keeps the static ink paper, gold highlights and judgement feedback', () => {
