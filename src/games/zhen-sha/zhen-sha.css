@@ -81,6 +81,13 @@
 }
 
 .zhen-sha-stage {
+  /*
+   * Animated scanline ink (issue #249 t2). Deliberately not a --zhen-* token:
+   * the palette guard counts exactly the four core colours plus gold, and this
+   * property only carries a derived alpha. The reduced-motion block below
+   * turns the scanlines off by making it transparent.
+   */
+  --fx-scan: color-mix(in srgb, var(--zhen-paper) 8%, transparent);
   position: relative;
   isolation: isolate;
   width: min(100%, 420px);
@@ -112,9 +119,11 @@
 }
 
 /*
- * Black xuan paper: fixed procedural fibres and wash blooms. The canvas fills
- * an opaque ink base every frame, so this background only shows before the
- * first paint; paper grain is screen-blended above it. No image files/URLs/fonts.
+ * Black xuan paper: procedural fibres and wash blooms. The stage's own
+ * background only shows before the canvas paints its first opaque ink frame;
+ * this decorative layer sits above that canvas (z-index 1) and is
+ * screen-blended, so the drifting paper grain and ink mist stay visible over
+ * it. No image files/URLs/fonts.
  */
 .zhen-sha-stage::before {
   content: "";
@@ -143,9 +152,30 @@
       21deg,
       transparent 0 8px,
       color-mix(in srgb, var(--zhen-ash) 9%, transparent) 8px 9px
+    ),
+    /* Drifting ink mist: a soft wash larger than the frame, moved by keyframes. */
+    radial-gradient(
+      72% 58% at 28% 44%,
+      color-mix(in srgb, var(--zhen-paper) 7%, transparent),
+      transparent 72%
+    ),
+    /* Scanlines: one translucent band every third row, crawled by keyframes. */
+    repeating-linear-gradient(
+      to bottom,
+      transparent 0 2px,
+      var(--fx-scan) 2px 3px
     );
+  background-size: auto, auto, auto, auto, 165% 150%, 100% 6px;
+  background-repeat: repeat, repeat, repeat, repeat, no-repeat, repeat;
   mix-blend-mode: screen;
   opacity: 0.5;
+  /*
+   * Both loops stay on this decorative layer, above the opaque canvas and
+   * below the overlay, so the play field never moves or loses contrast.
+   */
+  animation:
+    zhen-sha-ink-mist 38s ease-in-out infinite,
+    zhen-sha-scanlines 9s linear infinite;
 }
 
 /*
@@ -200,6 +230,60 @@
       black calc(100% - 5px)
     );
   mask-composite: add;
+  /* Barely-there film-gate weave on the dry-brush edges only. */
+  animation: zhen-sha-jitter 7s steps(2, end) infinite;
+}
+
+/*
+ * Procedural motion for the style layer (issue #249 t2). The mist drift moves
+ * the whole decorative wash by ~1% (scaled up so no paper edge is exposed);
+ * the scanline crawl shifts only the last background layer by exactly one
+ * 6px background tile (two 3px scanline bands); the jitter nudges the masked
+ * brush edge by fractions of a pixel.
+ * None of these rules touch layout, the canvas or the settlement overlay.
+ */
+@keyframes zhen-sha-ink-mist {
+  0%,
+  100% {
+    transform: translate3d(-1.2%, -0.8%, 0) scale(1.04);
+  }
+
+  50% {
+    transform: translate3d(1%, 1.2%, 0) scale(1.06);
+  }
+}
+
+@keyframes zhen-sha-scanlines {
+  from {
+    background-position: 0 0, 0 0, 0 0, 0 0, 0 0, 0 0;
+  }
+
+  to {
+    background-position: 0 0, 0 0, 0 0, 0 0, 0 0, 0 6px;
+  }
+}
+
+@keyframes zhen-sha-jitter {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+
+  20% {
+    transform: translate3d(-0.6px, 0.5px, 0);
+  }
+
+  40% {
+    transform: translate3d(0.5px, -0.6px, 0);
+  }
+
+  60% {
+    transform: translate3d(-0.5px, -0.5px, 0);
+  }
+
+  80% {
+    transform: translate3d(0.6px, 0.5px, 0);
+  }
 }
 
 .zhen-sha-stage.is-pressed {
@@ -367,5 +451,22 @@
 
   .zhen-sha-gesture-note {
     font-size: 0.74rem;
+  }
+}
+
+/*
+ * Reduced motion (issue #249 t2): stop the mist drift, the jitter and the
+ * scanline crawl, and make the scanline ink transparent. The static paper
+ * wash, ink contrast, gold highlights and the pressed/judgement styling stay
+ * exactly as they are.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .zhen-sha-stage {
+    --fx-scan: transparent;
+  }
+
+  .zhen-sha-stage::before,
+  .zhen-sha-stage::after {
+    animation: none;
   }
 }
