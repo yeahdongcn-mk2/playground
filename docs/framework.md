@@ -251,7 +251,7 @@ const vector = directions.vector(); // 对角线已归一化
 3. **DOM 外壳** `view.ts`：负责 HUD、覆盖层、按钮、触屏辅助键；2D 游戏用 `createPhaser2DGame()` 创建 2D 运行时，DOM 游戏（如扫雷）直接操作 DOM（见 10.1），返回的 `destroy()` 里释放引擎、监听器与计时器。
 4. **注册**：在 `src/games/registry.ts` 的 `games` 数组加入 `myGame`，大厅自动出现卡片。
 5. **资源**：放到 `public/games/my-game/`，场景 `preload()` 里加载；体积大的资源按需加载。
-6. **测试**：规则单测放 `engine.test.ts`；浏览器行为加到 `tests/e2e/`，用 `data-testid` 定位。需要读取只读状态或固定初始数据时，可参考 snake / tetris / 2048 / breakout / minesweeper / zhen-sha 只在 `import.meta.env.DEV` 或 hash 路由后的 `?debug=1`（例如 `#/games/breakout?debug=1`）下安装 `window.__playground`，生产默认入口不会暴露调试 API。
+6. **测试**：规则单测放 `engine.test.ts`；浏览器行为加到 `tests/e2e/`，用 `data-testid` 定位。需要读取只读状态或固定初始数据时，可参考 snake / tetris / 2048 / breakout / minesweeper 在 `import.meta.env.DEV` 或 hash 路由后的 `?debug=1`（例如 `#/games/breakout?debug=1`）下安装 `window.__playground`；zhen-sha 只认 hash 路由后的 `?debug=1`，避免开发服务器自动开帧破坏固定输入序列。生产默认入口都不会暴露调试 API。
 
 ### 10.1 DOM 游戏（不加载引擎）
 
