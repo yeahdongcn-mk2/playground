@@ -123,7 +123,7 @@ export interface ZhenShaAttackSnapshot {
 
 export interface ZhenShaBossSnapshot {
   readonly name: string;
-  /** 1-based index of the current boss in the chart, paired with `phase`. */
+  /** 1-based boss index; with `phase` it forms labels such as `1-1`…`3-2`. */
   readonly bossIndex: number;
   /** 1-based index of the current phase inside the current boss. */
   readonly phase: number;

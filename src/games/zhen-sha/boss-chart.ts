@@ -5,16 +5,16 @@
  * A chart is data only: no DOM, renderer, audio, timer or wall clock, and no
  * import from the engine or the view. Once the engine is wired to a chart, it
  * reads that chart to decide how long a move winds up, when its parry bands are
- * open, how hard it hits and how long the duel rests between exchanges. Today
- * the engine still reads its own timing constants directly.
+ * open, how hard it hits and how long the duel rests between exchanges. The
+ * engine consumes a chart through its constructor.
  *
  * Relationship to `bosses.ts`: #246 already ships `BOSSES` with its own
  * `BossMove` / `BossPhase` / `BossChart` types — there a boss carries `id`,
  * `damage` is 7–13 points and `activeMs` is post-wind-up active time. This
- * module is the contract the engine card will consume; that card must map or
- * replace `BOSSES` here and reconcile the units in one place instead of
- * leaving two live contracts. This card deliberately does not change
- * `bosses.ts`.
+ * module is the contract the engine consumes; `boss-chart-adapter.ts` maps
+ * `BOSSES` into it and reconciles the units (including `activeMs`) in one
+ * place instead of leaving two live contracts, so later cards read the
+ * adapter rather than the historical field wording above.
  *
  * `bosses` and `phases` are arrays, not fixed-size tuples. Real charts have
  * three bosses with two phases each and 6–10 moves per phase, but the default
@@ -92,16 +92,16 @@ export interface BossChart {
 }
 
 /**
- * Default chart an argument-free engine should use once it is wired to charts.
+ * Default chart an argument-free engine uses.
  *
  * It reproduces the original kill gate tick for tick: one 黑煞 phase whose
  * single move repeats after a 900 ms wind-up, an opening attack warmed up for
  * 1500 ms, a 600 ms recovery, a 300 ms normal parry band and a nested 100 ms
  * perfect band. At 120 Hz those convert to 108, 180, 72, 36 and 12 ticks,
  * i.e. the engine's TELEGRAPH_TICKS, FIRST_TELEGRAPH_TICKS, RECOVERY_TICKS,
- * 2 × NORMAL_BAND_HALF_TICKS and 2 × PERFECT_BAND_HALF_TICKS. Until the wiring
- * lands, the engine still reads those constants directly; this constant is the
- * contract that wiring must preserve.
+ * 2 × NORMAL_BAND_HALF_TICKS and 2 × PERFECT_BAND_HALF_TICKS. The engine now
+ * consumes this chart through its constructor; the default chart keeps the
+ * original kill-gate schedule tick for tick.
  */
 export const DEFAULT_BOSS_CHART: BossChart = {
   firstTelegraphMs: 1500,

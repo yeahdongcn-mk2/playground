@@ -894,6 +894,11 @@ const STAGE_RECOVERY_MS = 250;
 
 const toTicks = (ms: number): number => (ms * TICKS_PER_SECOND) / 1000;
 
+/** Mirror the engine's `durationToTicks` rounding for chart durations. */
+function durationTicks(ms: number): number {
+  return Math.round(toTicks(ms));
+}
+
 const STAGE_TIMING = {
   firstTelegraph: toTicks(STAGE_FIRST_TELEGRAPH_MS),
   telegraph: toTicks(STAGE_TELEGRAPH_MS),
@@ -1175,6 +1180,7 @@ describe('boss chart stages', () => {
       expect(engine.snapshot().attack).toBeNull();
 
       advance(engine, phase.strikeStep + 1 - engine.snapshot().step);
+      expect(engine.snapshot().step).toBe(phase.strikeStep + 1);
       const cleared = engine.snapshot();
 
       if (index < plan.length - 1) {
@@ -1552,7 +1558,7 @@ describe('boss chart stages', () => {
   });
 });
 
-const REAL_RECOVERY_TICKS = toTicks(REAL_CHART_RECOVERY_MS);
+const REAL_RECOVERY_TICKS = durationTicks(REAL_CHART_RECOVERY_MS);
 
 interface RealPhasePlan {
   readonly bossIndex: number;
@@ -1588,11 +1594,11 @@ function realPhasePlan(): RealPhasePlan[] {
         REAL_BOSS_CHART.firstTelegraphMs !== undefined
           ? REAL_BOSS_CHART.firstTelegraphMs
           : first.telegraphMs;
-      const firstImpact = entry + toTicks(openingTelegraphMs);
+      const firstImpact = entry + durationTicks(openingTelegraphMs);
       const secondImpact =
-        firstImpact + REAL_RECOVERY_TICKS + toTicks(second.telegraphMs);
+        firstImpact + REAL_RECOVERY_TICKS + durationTicks(second.telegraphMs);
       const thirdImpact =
-        secondImpact + REAL_RECOVERY_TICKS + toTicks(third.telegraphMs);
+        secondImpact + REAL_RECOVERY_TICKS + durationTicks(third.telegraphMs);
       const strikeStep = thirdImpact + 10;
       plan.push({
         bossIndex,
@@ -1628,7 +1634,7 @@ function judgeRealFirstTap(offset: number): ZhenShaSnapshot {
   if (move === undefined) {
     throw new Error('real chart must have an opening move');
   }
-  const impact = toTicks(REAL_BOSS_CHART.firstTelegraphMs ?? move.telegraphMs);
+  const impact = durationTicks(REAL_BOSS_CHART.firstTelegraphMs ?? move.telegraphMs);
   const engine = new ZhenShaEngine(REAL_BOSS_CHART);
   engine.input('block', impact + offset);
   advance(engine, impact + offset + 1);
@@ -1656,9 +1662,9 @@ function realMissLandings(): readonly number[] {
       index === 0
         ? (REAL_BOSS_CHART.firstTelegraphMs ?? move.telegraphMs)
         : move.telegraphMs;
-    const impact = spawnTick + toTicks(telegraphMs);
+    const impact = spawnTick + durationTicks(telegraphMs);
     // Mirror the engine's conversion: round the full width, then halve/floor.
-    const landing = impact + Math.floor(Math.round(toTicks(move.activeMs)) / 2);
+    const landing = impact + Math.floor(durationTicks(move.activeMs) / 2);
     landings.push(landing);
     spawnTick = landing + REAL_RECOVERY_TICKS;
   }
@@ -1695,6 +1701,7 @@ describe('real boss chart wiring', () => {
 
     plan.forEach((phase, index) => {
       advance(engine, phase.breakStart + 1 - engine.snapshot().step);
+      expect(engine.snapshot().step).toBe(phase.breakStart + 1);
       perfects += MOMENTUM_FOR_BREAK;
       const boss = REAL_BOSS_CHART.bosses[phase.bossIndex];
       if (boss === undefined) {
@@ -1718,6 +1725,7 @@ describe('real boss chart wiring', () => {
       expect(engine.snapshot().attack).toBeNull();
 
       advance(engine, phase.strikeStep + 1 - engine.snapshot().step);
+      expect(engine.snapshot().step).toBe(phase.strikeStep + 1);
       const cleared = engine.snapshot();
 
       if (index < plan.length - 1) {
@@ -1758,14 +1766,16 @@ describe('real boss chart wiring', () => {
     expect(types.filter((type) => type === 'win')).toHaveLength(1);
   });
 
-  it('reads the real move windows and 600 ms recovery instead of the defaults', () => {
+  it('reads the real move windows and the adapter recovery', () => {
     // The real opening move is 320 ms active / 160 ms parry: 38 and 19 full
     // ticks, so the halves are 19 and 9 — not the default 18 and 6.
     const normalHalf = 19;
     const perfectHalf = 9;
     expect(perfectHalf).not.toBe(PERFECT_BAND_HALF_TICKS);
     expect(normalHalf).not.toBe(NORMAL_BAND_HALF_TICKS);
-    expect(REAL_RECOVERY_TICKS).toBe(RECOVERY_TICKS);
+    // 600 ms is also the kill-gate default; the full walk proves the engine
+    // actually reads it, while this pins the adapter's tick conversion.
+    expect(REAL_RECOVERY_TICKS).toBe(72);
 
     const cases: ReadonlyArray<
       readonly [offset: number, judgement: ParryJudgement, hits: number]
@@ -1788,6 +1798,69 @@ describe('real boss chart wiring', () => {
       expect(snapshot.hits, `offset ${offset}`).toBe(hits);
       expect(snapshot.boss).toMatchObject({ bossIndex: 1, phase: 1 });
     }
+  });
+
+  it('charges one hit per unparried move even when chart damage is larger', () => {
+    const heavyChart: BossChart = {
+      bosses: [
+        {
+          name: '重击 boss',
+          phases: [
+            {
+              id: 'heavy-phase',
+              moves: [
+                {
+                  id: 'heavy-move',
+                  telegraphMs: 900,
+                  activeMs: 300,
+                  parryWindowMs: 100,
+                  damage: 7,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const engine = new ZhenShaEngine(heavyChart);
+    advance(engine, toTicks(900) + NORMAL_BAND_HALF_TICKS + 1);
+
+    expect(engine.snapshot()).toMatchObject({
+      status: 'playing',
+      hits: 1,
+      momentum: 0,
+      perfects: 0,
+    });
+  });
+
+  it('honours a non-default recovery on an adapted real chart', () => {
+    const fastRecovery: BossChart = { ...REAL_BOSS_CHART, recoveryMs: 200 };
+    const phase = REAL_BOSS_CHART.bosses[0]?.phases[0];
+    if (phase === undefined) {
+      throw new Error('real chart must have an opening phase');
+    }
+    const [opening, second] = phase.moves;
+    if (opening === undefined || second === undefined) {
+      throw new Error('real chart must have two opening moves');
+    }
+    const firstImpact = durationTicks(
+      REAL_BOSS_CHART.firstTelegraphMs ?? opening.telegraphMs,
+    );
+    const engine = new ZhenShaEngine(fastRecovery);
+    engine.input('block', firstImpact);
+    advance(engine, firstImpact + 1);
+    expect(engine.snapshot()).toMatchObject({ perfects: 1, attack: null });
+
+    // 200 ms is 24 ticks, not the adapter's 600 ms / 72 ticks.
+    const nextSpawn = firstImpact + durationTicks(200);
+    advance(engine, nextSpawn + 1 - engine.snapshot().step);
+    expect(engine.snapshot()).toMatchObject({
+      step: nextSpawn + 1,
+      attack: {
+        impactStep: nextSpawn + durationTicks(second.telegraphMs),
+        phase: 'telegraph',
+      },
+    });
   });
 
   it('loses on the third unparried real move without touching 1-2', () => {
@@ -1813,7 +1886,7 @@ describe('real boss chart wiring', () => {
     expect(engine.drainEvents().map((event) => event.type).at(-1)).toBe('lose');
   });
 
-  it('restarts the real campaign at 1-1 and replays it identically', () => {
+  it('restarts the real campaign at 1-1 from a clean state', () => {
     const plan = realPhasePlan();
     const engine = new ZhenShaEngine(REAL_BOSS_CHART);
     queueRealPlan(engine, plan.slice(0, 1));

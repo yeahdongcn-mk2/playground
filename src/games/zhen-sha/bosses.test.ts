@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { BOSSES } from './bosses';
 import type { BossChart, BossMove, BossPhase } from './bosses';
+import { DEFAULT_BOSS_CHART } from './boss-chart';
 import {
   REAL_BOSS_CHART,
   REAL_CHART_RECOVERY_MS,
@@ -452,6 +453,7 @@ describe('real boss chart adapter', () => {
 
   it('uses the kill-gate recovery and lets the first move own the opening tell', () => {
     expect(REAL_CHART_RECOVERY_MS).toBe(600);
+    expect(REAL_CHART_RECOVERY_MS).toBe(DEFAULT_BOSS_CHART.recoveryMs);
     expect(REAL_BOSS_CHART.recoveryMs).toBe(REAL_CHART_RECOVERY_MS);
     expect(REAL_BOSS_CHART.firstTelegraphMs).toBeUndefined();
   });

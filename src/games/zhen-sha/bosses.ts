@@ -21,9 +21,9 @@ export interface BossMove {
   readonly id: string;
   /** Wind-up before the move becomes active, in milliseconds. */
   readonly telegraphMs: number;
-  /** Time the move stays active after its wind-up, in milliseconds. */
+  /** Time the move stays active after its wind-up; the chart adapter uses it as the full normal-band width, in milliseconds. */
   readonly activeMs: number;
-  /** Parry band inside the active time, in milliseconds. */
+  /** Parry band inside the active time; the chart adapter uses it as the full perfect-band width, in milliseconds. */
   readonly parryWindowMs: number;
   /** Damage dealt when the move lands unparried. */
   readonly damage: number;

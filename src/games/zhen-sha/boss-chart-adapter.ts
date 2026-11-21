@@ -4,7 +4,7 @@
  *
  * `bosses.ts` predates `boss-chart.ts` and describes the same rhythm with two
  * different field meanings. This module is the only place that reconciles the
- * units, so neither the engine nor the view carries a second contract:
+ * units; its rules supersede the older field comments when the two meet:
  *
  * - `telegraphMs` and `parryWindowMs` mean the same thing in both modules and
  *   pass through unchanged.
