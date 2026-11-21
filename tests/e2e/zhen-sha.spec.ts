@@ -302,4 +302,60 @@ test('keeps the settlement readable: both actions inside the 320x640 first scree
   ]) {
     await expect(page.getByTestId(testId)).toBeVisible();
   }
+
+  // Bounding boxes alone cannot prove the result is readable: the fixed layer
+  // used to live inside the stage's stacking context, so the sticky site header
+  // still painted over the top of the card even though every rect was inside
+  // the viewport. Hit-test the content instead and require the visible element
+  // to belong to the settlement.
+  const occlusion = await page.evaluate(() => {
+    const header = document.querySelector('.site-header') as HTMLElement;
+    const ids = [
+      'overlay-kicker',
+      'overlay-title',
+      'settlement-canvas',
+      'settlement-perfects',
+      'settlement-elapsed',
+      'settlement-slashes',
+      'settlement-boss',
+      'overlay-restart',
+      'overlay-lobby',
+    ] as const;
+    const samples = ids.flatMap((testId) => {
+      const element = document.querySelector(`[data-testid="${testId}"]`) as HTMLElement;
+      const rect = element.getBoundingClientRect();
+      const x = rect.left + rect.width / 2;
+      return [
+        { testId, x, y: rect.top + 1 },
+        { testId, x, y: rect.top + rect.height / 2 },
+      ];
+    });
+    return {
+      headerBottom: header.getBoundingClientRect().bottom,
+      samples: samples.map(({ testId, x, y }) => {
+        const hit = document.elementFromPoint(x, y) as HTMLElement | null;
+        return {
+          testId,
+          x: Math.round(x),
+          y: Math.round(y),
+          hitTestId: hit?.dataset.testid ?? null,
+          insideSettlement: Boolean(hit?.closest('[data-testid="settlement"]')),
+        };
+      }),
+    };
+  });
+
+  // At least one sample must sit in the header band; otherwise this case could
+  // silently stop covering the occlusion it is meant to catch.
+  expect(
+    occlusion.samples.filter((sample) => sample.y < occlusion.headerBottom).length,
+    'samples must exercise the header band',
+  ).toBeGreaterThan(0);
+  for (const sample of occlusion.samples) {
+    expect(
+      sample.insideSettlement,
+      `${sample.testId} at (${sample.x}, ${sample.y}) is covered by ` +
+        `"${sample.hitTestId ?? 'unknown'}" instead of the settlement`,
+    ).toBe(true);
+  }
 });

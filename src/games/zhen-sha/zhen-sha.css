@@ -441,6 +441,15 @@
     padding: 10px;
   }
 
+  /* `position: fixed` escapes the stage's overflow clipping, but not its
+     stacking context (`isolation: isolate` above). The shell header is sticky
+     at z-index 20 in the root context, so while the result is open its whole
+     ancestor level must outrank the header or the header paints over it. */
+  .zhen-sha-game[data-status="won"] .zhen-sha-stage,
+  .zhen-sha-game[data-status="lost"] .zhen-sha-stage {
+    z-index: 30;
+  }
+
   .zhen-sha-settlement {
     gap: 5px;
     padding: 10px;
