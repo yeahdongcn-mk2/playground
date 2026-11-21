@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_BOSS_CHART,
   type BossChart,
+  type BossChartBoss,
   type BossMoveChart,
 } from './boss-chart';
 import { REAL_BOSS_CHART, REAL_CHART_RECOVERY_MS } from './boss-chart-adapter';
@@ -1933,30 +1934,33 @@ describe('real boss chart wiring', () => {
 });
 
 describe('chart validation', () => {
-  /** A minimal valid chart, with one move overridden per test. */
-  function chartWithMove(overrides: Partial<BossMoveChart> = {}): BossChart {
+  /** A minimal valid move; tests override single fields to probe validation. */
+  const VALID_MOVE: BossMoveChart = {
+    id: 'validate-move',
+    telegraphMs: 900,
+    activeMs: 300,
+    parryWindowMs: 100,
+    damage: 1,
+  };
+
+  /** A minimal valid chart, with the boss record overridden per test. */
+  function chartWithBoss(overrides: Partial<BossChartBoss> = {}): BossChart {
     return {
       bosses: [
         {
           name: '校验',
-          phases: [
-            {
-              id: 'validate',
-              moves: [
-                {
-                  id: 'validate-move',
-                  telegraphMs: 900,
-                  activeMs: 300,
-                  parryWindowMs: 100,
-                  damage: 1,
-                  ...overrides,
-                },
-              ],
-            },
-          ],
+          phases: [{ id: 'validate', moves: [{ ...VALID_MOVE }] }],
+          ...overrides,
         },
       ],
     };
+  }
+
+  /** A minimal valid chart, with one move overridden per test. */
+  function chartWithMove(overrides: Partial<BossMoveChart> = {}): BossChart {
+    return chartWithBoss({
+      phases: [{ id: 'validate', moves: [{ ...VALID_MOVE, ...overrides }] }],
+    });
   }
 
   it('rejects a chart without a complete first stage', () => {
@@ -1969,6 +1973,18 @@ describe('chart validation', () => {
         new ZhenShaEngine({
           bosses: [{ name: '空', phases: [{ id: 'empty', moves: [] }] }],
         }),
+    ).toThrow(RangeError);
+  });
+
+  it('rejects a boss without a usable name', () => {
+    expect(() => new ZhenShaEngine(chartWithBoss({ name: '' }))).toThrow(
+      RangeError,
+    );
+    expect(() => new ZhenShaEngine(chartWithBoss({ name: '   ' }))).toThrow(
+      RangeError,
+    );
+    expect(() =>
+      new ZhenShaEngine(chartWithBoss({ name: 42 as unknown as string })),
     ).toThrow(RangeError);
   });
 
@@ -2054,6 +2070,44 @@ describe('chart validation', () => {
               ],
             },
           ],
+        }),
+    ).toThrow(RangeError);
+  });
+
+  it('rejects a recovery that is not a finite number', () => {
+    expect(
+      () => new ZhenShaEngine({ ...chartWithMove(), recoveryMs: Number.NaN }),
+    ).toThrow(RangeError);
+    expect(
+      () =>
+        new ZhenShaEngine({
+          ...chartWithMove(),
+          recoveryMs: Number.POSITIVE_INFINITY,
+        }),
+    ).toThrow(RangeError);
+    expect(
+      () =>
+        new ZhenShaEngine({
+          ...chartWithMove(),
+          // Runtime guard for untrusted charts, not just typed callers.
+          recoveryMs: '600' as unknown as number,
+        }),
+    ).toThrow(RangeError);
+  });
+
+  it('rejects an invalid opening telegraph', () => {
+    const chart = chartWithMove();
+    expect(() => new ZhenShaEngine({ ...chart, firstTelegraphMs: 0 })).toThrow(
+      RangeError,
+    );
+    expect(
+      () => new ZhenShaEngine({ ...chart, firstTelegraphMs: Number.NaN }),
+    ).toThrow(RangeError);
+    expect(
+      () =>
+        new ZhenShaEngine({
+          ...chart,
+          firstTelegraphMs: '1500' as unknown as number,
         }),
     ).toThrow(RangeError);
   });
