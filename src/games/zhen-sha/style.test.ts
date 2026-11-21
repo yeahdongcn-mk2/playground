@@ -191,6 +191,24 @@ describe('zhen-sha palette and procedural paper theme', () => {
     expect(edge).toContain('var(--zhen-paper)');
   });
 
+  it('overlays the first-visit hint without intercepting gestures', () => {
+    const tutorial = zIndex('.zhen-sha-tutorial');
+    const canvas = zIndex('.zhen-sha-canvas');
+    const overlay = zIndex('.zhen-sha-overlay');
+    expect(tutorial).toBeGreaterThan(canvas);
+    expect(tutorial).toBeLessThan(overlay);
+    expect(declarationValue(ruleBody('.zhen-sha-tutorial'), 'pointer-events')).toBe('none');
+
+    // Animation is opt-in; reduce motion keeps a static gold contour.
+    expect(CSS).toContain('.zhen-sha-tutorial[data-motion="animated"] .zhen-sha-tutorial-ring');
+    const staticRing = ruleBody(
+      '.zhen-sha-tutorial[data-motion="static"] .zhen-sha-tutorial-ring',
+    );
+    expect(staticRing).toMatch(/animation:\s*none/);
+    expect(staticRing).toContain('var(--zhen-gold)');
+    expect(CSS).toContain('@media (prefers-reduced-motion: reduce)');
+  });
+
   it('stacks the paper layers above the canvas and below the settlement overlay', () => {
     const canvas = zIndex('.zhen-sha-canvas');
     const overlay = zIndex('.zhen-sha-overlay');

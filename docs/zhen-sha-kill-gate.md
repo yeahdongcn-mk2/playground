@@ -17,17 +17,18 @@
 | 生产文件 | 行数 |
 | --- | ---: |
 | `boss-chart.ts` | 128 |
-| `engine.ts` | 457 |
+| `engine.ts` | 470 |
 | `bosses.ts` | 144 |
 | `index.ts` | 29 |
-| `zhen-sha-view.ts` | 676 |
-| `zhen-sha.css` | 371 |
-| **合计** | **1,805** |
+| `tutorial.ts` | 54 |
+| `zhen-sha-view.ts` | 711 |
+| `zhen-sha.css` | 446 |
+| **合计** | **1,982** |
 
-- 生产文件数：6
-- 生产行数：1,805
-- `src/games/registry.ts` 入口：数组条目 `zhenShaGame,` 1 行（配套 `import { zhenShaGame } from './zhen-sha';` 另 1 行，合计 2 行改动），不计入上面的 6 个文件。
-- `engine.test.ts`、`bosses.test.ts`、`zhen-sha-view.test.ts`、`kill-gate-doc.test.ts` 与 e2e 都不计入生产规模。
+- 生产文件数：7
+- 生产行数：1,982
+- `src/games/registry.ts` 入口：数组条目 `zhenShaGame,` 1 行（配套 `import { zhenShaGame } from './zhen-sha';` 另 1 行，合计 2 行改动），不计入上面的 7 个文件。
+- `engine.test.ts`、`bosses.test.ts`、`tutorial.test.ts`、`zhen-sha-view.test.ts`、`kill-gate-doc.test.ts` 与 e2e 都不计入生产规模。
 
 ### 完整特性规模估算
 
@@ -46,6 +47,8 @@
 
 完整特性估算：7 个生产文件、约 2,154 行（±10%，不含测试 / e2e / 截图 / 文档）。
 
+> 首启教学在 #245 内新增 `tutorial.ts`，只计入上面的实测基线；下面的完整特性估算仍按 #246–#249 的范围，不把教学文件重复计入。
+
 > 本估算写于 `boss-chart.ts` 拆出之前，契约类型仍按并入 `bosses.ts` 的 300 行估算；若接线卡保留独立文件，`boss-chart.ts:35-92` 的 58 行接口声明应从 `bosses.ts` 的估算中移出，不能重复计入：完整特性为 8 个生产文件、约 2,224 行（2,154 + 128 − 58）；2,282 行（直接相加）只作为未扣除类型时的保守上限。两种算法都超过本文 2,200 行上沿，需按结论中的 L 条件重新复核。
 
 ### 新概念（2 个）
@@ -62,10 +65,10 @@
 - 固定步长与确定性：`engine.test.ts` 覆盖 120Hz 单步、60Hz / 120Hz / 抖动帧块切分下完美数、中招数、势与分数逐项相等。
 - 判定与状态：完美 / 普通 / 落空边界 ±1 tick、势累积、三次完美破防、破防窗口首末 tick、蓄势 / 松手终结、三次中招失败、`restart()`、快照隔离。
 - 引擎边界：`engine.ts` 不引用 `document` / `window` / `Phaser` / `THREE` / `setTimeout` / `Date.now`，由源码约束测试守护。
-- 视图与手势：`zhen-sha-view.test.ts`（jsdom）覆盖轻点 / 长按 / 松手到引擎输入的映射、HUD 随快照更新、结算与重开、pointer capture 丢失、destroy / abort 的监听与 rAF 清理、页面隐藏暂停、音效事件映射。
+- 视图与手势：`zhen-sha-view.test.ts`（jsdom）覆盖轻点 / 长按 / 松手到引擎输入的映射、HUD 随快照更新、结算与重开、pointer capture 丢失、destroy / abort 的监听与 rAF 清理、页面隐藏暂停、音效事件映射；首启教学覆盖提示显隐、首招 ≥1.5× 基准、首次完美后写入 `zhen-sha.tutorial=done`、两个重开入口与重新挂载不再显示、清空键后恢复显示、提示可见时手势与结算仍正常。`tutorial.test.ts` 覆盖教学状态读取与持久化。
 - 入口与路由：懒加载入口不把 view / engine 拉进 shell 包；`#/games/zhen-sha` 可从大厅进入；320×640 首屏三手势提示由 `tests/e2e/zhen-sha.spec.ts` 断言。
 - 构建与预算：`npm run typecheck`、`npm run lint`、`npm run test:unit`、`npm run build`、`npm run check:budget` 可重复执行。
-- 风格层可自动化的部分：核心色数量、无外部图片 / 字体 / URL 与黑宣纸 / 飞白规则由 `style.test.ts` 守护；`prefers-reduced-motion` 分支仍未实现、未测，由后续子任务补。
+- 风格层与首启教学可自动化的部分：核心色数量、无外部图片 / 字体 / URL、黑宣纸 / 飞白规则与教学提示的层级 / 不拦截指针由 `style.test.ts` 守护；`prefers-reduced-motion` 已实现并有单测：`services.reduceMotion` 为 true 时提示改走 `data-motion="static"` 的静态金色轮廓，无动画、无布局跳动（`zhen-sha-view.test.ts` 与 `style.test.ts`）。
 - 本评估文档自身由 `kill-gate-doc.test.ts` 校验：文件数 / 行数必须与生产文件一致，结论、#261、试玩状态与「未新增系统」陈述必须存在。
 
 ### 不可自动验收面
@@ -84,8 +87,8 @@
 
 对照 #250 的 S/M/L 尺子（M 的复核区间：7–9 个文件、1,400–2,200 行、2 个新概念）：
 
-- 文件数：原型 6 个；完整特性估算 7 个，落在 M 区间下沿。
-- 行数：原型 1,805 行；完整特性估算约 2,154 行，落在 M 区间内。
+- 文件数：原型 7 个；完整特性估算 7 个，落在 M 区间下沿。
+- 行数：原型 1,982 行；完整特性估算约 2,154 行，落在 M 区间内。
 - 新概念：2 个，符合 M。
 
 **结论：M。** 后续卡可按 M 规模继续。行数已接近 2,200 行上沿：实现中若超过 2,200 行，或出现第三个新概念，必须回到本文按 L 复核。

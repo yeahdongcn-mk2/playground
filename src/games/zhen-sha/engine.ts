@@ -140,6 +140,13 @@ export interface ZhenShaSnapshot {
 const BOSS_NAME = '黑煞';
 const BOSS_PHASE = 1;
 
+/** Keep an injected opening wind-up on a valid positive integer tick count. */
+function normalizeFirstTelegraph(ticks: number): number {
+  return Number.isFinite(ticks) && ticks > 0
+    ? Math.floor(ticks)
+    : FIRST_TELEGRAPH_TICKS;
+}
+
 interface AttackState {
   readonly impactStep: number;
   /**
@@ -185,16 +192,22 @@ export class ZhenShaEngine {
   private pendingInputs: PendingInput[] = [];
   private events: ZhenShaEvent[] = [];
 
-  constructor() {
-    this.restart();
+  constructor(firstTelegraphTicks: number = FIRST_TELEGRAPH_TICKS) {
+    this.restart(firstTelegraphTicks);
   }
 
-  /** Reset every counter, the attack schedule and the queued feedback. */
-  restart(): void {
+  /**
+   * Reset every counter, the attack schedule and the queued feedback.
+   *
+   * `firstTelegraphTicks` overrides the opening wind-up only; later moves keep
+   * using TELEGRAPH_TICKS. The default preserves the original kill-gate timing,
+   * so a caller without a first-visit tutorial behaves exactly as before.
+   */
+  restart(firstTelegraphTicks: number = FIRST_TELEGRAPH_TICKS): void {
     this.stepIndex = 0;
     this.accumulatorMs = 0;
     this.status = 'playing';
-    this.spawnAttack(FIRST_TELEGRAPH_TICKS);
+    this.spawnAttack(normalizeFirstTelegraph(firstTelegraphTicks));
     this.nextAttackAtStep = 0;
     this.charging = false;
     this.momentum = 0;

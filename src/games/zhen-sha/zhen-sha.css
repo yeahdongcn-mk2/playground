@@ -218,10 +218,85 @@
   height: 100%;
 }
 
-.zhen-sha-overlay {
+/*
+ * First-visit hint: one short line plus a ring, overlaid on the stage so it
+ * never intercepts the tap/hold gestures underneath. The ring pulses only when
+ * animation is allowed; with reduce motion it becomes a static gold contour
+ * that still marks the timing without moving.
+ */
+.zhen-sha-tutorial {
   position: absolute;
   inset: 0;
   z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding-bottom: 18%;
+  pointer-events: none;
+  text-align: center;
+}
+
+.zhen-sha-tutorial[hidden] {
+  display: none;
+}
+
+.zhen-sha-tutorial-ring {
+  width: 88px;
+  height: 88px;
+  border: 2px solid color-mix(in srgb, var(--zhen-gold) 72%, transparent);
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--zhen-gold) 18%, transparent),
+    0 0 26px color-mix(in srgb, var(--zhen-gold) 42%, transparent);
+}
+
+.zhen-sha-tutorial[data-motion="animated"] .zhen-sha-tutorial-ring {
+  animation: zhen-sha-tutorial-pulse 1100ms ease-in-out infinite;
+}
+
+.zhen-sha-tutorial[data-motion="static"] .zhen-sha-tutorial-ring {
+  border-color: var(--zhen-gold);
+  background: color-mix(in srgb, var(--zhen-gold) 16%, transparent);
+  box-shadow: none;
+  animation: none;
+}
+
+.zhen-sha-tutorial-copy {
+  padding: 5px 12px;
+  border: 1px solid color-mix(in srgb, var(--zhen-gold) 40%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--zhen-ink) 78%, transparent);
+  color: var(--zhen-gold);
+  font-size: 0.86rem;
+  letter-spacing: 0.18em;
+}
+
+@keyframes zhen-sha-tutorial-pulse {
+  0%,
+  100% {
+    transform: scale(0.84);
+    opacity: 0.6;
+  }
+
+  50% {
+    transform: scale(1.06);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .zhen-sha-tutorial-ring,
+  .zhen-sha-tutorial[data-motion="animated"] .zhen-sha-tutorial-ring {
+    animation: none;
+  }
+}
+
+.zhen-sha-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
   display: grid;
   place-items: center;
   padding: 18px;

@@ -206,9 +206,11 @@ describe('zhen-sha kill gate engineering assessment', () => {
     expect(DOC).toContain('### 可自动验收面');
     expect(DOC).toContain('### 不可自动验收面');
     expect(DOC).toContain('3 人盲测试玩');
-    // #249 requires reduced motion; this subtask leaves it pending, not silent.
+    // #249 requires reduced motion; the first-visit tutorial now implements
+    // and tests the static hint branch, so the doc must not still call it pending.
     expect(DOC).toContain('prefers-reduced-motion');
-    expect(DOC).toContain('仍未实现、未测');
+    expect(DOC).toContain('data-motion="static"');
+    expect(DOC).not.toContain('仍未实现、未测');
   });
 
   it('flags procedural ink as a third-concept sensitivity that forces an L review', () => {

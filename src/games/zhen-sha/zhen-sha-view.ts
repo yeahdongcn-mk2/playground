@@ -2,6 +2,7 @@ import type { SoundEvent } from '../../core/audio';
 import { query, setText } from '../../core/dom';
 import type { GameHandle, GameServices } from '../../core/game';
 import {
+  FIRST_TELEGRAPH_TICKS,
   MAX_HITS,
   MOMENTUM_FOR_BREAK,
   TELEGRAPH_TICKS,
@@ -12,6 +13,11 @@ import {
   type ZhenShaSnapshot,
   type ZhenShaStatus,
 } from './engine';
+import {
+  markTutorialDone,
+  readTutorialState,
+  TUTORIAL_HINT_TEXT,
+} from './tutorial';
 import './zhen-sha.css';
 
 /** Hold this long without lifting to turn the tap into a charged strike. */
@@ -79,6 +85,13 @@ const VIEW_HTML = `
         <div class="zhen-sha-stage" data-testid="zhen-sha-stage">
           <canvas class="zhen-sha-canvas" data-testid="zhen-sha-canvas"
             role="img" aria-label="黑宣纸上的黑煞首领与金棍"></canvas>
+          <div class="zhen-sha-tutorial" data-testid="tutorial-hint"
+            data-motion="animated" hidden>
+            <span class="zhen-sha-tutorial-ring" aria-hidden="true"></span>
+            <span class="zhen-sha-tutorial-copy" data-testid="tutorial-copy">
+              ${TUTORIAL_HINT_TEXT}
+            </span>
+          </div>
           <div class="zhen-sha-overlay" data-testid="overlay" role="group"
             aria-labelledby="zhen-sha-overlay-title" hidden>
             <div class="zhen-sha-overlay-card">
@@ -124,7 +137,7 @@ const VIEW_HTML = `
           </div>
         </div>
 
-        <p class="zhen-sha-note">
+        <p class="zhen-sha-note" data-testid="sidebar-note">
           首领只有一招：长枪突刺。看准枪尖亮起的时机轻点，三次完美便破防。
         </p>
         <p class="sr-only" data-testid="announcer" aria-live="polite"></p>
@@ -161,6 +174,9 @@ export function mountZhenSha(
   const gameRoot = query<HTMLElement>(root, '[data-testid="zhen-sha-game"]');
   const stage = query<HTMLElement>(root, '[data-testid="zhen-sha-stage"]');
   const canvas = query<HTMLCanvasElement>(root, '[data-testid="zhen-sha-canvas"]');
+  const tutorialHint = query<HTMLElement>(root, '[data-testid="tutorial-hint"]');
+  const gestureNote = query<HTMLElement>(root, '[data-testid="gesture-note"]');
+  const sidebarNote = query<HTMLElement>(root, '[data-testid="sidebar-note"]');
   const overlay = query<HTMLElement>(root, '[data-testid="overlay"]');
   const overlayKicker = query<HTMLElement>(root, '[data-testid="overlay-kicker"]');
   const overlayTitle = query<HTMLElement>(root, '[data-testid="overlay-title"]');
@@ -180,8 +196,10 @@ export function mountZhenSha(
   canvas.height = CANVAS_HEIGHT;
   const context = canvas.getContext('2d');
 
-  const engine = new ZhenShaEngine();
+  let tutorial = readTutorialState(services.storage);
+  const engine = new ZhenShaEngine(tutorial.firstTelegraphTicks);
   const audio = services.audio;
+  tutorialHint.dataset.motion = services.reduceMotion ? 'static' : 'animated';
 
   let lastStatus: ZhenShaStatus = engine.currentStatus;
   let pointerDown = false;
@@ -230,6 +248,11 @@ export function mountZhenSha(
         overlayRestart.focus({ preventScroll: true });
       }
     }
+
+    const showTutorial = tutorial.pending && state.status === 'playing';
+    tutorialHint.hidden = !showTutorial;
+    gestureNote.hidden = showTutorial;
+    sidebarNote.hidden = showTutorial;
 
     if (previousStatus !== state.status) {
       if (state.status === 'won') {
@@ -306,6 +329,15 @@ export function mountZhenSha(
 
   function handleEvents(events: readonly ZhenShaEvent[]): void {
     for (const event of events) {
+      // The first perfect parry is the tutorial's whole goal: hide the hint in
+      // this same frame and persist the finished state for later visits.
+      if (event.type === 'perfect' && tutorial.pending) {
+        tutorial = {
+          pending: false,
+          firstTelegraphTicks: FIRST_TELEGRAPH_TICKS,
+        };
+        markTutorialDone(services.storage);
+      }
       flash = {
         type: event.type,
         remainingMs: isResultFlash(event.type) ? RESULT_FLASH_MS : FLASH_MS,
@@ -384,7 +416,10 @@ export function mountZhenSha(
   function restart(): void {
     audio.unlock();
     audio.play('reset');
-    engine.restart();
+    // Re-read storage so clearing the key while the view is mounted restores
+    // the first-visit hint and the stretched opening on the next duel.
+    tutorial = readTutorialState(services.storage);
+    engine.restart(tutorial.firstTelegraphTicks);
     resetPointer();
     flash = null;
     lastStatus = engine.currentStatus;
