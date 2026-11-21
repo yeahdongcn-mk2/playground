@@ -6,9 +6,9 @@
 
 | 项 | Before | After |
 | --- | --- | --- |
-| 产品代码 | `5cb5b79`（t1 已合并，结算模块存在但 view 仍是纯文字 overlay） | `11a87ce`（本分支产品、测试与文档提交；截图取自该树，其后追加本证据目录与一处文档措辞修正） |
+| 产品代码 | `5cb5b79`（t1 已合并，结算模块存在但 view 仍是纯文字 overlay） | `be62fe9`（本分支产品、测试与文档提交，含第三轮复审的移动端层叠修复；截图取自该树，其后追加本证据目录） |
 | 场景 | 固定输入序列的胜利：三次完美格挡 + 破防后蓄势棍击 | 同一场景、同一输入序列 |
-| 结果数值 | 完美 3 / 得分 1900 | 完美 3 / 用时 4.8s / 刀光 6 道 / 首领 黑煞·第 1 阶段 / 得分 1900 |
+| 结果数值 | 完美 3 / 得分 1900 | 完美 3 / 用时 4.9s / 刀光 6 道 / 首领 黑煞·第 1 阶段 / 得分 1900 |
 | 视口 | 1440×1000 与 320×640 | 同左 |
 | 主题 | 深色（`colorScheme: dark`），`reducedMotion: reduce` | 同左 |
 | 渲染 | 生产构建产物（`npm run build` + `vite preview`），Chromium headless | 同左 |
@@ -17,14 +17,16 @@ Before 的纯文字 overlay 只显示胜负标题、完美数与得分；After �
 
 根因差异：320×640 下 Before 的结算卡片仍在 stage 内（y≈305，高 458），首屏只能看到顶部；After 在窄屏把结算层提升为整屏覆盖（320×640），数值和按钮无需滚动。桌面端两者都停在 stage 内，After 卡片高 606，恰好放进 651 高的 overlay。
 
+第三轮复审修复（`be62fe9`）：`position: fixed` 只让结算层脱离 stage 的溢出裁剪，没有脱离 `.zhen-sha-stage { isolation: isolate }` 的层叠上下文，所以上一版 320×640 截图里 sticky 页头（0–67）仍盖住结算卡顶部。现在结算打开（`data-status` 为 `won` / `lost`）时把 stage 的层叠级别提到 30，高于页头的 20；320×640 下页头不再可见、不可点，`overlay-kicker` 与标题顶边命中的都是结算内容。
+
 ## 截图
 
 | 文件 | 说明 | CSS 视口 / PNG 尺寸 | sha256 |
 | --- | --- | --- | --- |
 | `plan-251-t1-before-1440x1000.png` | Before，桌面，纯文字结算 | 1440×1000 / 1440×1000 | `1bde6e458a470bf82d1493d26e6f1b8d62b60290a1538845693639c9ae256cd8` |
-| `plan-251-t1-after-1440x1000.png` | After，桌面，战绩符结算 | 1440×1000 / 1440×1000 | `f57bdabf3c762bbc6e2e57d8b4314886d4800be43df6c29be2052626224aabf1` |
+| `plan-251-t1-after-1440x1000.png` | After，桌面，战绩符结算 | 1440×1000 / 1440×1000 | `1f02c2a78e810101a48243d3182d63e6ec476732398bcfef078b51f7e8611ac1` |
 | `plan-251-t1-before-320x640.png` | Before，窄屏，纯文字结算 | 320×640 / 320×640 | `77f634b25a88e49b001d3d621b5cb3b02b71977d38fcd73174341fd3504b2488` |
-| `plan-251-t1-after-320x640.png` | After，窄屏，整屏战绩符结算 | 320×640 / 320×640 | `28b5b35c103e7b98a14ab57c3bec0900da8d8f1ce76c5d7073cfdfca90c7634e` |
+| `plan-251-t1-after-320x640.png` | After，窄屏，整屏战绩符结算（页头已完全被覆盖） | 320×640 / 320×640 | `30424465085f213012a4b47afe6bade8c0c2eb6a8476448ab8c0757dce9b376c` |
 
 采集时记录的关键几何 / 溢出数据：
 
@@ -41,7 +43,7 @@ Before 窄屏截图的 `scrollY=265` 是 baseline 自身布局造成的：结算
 
 - Node `v22.19.0`，Playwright `1.64.1`，Chromium headless shell。
 - 用 `page.clock` 冻结墙上时间，再按 1500 / 3000 / 4500 ms 三次攻击判定点派发真实 `PointerEvent`；破防后按住 300 ms、松手终结。两版走完全相同的真实指针路径，没有为截图改动游戏代码，也没有使用 After 的调试接缝。
-- 时钟冻结下仍可能因机器负载丢帧，导致某次点击落在完美判定带之外。脚本在保存前会检查 `overlay-title` 必须为「一棍定魂」，否则重开新页面重试（最多 6 次）；本次 Before 桌面第 4 次成功，其余第 1 次成功。脚本不会把失败局当作胜利证据保存。
+- 时钟冻结下仍可能因机器负载丢帧，导致某次点击落在完美判定带之外。脚本在保存前会检查 `overlay-title` 必须为「一棍定魂」，否则重开新页面重试（最多 6 次）；本次 4 张截图均第 1 次成功。脚本不会把失败局当作胜利证据保存。
 - 采集环境不是真机；窄屏覆盖通过 Chromium 视口模拟。三真人盲测仍是后续 #421。
 
 ## 复现
@@ -52,7 +54,7 @@ git worktree add --detach /tmp/zhen-251-before 5cb5b79
 (cd /tmp/zhen-251-before && npm ci && npm run build)
 (cd /tmp/zhen-251-before && npx vite preview --host 127.0.0.1 --port 4190 --strictPort) &
 
-# 2) After：本分支（产品提交 11a87ce）
+# 2) After：本分支（产品提交 be62fe9）
 npm ci
 npm run build
 npx vite preview --host 127.0.0.1 --port 4191 --strictPort &
