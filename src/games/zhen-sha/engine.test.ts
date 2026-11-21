@@ -1015,6 +1015,71 @@ const STAGE_BOUNDARY_CASES: ReadonlyArray<
   [STAGE_TIMING.normalHalf + 1, 'miss', 1],
 ];
 
+/**
+ * A chart whose perfect window is deliberately narrower than the default
+ * 100 ms / 12-tick window (half-width `PERFECT_BAND_HALF_TICKS` = 6): 60 ms
+ * rounds to 7 full ticks, so this chart's half-width is 3 ticks. Its 200 ms
+ * active window gives a 12-tick half-width, versus the default 18. Watching
+ * the ±3 / ±4 and -13 edges proves the engine reads the chart's values
+ * instead of the exported defaults.
+ */
+const NARROW_PARRY_MS = 60;
+const NARROW_PERFECT_HALF = 3;
+const NARROW_NORMAL_HALF = STAGE_TIMING.normalHalf;
+
+const NARROW_CHART: BossChart = {
+  recoveryMs: STAGE_RECOVERY_MS,
+  bosses: [
+    {
+      name: '窄窗 boss',
+      phases: [
+        {
+          id: 'narrow-phase',
+          moves: [
+            {
+              id: 'narrow-move',
+              telegraphMs: STAGE_TELEGRAPH_MS,
+              activeMs: STAGE_ACTIVE_MS,
+              parryWindowMs: NARROW_PARRY_MS,
+              damage: 1,
+            },
+          ],
+        },
+      ],
+    },
+  ],
+};
+const NARROW_IMPACT = STAGE_TIMING.telegraph;
+
+const NARROW_BOUNDARY_CASES: ReadonlyArray<
+  readonly [offset: number, judgement: ParryJudgement, hits: number]
+> = [
+  // Perfect band edges from parryWindowMs=60 (3 ticks), not the default 6.
+  [-NARROW_PERFECT_HALF - 1, 'normal', 0],
+  [-NARROW_PERFECT_HALF, 'perfect', 0],
+  [0, 'perfect', 0],
+  [NARROW_PERFECT_HALF, 'perfect', 0],
+  [NARROW_PERFECT_HALF + 1, 'normal', 0],
+  // Normal band: the early edge is falsifiable; a tap one tick further out
+  // is a live whiff before the move lands. The late side is preempted by the
+  // landing check at impact + half-width, so +1 tick there is a tap after the
+  // landing, not a parry band decision.
+  [-NARROW_NORMAL_HALF - 1, 'miss', 0],
+  [-NARROW_NORMAL_HALF, 'normal', 0],
+  [NARROW_NORMAL_HALF, 'normal', 0],
+  [NARROW_NORMAL_HALF + 1, 'miss', 1],
+];
+
+function judgeNarrowTap(offset: number): ZhenShaSnapshot {
+  const engine = new ZhenShaEngine(NARROW_CHART);
+  engine.input('block', NARROW_IMPACT + offset);
+  advance(engine, NARROW_IMPACT + offset + 1);
+  return engine.snapshot();
+}
+
+/** Same boss data as NARROW_CHART, minus recoveryMs: it rests immediately. */
+const NO_RECOVERY_CHART: BossChart = { bosses: NARROW_CHART.bosses };
+
 describe('boss chart stages', () => {
   it('walks 1-1 → 1-2 → 2-1 → 2-2 → 3-1 → 3-2 and wins only on 3-2', () => {
     const plan = stagePlan();
@@ -1064,6 +1129,8 @@ describe('boss chart stages', () => {
           score: perfects * SCORE_PERFECT + (index + 1) * SCORE_FINISHER,
         });
         expect(cleared.attack).toBeNull();
+        // The cleared phase starts with no stale perfect/normal/miss feedback.
+        expect(cleared.lastJudgement).toBeNull();
       } else {
         expect(cleared).toMatchObject({
           status: 'won',
@@ -1172,6 +1239,58 @@ describe('boss chart stages', () => {
       }
     },
   );
+
+  it.each(NARROW_BOUNDARY_CASES)(
+    'judges a %i tick tap on a 60 ms perfect / 200 ms active chart as %s',
+    (offset, judgement, hits) => {
+      const snapshot = judgeNarrowTap(offset);
+
+      expect(snapshot.lastJudgement).toBe(judgement);
+      expect(snapshot.hits).toBe(hits);
+      if (judgement === 'perfect') {
+        expect(snapshot.perfects).toBe(1);
+        expect(snapshot.momentum).toBe(1);
+      } else {
+        expect(snapshot.perfects).toBe(0);
+        expect(snapshot.momentum).toBe(0);
+      }
+    },
+  );
+
+  it('rests immediately when the chart omits recoveryMs', () => {
+    const engine = new ZhenShaEngine(NO_RECOVERY_CHART);
+
+    engine.input('block', NARROW_IMPACT);
+    advance(engine, NARROW_IMPACT + 1);
+    expect(engine.snapshot()).toMatchObject({
+      perfects: 1,
+      attack: null,
+    });
+
+    // No recovery: the next move starts winding up on the very next tick.
+    advance(engine, 1);
+    expect(engine.snapshot().attack).not.toBeNull();
+    expect(engine.snapshot().attack).toMatchObject({
+      impactStep: NARROW_IMPACT + 1 + NARROW_IMPACT,
+      phase: 'telegraph',
+    });
+  });
+
+  it('rests immediately after an unparried landing when recoveryMs is omitted', () => {
+    const engine = new ZhenShaEngine(NO_RECOVERY_CHART);
+    const landingTick = NARROW_IMPACT + NARROW_NORMAL_HALF;
+
+    advance(engine, landingTick + 1);
+    expect(engine.snapshot()).toMatchObject({ hits: 1, attack: null });
+
+    // The landing path also honors the chart: no recovery means the next move
+    // starts on the tick after the unparried move resolves.
+    advance(engine, 1);
+    expect(engine.snapshot().attack).toMatchObject({
+      impactStep: landingTick + 1 + NARROW_IMPACT,
+      phase: 'telegraph',
+    });
+  });
 
   it('carries hits across phases and loses on the third unparried move', () => {
     const engine = new ZhenShaEngine(STAGE_CHART);
