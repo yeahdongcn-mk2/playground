@@ -1080,6 +1080,72 @@ function judgeNarrowTap(offset: number): ZhenShaSnapshot {
 /** Same boss data as NARROW_CHART, minus recoveryMs: it rests immediately. */
 const NO_RECOVERY_CHART: BossChart = { bosses: NARROW_CHART.bosses };
 
+/**
+ * A two-phase chart whose moves deliberately use different telegraphs, so a
+ * test can tell which chart move the engine actually consumed. Phase 1 winds up
+ * for 250 / 500 / 750 / 1000 ms and phase 2 starts at 350 ms; the 200 ms
+ * recovery is not the default 600 ms. Removing a move advance, the stage reset
+ * or either chart-recovery read changes the next impact by a whole move.
+ */
+const SEQUENCE_FIRST_TELEGRAPH_MS = 250;
+const SEQUENCE_TELEGRAPHS_MS = [250, 500, 750, 1000] as const;
+const NEXT_PHASE_TELEGRAPHS_MS = [350, 450, 550, 650] as const;
+const SEQUENCE_ACTIVE_MS = 200;
+const SEQUENCE_PARRY_MS = 100;
+const SEQUENCE_RECOVERY_MS = 200;
+
+const SEQUENCE_TIMING = {
+  firstTelegraph: toTicks(SEQUENCE_FIRST_TELEGRAPH_MS),
+  telegraphs: SEQUENCE_TELEGRAPHS_MS.map(toTicks),
+  nextTelegraphs: NEXT_PHASE_TELEGRAPHS_MS.map(toTicks),
+  normalHalf: toTicks(SEQUENCE_ACTIVE_MS) / 2,
+  recovery: toTicks(SEQUENCE_RECOVERY_MS),
+} as const;
+
+function sequenceMoves(
+  phaseId: string,
+  telegraphs: readonly number[],
+): BossMoveChart[] {
+  return telegraphs.map((telegraphMs, moveIndex) => ({
+    id: `${phaseId}-move-${moveIndex + 1}`,
+    telegraphMs,
+    activeMs: SEQUENCE_ACTIVE_MS,
+    parryWindowMs: SEQUENCE_PARRY_MS,
+    damage: 1,
+  }));
+}
+
+const SEQUENCE_CHART: BossChart = {
+  firstTelegraphMs: SEQUENCE_FIRST_TELEGRAPH_MS,
+  recoveryMs: SEQUENCE_RECOVERY_MS,
+  bosses: [
+    {
+      name: '时序 boss',
+      phases: [
+        {
+          id: 'sequence-phase-1',
+          moves: sequenceMoves('sequence-phase-1', SEQUENCE_TELEGRAPHS_MS),
+        },
+        {
+          id: 'sequence-phase-2',
+          moves: sequenceMoves('sequence-phase-2', NEXT_PHASE_TELEGRAPHS_MS),
+        },
+      ],
+    },
+  ],
+};
+
+/** Impact ticks of the first three perfect parries in SEQUENCE_CHART phase 1. */
+function sequencePerfectImpacts(): readonly [number, number, number] {
+  const second =
+    SEQUENCE_TIMING.firstTelegraph +
+    SEQUENCE_TIMING.recovery +
+    SEQUENCE_TIMING.telegraphs[1]!;
+  const third =
+    second + SEQUENCE_TIMING.recovery + SEQUENCE_TIMING.telegraphs[2]!;
+  return [SEQUENCE_TIMING.firstTelegraph, second, third];
+}
+
 describe('boss chart stages', () => {
   it('walks 1-1 → 1-2 → 2-1 → 2-2 → 3-1 → 3-2 and wins only on 3-2', () => {
     const plan = stagePlan();
@@ -1292,6 +1358,116 @@ describe('boss chart stages', () => {
     });
   });
 
+  it('advances to the next chart move after a normal parry', () => {
+    const engine = new ZhenShaEngine(SEQUENCE_CHART);
+    const tapStep = SEQUENCE_TIMING.firstTelegraph + SEQUENCE_TIMING.normalHalf;
+    engine.input('block', tapStep);
+    advance(engine, tapStep + 1);
+
+    expect(engine.snapshot()).toMatchObject({
+      lastJudgement: 'normal',
+      hits: 0,
+      score: SCORE_NORMAL,
+      attack: null,
+    });
+
+    // The next move is chart move 2 (500 ms), not the tap's own 250 ms move.
+    const nextSpawn = tapStep + SEQUENCE_TIMING.recovery;
+    const nextImpact = nextSpawn + SEQUENCE_TIMING.telegraphs[1]!;
+    advance(engine, nextSpawn + 1 - engine.snapshot().step);
+    expect(engine.snapshot().attack).toMatchObject({
+      impactStep: nextImpact,
+      phase: 'telegraph',
+    });
+  });
+
+  it('advances to the next chart move after an unparried landing', () => {
+    const engine = new ZhenShaEngine(SEQUENCE_CHART);
+    const landingStep =
+      SEQUENCE_TIMING.firstTelegraph + SEQUENCE_TIMING.normalHalf;
+    advance(engine, landingStep + 1);
+
+    expect(engine.snapshot()).toMatchObject({
+      lastJudgement: 'miss',
+      hits: 1,
+      attack: null,
+    });
+
+    // Landing also consumes chart move 1: the next impact uses move 2's tell.
+    const nextSpawn = landingStep + SEQUENCE_TIMING.recovery;
+    const nextImpact = nextSpawn + SEQUENCE_TIMING.telegraphs[1]!;
+    advance(engine, nextSpawn + 1 - engine.snapshot().step);
+    expect(engine.snapshot().attack).toMatchObject({
+      impactStep: nextImpact,
+      phase: 'telegraph',
+    });
+  });
+
+  it('opens the cleared phase with its first chart move', () => {
+    const engine = new ZhenShaEngine(SEQUENCE_CHART);
+    const [first, second, third] = sequencePerfectImpacts();
+    for (const impact of [first, second, third]) {
+      engine.input('block', impact);
+    }
+    const strikeStep = third + 10;
+    engine.input('charge', strikeStep - 5);
+    engine.input('strike', strikeStep);
+    advance(engine, strikeStep + 1);
+
+    expect(engine.snapshot()).toMatchObject({
+      status: 'playing',
+      boss: { name: '时序 boss', phase: 2, guard: 'up' },
+      charging: false,
+      momentum: 0,
+      breakTicksLeft: 0,
+      lastJudgement: null,
+      attack: null,
+    });
+
+    // Phase 1 had cycled to its 1000 ms move; phase 2 must restart at 350 ms.
+    const nextSpawn = strikeStep + SEQUENCE_TIMING.recovery;
+    const nextImpact = nextSpawn + SEQUENCE_TIMING.nextTelegraphs[0]!;
+    advance(engine, nextSpawn + 1 - engine.snapshot().step);
+    expect(engine.snapshot().attack).toMatchObject({
+      impactStep: nextImpact,
+      phase: 'telegraph',
+    });
+  });
+
+  it('rests for the chart recovery after a break expires naturally', () => {
+    const engine = new ZhenShaEngine(SEQUENCE_CHART);
+    const [, , third] = sequencePerfectImpacts();
+    for (const impact of sequencePerfectImpacts()) {
+      engine.input('block', impact);
+    }
+    advance(engine, third + 1);
+    expect(engine.snapshot()).toMatchObject({
+      momentum: MOMENTUM_FOR_BREAK,
+      boss: { guard: 'broken' },
+      breakTicksLeft: BREAK_TICKS - 1,
+    });
+
+    const expiryStep = third + BREAK_TICKS;
+    advance(engine, expiryStep - engine.snapshot().step);
+    expect(engine.snapshot()).toMatchObject({
+      momentum: 0,
+      breakTicksLeft: 0,
+      attack: null,
+    });
+    expect(engine.drainEvents().map((event) => event.type)).toContain(
+      'break-end',
+    );
+
+    // The break expiry restarts the phase's 1000 ms move after 200 ms, not 600.
+    const nextSpawn = expiryStep + SEQUENCE_TIMING.recovery;
+    const nextImpact = nextSpawn + SEQUENCE_TIMING.telegraphs[3]!;
+    advance(engine, nextSpawn + 1 - engine.snapshot().step);
+    expect(engine.snapshot().attack).toMatchObject({
+      impactStep: nextImpact,
+      phase: 'telegraph',
+    });
+  });
+
   it('carries hits across phases and loses on the third unparried move', () => {
     const engine = new ZhenShaEngine(STAGE_CHART);
     // Miss the first two moves of 1-1, then clear it with three perfects.
@@ -1455,7 +1631,13 @@ describe('engine source constraints', () => {
 
     // The chart contract is the engine's only import; everything else stays
     // out so the rules keep running in plain Node and in a fixed tick loop.
-    expect(source).toMatch(/from\s+['"]\.\/boss-chart['"]/);
+    const importSpecifiers = [
+      ...source.matchAll(/\bfrom\s+['"]([^'"]+)['"]/g),
+    ].map((match) => match[1]);
+    expect(importSpecifiers).toEqual(['./boss-chart']);
+    // Side-effect and dynamic imports have no `from` clause; reject them too.
+    expect(source).not.toMatch(/(?:^|\n)\s*import\s*['"]/);
+    expect(source).not.toMatch(/\bimport\s*\(/);
     expect(source).not.toMatch(FORBIDDEN_ENGINE_SOURCE);
     expect(source).not.toMatch(ACCEPTANCE_PURITY_GREP);
   });
