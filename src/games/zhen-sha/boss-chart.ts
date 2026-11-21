@@ -29,8 +29,8 @@
  * All times are milliseconds of game time; the engine card converts them to
  * integer ticks (120 per second). The default chart's values are exact
  * multiples of 1000/120 ms; non-aligned real values (for example #246's 320 ms)
- * need one documented rounding rule before they drive judgement. The impact
- * tick ends the wind-up and is the centre of the parry bands.
+ * need one explicit rounding rule before they drive judgement. The impact tick
+ * ends the wind-up and is the centre of the parry bands.
  */
 export interface BossMoveChart {
   /** Stable identifier, unique inside a chart; real data must not recycle it. */

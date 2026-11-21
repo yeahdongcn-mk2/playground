@@ -730,6 +730,14 @@ describe('fixed-step determinism', () => {
 const FORBIDDEN_PURE_SOURCE =
   /\b(?:document|window|navigator|localStorage|sessionStorage|fetch|Audio|performance|requestAnimationFrame|setTimeout|setInterval|Phaser|THREE|require|globalThis)\b|Date\.now|\bnew\s+Date\b|\bMath\.random\b|(?:^|\n)\s*import\b|(?:^|\n)\s*export\b[^;]*\bfrom\b/;
 
+/**
+ * Acceptance #4's grep verbatim: no word boundaries, so a substring inside a
+ * comment (for example `documented`) counts as a hit. The semantic guard above
+ * checks API use and would miss that, so both assertions are needed.
+ */
+const ACCEPTANCE_PURITY_GREP =
+  /document|window|Phaser|THREE|setTimeout|Date\.now/;
+
 /** Build a move that satisfies the chart contract, for shape fixtures. */
 function chartMove(
   bossIndex: number,
@@ -872,6 +880,8 @@ describe('boss chart contract', () => {
     );
 
     expect(source).not.toMatch(FORBIDDEN_PURE_SOURCE);
+    // Acceptance #4 greps boss-chart.ts verbatim, so comments must not match.
+    expect(source).not.toMatch(ACCEPTANCE_PURITY_GREP);
   });
 });
 
