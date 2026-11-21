@@ -6,7 +6,6 @@ import { describe, expect, it } from 'vitest';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const CSS_PATH = join(ROOT, 'src', 'games', 'zhen-sha', 'zhen-sha.css');
 const CSS = readFileSync(CSS_PATH, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
-const REDUCED_MOTION_QUERY = /@media\s*\(\s*prefers-reduced-motion\s*:\s*reduce\s*\)/i;
 
 /*
  * The parsing helpers below deliberately mirror style.test.ts instead of
@@ -63,9 +62,30 @@ function keyframes(name: string): string {
   return blockAfter(new RegExp(`@keyframes\\s+${name}\\s*\\{`));
 }
 
+/**
+ * Every media block whose condition asks for `prefers-reduced-motion: reduce`.
+ * `@media screen and (...)` is an equivalent write for this screen-only app,
+ * so match the feature semantically instead of one canonical prelude.
+ */
+function reducedMotionBlocks(): {
+  prelude: string;
+  body: string;
+  start: number;
+  end: number;
+}[] {
+  return mediaBlocks().filter(({ prelude }) =>
+    compactPrelude(prelude).includes('prefers-reduced-motion:reduce'),
+  );
+}
+
 /** The single `prefers-reduced-motion: reduce` block start, body and end. */
 function reducedMotionRange(): { start: number; body: string; end: number } {
-  return blockRangeAfter(new RegExp(`${REDUCED_MOTION_QUERY.source}\\s*\\{`, 'i'));
+  const blocks = reducedMotionBlocks();
+  const [block] = blocks;
+  if (block === undefined || blocks.length !== 1) {
+    throw new Error('zhen-sha.css 应恰好有一条 prefers-reduced-motion: reduce 媒体块');
+  }
+  return block;
 }
 
 /** The body of the single `prefers-reduced-motion: reduce` media block. */
@@ -73,12 +93,21 @@ function reducedMotionBlock(): string {
   return reducedMotionRange().body;
 }
 
-/** Every `@media` block in source order: its normalised prelude and body. */
-function mediaBlocks(): { prelude: string; body: string }[] {
-  return [...CSS.matchAll(/@media\s*([^{]+)\{/gi)].map((match) => ({
-    prelude: normalizeSelector(match[1] ?? ''),
-    body: balancedBlockFrom((match.index ?? 0) + match[0].length - 1),
-  }));
+/**
+ * Every `@media` block in source order: its normalised prelude, body and the
+ * source range of the block including its prelude.
+ */
+function mediaBlocks(): { prelude: string; body: string; start: number; end: number }[] {
+  return [...CSS.matchAll(/@media\s*([^{]+)\{/gi)].map((match) => {
+    const start = match.index ?? 0;
+    const openBrace = start + match[0].length - 1;
+    return {
+      prelude: normalizeSelector(match[1] ?? ''),
+      body: balancedBlockFrom(openBrace),
+      start,
+      end: matchingBraceIndex(openBrace) + 1,
+    };
+  });
 }
 
 /** A media prelude with insignificant whitespace removed and case folded. */
@@ -134,12 +163,77 @@ function declarationValue(body: string, property: string): string {
 
 /** Every property/value declaration inside a rule body, in source order. */
 function declarationsIn(body: string): { property: string; value: string }[] {
-  return [...body.matchAll(/(?:^|;)\s*([a-z-]+)\s*:\s*([^;]*)(?=;|$)/gi)].map((match) => ({
-    // CSS property names are ASCII case-insensitive, and a final declaration
-    // may omit its semicolon.
-    property: (match[1] ?? '').toLowerCase(),
-    value: (match[2] ?? '').trim(),
-  }));
+  return [...body.matchAll(/(?:^|;)\s*([a-z-]+)\s*:\s*([^;]*)(?=;|$)/gi)].map((match) => {
+    const property = match[1] ?? '';
+    return {
+      // CSS property names are ASCII case-insensitive, and a final declaration
+      // may omit its semicolon. Custom property names are case-sensitive, so
+      // `--FX-SCAN` must not collapse onto `--fx-scan`.
+      property: property.startsWith('--') ? property : property.toLowerCase(),
+      value: (match[2] ?? '').trim(),
+    };
+  });
+}
+
+/** A CSS value with insignificant whitespace and keyword case folded. */
+function normalizeCssValue(value: string): string {
+  return value
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+    .replace(/\s*!\s*important$/, ' !important');
+}
+
+/**
+ * The reduced-motion block's declarations grouped by individual selector.
+ * Splitting a selector list into separate rules, reordering rules and ASCII
+ * case changes are equivalent writes, so the assertions compare this semantic
+ * grouping instead of the literal rule list.
+ */
+function reducedMotionDeclarations(): Map<string, { property: string; value: string }[]> {
+  const grouped = new Map<string, { property: string; value: string }[]>();
+  for (const rule of rulesIn(reducedMotionBlock())) {
+    for (const selector of rule.selector.split(',').map(normalizeSelector)) {
+      const declarations = grouped.get(selector) ?? [];
+      declarations.push(
+        ...declarationsIn(rule.body).map(({ property, value }) => ({
+          property,
+          value: normalizeCssValue(value),
+        })),
+      );
+      grouped.set(selector, declarations);
+    }
+  }
+  return grouped;
+}
+
+/**
+ * Assert the reduced-motion block overrides only the scanline ink alpha and the
+ * two decorative loops. Split selector lists, reordered rules, `ANIMATION:
+ * NONE` and `none !important` are equivalent writes and must pass; any extra
+ * selector or declaration is still rejected by the exact per-selector set.
+ */
+function expectOnlyReducedMotionOverrides(): void {
+  const grouped = reducedMotionDeclarations();
+  expect([...grouped.keys()].sort(), 'reduced-motion 块只应覆盖 stage 与两个伪元素').toEqual([
+    '.zhen-sha-stage',
+    '.zhen-sha-stage::after',
+    '.zhen-sha-stage::before',
+  ]);
+  expect(
+    grouped.get('.zhen-sha-stage'),
+    'stage 只应把 --fx-scan 置为 transparent',
+  ).toEqual([{ property: '--fx-scan', value: 'transparent' }]);
+
+  for (const selector of ['.zhen-sha-stage::before', '.zhen-sha-stage::after']) {
+    const declarations = grouped.get(selector) ?? [];
+    expect(declarations, `${selector} 只应声明一条 animation`).toHaveLength(1);
+    const [declaration] = declarations;
+    expect(declaration?.property, `${selector} 的动画必须是 animation 简写`).toBe('animation');
+    expect(declaration?.value, `${selector} 的动画必须关闭循环`).toMatch(
+      /^none(?: !important)?$/,
+    );
+  }
 }
 
 /**
@@ -342,7 +436,17 @@ describe('zhen-sha procedural motion layer', () => {
 
     // Scanlines are 8% paper over the ink base, so they cannot hide the canvas.
     expect(declarationValue(stage, '--fx-scan')).toMatch(/var\(--zhen-paper\)\s*8%/);
-    expect(paper).toMatch(/var\(--fx-scan\)/);
+    // `--fx-scan` becomes transparent under reduced motion, so a static paper
+    // layer that reused it would be erased too. Pin it to exactly one paint and
+    // to the last background layer instead of merely checking that it appears.
+    const scanInk = /var\(\s*--fx-scan\s*\)/;
+    expect(paper.match(/var\(\s*--fx-scan\s*\)/g) ?? [], 'var(--fx-scan) 只能用于扫描线层')
+      .toHaveLength(1);
+    const paperLayers = topLevelItems(declarationValue(paper, 'background-image'));
+    expect(paperLayers.at(-1), '扫描线应是最后一个 background-image 层').toMatch(scanInk);
+    for (const layer of paperLayers.slice(0, -1)) {
+      expect(layer, '前五个静态背景层不应复用 --fx-scan').not.toMatch(scanInk);
+    }
 
     const edge = ruleBody('.zhen-sha-stage::after');
     expect(declarationValue(edge, 'position')).toBe('absolute');
@@ -350,50 +454,23 @@ describe('zhen-sha procedural motion layer', () => {
   });
 
   it('stops the mist, jitter and scanlines under reduced motion', () => {
-    // A second reduced-motion block written as `@media screen and
-    // (prefers-reduced-motion: reduce)` would be invisible to the canonical
-    // lookup below and could override the static paper with a longhand. Require
-    // every media query that mentions the preference to be the canonical one,
-    // ignoring only case and whitespace, so `@media screen and (...)` or a
-    // `no-preference` variant cannot slip in.
+    // Exactly one media block may request `prefers-reduced-motion: reduce`.
+    // The semantic match keeps a second reduce block out while accepting the
+    // equivalent `@media screen and (...)` prelude for this screen-only app
+    // instead of pinning one canonical spelling.
     expect(
-      mediaBlocks()
-        .map(({ prelude }) => compactPrelude(prelude))
-        .filter((prelude) => prelude.includes('prefers-reduced-motion')),
-      'prefers-reduced-motion 媒体查询只能有一条规范写法',
-    ).toEqual(['(prefers-reduced-motion:reduce)']);
+      reducedMotionBlocks().map(({ prelude }) => compactPrelude(prelude)),
+      'prefers-reduced-motion: reduce 媒体块只能有一条',
+    ).toHaveLength(1);
 
     const { body: reduced, start: reducedStart, end: reducedEnd } = reducedMotionRange();
+
+    // Only the scanline ink alpha and the two decorative loops may be
+    // overridden. Equivalent writes (split selector list, reordered rules,
+    // keyword case, `none !important`) pass; any extra declaration still fails.
+    expectOnlyReducedMotionOverrides();
+
     const rules = rulesIn(reduced);
-
-    // The block may only turn the two decorative pseudo-elements off and make
-    // the scanline ink transparent; any other rule is an unnecessary override
-    // of the static style that reduced motion must keep.
-    expect(rules.map((rule) => rule.selector)).toEqual([
-      '.zhen-sha-stage',
-      '.zhen-sha-stage::before, .zhen-sha-stage::after',
-    ]);
-
-    // Exactly one animation*-declaration may exist in the whole reduced block,
-    // and it must be the `none` shorthand on both pseudo-elements. A second
-    // `animation` shorthand or any longhand (including a vendor-prefixed one)
-    // would override it in the cascade and silently re-enable a loop.
-    const animationDeclarations = rules.flatMap((rule) =>
-      declarationsIn(rule.body)
-        .filter(({ property }) => {
-          const unprefixed = unprefixedAnimationProperty(property);
-          return unprefixed === 'animation' || unprefixed.startsWith('animation-');
-        })
-        .map(({ property, value }) => ({ selector: rule.selector, property, value })),
-    );
-    expect(animationDeclarations, 'reduced-motion 只允许一条 animation: none').toEqual([
-      {
-        selector: '.zhen-sha-stage::before, .zhen-sha-stage::after',
-        property: 'animation',
-        value: 'none',
-      },
-    ]);
-
     const scanOff = rules.find((rule) => rule.body.includes('--fx-scan'));
     expect(scanOff?.selector).toBe('.zhen-sha-stage');
     expect(scanOff?.body).toMatch(/--fx-scan\s*:\s*transparent/);
@@ -414,10 +491,18 @@ describe('zhen-sha procedural motion layer', () => {
     ]);
 
     // `animation: none` in the media block is normal, so a running declaration
-    // with `!important` would beat it regardless of source order.
-    expect(CSS.slice(0, reducedStart), 'running animation 不得用 !important').not.toMatch(
-      /animation(?:-[a-z-]+)?\s*:[^;}]*!\s*important/i,
-    );
+    // with `!important` would beat it regardless of source order. Reject any
+    // `!` in a running animation value instead of spelling `important`: CSS
+    // escapes such as `!\69 mportant` form the same token, and a literal `!`
+    // cannot be escaped without ceasing to be the `!important` delimiter.
+    for (const rule of runningRules) {
+      for (const { property, value } of declarationsIn(rule.body)) {
+        const unprefixed = unprefixedAnimationProperty(property);
+        if (unprefixed === 'animation' || unprefixed.startsWith('animation-')) {
+          expect(value, `${rule.selector} 的 ${property} 不得用 !important`).not.toContain('!');
+        }
+      }
+    }
 
     // Nothing after the media block may declare animation / animation-*
     // again: a later rule of equal specificity would cascade over
@@ -449,32 +534,16 @@ describe('zhen-sha procedural motion layer', () => {
 
     // Only motion and its scanline alpha are overridden; colours, borders,
     // contrast, stacking and sizing stay exactly as the base rules define them.
-    // The reduced-motion test above pins the selector list and the single
-    // animation declaration; here the complete set additionally proves that no
-    // other declaration sneaks in. Pin it instead of blacklisting property
-    // names: longhands such as `background-image: none`, `background-size: 0 0`
-    // or `border-color` were never named in the old blacklist, so a
-    // property-name blacklist can never be complete.
-    expect(
-      rulesIn(reduced).map((rule) => ({
-        selector: rule.selector,
-        declarations: declarationsIn(rule.body),
-      })),
-      'reduced-motion 块只应覆盖 --fx-scan 与 animation: none',
-    ).toEqual([
-      {
-        selector: '.zhen-sha-stage',
-        declarations: [{ property: '--fx-scan', value: 'transparent' }],
-      },
-      {
-        selector: '.zhen-sha-stage::before, .zhen-sha-stage::after',
-        declarations: [{ property: 'animation', value: 'none' }],
-      },
-    ]);
+    // Assert the semantic per-selector set instead of the literal rule list:
+    // splitting the selector list, reordering rules, `ANIMATION: NONE` and
+    // `none !important` are equivalent writes, while any extra declaration
+    // still fails. Longhands such as `background-image: none`,
+    // `background-size: 0 0` or `border-color` cannot hide either.
+    expectOnlyReducedMotionOverrides();
 
-    // The exact set above is only complete when every token in each rule body
-    // was parsed as a declaration; escape tricks such as `background\2d image`
-    // would otherwise be invisible to `declarationsIn`.
+    // The semantic set above is only complete when every token in each rule
+    // body was parsed as a declaration; escape tricks such as
+    // `background\2d image` would otherwise be invisible to `declarationsIn`.
     for (const rule of rulesIn(reduced)) {
       expect(undeclaredTextIn(rule.body), `${rule.selector} 的声明应能被完整解析`).toBe('');
     }
