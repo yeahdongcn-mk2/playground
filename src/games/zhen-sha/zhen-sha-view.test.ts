@@ -749,6 +749,74 @@ describe('first-visit tutorial', () => {
     expect(note(view.root, 'sidebar-note').hidden).toBe(false);
   });
 
+  it('keeps the tutorial pending after a normal parry', () => {
+    const { view, services } = mountFirstVisit();
+    primeLoop();
+    const tutorial = hint(view.root);
+
+    // Tap 10 ticks before impact: inside the normal band, outside perfect.
+    advanceTicks(TUTORIAL_FIRST_TELEGRAPH_TICKS - 10);
+    tap();
+    advanceTicks(2);
+
+    expect(text('judgement')).toBe('普通格挡');
+    expect(text('perfects')).toBe('0');
+    expect(momentum().dataset.filled).toBe('0');
+    // Only a perfect parry finishes the first-visit tutorial.
+    expect(tutorial.hidden).toBe(false);
+    expect(note(view.root, 'gesture-note').hidden).toBe(true);
+    expect(services.store.getItem('playground:v1:zhen-sha.tutorial')).toBeNull();
+    expect(services.storage.getString(TUTORIAL_STORAGE_KEY, '')).toBe('');
+
+    // The next killing move is still perfect, and that perfect ends it.
+    advanceTicks(TELEGRAPH_TICKS + RECOVERY_TICKS - 2);
+    tap();
+    advanceTicks(2);
+
+    expect(text('judgement')).toBe('完美格挡');
+    expect(tutorial.hidden).toBe(true);
+    expect(services.store.getItem('playground:v1:zhen-sha.tutorial')).toBe(TUTORIAL_DONE);
+  });
+
+  it('re-reads a cleared tutorial key on restart while still mounted', () => {
+    const { view, services } = mountFirstVisit();
+    primeLoop();
+    const tutorial = hint(view.root);
+
+    advanceTicks(TUTORIAL_FIRST_TELEGRAPH_TICKS);
+    tap();
+    advanceTicks(2);
+    expect(tutorial.hidden).toBe(true);
+    expect(services.storage.getString(TUTORIAL_STORAGE_KEY, '')).toBe(TUTORIAL_DONE);
+
+    // Clearing the key while mounted must not require a remount: the restart
+    // entry itself re-reads storage.
+    services.storage.remove(TUTORIAL_STORAGE_KEY);
+    required<HTMLButtonElement>(view.root, '[data-testid="restart-button"]').click();
+    primeLoop();
+
+    expect(tutorial.hidden).toBe(false);
+    expect(note(view.root, 'gesture-note').hidden).toBe(true);
+    expect(note(view.root, 'sidebar-note').hidden).toBe(true);
+
+    // The re-read state also restores the stretched opening: the original
+    // 180-tick impact is a whiff, and the 270-tick impact is perfect.
+    advanceTicks(FIRST_TELEGRAPH_TICKS);
+    tap();
+    advanceTicks(2);
+    expect(text('judgement')).toBe('落空');
+
+    required<HTMLButtonElement>(view.root, '[data-testid="restart-button"]').click();
+    primeLoop();
+    advanceTicks(TUTORIAL_FIRST_TELEGRAPH_TICKS);
+    tap();
+    advanceTicks(1);
+
+    expect(text('judgement')).toBe('完美格挡');
+    expect(tutorial.hidden).toBe(true);
+    expect(services.store.getItem('playground:v1:zhen-sha.tutorial')).toBe(TUTORIAL_DONE);
+  });
+
   it('stays hidden across both restart entries and a remount', () => {
     const { view, services } = mountFirstVisit();
     primeLoop();

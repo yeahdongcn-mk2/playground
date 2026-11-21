@@ -1,7 +1,7 @@
 # 镇煞首启教学 Before / After 证据（#245 t1）
 
 - baseline（Before）：`origin/main` @ `0253b20`，未加首启教学的当前实现
-- after（After）：`agent/plan-245-t0` @ `7bcaab2`（After 截图对应的实现提交；之后只新增本 README，UI 不再变化）
+- after（After）：`agent/plan-245-t0` @ `7bcaab2`（After 截图对应的实现提交；之后的提交只加测试 / 文档并合并 `origin/main` 的结算模块，不改变首启教学的 UI）
 - 场景：全新浏览器上下文（空 `localStorage`）直接进入 `/#/games/zhen-sha` 首屏；同一 Chromium、DPR 1
 - 视口：1440×1000（桌面）与 390×844（手机）
 - 主题 / 状态：默认深色主题；页面加载后 250 ms 截图，首招 telegraph 仍在进行
@@ -60,4 +60,6 @@ node evidence/plan-245-t0/verify-tutorial.mjs http://127.0.0.1:4181 before
 node evidence/plan-245-t0/verify-tutorial.mjs http://127.0.0.1:4182 after
 ```
 
-首招 ≥1.5× 基准、首次完美后持久化 `done`、两个重开入口与重新挂载不再显示、清空键后恢复、教程可见时手势与结算仍正常，由 `src/games/zhen-sha/tutorial.test.ts`、`engine.test.ts`、`zhen-sha-view.test.ts` 与 `style.test.ts` 覆盖；`capture-tutorial.mjs` / `verify-tutorial.mjs` 只补充真实浏览器截图与 DOM 证据。
+首招 ≥1.5× 基准、首次完美后持久化 `done`、普通格挡不结束教学、挂载中清空键后点重开恢复提示与延长首招、两个重开入口与重新挂载不再显示、清空键后重新挂载恢复、教程可见时手势与结算仍正常，由 `src/games/zhen-sha/tutorial.test.ts`、`engine.test.ts`、`zhen-sha-view.test.ts` 与 `style.test.ts` 覆盖；`capture-tutorial.mjs` / `verify-tutorial.mjs` 只补充真实浏览器截图与 DOM 证据。
+
+reduced-motion 的「无布局跳动」是上述真实 Chromium 截图里对静态 / 动画两支布局盒的测量结果；单测只断言 `data-motion="static"`、静态分支无动画且仍能打出完美，不量布局，布局断言留给 t3 的 e2e。
