@@ -50,7 +50,7 @@ export const MOMENTUM_PER_PERFECT = 1;
 /** Momentum required to break the boss's guard. */
 export const MOMENTUM_FOR_BREAK = 3;
 
-/** Unparried moves tolerated before the duel is lost. */
+/** Unparried hits tolerated before the duel is lost. */
 export const MAX_HITS = 3;
 
 /** Score for a perfect parry. */
@@ -143,7 +143,7 @@ export interface ZhenShaSnapshot {
   readonly momentum: number;
   /** Perfect parries landed this duel. */
   readonly perfects: number;
-  /** Unparried killing moves taken this duel. */
+  /** Unparried damage taken this duel, capped at `MAX_HITS`. */
   readonly hits: number;
   readonly score: number;
   /** Ticks until the break expires (exclusive), or 0 while the guard is up. */
@@ -152,14 +152,16 @@ export interface ZhenShaSnapshot {
 }
 
 /**
- * One move converted to integer ticks. Band half-widths are derived from the
- * full-width chart durations with `floor(fullTicks / 2)`, so the two outside
- * ticks of an odd-width band stay inside it.
+ * One move converted to integer ticks, with its damage kept as a hit cost.
+ * Band half-widths are derived from the full-width chart durations with
+ * `floor(fullTicks / 2)`, so the two outside ticks of an odd-width band stay
+ * inside it.
  */
 interface TimedMove {
   readonly telegraphTicks: number;
   readonly normalHalfTicks: number;
   readonly perfectHalfTicks: number;
+  readonly damage: number;
 }
 
 interface TimedPhase {
@@ -225,6 +227,10 @@ function normalizeChart(chart: BossChart): TimedChart {
             const label = `BossChart boss ${bossIndex + 1} phase ${
               phaseIndex + 1
             } move ${moveIndex + 1}`;
+            const damage = move.damage;
+            if (!Number.isInteger(damage) || damage < 1) {
+              throw new RangeError(`${label} damage must be a positive integer`);
+            }
             const telegraphTicks = durationToTicks(
               move.telegraphMs,
               `${label} telegraphMs`,
@@ -242,7 +248,7 @@ function normalizeChart(chart: BossChart): TimedChart {
                 `${label} parryWindowMs must not be wider than activeMs`,
               );
             }
-            return { telegraphTicks, normalHalfTicks, perfectHalfTicks };
+            return { telegraphTicks, normalHalfTicks, perfectHalfTicks, damage };
           }),
         };
       }),
@@ -303,9 +309,10 @@ interface PendingInput {
  * landing, so a panic tap cannot be re-rolled by tapping again. A hold
  * (`charge`) followed by a release (`strike`) inside the break clears the
  * phase: the next phase or boss begins, and only clearing the last phase of
- * the last boss wins. Three unparried moves end the duel the other way; the
- * chart's damage values describe the fiction, while the budget counts one hit
- * per unparried move.
+ * the last boss wins. Three unparried hits end the duel the other way; each
+ * landed move adds the chart's `damage` (capped at `MAX_HITS`), which is 1 in
+ * both the default chart and the real-chart adapter, so three unparried moves
+ * still lose.
  */
 export class ZhenShaEngine {
   private readonly chart: TimedChart;
@@ -334,7 +341,8 @@ export class ZhenShaEngine {
 
   /**
    * Build an engine for `chart`, defaulting to the kill-gate chart. The chart
-   * is validated and converted to ticks once; only the integer timing is kept.
+   * is validated and converted to ticks once; only integer timing and damage
+   * are kept.
    */
   constructor(chart: BossChart = DEFAULT_BOSS_CHART) {
     this.chart = normalizeChart(chart);
@@ -439,7 +447,7 @@ export class ZhenShaEngine {
       tick >= attack.impactStep + attack.move.normalHalfTicks
     ) {
       this.attack = null;
-      this.hits += 1;
+      this.hits = Math.min(MAX_HITS, this.hits + attack.move.damage);
       this.lastJudgement = 'miss';
       this.pushEvent('hit');
       this.advanceMove();

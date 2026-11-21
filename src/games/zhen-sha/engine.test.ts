@@ -755,10 +755,10 @@ function chartMove(
 }
 
 /**
- * A shape smoke test for #246's already-merged 3 × 2 `BOSSES`. The engine card
- * that consumes this contract must map `BOSSES` here and reconcile its
- * different `id` / `activeMs` / `damage` semantics, so no production data is
- * bound yet.
+ * A shape fixture for #246's 3 × 2 `BOSSES` contract. The real binding lives in
+ * `boss-chart-adapter.ts` / `REAL_BOSS_CHART`; this generated chart only keeps
+ * the phase / move-count shape honest, with deliberately different ids,
+ * `activeMs` and `damage` values.
  */
 const THREE_BY_TWO_CHART: BossChart = {
   bosses: Array.from({ length: 3 }, (_, bossIndex) => ({
@@ -1768,11 +1768,18 @@ describe('real boss chart wiring', () => {
 
   it('reads the real move windows and the adapter recovery', () => {
     // The real opening move is 320 ms active / 160 ms parry: 38 and 19 full
-    // ticks, so the halves are 19 and 9 — not the default 18 and 6.
-    const normalHalf = 19;
-    const perfectHalf = 9;
-    expect(perfectHalf).not.toBe(PERFECT_BAND_HALF_TICKS);
-    expect(normalHalf).not.toBe(NORMAL_BAND_HALF_TICKS);
+    // ticks, so the halves are 19 and 9 — not the default 18 and 6. Derive them
+    // from the adapted chart rather than comparing local literals to the
+    // defaults; the explicit 19/9 assertions below still keep the data visible.
+    const opening = REAL_BOSS_CHART.bosses[0]?.phases[0]?.moves[0];
+    if (opening === undefined) {
+      throw new Error('real chart must have an opening move');
+    }
+    expect(opening).toMatchObject({ activeMs: 320, parryWindowMs: 160 });
+    const normalHalf = Math.floor(durationTicks(opening.activeMs) / 2);
+    const perfectHalf = Math.floor(durationTicks(opening.parryWindowMs) / 2);
+    expect(normalHalf).toBe(19);
+    expect(perfectHalf).toBe(9);
     // 600 ms is also the kill-gate default; the full walk proves the engine
     // actually reads it, while this pins the adapter's tick conversion.
     expect(REAL_RECOVERY_TICKS).toBe(72);
@@ -1800,7 +1807,7 @@ describe('real boss chart wiring', () => {
     }
   });
 
-  it('charges one hit per unparried move even when chart damage is larger', () => {
+  it('charges chart damage per unparried move and loses once the budget is spent', () => {
     const heavyChart: BossChart = {
       bosses: [
         {
@@ -1814,7 +1821,7 @@ describe('real boss chart wiring', () => {
                   telegraphMs: 900,
                   activeMs: 300,
                   parryWindowMs: 100,
-                  damage: 7,
+                  damage: 2,
                 },
               ],
             },
@@ -1824,13 +1831,32 @@ describe('real boss chart wiring', () => {
     };
     const engine = new ZhenShaEngine(heavyChart);
     advance(engine, toTicks(900) + NORMAL_BAND_HALF_TICKS + 1);
-
     expect(engine.snapshot()).toMatchObject({
       status: 'playing',
-      hits: 1,
+      hits: 2,
       momentum: 0,
       perfects: 0,
     });
+    expect(engine.drainEvents().map((event) => event.type)).toEqual(['hit']);
+
+    // Step to the second landing without assuming a recovery length: any
+    // chart change that shifts the wait still reaches the same outcome.
+    const maxSteps = 2 * (toTicks(900) + NORMAL_BAND_HALF_TICKS + 2);
+    let steps = 0;
+    while (engine.snapshot().status === 'playing' && steps < maxSteps) {
+      engine.step();
+      steps += 1;
+    }
+    expect(steps).toBeLessThan(maxSteps);
+    expect(engine.snapshot()).toMatchObject({
+      status: 'lost',
+      hits: MAX_HITS,
+      lastJudgement: 'miss',
+    });
+    expect(engine.drainEvents().map((event) => event.type)).toEqual([
+      'hit',
+      'lose',
+    ]);
   });
 
   it('honours a non-default recovery on an adapted real chart', () => {
@@ -1907,6 +1933,32 @@ describe('real boss chart wiring', () => {
 });
 
 describe('chart validation', () => {
+  /** A minimal valid chart, with one move overridden per test. */
+  function chartWithMove(overrides: Partial<BossMoveChart> = {}): BossChart {
+    return {
+      bosses: [
+        {
+          name: '校验',
+          phases: [
+            {
+              id: 'validate',
+              moves: [
+                {
+                  id: 'validate-move',
+                  telegraphMs: 900,
+                  activeMs: 300,
+                  parryWindowMs: 100,
+                  damage: 1,
+                  ...overrides,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+  }
+
   it('rejects a chart without a complete first stage', () => {
     expect(() => new ZhenShaEngine({ bosses: [] })).toThrow(RangeError);
     expect(
@@ -1945,6 +1997,37 @@ describe('chart validation', () => {
           ],
         }),
     ).toThrow(RangeError);
+  });
+
+  it('rejects a non-positive or non-finite move duration', () => {
+    expect(() => new ZhenShaEngine(chartWithMove({ telegraphMs: 0 }))).toThrow(
+      RangeError,
+    );
+    expect(
+      () => new ZhenShaEngine(chartWithMove({ telegraphMs: Number.NaN })),
+    ).toThrow(RangeError);
+    expect(
+      () => new ZhenShaEngine(chartWithMove({ activeMs: Number.POSITIVE_INFINITY })),
+    ).toThrow(RangeError);
+    expect(
+      () => new ZhenShaEngine(chartWithMove({ parryWindowMs: 0 })),
+    ).toThrow(RangeError);
+  });
+
+  it('rejects an active window narrower than one tick', () => {
+    // 5 ms rounds to one tick, so its half-width floors to zero.
+    expect(
+      () => new ZhenShaEngine(chartWithMove({ activeMs: 5, parryWindowMs: 4 })),
+    ).toThrow(RangeError);
+  });
+
+  it('rejects non-positive or fractional chart damage', () => {
+    expect(() => new ZhenShaEngine(chartWithMove({ damage: 0 }))).toThrow(
+      RangeError,
+    );
+    expect(() => new ZhenShaEngine(chartWithMove({ damage: 1.5 }))).toThrow(
+      RangeError,
+    );
   });
 
   it('rejects a negative recovery', () => {

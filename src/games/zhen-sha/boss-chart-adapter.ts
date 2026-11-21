@@ -13,9 +13,10 @@
  *   centred on the impact tick. The adapter treats the real value as the full
  *   band width (so the engine opens the band `activeMs / 2` on either side of
  *   impact) instead of inventing a second duration field.
- * - `damage` in `bosses.ts` is 7–13 fictional points; the engine spends one
- *   hit from `MAX_HITS` (3) per unparried move. The adapter therefore maps every
- *   real move to one hit (`damage: 1`) and keeps the three-hit end rule intact.
+ * - `damage` in `bosses.ts` is 7–13 fictional points; `BossMoveChart.damage`
+ *   is how many of the engine's `MAX_HITS` (3) an unparried move costs. The
+ *   adapter therefore maps every real move to `damage: 1`, keeping the
+ *   three-hit end rule intact.
  * - Every phase rests for `REAL_CHART_RECOVERY_MS` after an exchange; the source
  *   table has no recovery field, so the default kill-gate pause is reused. The
  *   opening wind-up is the first move's own `telegraphMs`.

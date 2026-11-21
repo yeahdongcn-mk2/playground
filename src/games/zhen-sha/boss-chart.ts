@@ -52,10 +52,11 @@ export interface BossMoveChart {
    */
   readonly parryWindowMs: number;
   /**
-   * Unparried hits this move costs the player. The default chart's 1 is one
-   * hit out of the engine's three-hit budget (`MAX_HITS`). #246's `bosses.ts`
-   * currently stores 7–13 damage points instead; the wiring card must pick one
-   * unit for both contracts rather than mixing them.
+   * Unparried hits this move costs the player, up to the remaining budget:
+   * the engine adds this value to `hits` and caps the total at `MAX_HITS`.
+   * The default chart and `boss-chart-adapter.ts` both use 1, so an unparried
+   * move costs one hit; the adapter normalizes `bosses.ts`'s 7–13 fictional
+   * damage points to it.
    */
   readonly damage: number;
 }

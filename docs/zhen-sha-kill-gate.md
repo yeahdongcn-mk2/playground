@@ -16,17 +16,17 @@
 
 | 生产文件 | 行数 |
 | --- | ---: |
-| `boss-chart.ts` | 128 |
-| `boss-chart-adapter.ts` | 88 |
-| `engine.ts` | 682 |
-| `bosses.ts` | 144 |
+| `boss-chart.ts` | 129 |
+| `boss-chart-adapter.ts` | 89 |
+| `engine.ts` | 690 |
+| `bosses.ts` | 151 |
 | `index.ts` | 29 |
 | `zhen-sha-view.ts` | 676 |
 | `zhen-sha.css` | 371 |
-| **合计** | **2,118** |
+| **合计** | **2,135** |
 
 - 生产文件数：7
-- 生产行数：2,118
+- 生产行数：2,135
 - `src/games/registry.ts` 入口：数组条目 `zhenShaGame,` 1 行（配套 `import { zhenShaGame } from './zhen-sha';` 另 1 行，合计 2 行改动），不计入上面的 7 个文件。
 - `engine.test.ts`、`bosses.test.ts`、`zhen-sha-view.test.ts`、`kill-gate-doc.test.ts` 与 e2e 都不计入生产规模。
 
@@ -86,7 +86,7 @@
 对照 #250 的 S/M/L 尺子（M 的复核区间：7–9 个文件、1,400–2,200 行、2 个新概念）：
 
 - 文件数：原型 7 个；完整特性估算 7 个，落在 M 区间下沿。
-- 行数：原型 2,118 行；完整特性估算约 2,154 行，落在 M 区间内。
+- 行数：原型 2,135 行；完整特性估算约 2,154 行，落在 M 区间内。
 - 新概念：2 个，符合 M。
 
 **结论：M。** 后续卡可按 M 规模继续。行数已接近 2,200 行上沿：实现中若超过 2,200 行，或出现第三个新概念，必须回到本文按 L 复核。
