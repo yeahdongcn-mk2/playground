@@ -123,6 +123,8 @@ export interface ZhenShaAttackSnapshot {
 
 export interface ZhenShaBossSnapshot {
   readonly name: string;
+  /** 1-based index of the current boss in the chart, paired with `phase`. */
+  readonly bossIndex: number;
   /** 1-based index of the current phase inside the current boss. */
   readonly phase: number;
   readonly guard: 'up' | 'broken';
@@ -486,6 +488,7 @@ export class ZhenShaEngine {
       status: this.status,
       boss: {
         name: this.currentBoss().name,
+        bossIndex: this.bossIndex + 1,
         phase: this.phaseIndex + 1,
         guard: guardBroken ? 'broken' : 'up',
       },
