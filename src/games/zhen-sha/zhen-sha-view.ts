@@ -7,11 +7,20 @@ import {
   TELEGRAPH_TICKS,
   TICKS_PER_SECOND,
   ZhenShaEngine,
+  type ZhenShaAction,
   type ZhenShaEvent,
   type ZhenShaEventType,
   type ZhenShaSnapshot,
   type ZhenShaStatus,
 } from './engine';
+import {
+  SETTLEMENT_HEIGHT,
+  SETTLEMENT_WIDTH,
+  createSettlement,
+  drawSettlement,
+  formatSettlementElapsed,
+  type ZhenShaSettlement,
+} from './settlement';
 import './zhen-sha.css';
 
 /** Hold this long without lifting to turn the tap into a charged strike. */
@@ -81,12 +90,24 @@ const VIEW_HTML = `
             role="img" aria-label="黑宣纸上的黑煞首领与金棍"></canvas>
           <div class="zhen-sha-overlay" data-testid="overlay" role="group"
             aria-labelledby="zhen-sha-overlay-title" hidden>
-            <div class="zhen-sha-overlay-card">
+            <div class="zhen-sha-overlay-card zhen-sha-settlement" data-testid="settlement"
+              data-stamps="0">
               <p class="panel-kicker" data-testid="overlay-kicker">RESULT</p>
               <h2 id="zhen-sha-overlay-title" data-testid="overlay-title">对决结束</h2>
-              <p class="zhen-sha-overlay-body" data-testid="overlay-body">再来一局。</p>
-              <button class="button button--primary" type="button" data-action="restart"
-                data-testid="overlay-restart">再来一局</button>
+              <canvas class="zhen-sha-settlement-canvas" data-testid="settlement-canvas"
+                width="${SETTLEMENT_WIDTH}" height="${SETTLEMENT_HEIGHT}" role="img"
+                aria-label="战绩符：朱印、完美数、用时、首领阶段与弹回刀光"></canvas>
+              <dl class="zhen-sha-settlement-stats">
+                <div><dt>完美</dt><dd data-testid="settlement-perfects">0</dd></div>
+                <div><dt>用时</dt><dd data-testid="settlement-elapsed">0.0s</dd></div>
+                <div><dt>刀光</dt><dd data-testid="settlement-slashes">0 道</dd></div>
+                <div><dt>首领</dt><dd data-testid="settlement-boss">—</dd></div>
+              </dl>
+              <div class="zhen-sha-overlay-actions">
+                <button class="button button--primary" type="button" data-action="restart"
+                  data-testid="overlay-restart">再来一局</button>
+                <a class="button button--ghost" href="#/" data-testid="overlay-lobby">返回大厅</a>
+              </div>
             </div>
           </div>
         </div>
@@ -146,6 +167,46 @@ interface Flash {
   remainingMs: number;
 }
 
+/** Snapshot plus the settlement of the same duel, read through the test seam. */
+type ZhenShaDebugState = ZhenShaSnapshot & {
+  settlement: ZhenShaSettlement | null;
+};
+
+interface ZhenShaDebugApi {
+  readonly gameId: 'zhen-sha';
+  readonly getState: () => ZhenShaDebugState;
+  /** Queue one logical action at the current tick, like a pointer gesture. */
+  readonly input: (action: ZhenShaAction) => void;
+  /** Advance exactly `ticks` fixed steps (default 1) without wall-clock time. */
+  readonly step: (ticks?: number) => void;
+  readonly restart: () => void;
+  readonly destroy: () => void;
+}
+
+/**
+ * Test seam. `window.__playground` is shared with the other games, so use one
+ * local cast instead of merging a conflicting global declaration.
+ */
+interface ZhenShaDebugWindow {
+  __playground?: ZhenShaDebugApi;
+}
+
+function debugWindow(): ZhenShaDebugWindow {
+  return window as unknown as ZhenShaDebugWindow;
+}
+
+/**
+ * Test seam: only a `?debug=1` hash route installs it, so the normal entry
+ * never exposes engine control or the settlement model. Unlike the Phaser
+ * games this is not enabled for every dev-server visit: the parry timing is
+ * tick-exact and a stray auto-started loop would make a fixed input sequence
+ * non-reproducible.
+ */
+function debugEnabled(): boolean {
+  const query = window.location.hash.split('?')[1];
+  return query ? new URLSearchParams(query).has('debug') : false;
+}
+
 /** Mount the minimal playable Zhen Sha duel: canvas scene plus pointer gestures. */
 export function mountZhenSha(
   root: HTMLElement,
@@ -164,7 +225,6 @@ export function mountZhenSha(
   const overlay = query<HTMLElement>(root, '[data-testid="overlay"]');
   const overlayKicker = query<HTMLElement>(root, '[data-testid="overlay-kicker"]');
   const overlayTitle = query<HTMLElement>(root, '[data-testid="overlay-title"]');
-  const overlayBody = query<HTMLElement>(root, '[data-testid="overlay-body"]');
   const overlayRestart = query<HTMLButtonElement>(root, '[data-testid="overlay-restart"]');
   const restartButton = query<HTMLButtonElement>(root, '[data-testid="restart-button"]');
   const momentumElement = query<HTMLElement>(root, '[data-testid="momentum"]');
@@ -175,13 +235,25 @@ export function mountZhenSha(
   const statusElement = query<HTMLElement>(root, '[data-testid="status"]');
   const judgementElement = query<HTMLElement>(root, '[data-testid="judgement"]');
   const announcer = query<HTMLElement>(root, '[data-testid="announcer"]');
+  const settlementCanvas = query<HTMLCanvasElement>(
+    root,
+    '[data-testid="settlement-canvas"]',
+  );
+  const settlementPerfects = query<HTMLElement>(root, '[data-testid="settlement-perfects"]');
+  const settlementElapsed = query<HTMLElement>(root, '[data-testid="settlement-elapsed"]');
+  const settlementSlashes = query<HTMLElement>(root, '[data-testid="settlement-slashes"]');
+  const settlementBoss = query<HTMLElement>(root, '[data-testid="settlement-boss"]');
 
   canvas.width = CANVAS_WIDTH;
   canvas.height = CANVAS_HEIGHT;
   const context = canvas.getContext('2d');
+  settlementCanvas.width = SETTLEMENT_WIDTH;
+  settlementCanvas.height = SETTLEMENT_HEIGHT;
+  const settlementContext = settlementCanvas.getContext('2d');
 
   const engine = new ZhenShaEngine();
   const audio = services.audio;
+  const debug = debugEnabled();
 
   let lastStatus: ZhenShaStatus = engine.currentStatus;
   let pointerDown = false;
@@ -191,6 +263,10 @@ export function mountZhenSha(
   let running = true;
   let frameId: number | null = null;
   let lastFrameMs: number | null = null;
+  /** Every engine event of this duel, in order, kept for the settlement trail. */
+  let duelEvents: ZhenShaEvent[] = [];
+  /** Created once when the duel ends; later frames never rebuild or redraw it. */
+  let settlement: ZhenShaSettlement | null = null;
 
   function sync(): void {
     const state = engine.snapshot();
@@ -217,14 +293,19 @@ export function mountZhenSha(
       overlay.hidden = true;
     } else {
       overlay.hidden = false;
+      if (settlement === null) {
+        // One stamp per duel: the model freezes this snapshot and the whole
+        // event list, and the seal canvas is drawn exactly once.
+        settlement = createSettlement(state, duelEvents);
+        stampSeal(settlement);
+      }
+      showSettlement(settlement);
       if (state.status === 'won') {
         setText(overlayKicker, 'VICTORY');
         setText(overlayTitle, '一棍定魂');
-        setText(overlayBody, `完美 ${state.perfects} 次 · 得分 ${state.score}`);
       } else {
         setText(overlayKicker, 'DEFEAT');
         setText(overlayTitle, '被黑煞击倒');
-        setText(overlayBody, `中招 ${state.hits} 次 · 再来一局找回节奏`);
       }
       if (previousStatus === 'playing') {
         overlayRestart.focus({ preventScroll: true });
@@ -240,6 +321,27 @@ export function mountZhenSha(
         setText(announcer, '新的一局开始');
       }
     }
+  }
+
+  /** Paint the battle seal once and bump the observable stamp counter. */
+  function stampSeal(model: ZhenShaSettlement): void {
+    if (settlementContext !== null) {
+      drawSettlement(settlementContext, model, {
+        width: SETTLEMENT_WIDTH,
+        height: SETTLEMENT_HEIGHT,
+      });
+    }
+    settlementCanvas.dataset.stamps = String(
+      Number(settlementCanvas.dataset.stamps ?? '0') + 1,
+    );
+  }
+
+  /** Copy the settlement numbers into the visible readout under the seal. */
+  function showSettlement(model: ZhenShaSettlement): void {
+    setText(settlementPerfects, String(model.perfects));
+    setText(settlementElapsed, formatSettlementElapsed(model.elapsedMs));
+    setText(settlementSlashes, `${model.slashes.length} 道`);
+    setText(settlementBoss, `${model.boss.name} · 第 ${model.boss.phase} 阶段`);
   }
 
   function render(): void {
@@ -268,7 +370,7 @@ export function mountZhenSha(
 
     const events = engine.drainEvents();
     if (events.length > 0) {
-      handleEvents(events);
+      absorbEvents(events);
     }
     if (flash !== null) {
       flash.remainingMs -= delta;
@@ -289,7 +391,9 @@ export function mountZhenSha(
   }
 
   function startLoop(): void {
-    if (!running) {
+    // In debug mode the caller owns time through `step(ticks)`; an auto-started
+    // loop would advance ticks behind a fixed input sequence.
+    if (!running || debug) {
       return;
     }
     lastFrameMs = null;
@@ -304,8 +408,10 @@ export function mountZhenSha(
     lastFrameMs = null;
   }
 
-  function handleEvents(events: readonly ZhenShaEvent[]): void {
+  /** Play the cues, flash the scene and keep every event for the settlement. */
+  function absorbEvents(events: readonly ZhenShaEvent[]): void {
     for (const event of events) {
+      duelEvents.push(event);
       flash = {
         type: event.type,
         remainingMs: isResultFlash(event.type) ? RESULT_FLASH_MS : FLASH_MS,
@@ -387,6 +493,9 @@ export function mountZhenSha(
     engine.restart();
     resetPointer();
     flash = null;
+    duelEvents = [];
+    settlement = null;
+    settlementCanvas.dataset.stamps = '0';
     lastStatus = engine.currentStatus;
     overlay.hidden = true;
     startLoop();
@@ -406,6 +515,7 @@ export function mountZhenSha(
     running = false;
     resetPointer();
     stopLoop();
+    removeDebugSeam();
     detachListeners();
   }
 
@@ -432,18 +542,56 @@ export function mountZhenSha(
   render();
   startLoop();
 
+  /** Debug seam installed by this mount, so destroy never deletes another's. */
+  let installedDebugApi: ZhenShaDebugApi | null = null;
+  function removeDebugSeam(): void {
+    if (installedDebugApi !== null && debugWindow().__playground === installedDebugApi) {
+      delete debugWindow().__playground;
+    }
+    installedDebugApi = null;
+  }
+
   let destroyed = false;
-  return {
-    destroy(): void {
-      if (destroyed) {
-        return;
-      }
-      destroyed = true;
-      running = false;
-      stopLoop();
-      detachListeners();
-    },
+  const destroy = (): void => {
+    if (destroyed) {
+      return;
+    }
+    destroyed = true;
+    running = false;
+    stopLoop();
+    removeDebugSeam();
+    detachListeners();
   };
+
+  if (debug) {
+    const api: ZhenShaDebugApi = {
+      gameId: 'zhen-sha',
+      getState: () => ({ ...engine.snapshot(), settlement }),
+      input: (action) => {
+        engine.input(action);
+        render();
+      },
+      step: (ticks = 1) => {
+        if (!Number.isInteger(ticks) || ticks < 0) {
+          throw new RangeError(`Invalid Zhen Sha debug step count: ${String(ticks)}`);
+        }
+        for (let index = 0; index < ticks; index += 1) {
+          engine.step();
+        }
+        const events = engine.drainEvents();
+        if (events.length > 0) {
+          absorbEvents(events);
+        }
+        render();
+      },
+      restart,
+      destroy,
+    };
+    installedDebugApi = api;
+    debugWindow().__playground = api;
+  }
+
+  return { destroy };
 }
 
 function judgementText(state: ZhenShaSnapshot): string {

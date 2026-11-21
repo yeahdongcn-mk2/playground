@@ -59,14 +59,15 @@ describe('README gameplay reference', () => {
     expect(reference).toContain(`其余${phaserCountLabel}款使用 Phaser 场景`);
   });
 
-  it('describes zhen-sha with the tests it ships, not a debug seam it lacks', () => {
+  it('describes zhen-sha with its tests, settlement sheet and debug seam', () => {
     const reference = gameplayReference(README);
     const zhenShaIndex = reference.indexOf('src/games/zhen-sha/');
     expect(zhenShaIndex).toBeGreaterThanOrEqual(0);
-    // 镇煞 has engine.test.ts / zhen-sha-view.test.ts but no `?debug=1` seam, so
-    // its fragment must not borrow the debug-seam wording used by the Phaser games.
+    // 镇煞 ships view / settlement tests and the same hash-only ?debug=1 seam as
+    // the other games, so its fragment names both.
     const zhenShaFragment = reference.slice(zhenShaIndex);
     expect(zhenShaFragment).toContain('与测试');
-    expect(zhenShaFragment).not.toContain('调试接缝');
+    expect(zhenShaFragment).toContain('结算战绩符');
+    expect(zhenShaFragment).toContain('调试接缝');
   });
 });

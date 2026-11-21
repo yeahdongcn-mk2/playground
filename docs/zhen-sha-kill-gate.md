@@ -20,15 +20,15 @@
 | `engine.ts` | 457 |
 | `bosses.ts` | 144 |
 | `index.ts` | 29 |
-| `settlement.ts` | 512 |
-| `zhen-sha-view.ts` | 676 |
-| `zhen-sha.css` | 371 |
-| **合计** | **2,317** |
+| `settlement.ts` | 393 |
+| `zhen-sha-view.ts` | 824 |
+| `zhen-sha.css` | 461 |
+| **合计** | **2,436** |
 
 - 生产文件数：7
-- 生产行数：2,317
+- 生产行数：2,436
 - `src/games/registry.ts` 入口：数组条目 `zhenShaGame,` 1 行（配套 `import { zhenShaGame } from './zhen-sha';` 另 1 行，合计 2 行改动），不计入上面的 7 个文件。
-- `engine.test.ts`、`bosses.test.ts`、`zhen-sha-view.test.ts`、`kill-gate-doc.test.ts` 与 e2e 都不计入生产规模。
+- `engine.test.ts`、`bosses.test.ts`、`settlement.test.ts`、`originality.test.ts`、`zhen-sha-view.test.ts`、`kill-gate-doc.test.ts` 与 e2e 都不计入生产规模。
 
 ### 完整特性规模估算
 
@@ -65,8 +65,8 @@
 - 固定步长与确定性：`engine.test.ts` 覆盖 120Hz 单步、60Hz / 120Hz / 抖动帧块切分下完美数、中招数、势与分数逐项相等。
 - 判定与状态：完美 / 普通 / 落空边界 ±1 tick、势累积、三次完美破防、破防窗口首末 tick、蓄势 / 松手终结、三次中招失败、`restart()`、快照隔离。
 - 引擎边界：`engine.ts` 不引用 `document` / `window` / `Phaser` / `THREE` / `setTimeout` / `Date.now`，由源码约束测试守护。
-- 视图与手势：`zhen-sha-view.test.ts`（jsdom）覆盖轻点 / 长按 / 松手到引擎输入的映射、HUD 随快照更新、结算与重开、pointer capture 丢失、destroy / abort 的监听与 rAF 清理、页面隐藏暂停、音效事件映射。
-- 入口与路由：懒加载入口不把 view / engine 拉进 shell 包；`#/games/zhen-sha` 可从大厅进入；320×640 首屏三手势提示由 `tests/e2e/zhen-sha.spec.ts` 断言。
+- 视图与手势：`zhen-sha-view.test.ts`（jsdom）覆盖轻点 / 长按 / 松手到引擎输入的映射、HUD 随快照更新、结算战绩符只在结束时盖印一次、重开清空结算并回到 boss 1 阶段 1、从结算返回大厅再进入重新开局、`?debug=1` 的 `getState().settlement` 与 destroy 清理、pointer capture 丢失、destroy / abort 的监听与 rAF 清理、页面隐藏暂停、音效事件映射；`originality.test.ts` 静态检查印面与字标只含原创「镇煞」与抽象印纹，不含现有作品名 / 门派 / 招式名 / 商标。
+- 入口与路由：懒加载入口不把 view / engine 拉进 shell 包；`#/games/zhen-sha` 可从大厅进入；320×640 首屏三手势提示、固定输入序列的胜利 / 失败结算数值、重开不叠加、从结算返回大厅再进入，以及 320×640 无横向滚动与 ≥44px 结算按钮由 `tests/e2e/zhen-sha.spec.ts` 断言。
 - 构建与预算：`npm run typecheck`、`npm run lint`、`npm run test:unit`、`npm run build`、`npm run check:budget` 可重复执行。
 - 风格层可自动化的部分：核心色数量、无外部图片 / 字体 / URL 与黑宣纸 / 飞白规则由 `style.test.ts` 守护；`prefers-reduced-motion` 分支仍未实现、未测，由后续子任务补。
 - 本评估文档自身由 `kill-gate-doc.test.ts` 校验：文件数 / 行数必须与生产文件一致，结论、#261、试玩状态与「未新增系统」陈述必须存在。
@@ -87,11 +87,11 @@
 
 对照 #250 的 S/M/L 尺子（M 的复核区间：7–9 个文件、1,400–2,200 行、2 个新概念）：
 
-- 文件数：原型 7 个（实测含 #251 的 `settlement.ts`，不计入 #250 完整特性估算）；完整特性估算 7 个，落在 M 区间下沿。
-- 行数：原型 2,317 行；完整特性估算约 2,154 行，落在 M 区间内。
+- 文件数：原型 7 个（实测含 #251 的 `settlement.ts` 与结算页接入，不计入 #250 完整特性估算）；完整特性估算 7 个，落在 M 区间下沿。
+- 行数：原型 2,436 行（含 #251 的结算模块与结算页接入）；完整特性估算约 2,154 行，落在 M 区间内。
 - 新概念：2 个，符合 M。
 
-**结论：M。** 后续卡可按 M 规模继续。M 的判定依据是完整特性估算约 2,154 行，仍在 2,200 行上沿内；原型实测 2,317 行已超出上沿 117 行（超出 M 区间），这是需要按 L 复核的信号，其重估由跟进单 [#417](https://github.com/yeahdongcn-mk2/playground/issues/417) 跟踪。实现中若完整特性估算超过 2,200 行，或出现第三个新概念，必须回到本文按 L 复核。
+**结论：M。** 后续卡可按 M 规模继续。M 的 2,200 行上沿针对 #250 的完整特性估算（约 2,154 行）；原型实测 2,436 行包含 #251 结算战绩符的两个部分（`settlement.ts` 与结算页接入），它们不属于 #250 范围的生产代码。若 #250 自身的实现超过 2,200 行，或出现第三个新概念，必须回到本文按 L 复核。
 
 程序化水墨的敏感度：本评估把它归入第 2 个「程序化水墨 Canvas 表现与手势输入」概念，所以概念数为 2。若评审要求把「程序化水墨」单列为第三个新概念，则概念数为 3，本评估必须按 L 复核；届时停止后续卡，只保留 kill gate 记录。
 

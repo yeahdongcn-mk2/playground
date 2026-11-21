@@ -13,8 +13,11 @@ import {
   MOMENTUM_FOR_BREAK,
   RECOVERY_TICKS,
   TELEGRAPH_TICKS,
+  type ZhenShaAction,
+  type ZhenShaSnapshot,
 } from './engine';
 import { zhenShaGame } from './index';
+import { formatSettlementElapsed, type ZhenShaSettlement } from './settlement';
 import { mountZhenSha } from './zhen-sha-view';
 
 class MemoryStore implements KeyValueStore {
@@ -40,14 +43,23 @@ function createServices(reduceMotion = false): GameServices {
 
 interface FakeContext {
   readonly calls: string[];
+  /** Every string passed to fillText, so the seal readout can be asserted. */
+  readonly texts: string[];
   fillStyle: string;
   strokeStyle: string;
   lineWidth: number;
   globalAlpha: number;
   lineCap: string;
   lineJoin: string;
+  font: string;
+  textAlign: CanvasTextAlign;
+  textBaseline: CanvasTextBaseline;
+  save: () => void;
+  restore: () => void;
+  scale: () => void;
   clearRect: () => void;
   fillRect: () => void;
+  strokeRect: () => void;
   beginPath: () => void;
   arc: () => void;
   fill: () => void;
@@ -56,11 +68,13 @@ interface FakeContext {
   moveTo: () => void;
   lineTo: () => void;
   quadraticCurveTo: () => void;
+  fillText: (text: string) => void;
 }
 
 /** Minimal 2D context stub: records every call so the test can prove drawing ran. */
 function createFakeContext(): FakeContext {
   const calls: string[] = [];
+  const texts: string[] = [];
   const record =
     (name: string) =>
     (): void => {
@@ -68,14 +82,22 @@ function createFakeContext(): FakeContext {
     };
   return {
     calls,
+    texts,
     fillStyle: '#000000',
     strokeStyle: '#000000',
     lineWidth: 1,
     globalAlpha: 1,
     lineCap: 'butt',
     lineJoin: 'miter',
+    font: '10px serif',
+    textAlign: 'start',
+    textBaseline: 'alphabetic',
+    save: record('save'),
+    restore: record('restore'),
+    scale: record('scale'),
     clearRect: record('clearRect'),
     fillRect: record('fillRect'),
+    strokeRect: record('strokeRect'),
     beginPath: record('beginPath'),
     arc: record('arc'),
     fill: record('fill'),
@@ -84,6 +106,10 @@ function createFakeContext(): FakeContext {
     moveTo: record('moveTo'),
     lineTo: record('lineTo'),
     quadraticCurveTo: record('quadraticCurveTo'),
+    fillText: (value: string): void => {
+      calls.push('fillText');
+      texts.push(value);
+    },
   };
 }
 
@@ -335,6 +361,67 @@ function momentum(): HTMLElement {
     throw new Error('no mounted view');
   }
   return required<HTMLElement>(mounted.root, '[data-testid="momentum"]');
+}
+
+interface TestDebugState extends ZhenShaSnapshot {
+  settlement: ZhenShaSettlement | null;
+}
+
+interface TestDebugApi {
+  readonly gameId: 'zhen-sha';
+  readonly getState: () => TestDebugState;
+  readonly input: (action: ZhenShaAction) => void;
+  readonly step: (ticks?: number) => void;
+  readonly restart: () => void;
+  readonly destroy: () => void;
+}
+
+function debugApi(): TestDebugApi | undefined {
+  return (window as unknown as { __playground?: TestDebugApi }).__playground;
+}
+
+/** Mount with the `?debug=1` hash route, which pauses the frame loop. */
+function mountDebugView(): MountedView {
+  window.location.hash = '#/games/zhen-sha?debug=1';
+  return mountView();
+}
+
+/**
+ * The fixed win sequence used by both the jsdom tests and the Playwright e2e:
+ * three perfect taps at impact ticks 180 / 360 / 540, then charge + strike in
+ * the break. Every tap resolves on its tick, so no real frame timing leaks in.
+ */
+const WIN_EVENT_STEPS = [180, 360, 540, 540, 542, 542] as const;
+
+function playWin(api: TestDebugApi): TestDebugState {
+  api.step(FIRST_TELEGRAPH_TICKS);
+  api.input('block');
+  api.step(1);
+  api.step(TELEGRAPH_TICKS + RECOVERY_TICKS - 1);
+  api.input('block');
+  api.step(1);
+  api.step(TELEGRAPH_TICKS + RECOVERY_TICKS - 1);
+  api.input('block');
+  api.step(1);
+  api.input('charge');
+  api.step(1);
+  api.input('strike');
+  api.step(1);
+  return api.getState();
+}
+
+function overlay(): HTMLElement {
+  if (mounted === null) {
+    throw new Error('no mounted view');
+  }
+  return required<HTMLElement>(mounted.root, '[data-testid="overlay"]');
+}
+
+function settlementCanvas(): HTMLCanvasElement {
+  if (mounted === null) {
+    throw new Error('no mounted view');
+  }
+  return required<HTMLCanvasElement>(mounted.root, '[data-testid="settlement-canvas"]');
 }
 
 beforeEach(() => {
@@ -657,6 +744,164 @@ describe('zhen-sha view', () => {
     } finally {
       restoreProperty(document, 'hidden', originalHidden);
     }
+  });
+});
+
+describe('zhen-sha settlement', () => {
+  it('shows the battle seal on a win with the same numbers as the snapshot and events', () => {
+    const view = mountDebugView();
+    const api = debugApi();
+    if (api === undefined) {
+      throw new Error('the debug seam should be installed');
+    }
+    const state = playWin(api);
+
+    expect(state.status).toBe('won');
+    expect(state.perfects).toBe(3);
+    expect(state.score).toBe(1900);
+    expect(state.elapsedMs).toBeCloseTo(543 * FIXED_STEP_MS, 9);
+    expect(state.boss).toEqual({ name: '黑煞', phase: 1, guard: 'broken' });
+
+    const settlement = state.settlement;
+    expect(settlement).not.toBeNull();
+    if (settlement === null) {
+      return;
+    }
+    // The settlement is a projection of this snapshot and this event order.
+    expect(settlement.perfects).toBe(state.perfects);
+    expect(settlement.elapsedMs).toBe(state.elapsedMs);
+    expect(settlement.boss).toEqual({ name: state.boss.name, phase: state.boss.phase });
+    expect(settlement.slashes.map((slash) => slash.step)).toEqual([...WIN_EVENT_STEPS]);
+
+    expect(overlay().hidden).toBe(false);
+    expect(text('settlement-perfects')).toBe('3');
+    expect(text('settlement-elapsed')).toBe(formatSettlementElapsed(state.elapsedMs));
+    expect(text('settlement-elapsed')).toBe('4.5s');
+    expect(text('settlement-slashes')).toBe('6 道');
+    expect(text('settlement-boss')).toBe('黑煞 · 第 1 阶段');
+    expect(text('overlay-title')).toBe('一棍定魂');
+
+    // The seal canvas was painted once, with the original seal face and the
+    // snapshot-derived readout.
+    expect(settlementCanvas().dataset.stamps).toBe('1');
+    expect(view.context.texts).toContain('镇');
+    expect(view.context.texts).toContain('煞');
+    expect(view.context.texts).toContain('完美 3 次');
+    expect(view.context.texts).toContain('用时 4.5s');
+    expect(view.context.texts).toContain('黑煞 · 第 1 阶段');
+  });
+
+  it('stamps the settlement once and never regenerates it on later frames', () => {
+    mountDebugView();
+    const api = debugApi();
+    if (api === undefined) {
+      throw new Error('the debug seam should be installed');
+    }
+    const settlement = playWin(api).settlement;
+    expect(settlement).not.toBeNull();
+
+    const textCalls = mounted!.context.texts.length;
+    api.step(12);
+
+    expect(api.getState().settlement).toBe(settlement);
+    expect(settlementCanvas().dataset.stamps).toBe('1');
+    expect(mounted!.context.texts.length).toBe(textCalls);
+    expect(overlay().hidden).toBe(false);
+    expect(text('settlement-perfects')).toBe('3');
+  });
+
+  it('shows the defeat seal and restart clears it back to boss 1 phase 1', () => {
+    mountDebugView();
+    const api = debugApi();
+    if (api === undefined) {
+      throw new Error('the debug seam should be installed');
+    }
+
+    api.step(600);
+    const lost = api.getState();
+    expect(lost.status).toBe('lost');
+    expect(lost.hits).toBe(MAX_HITS);
+    expect(lost.perfects).toBe(0);
+    expect(lost.boss).toEqual({ name: '黑煞', phase: 1, guard: 'up' });
+    expect(lost.settlement?.slashes).toHaveLength(4);
+    expect(lost.settlement?.perfects).toBe(lost.perfects);
+    expect(lost.settlement?.elapsedMs).toBe(lost.elapsedMs);
+
+    expect(overlay().hidden).toBe(false);
+    expect(text('overlay-title')).toBe('被黑煞击倒');
+    expect(text('settlement-perfects')).toBe('0');
+    expect(text('settlement-elapsed')).toBe('5.0s');
+    expect(text('settlement-slashes')).toBe('4 道');
+    expect(text('settlement-boss')).toBe('黑煞 · 第 1 阶段');
+    expect(settlementCanvas().dataset.stamps).toBe('1');
+
+    required<HTMLButtonElement>(mounted!.root, '[data-testid="overlay-restart"]').click();
+    const reset = api.getState();
+    expect(reset.status).toBe('playing');
+    expect(reset.step).toBe(0);
+    expect(reset.settlement).toBeNull();
+    expect(reset.boss).toEqual({ name: '黑煞', phase: 1, guard: 'up' });
+    expect(overlay().hidden).toBe(true);
+    expect(settlementCanvas().dataset.stamps).toBe('0');
+
+    // A second duel stamps once from scratch; the old six arcs never stack.
+    const won = playWin(api);
+    expect(won.status).toBe('won');
+    expect(won.settlement?.slashes).toHaveLength(6);
+    expect(settlementCanvas().dataset.stamps).toBe('1');
+    expect(text('settlement-slashes')).toBe('6 道');
+
+    required<HTMLButtonElement>(mounted!.root, '[data-testid="restart-button"]').click();
+    expect(api.getState().status).toBe('playing');
+    expect(api.getState().settlement).toBeNull();
+  });
+
+  it('remounts a fresh duel after the settlement returns to the lobby', () => {
+    const first = mountDebugView();
+    const api = debugApi();
+    if (api === undefined) {
+      throw new Error('the debug seam should be installed');
+    }
+    playWin(api);
+    expect(first.root.querySelector('[data-testid="settlement"]')).not.toBeNull();
+
+    // The shell unmounts the game on the route change; mirror that teardown.
+    first.handle.destroy();
+    first.root.remove();
+    mounted = null;
+    window.location.hash = '#/';
+    expect(debugApi()).toBeUndefined();
+
+    const second = mountDebugView();
+    const fresh = debugApi();
+    if (fresh === undefined) {
+      throw new Error('the debug seam should be reinstalled on re-entry');
+    }
+    const state = fresh.getState();
+    expect(state.status).toBe('playing');
+    expect(state.step).toBe(0);
+    expect(state.settlement).toBeNull();
+    expect(state.boss).toEqual({ name: '黑煞', phase: 1, guard: 'up' });
+    expect(required<HTMLElement>(second.root, '[data-testid="overlay"]').hidden).toBe(true);
+  });
+
+  it('exposes the settlement only through the debug seam and removes it on destroy', () => {
+    window.location.hash = '#/games/zhen-sha';
+    const normal = mountView();
+    expect(debugApi()).toBeUndefined();
+    normal.handle.destroy();
+    normal.root.remove();
+    mounted = null;
+
+    const debugView = mountDebugView();
+    const api = debugApi();
+    expect(api).toBeDefined();
+    expect(api?.getState().settlement).toBeNull();
+
+    api?.destroy();
+    expect(debugApi()).toBeUndefined();
+    debugView.root.remove();
+    mounted = null;
   });
 });
 
