@@ -182,6 +182,8 @@ export function mountZhenSha(
   const statusElement = query<HTMLElement>(root, '[data-testid="status"]');
   const judgementElement = query<HTMLElement>(root, '[data-testid="judgement"]');
   const announcer = query<HTMLElement>(root, '[data-testid="announcer"]');
+  const arcGlow = query<HTMLElement>(root, '.zhen-sha-arc-glow');
+  const arcEdge = query<HTMLElement>(root, '.zhen-sha-arc-edge');
 
   canvas.width = CANVAS_WIDTH;
   canvas.height = CANVAS_HEIGHT;
@@ -249,9 +251,29 @@ export function mountZhenSha(
     }
   }
 
+  let lastArcLift: number | null = null;
+
+  function updateArcEdge(lift: number): void {
+    if (lift === lastArcLift) {
+      return;
+    }
+    lastArcLift = lift;
+    const clips = staffArcClipPaths(lift);
+    arcGlow.style.setProperty('--zhen-arc-glow-clip', clips.glow);
+    arcEdge.style.setProperty('--zhen-arc-edge-clip', clips.edge);
+  }
+
   function render(): void {
     sync();
-    draw(context, engine.snapshot(), flash, services.reduceMotion);
+    const state = engine.snapshot();
+    updateArcEdge(
+      staffArcLift(
+        state.charging,
+        state.breakTicksLeft,
+        flash !== null && isSwingFlashType(flash.type),
+      ),
+    );
+    draw(context, state, flash, services.reduceMotion);
   }
 
   function frame(time: number): void {
@@ -605,23 +627,110 @@ function drawBoss(ctx: CanvasRenderingContext2D, state: ZhenShaSnapshot): void {
   }
 }
 
+/** Whether a flash means the staff is swinging (and therefore lifted). */
+function isSwingFlashType(type: ZhenShaEventType): boolean {
+  return type === 'perfect' || type === 'strike' || type === 'finisher' || type === 'win';
+}
+
+/** The staff arc anchors in the 360x560 logical canvas. */
+const STAFF_ARC_START = [42, 486] as const;
+const STAFF_ARC_CONTROL = [178, 420] as const;
+const STAFF_ARC_END = [318, 456] as const;
+/** Logical pixels the canvas lifts the arc while charging, breaking or swinging. */
+const STAFF_ARC_LIFT = 34;
+/** End-point lift is damped so the staff pivots instead of translating. */
+const STAFF_ARC_END_LIFT_RATIO = 0.4;
+/** How many segments approximate the quadratic curve in the CSS clip-path. */
+const STAFF_ARC_STEPS = 10;
+/**
+ * Vertical half-thickness, in logical pixels, of the two decorative CSS bands:
+ * a wide soft glow and the thin bright edge. They trace the canvas stroke.
+ */
+export const STAFF_ARC_BAND = { glow: 10.1, edge: 2.5 } as const;
+
+/**
+ * Vertical lift of the staff arc in logical canvas pixels. `drawStaff()` and
+ * the CSS gold edge both read this, so the two stay aligned while charging,
+ * breaking or swinging (issue #249 t2 review).
+ */
+export function staffArcLift(
+  charging: boolean,
+  breakTicksLeft: number,
+  swinging: boolean,
+): number {
+  return charging || breakTicksLeft > 0 || swinging ? STAFF_ARC_LIFT : 0;
+}
+
+/** One point on the staff arc's quadratic, in logical pixels, at a given lift. */
+function staffArcPoint(t: number, lift: number): readonly [number, number] {
+  const inverse = 1 - t;
+  const [x0, y0] = STAFF_ARC_START;
+  const [cx, cy] = STAFF_ARC_CONTROL;
+  const [x1, y1] = STAFF_ARC_END;
+  return [
+    inverse * inverse * x0 + 2 * t * inverse * cx + t * t * x1,
+    inverse * inverse * y0 +
+      2 * t * inverse * (cy - lift) +
+      t * t * (y1 - lift * STAFF_ARC_END_LIFT_RATIO),
+  ];
+}
+
+function percentOfCanvas(value: number, total: number): string {
+  return `${((value / total) * 100).toFixed(2)}%`;
+}
+
+/**
+ * A CSS `clip-path` band tracing the staff arc at `lift`, `halfThickness`
+ * logical pixels either side. The same curve and lift feed the canvas stroke,
+ * so the decorative gold edge tracks the lifted arc instead of staying put.
+ */
+export function staffArcClipPath(lift: number, halfThickness: number): string {
+  const points: string[] = [];
+  for (let index = 0; index <= STAFF_ARC_STEPS; index += 1) {
+    const t = index / STAFF_ARC_STEPS;
+    const [x, y] = staffArcPoint(t, lift);
+    points.push(
+      `${percentOfCanvas(x, CANVAS_WIDTH)} ${percentOfCanvas(y - halfThickness, CANVAS_HEIGHT)}`,
+    );
+  }
+  for (let index = STAFF_ARC_STEPS; index >= 0; index -= 1) {
+    const t = index / STAFF_ARC_STEPS;
+    const [x, y] = staffArcPoint(t, lift);
+    points.push(
+      `${percentOfCanvas(x, CANVAS_WIDTH)} ${percentOfCanvas(y + halfThickness, CANVAS_HEIGHT)}`,
+    );
+  }
+  return `polygon(${points.join(', ')})`;
+}
+
+/** The glow and edge clip-paths for one lift, ready to write as CSS variables. */
+export function staffArcClipPaths(lift: number): { readonly glow: string; readonly edge: string } {
+  return {
+    glow: staffArcClipPath(lift, STAFF_ARC_BAND.glow),
+    edge: staffArcClipPath(lift, STAFF_ARC_BAND.edge),
+  };
+}
+
 function drawStaff(
   ctx: CanvasRenderingContext2D,
   state: ZhenShaSnapshot,
   flash: Flash | null,
 ): void {
-  const swinging =
-    flash !== null &&
-    (flash.type === 'perfect' ||
-      flash.type === 'strike' ||
-      flash.type === 'finisher' ||
-      flash.type === 'win');
-  const lift = state.charging || state.breakTicksLeft > 0 || swinging ? 34 : 0;
+  const lift = staffArcLift(
+    state.charging,
+    state.breakTicksLeft,
+    flash !== null && isSwingFlashType(flash.type),
+  );
 
   const arc = (): void => {
     ctx.beginPath();
-    ctx.moveTo(42, 486);
-    ctx.quadraticCurveTo(178, 420 - lift, 318, 456 - lift * 0.4);
+    ctx.moveTo(...STAFF_ARC_START);
+    ctx.quadraticCurveTo(
+      STAFF_ARC_CONTROL[0],
+      STAFF_ARC_CONTROL[1] - lift,
+      STAFF_ARC_END[0],
+      STAFF_ARC_END[1] - lift * STAFF_ARC_END_LIFT_RATIO,
+    );
     ctx.stroke();
   };
 

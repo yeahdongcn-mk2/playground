@@ -15,7 +15,7 @@ import {
   TELEGRAPH_TICKS,
 } from './engine';
 import { zhenShaGame } from './index';
-import { mountZhenSha } from './zhen-sha-view';
+import { mountZhenSha, staffArcClipPaths, staffArcLift } from './zhen-sha-view';
 
 class MemoryStore implements KeyValueStore {
   private readonly values = new Map<string, string>();
@@ -386,6 +386,33 @@ describe('zhen-sha view', () => {
     expect(view.canvas.height).toBe(560);
     expect(view.context.calls).toContain('clearRect');
     expect(view.context.calls).toContain('quadraticCurveTo');
+  });
+
+  it('moves the CSS gold edge with the staff arc while charging', () => {
+    const view = mountView();
+    primeLoop();
+
+    const glow = required<HTMLElement>(view.root, '.zhen-sha-arc-glow');
+    const edge = required<HTMLElement>(view.root, '.zhen-sha-arc-edge');
+    const resting = staffArcClipPaths(0);
+
+    expect(glow.style.getPropertyValue('--zhen-arc-glow-clip')).toBe(resting.glow);
+    expect(edge.style.getPropertyValue('--zhen-arc-edge-clip')).toBe(resting.edge);
+
+    view.stage.dispatchEvent(pointerEvent('pointerdown'));
+    advanceMs(250);
+
+    const raised = staffArcClipPaths(staffArcLift(true, 0, false));
+    expect(raised.edge).not.toBe(resting.edge);
+    expect(glow.style.getPropertyValue('--zhen-arc-glow-clip')).toBe(raised.glow);
+    expect(edge.style.getPropertyValue('--zhen-arc-edge-clip')).toBe(raised.edge);
+
+    // Release and let the swing flash expire: the edge settles back onto the
+    // resting arc instead of drifting away permanently.
+    view.stage.dispatchEvent(pointerEvent('pointerup'));
+    advanceMs(1000);
+    expect(edge.style.getPropertyValue('--zhen-arc-edge-clip')).toBe(resting.edge);
+    expect(glow.style.getPropertyValue('--zhen-arc-glow-clip')).toBe(resting.glow);
   });
 
   it('refuses to render when the mount signal is already aborted', () => {

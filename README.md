@@ -405,7 +405,7 @@ npm run check:budget # 通过，实际输出：
 # Zhen Sha view JS: zhen-sha-view-CL1EgPnv.js 5.22 KB gzip (per-game budget 35 KB)
 # Budget check OK: shell is engine-free and within the 2D download budget.
 npm run score        # 通过（打印「指标 / 当前值 / 基线值 / 差值」表与末行 SCORE_JSON；退化退出 1，变好只报差值）
-npm run test:e2e     # 158 passed（桌面 90 + 手机 36 + WebKit 32）
+npm run test:e2e     # 161 passed（桌面 93 + 手机 36 + WebKit 32）
 ```
 
 CI 的 `verify` job 会在 `Bundle budget` 之后、`End-to-end tests` 之前运行 `npm run score`（见上文「CI 检查顺序」）。该步骤只与 `docs/score-baseline.json` 对比：不会运行 `npm run score -- --update`，因此 CI 不会改写基线；基线退化或损坏时 job 直接失败，新基线仍由人显式运行 `--update` 后提交。score 内部的 `verify:doc-counts` 默认会再跑一次单测（见 [docs/framework.md](docs/framework.md) 第 13 节），这是它现有的采集语义。
