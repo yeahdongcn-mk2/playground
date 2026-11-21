@@ -11,7 +11,7 @@
  * ordered list of phases and each phase cycles its ordered moves. One perfect
  * parry per move fills one momentum pip; three perfects break the guard, and a
  * charged staff strike clears the phase and advances to the next phase or the
- * next boss. Three unparried moves end the duel. The default chart reproduces
+ * next boss. Three unparried hits end the duel. The default chart reproduces
  * the original single-boss kill gate tick for tick.
  */
 
