@@ -635,8 +635,8 @@ function isSwingFlashType(type: ZhenShaEventType): boolean {
 /** The staff arc anchors in the 360x560 logical canvas. */
 const STAFF_ARC_START = [42, 486] as const;
 /**
- * Exported so a test can assert the drawn quadratic's arguments against the
- * anchors instead of re-deriving them from the same helper it is checking.
+ * CONTROL and END are exported so a test can assert the drawn quadratic's
+ * arguments against them instead of re-deriving them from the helper.
  */
 export const STAFF_ARC_CONTROL = [178, 420] as const;
 export const STAFF_ARC_END = [318, 456] as const;

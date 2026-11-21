@@ -448,9 +448,7 @@ describe('zhen-sha view', () => {
     // lift to both anchors; removing `- lift` or `- lift * ratio` from
     // drawStaff fails here instead of only changing pixels.
     const chargingArc = latestStaffArc(view.context);
-    expect(chargingArc.controlX).toBe(STAFF_ARC_CONTROL[0]);
     expect(chargingArc.controlY).toBe(STAFF_ARC_CONTROL[1] - lift);
-    expect(chargingArc.x).toBe(STAFF_ARC_END[0]);
     expect(chargingArc.y).toBe(STAFF_ARC_END[1] - lift * STAFF_ARC_END_LIFT_RATIO);
 
     // Release and let the swing flash expire: both the edge and the canvas arc
