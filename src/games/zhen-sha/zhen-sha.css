@@ -119,10 +119,11 @@
 }
 
 /*
- * Black xuan paper: procedural fibres and wash blooms. The slow motion layer
- * below drifts this decorative wash; the canvas fills an opaque ink base every
- * frame, so this background only shows before the first paint; paper grain is
- * screen-blended above it. No image files/URLs/fonts.
+ * Black xuan paper: procedural fibres and wash blooms. The stage's own
+ * background only shows before the canvas paints its first opaque ink frame;
+ * this decorative layer sits above that canvas (z-index 1) and is
+ * screen-blended, so the drifting paper grain and ink mist stay visible over
+ * it. No image files/URLs/fonts.
  */
 .zhen-sha-stage::before {
   content: "";
