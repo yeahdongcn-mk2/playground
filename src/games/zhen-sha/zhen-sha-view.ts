@@ -90,11 +90,11 @@ const VIEW_HTML = `
             role="img" aria-label="黑宣纸上的黑煞首领与金棍"></canvas>
           <div class="zhen-sha-overlay" data-testid="overlay" role="group"
             aria-labelledby="zhen-sha-overlay-title" hidden>
-            <div class="zhen-sha-overlay-card zhen-sha-settlement" data-testid="settlement"
-              data-stamps="0">
+            <div class="zhen-sha-overlay-card zhen-sha-settlement" data-testid="settlement">
               <p class="panel-kicker" data-testid="overlay-kicker">RESULT</p>
               <h2 id="zhen-sha-overlay-title" data-testid="overlay-title">对决结束</h2>
               <canvas class="zhen-sha-settlement-canvas" data-testid="settlement-canvas"
+                data-stamps="0"
                 width="${SETTLEMENT_WIDTH}" height="${SETTLEMENT_HEIGHT}" role="img"
                 aria-label="战绩符：朱印、完美数、用时、首领阶段与弹回刀光"></canvas>
               <dl class="zhen-sha-settlement-stats">

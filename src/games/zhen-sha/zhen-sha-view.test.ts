@@ -381,9 +381,9 @@ function debugApi(): TestDebugApi | undefined {
 }
 
 /** Mount with the `?debug=1` hash route, which pauses the frame loop. */
-function mountDebugView(): MountedView {
+function mountDebugView(signal: AbortSignal = new AbortController().signal): MountedView {
   window.location.hash = '#/games/zhen-sha?debug=1';
-  return mountView();
+  return mountView(signal);
 }
 
 /**
@@ -810,6 +810,30 @@ describe('zhen-sha settlement', () => {
     expect(text('settlement-perfects')).toBe('3');
   });
 
+  it('keeps the stamp counter on the seal canvas, not the settlement card', () => {
+    mountDebugView();
+
+    expect(settlementCanvas().dataset.stamps).toBe('0');
+    const card = required<HTMLElement>(mounted!.root, '[data-testid="settlement"]');
+    expect(card.hasAttribute('data-stamps')).toBe(false);
+  });
+
+  it('rejects malformed debug step counts without advancing the duel', () => {
+    mountDebugView();
+    const api = debugApi();
+    if (api === undefined) {
+      throw new Error('the debug seam should be installed');
+    }
+    expect(api.getState().step).toBe(0);
+
+    expect(() => api.step(-1)).toThrow(RangeError);
+    expect(() => api.step(1.5)).toThrow(RangeError);
+    expect(api.getState().step).toBe(0);
+
+    api.step(2);
+    expect(api.getState().step).toBe(2);
+  });
+
   it('shows the defeat seal and restart clears it back to boss 1 phase 1', () => {
     mountDebugView();
     const api = debugApi();
@@ -902,6 +926,18 @@ describe('zhen-sha settlement', () => {
     expect(debugApi()).toBeUndefined();
     debugView.root.remove();
     mounted = null;
+  });
+
+  it('removes the debug seam when the mount signal aborts', () => {
+    const controller = new AbortController();
+    mountDebugView(controller.signal);
+    expect(debugApi()).toBeDefined();
+
+    // The shell aborts the mount signal before destroying the handle; the seam
+    // must not survive that abort if destroy is never reached.
+    controller.abort();
+
+    expect(debugApi()).toBeUndefined();
   });
 });
 

@@ -224,7 +224,9 @@ test('returns from the settlement to the lobby and re-enters with a fresh duel',
   ).toBeUndefined();
 });
 
-test('keeps the settlement readable and targets at least 44px at 320x640', async ({ page }) => {
+test('keeps the settlement readable: both actions inside the 320x640 first screen', async ({
+  page,
+}) => {
   await openDebugGame(page);
   await playFixedWin(page);
 
@@ -240,23 +242,55 @@ test('keeps the settlement readable and targets at least 44px at 320x640', async
     const stat = document.querySelector(
       '[data-testid="settlement-perfects"]',
     ) as HTMLElement;
+    const box = (element: HTMLElement) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        top: rect.top,
+        bottom: rect.bottom,
+        left: rect.left,
+        right: rect.right,
+        width: rect.width,
+        height: rect.height,
+      };
+    };
     return {
+      viewport: { width: window.innerWidth, height: window.innerHeight },
       scrollWidth: document.documentElement.scrollWidth,
       clientWidth: document.documentElement.clientWidth,
-      cardWidth: card.getBoundingClientRect().width,
-      canvasWidth: canvas.getBoundingClientRect().width,
-      restartHeight: restart.getBoundingClientRect().height,
-      lobbyHeight: lobby.getBoundingClientRect().height,
+      card: box(card),
+      canvasWidth: box(canvas).width,
+      restart: box(restart),
+      lobby: box(lobby),
       statFontSize: Number.parseFloat(getComputedStyle(stat).fontSize),
     };
   });
 
+  expect(metrics.viewport).toEqual({ width: 320, height: 640 });
   expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth);
-  expect(metrics.cardWidth).toBeLessThanOrEqual(320);
+  expect(metrics.card.width).toBeLessThanOrEqual(320);
   expect(metrics.canvasWidth).toBeGreaterThan(120);
-  expect(metrics.restartHeight).toBeGreaterThanOrEqual(44);
-  expect(metrics.lobbyHeight).toBeGreaterThanOrEqual(44);
+  expect(metrics.restart.height).toBeGreaterThanOrEqual(44);
+  expect(metrics.lobby.height).toBeGreaterThanOrEqual(44);
   expect(metrics.statFontSize).toBeGreaterThanOrEqual(12);
+
+  // The result must be operable on the documented minimum viewport without
+  // scrolling: assert the geometry, not just non-zero visibility. With the
+  // mobile overlay falling back to `position: absolute`, the card and both
+  // actions land below 640px and these bounds fail.
+  for (const [label, rect] of [
+    ['settlement card', metrics.card],
+    ['restart action', metrics.restart],
+    ['lobby action', metrics.lobby],
+  ] as const) {
+    expect(rect.top, `${label} starts inside the 320x640 first screen`).toBeGreaterThanOrEqual(0);
+    expect(rect.bottom, `${label} ends inside the 320x640 first screen`).toBeLessThanOrEqual(
+      metrics.viewport.height,
+    );
+    expect(rect.left, `${label} starts inside the 320x640 first screen`).toBeGreaterThanOrEqual(0);
+    expect(rect.right, `${label} ends inside the 320x640 first screen`).toBeLessThanOrEqual(
+      metrics.viewport.width,
+    );
+  }
 
   for (const testId of [
     'settlement-perfects',
