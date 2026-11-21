@@ -634,12 +634,16 @@ function isSwingFlashType(type: ZhenShaEventType): boolean {
 
 /** The staff arc anchors in the 360x560 logical canvas. */
 const STAFF_ARC_START = [42, 486] as const;
-const STAFF_ARC_CONTROL = [178, 420] as const;
-const STAFF_ARC_END = [318, 456] as const;
+/**
+ * Exported so a test can assert the drawn quadratic's arguments against the
+ * anchors instead of re-deriving them from the same helper it is checking.
+ */
+export const STAFF_ARC_CONTROL = [178, 420] as const;
+export const STAFF_ARC_END = [318, 456] as const;
 /** Logical pixels the canvas lifts the arc while charging, breaking or swinging. */
-const STAFF_ARC_LIFT = 34;
+export const STAFF_ARC_LIFT = 34;
 /** End-point lift is damped so the staff pivots instead of translating. */
-const STAFF_ARC_END_LIFT_RATIO = 0.4;
+export const STAFF_ARC_END_LIFT_RATIO = 0.4;
 /** How many segments approximate the quadratic curve in the CSS clip-path. */
 const STAFF_ARC_STEPS = 10;
 /**

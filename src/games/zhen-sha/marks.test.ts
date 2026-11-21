@@ -221,6 +221,11 @@ describe('zhen-sha cinnabar seal, wordmark and gold arc edge', () => {
     expect(drawStaff).toContain('quadraticCurveTo');
     expect(drawStaff).toContain('strokeStyle');
     expect(drawStaff).toContain('staffArcLift(');
+    // The behavioral counterpart lives in zhen-sha-view.test.ts, which records
+    // the real quadraticCurveTo arguments. Keep the source contract in sync so
+    // neither anchor can silently drop the lift.
+    expect(drawStaff).toMatch(/STAFF_ARC_CONTROL\[1\]\s*-\s*lift/);
+    expect(drawStaff).toMatch(/STAFF_ARC_END\[1\]\s*-\s*lift\s*\*\s*STAFF_ARC_END_LIFT_RATIO/);
     expect(VIEW).toContain('drawStaff(ctx, state, flash)');
     // Input mapping is untouched by this subtask.
     expect(VIEW).toContain("engine.input('block')");

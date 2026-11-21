@@ -15,7 +15,15 @@ import {
   TELEGRAPH_TICKS,
 } from './engine';
 import { zhenShaGame } from './index';
-import { mountZhenSha, staffArcClipPaths, staffArcLift } from './zhen-sha-view';
+import {
+  STAFF_ARC_CONTROL,
+  STAFF_ARC_END,
+  STAFF_ARC_END_LIFT_RATIO,
+  STAFF_ARC_LIFT,
+  mountZhenSha,
+  staffArcClipPaths,
+  staffArcLift,
+} from './zhen-sha-view';
 
 class MemoryStore implements KeyValueStore {
   private readonly values = new Map<string, string>();
@@ -38,8 +46,16 @@ function createServices(reduceMotion = false): GameServices {
   return { storage, audio: new AudioService(storage), reduceMotion };
 }
 
+interface QuadraticCurveCall {
+  readonly controlX: number;
+  readonly controlY: number;
+  readonly x: number;
+  readonly y: number;
+}
+
 interface FakeContext {
   readonly calls: string[];
+  readonly quadraticCurves: QuadraticCurveCall[];
   fillStyle: string;
   strokeStyle: string;
   lineWidth: number;
@@ -55,12 +71,13 @@ interface FakeContext {
   closePath: () => void;
   moveTo: () => void;
   lineTo: () => void;
-  quadraticCurveTo: () => void;
+  quadraticCurveTo: (controlX: number, controlY: number, x: number, y: number) => void;
 }
 
 /** Minimal 2D context stub: records every call so the test can prove drawing ran. */
 function createFakeContext(): FakeContext {
   const calls: string[] = [];
+  const quadraticCurves: QuadraticCurveCall[] = [];
   const record =
     (name: string) =>
     (): void => {
@@ -68,6 +85,7 @@ function createFakeContext(): FakeContext {
     };
   return {
     calls,
+    quadraticCurves,
     fillStyle: '#000000',
     strokeStyle: '#000000',
     lineWidth: 1,
@@ -83,7 +101,10 @@ function createFakeContext(): FakeContext {
     closePath: record('closePath'),
     moveTo: record('moveTo'),
     lineTo: record('lineTo'),
-    quadraticCurveTo: record('quadraticCurveTo'),
+    quadraticCurveTo: (controlX, controlY, x, y) => {
+      calls.push('quadraticCurveTo');
+      quadraticCurves.push({ controlX, controlY, x, y });
+    },
   };
 }
 
@@ -337,6 +358,17 @@ function momentum(): HTMLElement {
   return required<HTMLElement>(mounted.root, '[data-testid="momentum"]');
 }
 
+/** The most recent quadraticCurveTo call belonging to the staff arc. */
+function latestStaffArc(context: FakeContext): QuadraticCurveCall {
+  const call = context.quadraticCurves.findLast(
+    (curve) => curve.controlX === STAFF_ARC_CONTROL[0] && curve.x === STAFF_ARC_END[0],
+  );
+  if (call === undefined) {
+    throw new Error('the staff arc was not stroked on the canvas');
+  }
+  return call;
+}
+
 beforeEach(() => {
   activeContext = createFakeContext();
   Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
@@ -388,31 +420,48 @@ describe('zhen-sha view', () => {
     expect(view.context.calls).toContain('quadraticCurveTo');
   });
 
-  it('moves the CSS gold edge with the staff arc while charging', () => {
+  it('moves the CSS gold edge and the canvas arc with the same lift while charging', () => {
     const view = mountView();
     primeLoop();
 
     const glow = required<HTMLElement>(view.root, '.zhen-sha-arc-glow');
     const edge = required<HTMLElement>(view.root, '.zhen-sha-arc-edge');
     const resting = staffArcClipPaths(0);
+    const restingArc = latestStaffArc(view.context);
 
     expect(glow.style.getPropertyValue('--zhen-arc-glow-clip')).toBe(resting.glow);
     expect(edge.style.getPropertyValue('--zhen-arc-edge-clip')).toBe(resting.edge);
+    expect(restingArc.controlY).toBe(STAFF_ARC_CONTROL[1]);
+    expect(restingArc.y).toBe(STAFF_ARC_END[1]);
 
     view.stage.dispatchEvent(pointerEvent('pointerdown'));
     advanceMs(250);
 
-    const raised = staffArcClipPaths(staffArcLift(true, 0, false));
+    const lift = staffArcLift(true, 0, false);
+    expect(lift).toBe(STAFF_ARC_LIFT);
+    const raised = staffArcClipPaths(lift);
     expect(raised.edge).not.toBe(resting.edge);
     expect(glow.style.getPropertyValue('--zhen-arc-glow-clip')).toBe(raised.glow);
     expect(edge.style.getPropertyValue('--zhen-arc-edge-clip')).toBe(raised.edge);
 
-    // Release and let the swing flash expire: the edge settles back onto the
-    // resting arc instead of drifting away permanently.
+    // The recorded quadraticCurveTo arguments prove the canvas applies the
+    // lift to both anchors; removing `- lift` or `- lift * ratio` from
+    // drawStaff fails here instead of only changing pixels.
+    const chargingArc = latestStaffArc(view.context);
+    expect(chargingArc.controlX).toBe(STAFF_ARC_CONTROL[0]);
+    expect(chargingArc.controlY).toBe(STAFF_ARC_CONTROL[1] - lift);
+    expect(chargingArc.x).toBe(STAFF_ARC_END[0]);
+    expect(chargingArc.y).toBe(STAFF_ARC_END[1] - lift * STAFF_ARC_END_LIFT_RATIO);
+
+    // Release and let the swing flash expire: both the edge and the canvas arc
+    // settle back onto the resting curve instead of drifting away permanently.
     view.stage.dispatchEvent(pointerEvent('pointerup'));
     advanceMs(1000);
     expect(edge.style.getPropertyValue('--zhen-arc-edge-clip')).toBe(resting.edge);
     expect(glow.style.getPropertyValue('--zhen-arc-glow-clip')).toBe(resting.glow);
+    const settledArc = latestStaffArc(view.context);
+    expect(settledArc.controlY).toBe(STAFF_ARC_CONTROL[1]);
+    expect(settledArc.y).toBe(STAFF_ARC_END[1]);
   });
 
   it('refuses to render when the mount signal is already aborted', () => {
