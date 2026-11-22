@@ -114,6 +114,65 @@ async function playFixedLoss(page: Page): Promise<ZhenShaDebugState> {
 
 const WIN_EVENT_STEPS = [180, 360, 540, 540, 542, 542] as const;
 
+async function expectSettlementNotOccluded(page: Page): Promise<void> {
+  // Bounding boxes alone cannot prove the result is readable: the fixed layer
+  // used to live inside the stage's stacking context, so the sticky site header
+  // still painted over the top of the card even though every rect was inside
+  // the viewport. Hit-test the content instead and require the visible element
+  // to belong to the settlement.
+  const occlusion = await page.evaluate(() => {
+    const header = document.querySelector('.site-header') as HTMLElement;
+    const ids = [
+      'overlay-kicker',
+      'overlay-title',
+      'settlement-canvas',
+      'settlement-perfects',
+      'settlement-elapsed',
+      'settlement-slashes',
+      'settlement-boss',
+      'overlay-restart',
+      'overlay-save-seal',
+      'overlay-lobby',
+    ] as const;
+    const samples = ids.flatMap((testId) => {
+      const element = document.querySelector(`[data-testid="${testId}"]`) as HTMLElement;
+      const rect = element.getBoundingClientRect();
+      const x = rect.left + rect.width / 2;
+      return [
+        { testId, x, y: rect.top + 1 },
+        { testId, x, y: rect.top + rect.height / 2 },
+      ];
+    });
+    return {
+      headerBottom: header.getBoundingClientRect().bottom,
+      samples: samples.map(({ testId, x, y }) => {
+        const hit = document.elementFromPoint(x, y) as HTMLElement | null;
+        return {
+          testId,
+          x: Math.round(x),
+          y: Math.round(y),
+          hitTestId: hit?.dataset.testid ?? null,
+          insideSettlement: Boolean(hit?.closest('[data-testid="settlement"]')),
+        };
+      }),
+    };
+  });
+
+  // At least one sample must sit in the header band; otherwise this case could
+  // silently stop covering the occlusion it is meant to catch.
+  expect(
+    occlusion.samples.filter((sample) => sample.y < occlusion.headerBottom).length,
+    'samples must exercise the header band',
+  ).toBeGreaterThan(0);
+  for (const sample of occlusion.samples) {
+    expect(
+      sample.insideSettlement,
+      `${sample.testId} at (${sample.x}, ${sample.y}) is covered by ` +
+        `"${sample.hitTestId ?? 'unknown'}" instead of the settlement`,
+    ).toBe(true);
+  }
+}
+
 /**
  * 320x640 is the documented minimum viewport. The stage may extend past the
  * fold, but the three gesture hints are the onboarding copy and must be read
@@ -215,6 +274,7 @@ test('settles a fixed win into the battle seal and restarts from boss 1 phase 1'
 });
 
 test('settles a fixed loss with the frozen boss phase and no perfects', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 640 });
   await openDebugGame(page);
 
   const state = await playFixedLoss(page);
@@ -231,6 +291,7 @@ test('settles a fixed loss with the frozen boss phase and no perfects', async ({
   await expect(page.getByTestId('settlement-elapsed')).toHaveText('5.0s');
   await expect(page.getByTestId('settlement-slashes')).toHaveText('4 道');
   await expect(page.getByTestId('settlement-boss')).toHaveText('黑煞 · 第 1 阶段');
+  await expectSettlementNotOccluded(page);
 });
 
 test('saves the battle seal as a 1080x1440 PNG while offline', async ({ page, context }) => {
@@ -383,62 +444,7 @@ test('keeps the settlement readable: all actions inside the 320x640 first screen
     await expect(page.getByTestId(testId)).toBeVisible();
   }
 
-  // Bounding boxes alone cannot prove the result is readable: the fixed layer
-  // used to live inside the stage's stacking context, so the sticky site header
-  // still painted over the top of the card even though every rect was inside
-  // the viewport. Hit-test the content instead and require the visible element
-  // to belong to the settlement.
-  const occlusion = await page.evaluate(() => {
-    const header = document.querySelector('.site-header') as HTMLElement;
-    const ids = [
-      'overlay-kicker',
-      'overlay-title',
-      'settlement-canvas',
-      'settlement-perfects',
-      'settlement-elapsed',
-      'settlement-slashes',
-      'settlement-boss',
-      'overlay-restart',
-      'overlay-save-seal',
-      'overlay-lobby',
-    ] as const;
-    const samples = ids.flatMap((testId) => {
-      const element = document.querySelector(`[data-testid="${testId}"]`) as HTMLElement;
-      const rect = element.getBoundingClientRect();
-      const x = rect.left + rect.width / 2;
-      return [
-        { testId, x, y: rect.top + 1 },
-        { testId, x, y: rect.top + rect.height / 2 },
-      ];
-    });
-    return {
-      headerBottom: header.getBoundingClientRect().bottom,
-      samples: samples.map(({ testId, x, y }) => {
-        const hit = document.elementFromPoint(x, y) as HTMLElement | null;
-        return {
-          testId,
-          x: Math.round(x),
-          y: Math.round(y),
-          hitTestId: hit?.dataset.testid ?? null,
-          insideSettlement: Boolean(hit?.closest('[data-testid="settlement"]')),
-        };
-      }),
-    };
-  });
-
-  // At least one sample must sit in the header band; otherwise this case could
-  // silently stop covering the occlusion it is meant to catch.
-  expect(
-    occlusion.samples.filter((sample) => sample.y < occlusion.headerBottom).length,
-    'samples must exercise the header band',
-  ).toBeGreaterThan(0);
-  for (const sample of occlusion.samples) {
-    expect(
-      sample.insideSettlement,
-      `${sample.testId} at (${sample.x}, ${sample.y}) is covered by ` +
-        `"${sample.hitTestId ?? 'unknown'}" instead of the settlement`,
-    ).toBe(true);
-  }
+  await expectSettlementNotOccluded(page);
 });
 
 test.describe('touch input', () => {
