@@ -1,11 +1,16 @@
+// @vitest-environment jsdom
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ZhenShaEvent, ZhenShaSnapshot } from './engine';
 import {
   SETTLEMENT_HEIGHT,
   SETTLEMENT_WIDTH,
   createSettlement,
+  downloadSettlementPng,
   drawSettlement,
+  exportSettlementPng,
   formatSettlementElapsed,
   type ZhenShaSettlement,
 } from './settlement';
@@ -303,8 +308,236 @@ describe('zhen-sha settlement renderer', () => {
   });
 
   it('keeps randomness, wall clocks and network APIs out of the source', () => {
-    const source = readFileSync(new URL('./settlement.ts', import.meta.url), 'utf8');
+    const source = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), 'settlement.ts'),
+      'utf8',
+    );
 
     expect(source).not.toMatch(/Math\.random|Date\.now|fetch|XMLHttpRequest/);
+  });
+});
+
+interface FakeExportCanvas {
+  readonly canvas: HTMLCanvasElement;
+  readonly calls: string[];
+  readonly requestedSizes: Array<readonly [number, number]>;
+  readonly toBlobTypes: string[];
+  readonly toDataUrlTypes: string[];
+  /** The blob the fake `toBlob` returns; null on the toDataURL fallback variants. */
+  readonly toBlobResult: Blob | null;
+}
+
+/** Canvas stub that records sizing, encoding and the shared 2D drawing calls. */
+function createFakeExportCanvas(
+  options: {
+    readonly blob?: Blob | null;
+    readonly dataUrl?: string;
+    readonly withoutToBlob?: boolean;
+    readonly toBlobError?: boolean;
+    readonly withoutContext?: boolean;
+  } = {},
+): FakeExportCanvas {
+  const { context, calls } = createFakeContext();
+  const requestedSizes: Array<readonly [number, number]> = [];
+  const toBlobTypes: string[] = [];
+  const toDataUrlTypes: string[] = [];
+  const blob =
+    options.blob === undefined
+      ? new Blob(['seal'], { type: 'image/png' })
+      : options.blob;
+  const dataUrl = options.dataUrl ?? 'data:image/png;base64,iVBORw==';
+
+  const canvas = {
+    width: 0,
+    height: 0,
+    getContext(kind: string) {
+      calls.push(`getContext:${kind}`);
+      return options.withoutContext === true ? null : context;
+    },
+    toBlob(callback: BlobCallback, type?: string) {
+      toBlobTypes.push(type ?? '');
+      if (options.toBlobError === true) {
+        throw new Error('toBlob unavailable');
+      }
+      callback(blob);
+    },
+    toDataURL(type?: string) {
+      toDataUrlTypes.push(type ?? '');
+      return dataUrl;
+    },
+  };
+
+  if (options.withoutToBlob === true) {
+    delete (canvas as Partial<typeof canvas>).toBlob;
+  }
+
+  return {
+    canvas: canvas as unknown as HTMLCanvasElement,
+    calls,
+    requestedSizes,
+    toBlobTypes,
+    toDataUrlTypes,
+    toBlobResult: blob,
+  };
+}
+
+/** Inject one fake canvas while recording every requested export size. */
+function useFakeCanvas(
+  fixture: FakeExportCanvas,
+): (width: number, height: number) => HTMLCanvasElement {
+  return (width, height) => {
+    fixture.requestedSizes.push([width, height]);
+    return fixture.canvas;
+  };
+}
+
+describe('zhen-sha settlement PNG export', () => {
+  it('draws the settlement on a 1080x1440 offscreen canvas and encodes it with toBlob', async () => {
+    const fixture = createFakeExportCanvas();
+
+    const blob = await exportSettlementPng(EXPECTED, {
+      createCanvas: useFakeCanvas(fixture),
+    });
+
+    expect(fixture.requestedSizes).toEqual([
+      [SETTLEMENT_WIDTH, SETTLEMENT_HEIGHT],
+    ]);
+    expect(fixture.canvas.width).toBe(SETTLEMENT_WIDTH);
+    expect(fixture.canvas.height).toBe(SETTLEMENT_HEIGHT);
+    expect(fixture.calls).toContain('getContext:2d');
+    expect(fixture.calls).toContain('scale:1,1');
+    expect(fixture.calls).toContain(
+      `clearRect:0,0,${SETTLEMENT_WIDTH},${SETTLEMENT_HEIGHT}`,
+    );
+    expect(fixture.calls.some((call) => call.includes('完美 3 次'))).toBe(true);
+    expect(fixture.toBlobTypes).toEqual(['image/png']);
+    expect(fixture.toDataUrlTypes).toEqual([]);
+    expect(blob.type).toBe('image/png');
+  });
+
+  it('falls back to toDataURL when the canvas has no toBlob', async () => {
+    const fixture = createFakeExportCanvas({ withoutToBlob: true });
+
+    const blob = await exportSettlementPng(EXPECTED, {
+      createCanvas: useFakeCanvas(fixture),
+    });
+
+    expect(fixture.toDataUrlTypes).toEqual(['image/png']);
+    expect(blob.type).toBe('image/png');
+    expect(Array.from(new Uint8Array(await blob.arrayBuffer()))).toEqual([
+      137, 80, 78, 71,
+    ]);
+  });
+
+  it('falls back to toDataURL when toBlob yields null', async () => {
+    const fixture = createFakeExportCanvas({ blob: null });
+
+    const blob = await exportSettlementPng(EXPECTED, {
+      createCanvas: useFakeCanvas(fixture),
+    });
+
+    expect(fixture.toBlobTypes).toEqual(['image/png']);
+    expect(fixture.toDataUrlTypes).toEqual(['image/png']);
+    expect(blob.type).toBe('image/png');
+  });
+
+  it('falls back to toDataURL when toBlob throws', async () => {
+    const fixture = createFakeExportCanvas({ toBlobError: true });
+
+    const blob = await exportSettlementPng(EXPECTED, {
+      createCanvas: useFakeCanvas(fixture),
+    });
+
+    expect(fixture.toBlobTypes).toEqual(['image/png']);
+    expect(fixture.toDataUrlTypes).toEqual(['image/png']);
+    expect(blob.type).toBe('image/png');
+  });
+
+  it('reports a missing 2D context instead of exporting a blank bitmap', async () => {
+    const fixture = createFakeExportCanvas({ withoutContext: true });
+
+    await expect(
+      exportSettlementPng(EXPECTED, { createCanvas: useFakeCanvas(fixture) }),
+    ).rejects.toThrow('无法为战绩符创建 1080x1440 的 2D canvas 上下文');
+    expect(fixture.toBlobTypes).toEqual([]);
+    expect(fixture.toDataUrlTypes).toEqual([]);
+  });
+
+  it('reports a toDataURL result that is not a base64 PNG data URL', async () => {
+    const withoutBase64 = createFakeExportCanvas({
+      withoutToBlob: true,
+      dataUrl: 'data:image/png,not-base64',
+    });
+    await expect(
+      exportSettlementPng(EXPECTED, {
+        createCanvas: useFakeCanvas(withoutBase64),
+      }),
+    ).rejects.toThrow('canvas.toDataURL 未返回 base64 编码的 PNG data URL');
+    expect(withoutBase64.toDataUrlTypes).toEqual(['image/png']);
+
+    const withoutComma = createFakeExportCanvas({
+      withoutToBlob: true,
+      dataUrl: 'data:image/png;base64',
+    });
+    await expect(
+      exportSettlementPng(EXPECTED, { createCanvas: useFakeCanvas(withoutComma) }),
+    ).rejects.toThrow('canvas.toDataURL 未返回 base64 编码的 PNG data URL');
+    expect(withoutComma.toDataUrlTypes).toEqual(['image/png']);
+  });
+});
+
+describe('zhen-sha settlement PNG download', () => {
+  const objectUrls = URL as unknown as {
+    createObjectURL?: (blob: Blob) => string;
+    revokeObjectURL?: (url: string) => void;
+  };
+
+  beforeEach(() => {
+    objectUrls.createObjectURL = vi.fn(() => 'blob:zhen-sha-seal');
+    objectUrls.revokeObjectURL = vi.fn();
+  });
+
+  afterEach(() => {
+    delete objectUrls.createObjectURL;
+    delete objectUrls.revokeObjectURL;
+    vi.restoreAllMocks();
+  });
+
+  it('clicks an <a download> named from the caller timestamp and releases the object URL', async () => {
+    const fixture = createFakeExportCanvas();
+    const clickedAnchors: HTMLAnchorElement[] = [];
+    const clickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(function (this: HTMLAnchorElement) {
+        clickedAnchors.push(this);
+      });
+
+    await downloadSettlementPng(EXPECTED, {
+      timestamp: 1_700_000_000_000,
+      createCanvas: useFakeCanvas(fixture),
+    });
+
+    const [anchor] = clickedAnchors;
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+    if (anchor === undefined) {
+      throw new Error('下载没有点击合成的 <a>');
+    }
+    // Literal expectation: the caller timestamp must reach the file name
+    // verbatim, so a `settlementPngFilename` regression cannot self-confirm.
+    expect(anchor.download).toBe('zhen-sha-seal-1700000000000.png');
+    expect(anchor.getAttribute('href')).toBe('blob:zhen-sha-seal');
+    expect(anchor.isConnected).toBe(false);
+    expect(fixture.toBlobTypes).toEqual(['image/png']);
+    expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1);
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:zhen-sha-seal');
+    const exported = fixture.toBlobResult;
+    if (exported === null) {
+      throw new Error('假 canvas 没有导出 blob');
+    }
+    const downloaded = vi.mocked(URL.createObjectURL).mock.calls[0]?.[0];
+    // The object URL must wrap the very blob the export produced; an empty
+    // placeholder blob would still carry the image/png MIME type.
+    expect(downloaded).toBe(exported);
   });
 });
