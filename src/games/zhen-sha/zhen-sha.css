@@ -455,6 +455,17 @@
     padding: 10px;
   }
 
+  /* Three actions share one row so the whole result still fits the 320x640
+     first screen; tighten the label spacing instead of adding a second row. */
+  .zhen-sha-overlay-actions {
+    gap: 6px;
+  }
+
+  .zhen-sha-overlay-actions .button {
+    padding: 8px 6px;
+    font-size: 0.78rem;
+  }
+
   .zhen-sha-settlement-canvas {
     border-radius: 8px;
   }

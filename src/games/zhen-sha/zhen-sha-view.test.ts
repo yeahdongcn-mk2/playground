@@ -17,7 +17,12 @@ import {
   type ZhenShaSnapshot,
 } from './engine';
 import { zhenShaGame } from './index';
-import { formatSettlementElapsed, type ZhenShaSettlement } from './settlement';
+import {
+  formatSettlementElapsed,
+  SETTLEMENT_HEIGHT,
+  SETTLEMENT_WIDTH,
+  type ZhenShaSettlement,
+} from './settlement';
 import { mountZhenSha } from './zhen-sha-view';
 
 class MemoryStore implements KeyValueStore {
@@ -113,7 +118,17 @@ function createFakeContext(): FakeContext {
   };
 }
 
-let activeContext: FakeContext;
+const canvasContexts = new WeakMap<HTMLCanvasElement, FakeContext>();
+
+/** One fake 2D context per canvas, so a test can tell the seal from the scene. */
+function contextFor(canvas: HTMLCanvasElement): FakeContext {
+  let context = canvasContexts.get(canvas);
+  if (context === undefined) {
+    context = createFakeContext();
+    canvasContexts.set(canvas, context);
+  }
+  return context;
+}
 
 const ORIGINAL_REQUEST_ANIMATION_FRAME = Object.getOwnPropertyDescriptor(
   window,
@@ -310,18 +325,16 @@ function required<T extends Element>(root: ParentNode, selector: string): T {
 }
 
 function mountView(signal: AbortSignal = new AbortController().signal): MountedView {
-  if (!activeContext) {
-    throw new Error('the canvas stub was not installed');
-  }
   const root = document.createElement('div');
   document.body.append(root);
   const handle = mountZhenSha(root, createServices(), signal);
+  const canvas = required<HTMLCanvasElement>(root, '[data-testid="zhen-sha-canvas"]');
   const view: MountedView = {
     root,
     stage: required<HTMLElement>(root, '[data-testid="zhen-sha-stage"]'),
-    canvas: required<HTMLCanvasElement>(root, '[data-testid="zhen-sha-canvas"]'),
+    canvas,
     handle,
-    context: activeContext,
+    context: contextFor(canvas),
   };
   mounted = view;
   return view;
@@ -424,12 +437,104 @@ function settlementCanvas(): HTMLCanvasElement {
   return required<HTMLCanvasElement>(mounted.root, '[data-testid="settlement-canvas"]');
 }
 
+/** The 2D context of the settlement canvas, distinct from the scene canvas. */
+function sealContext(): FakeContext {
+  return contextFor(settlementCanvas());
+}
+
+/**
+ * Stub the browser download primitives so clicking the save button can be
+ * observed without a real canvas encoder or navigation. jsdom has no
+ * createObjectURL, so both URL methods are installed and restored here.
+ */
+function installDownloadHarness(
+  options: { readonly blob?: Blob | null; readonly dataUrl?: string } = {},
+) {
+  const canvases: HTMLCanvasElement[] = [];
+  const anchors: HTMLAnchorElement[] = [];
+  const blobs: Blob[] = [];
+
+  const toBlob = vi
+    .spyOn(HTMLCanvasElement.prototype, 'toBlob')
+    .mockImplementation(function (this: HTMLCanvasElement, callback: BlobCallback, type?: string) {
+      canvases.push(this);
+      const blob =
+        options.blob === undefined
+          ? new Blob(['seal'], { type: type ?? 'image/png' })
+          : options.blob;
+      callback(blob);
+    });
+  const toDataURL = vi
+    .spyOn(HTMLCanvasElement.prototype, 'toDataURL')
+    .mockImplementation(function (this: HTMLCanvasElement) {
+      canvases.push(this);
+      return options.dataUrl ?? 'data:image/png;base64,iVBORw0KGgo=';
+    });
+
+  const previousCreate = Object.getOwnPropertyDescriptor(URL, 'createObjectURL');
+  const previousRevoke = Object.getOwnPropertyDescriptor(URL, 'revokeObjectURL');
+  const createObjectURL = vi.fn((blob: Blob): string => {
+    blobs.push(blob);
+    return 'blob:zhen-sha-seal';
+  });
+  const revokeObjectURL = vi.fn();
+  Object.defineProperty(URL, 'createObjectURL', {
+    configurable: true,
+    writable: true,
+    value: createObjectURL,
+  });
+  Object.defineProperty(URL, 'revokeObjectURL', {
+    configurable: true,
+    writable: true,
+    value: revokeObjectURL,
+  });
+
+  const click = vi
+    .spyOn(HTMLAnchorElement.prototype, 'click')
+    .mockImplementation(function (this: HTMLAnchorElement) {
+      anchors.push(this);
+    });
+
+  return {
+    canvases,
+    anchors,
+    blobs,
+    toBlob,
+    toDataURL,
+    createObjectURL,
+    revokeObjectURL,
+    restore: () => {
+      click.mockRestore();
+      toBlob.mockRestore();
+      toDataURL.mockRestore();
+      if (previousCreate === undefined) {
+        Reflect.deleteProperty(URL, 'createObjectURL');
+      } else {
+        Object.defineProperty(URL, 'createObjectURL', previousCreate);
+      }
+      if (previousRevoke === undefined) {
+        Reflect.deleteProperty(URL, 'revokeObjectURL');
+      } else {
+        Object.defineProperty(URL, 'revokeObjectURL', previousRevoke);
+      }
+    },
+  };
+}
+
+function saveSealButton(): HTMLButtonElement {
+  if (mounted === null) {
+    throw new Error('no mounted view');
+  }
+  return required<HTMLButtonElement>(mounted.root, '[data-testid="overlay-save-seal"]');
+}
+
 beforeEach(() => {
-  activeContext = createFakeContext();
   Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
     configurable: true,
     writable: true,
-    value: () => activeContext,
+    value(this: HTMLCanvasElement) {
+      return contextFor(this);
+    },
   });
   installFrameStub();
   installPointerEventFallback();
@@ -653,6 +758,7 @@ describe('zhen-sha view', () => {
       view.root,
       '[data-testid="overlay-restart"]',
     );
+    const saveSeal = required<HTMLButtonElement>(view.root, '[data-testid="overlay-save-seal"]');
     const expected: readonly (readonly [EventTarget, string])[] = [
       [view.stage, 'pointerdown'],
       [view.stage, 'pointerup'],
@@ -661,6 +767,7 @@ describe('zhen-sha view', () => {
       [document, 'visibilitychange'],
       [restartButton, 'click'],
       [overlayRestart, 'click'],
+      [saveSeal, 'click'],
     ];
     for (const [target, type] of expected) {
       expect(
@@ -784,11 +891,14 @@ describe('zhen-sha settlement', () => {
     // The seal canvas was painted once, with the original seal face and the
     // snapshot-derived readout.
     expect(settlementCanvas().dataset.stamps).toBe('1');
-    expect(view.context.texts).toContain('镇');
-    expect(view.context.texts).toContain('煞');
-    expect(view.context.texts).toContain('完美 3 次');
-    expect(view.context.texts).toContain('用时 4.5s');
-    expect(view.context.texts).toContain('黑煞 · 第 1 阶段');
+    // The seal has its own canvas/context; painting it on the scene canvas would
+    // bump the stamp counter but leave the visible preview blank.
+    expect(sealContext().texts).toContain('镇');
+    expect(sealContext().texts).toContain('煞');
+    expect(sealContext().texts).toContain('完美 3 次');
+    expect(sealContext().texts).toContain('用时 4.5s');
+    expect(sealContext().texts).toContain('黑煞 · 第 1 阶段');
+    expect(view.context).not.toBe(sealContext());
   });
 
   it('stamps the settlement once and never regenerates it on later frames', () => {
@@ -800,12 +910,15 @@ describe('zhen-sha settlement', () => {
     const settlement = playWin(api).settlement;
     expect(settlement).not.toBeNull();
 
-    const textCalls = mounted!.context.texts.length;
+    const seal = sealContext();
+    const textCalls = seal.texts.length;
+    const fillCalls = seal.calls.filter((call) => call === 'fillRect').length;
     api.step(12);
 
     expect(api.getState().settlement).toBe(settlement);
     expect(settlementCanvas().dataset.stamps).toBe('1');
-    expect(mounted!.context.texts.length).toBe(textCalls);
+    expect(seal.texts.length).toBe(textCalls);
+    expect(seal.calls.filter((call) => call === 'fillRect').length).toBe(fillCalls);
     expect(overlay().hidden).toBe(false);
     expect(text('settlement-perfects')).toBe('3');
   });
@@ -818,6 +931,173 @@ describe('zhen-sha settlement', () => {
     expect(card.hasAttribute('data-stamps')).toBe(false);
   });
 
+  it('saves the settled seal as a 1080x1440 PNG and releases the object URL', async () => {
+    mountDebugView();
+    const api = debugApi();
+    if (api === undefined) {
+      throw new Error('the debug seam should be installed');
+    }
+    const save = saveSealButton();
+    const xhrOpen = vi.spyOn(XMLHttpRequest.prototype, 'open');
+
+    const harness = installDownloadHarness();
+    try {
+      // With no settlement there is nothing to export.
+      save.click();
+      await Promise.resolve();
+      expect(harness.canvases).toHaveLength(0);
+
+      playWin(api);
+      save.click();
+      await vi.waitFor(() => expect(harness.anchors).toHaveLength(1));
+
+      const [exportCanvas] = harness.canvases;
+      expect(exportCanvas?.width).toBe(SETTLEMENT_WIDTH);
+      expect(exportCanvas?.height).toBe(SETTLEMENT_HEIGHT);
+
+      const [anchor] = harness.anchors;
+      expect(anchor?.download).toMatch(/^zhen-sha-seal-\d+\.png$/);
+      expect(anchor?.getAttribute('href')).toBe('blob:zhen-sha-seal');
+      expect(anchor?.isConnected).toBe(false);
+
+      expect(harness.createObjectURL).toHaveBeenCalledTimes(1);
+      expect(harness.revokeObjectURL).toHaveBeenCalledTimes(1);
+      expect(harness.revokeObjectURL).toHaveBeenCalledWith('blob:zhen-sha-seal');
+      expect(harness.blobs[0]).toBeInstanceOf(Blob);
+      // The seal export never needs a data URL when toBlob works, and it never
+      // reaches the network.
+      expect(harness.toDataURL).not.toHaveBeenCalled();
+      expect(xhrOpen).not.toHaveBeenCalled();
+
+      expect(save.hasAttribute('aria-disabled')).toBe(false);
+      expect(save.hasAttribute('aria-busy')).toBe(false);
+      expect(text('announcer')).toBe('战绩符已保存');
+    } finally {
+      harness.restore();
+    }
+  });
+
+  it('falls back to toDataURL when the canvas cannot encode a blob', async () => {
+    mountDebugView();
+    const api = debugApi();
+    if (api === undefined) {
+      throw new Error('the debug seam should be installed');
+    }
+    playWin(api);
+
+    const harness = installDownloadHarness({
+      blob: null,
+      dataUrl: 'data:image/png;base64,iVBORw0KGgo=',
+    });
+    try {
+      saveSealButton().click();
+      await vi.waitFor(() => expect(harness.anchors).toHaveLength(1));
+
+      expect(harness.toBlob).toHaveBeenCalledTimes(1);
+      expect(harness.toDataURL).toHaveBeenCalledTimes(1);
+      expect(harness.anchors[0]?.download).toMatch(/^zhen-sha-seal-\d+\.png$/);
+      expect(harness.blobs[0]?.type).toBe('image/png');
+      expect(harness.revokeObjectURL).toHaveBeenCalledTimes(1);
+    } finally {
+      harness.restore();
+    }
+  });
+
+  it('announces a failed save and restores the button', async () => {
+    mountDebugView();
+    const api = debugApi();
+    if (api === undefined) {
+      throw new Error('the debug seam should be installed');
+    }
+    playWin(api);
+
+    const harness = installDownloadHarness();
+    harness.createObjectURL.mockImplementation(() => {
+      throw new Error('object URLs unavailable');
+    });
+    try {
+      const save = saveSealButton();
+      save.click();
+      await vi.waitFor(() =>
+        expect(text('announcer')).toBe('战绩符保存失败，请重试'),
+      );
+
+      expect(harness.anchors).toHaveLength(0);
+      expect(save.hasAttribute('aria-disabled')).toBe(false);
+      expect(save.hasAttribute('aria-busy')).toBe(false);
+    } finally {
+      harness.restore();
+    }
+  });
+
+  it('does not start a second download while one save is in flight', async () => {
+    mountDebugView();
+    const api = debugApi();
+    if (api === undefined) {
+      throw new Error('the debug seam should be installed');
+    }
+    playWin(api);
+
+    let releaseBlob: (blob: Blob | null) => void = () => {};
+    const harness = installDownloadHarness();
+    harness.toBlob.mockImplementation(function (
+      this: HTMLCanvasElement,
+      callback: BlobCallback,
+    ) {
+      harness.canvases.push(this);
+      releaseBlob = callback;
+    });
+    try {
+      const save = saveSealButton();
+      save.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      save.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await vi.waitFor(() => expect(save.getAttribute('aria-disabled')).toBe('true'));
+      releaseBlob(new Blob(['seal'], { type: 'image/png' }));
+      await vi.waitFor(() => expect(harness.anchors).toHaveLength(1));
+      expect(harness.createObjectURL).toHaveBeenCalledTimes(1);
+    } finally {
+      harness.restore();
+    }
+  });
+
+  it('does not announce a save that finishes after a restart', async () => {
+    mountDebugView();
+    const api = debugApi();
+    if (api === undefined) {
+      throw new Error('the debug seam should be installed');
+    }
+    playWin(api);
+
+    let releaseBlob: (blob: Blob | null) => void = () => {};
+    const harness = installDownloadHarness();
+    harness.toBlob.mockImplementation(function (
+      this: HTMLCanvasElement,
+      callback: BlobCallback,
+    ) {
+      harness.canvases.push(this);
+      releaseBlob = callback;
+    });
+    try {
+      const beforeRestart = text('announcer');
+      saveSealButton().click();
+      await vi.waitFor(() =>
+        expect(saveSealButton().getAttribute('aria-busy')).toBe('true'),
+      );
+
+      required<HTMLButtonElement>(mounted!.root, '[data-testid="overlay-restart"]').click();
+      releaseBlob(new Blob(['seal'], { type: 'image/png' }));
+      await vi.waitFor(() => expect(harness.anchors).toHaveLength(1));
+
+      // The old duel's completion must not overwrite the new duel's message.
+      expect(beforeRestart).toBe('你赢了，一棍定魂');
+      expect(text('announcer')).toBe(beforeRestart);
+      expect(saveSealButton().hasAttribute('aria-busy')).toBe(false);
+      expect(saveSealButton().hasAttribute('aria-disabled')).toBe(false);
+    } finally {
+      harness.restore();
+    }
+  });
+
   it('rejects malformed debug step counts without advancing the duel', () => {
     mountDebugView();
     const api = debugApi();
@@ -828,6 +1108,7 @@ describe('zhen-sha settlement', () => {
 
     expect(() => api.step(-1)).toThrow(RangeError);
     expect(() => api.step(1.5)).toThrow(RangeError);
+    expect(() => api.step(10_001)).toThrow(RangeError);
     expect(api.getState().step).toBe(0);
 
     api.step(2);
@@ -926,6 +1207,12 @@ describe('zhen-sha settlement', () => {
     expect(debugApi()).toBeUndefined();
     debugView.root.remove();
     mounted = null;
+  });
+
+  it('keeps the seam off when the debug query is not exactly 1', () => {
+    window.location.hash = '#/games/zhen-sha?debug=0';
+    mountView();
+    expect(debugApi()).toBeUndefined();
   });
 
   it('removes the debug seam when the mount signal aborts', () => {

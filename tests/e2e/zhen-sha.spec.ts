@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import type { ZhenShaSnapshot } from '../../src/games/zhen-sha/engine';
 import type { ZhenShaSettlement } from '../../src/games/zhen-sha/settlement';
@@ -30,6 +31,37 @@ async function openDebugGame(page: Page): Promise<void> {
       page.evaluate(() => (window as unknown as DebugWindow).__playground?.gameId ?? null),
     )
     .toBe('zhen-sha');
+}
+
+/**
+ * Count every window.fetch / XMLHttpRequest call. Installed before navigation so
+ * the save flow can prove it never touches the network, even while offline.
+ */
+async function installNetworkProbe(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const probe = window as unknown as { __networkCalls?: number };
+    probe.__networkCalls = 0;
+
+    const fetchImpl = (window as unknown as { fetch?: (...args: unknown[]) => Promise<unknown> })
+      .fetch;
+    if (typeof fetchImpl === 'function') {
+      (window as unknown as { fetch: (...args: unknown[]) => Promise<unknown> }).fetch = (
+        ...args: unknown[]
+      ) => {
+        probe.__networkCalls = (probe.__networkCalls ?? 0) + 1;
+        return fetchImpl(...args);
+      };
+    }
+
+    const xhr = XMLHttpRequest.prototype as unknown as {
+      open: (...args: unknown[]) => void;
+    };
+    const originalOpen = xhr.open;
+    xhr.open = function (this: XMLHttpRequest, ...args: unknown[]): void {
+      probe.__networkCalls = (probe.__networkCalls ?? 0) + 1;
+      originalOpen.apply(this, args);
+    };
+  });
 }
 
 async function readState(page: Page): Promise<ZhenShaDebugState> {
@@ -201,6 +233,49 @@ test('settles a fixed loss with the frozen boss phase and no perfects', async ({
   await expect(page.getByTestId('settlement-boss')).toHaveText('黑煞 · 第 1 阶段');
 });
 
+test('saves the battle seal as a 1080x1440 PNG while offline', async ({ page, context }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await installNetworkProbe(page);
+  await openDebugGame(page);
+  await playFixedWin(page);
+
+  await context.setOffline(true);
+  try {
+    const downloadPromise = page.waitForEvent('download');
+    await page.getByTestId('overlay-save-seal').click();
+    const download = await downloadPromise;
+
+    expect(download.suggestedFilename()).toMatch(/^zhen-sha-seal-\d+\.png$/);
+    const downloadPath = await download.path();
+    if (downloadPath === null) {
+      throw new Error('the download has no local path');
+    }
+    const png = readFileSync(downloadPath);
+
+    // PNG signature followed by the IHDR width/height, big-endian.
+    expect([...png.subarray(0, 8)]).toEqual([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    ]);
+    expect(png.readUInt32BE(16)).toBe(1080);
+    expect(png.readUInt32BE(20)).toBe(1440);
+
+    // The same native button is keyboard operable and downloads again.
+    await page.getByTestId('overlay-save-seal').focus();
+    const keyboardDownload = page.waitForEvent('download');
+    await page.keyboard.press('Enter');
+    expect((await keyboardDownload).suggestedFilename()).toMatch(
+      /^zhen-sha-seal-\d+\.png$/,
+    );
+
+    const networkCalls = await page.evaluate(
+      () => (window as unknown as { __networkCalls?: number }).__networkCalls ?? 0,
+    );
+    expect(networkCalls).toBe(0);
+  } finally {
+    await context.setOffline(false);
+  }
+});
+
 test('returns from the settlement to the lobby and re-enters with a fresh duel', async ({
   page,
 }) => {
@@ -224,7 +299,7 @@ test('returns from the settlement to the lobby and re-enters with a fresh duel',
   ).toBeUndefined();
 });
 
-test('keeps the settlement readable: both actions inside the 320x640 first screen', async ({
+test('keeps the settlement readable: all actions inside the 320x640 first screen', async ({
   page,
 }) => {
   await openDebugGame(page);
@@ -238,6 +313,7 @@ test('keeps the settlement readable: both actions inside the 320x640 first scree
     const restart = document.querySelector(
       '[data-testid="overlay-restart"]',
     ) as HTMLElement;
+    const save = document.querySelector('[data-testid="overlay-save-seal"]') as HTMLElement;
     const lobby = document.querySelector('[data-testid="overlay-lobby"]') as HTMLElement;
     const stat = document.querySelector(
       '[data-testid="settlement-perfects"]',
@@ -260,6 +336,7 @@ test('keeps the settlement readable: both actions inside the 320x640 first scree
       card: box(card),
       canvasWidth: box(canvas).width,
       restart: box(restart),
+      save: box(save),
       lobby: box(lobby),
       statFontSize: Number.parseFloat(getComputedStyle(stat).fontSize),
     };
@@ -270,16 +347,18 @@ test('keeps the settlement readable: both actions inside the 320x640 first scree
   expect(metrics.card.width).toBeLessThanOrEqual(320);
   expect(metrics.canvasWidth).toBeGreaterThan(120);
   expect(metrics.restart.height).toBeGreaterThanOrEqual(44);
+  expect(metrics.save.height).toBeGreaterThanOrEqual(44);
   expect(metrics.lobby.height).toBeGreaterThanOrEqual(44);
   expect(metrics.statFontSize).toBeGreaterThanOrEqual(12);
 
   // The result must be operable on the documented minimum viewport without
   // scrolling: assert the geometry, not just non-zero visibility. With the
-  // mobile overlay falling back to `position: absolute`, the card and both
-  // actions land below 640px and these bounds fail.
+  // mobile overlay falling back to `position: absolute`, the card and all
+  // three actions land below 640px and these bounds fail.
   for (const [label, rect] of [
     ['settlement card', metrics.card],
     ['restart action', metrics.restart],
+    ['save action', metrics.save],
     ['lobby action', metrics.lobby],
   ] as const) {
     expect(rect.top, `${label} starts inside the 320x640 first screen`).toBeGreaterThanOrEqual(0);
@@ -298,6 +377,7 @@ test('keeps the settlement readable: both actions inside the 320x640 first scree
     'settlement-slashes',
     'settlement-boss',
     'overlay-restart',
+    'overlay-save-seal',
     'overlay-lobby',
   ]) {
     await expect(page.getByTestId(testId)).toBeVisible();
@@ -319,6 +399,7 @@ test('keeps the settlement readable: both actions inside the 320x640 first scree
       'settlement-slashes',
       'settlement-boss',
       'overlay-restart',
+      'overlay-save-seal',
       'overlay-lobby',
     ] as const;
     const samples = ids.flatMap((testId) => {
@@ -358,4 +439,19 @@ test('keeps the settlement readable: both actions inside the 320x640 first scree
         `"${sample.hitTestId ?? 'unknown'}" instead of the settlement`,
     ).toBe(true);
   }
+});
+
+test.describe('touch input', () => {
+  test.use({ hasTouch: true });
+
+  test('saves the battle seal with a touch tap at 320x640', async ({ page }) => {
+    await openDebugGame(page);
+    await playFixedWin(page);
+
+    const downloadPromise = page.waitForEvent('download');
+    await page.getByTestId('overlay-save-seal').tap();
+    expect((await downloadPromise).suggestedFilename()).toMatch(
+      /^zhen-sha-seal-\d+\.png$/,
+    );
+  });
 });

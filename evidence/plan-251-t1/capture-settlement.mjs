@@ -12,8 +12,13 @@
  * freezes wall time and advances exactly 1500 / 3000 / 4500 ms to the three
  * impact ticks, then holds for 300 ms and releases for the finisher. This keeps
  * the game code untouched; only the browser clock is controlled.
+ *
+ * The After build is also used to save one real 1080x1440 battle-seal PNG
+ * through the new "保存战绩符" button, so the PR can attach the actual
+ * downloaded artifact rather than only a screenshot of it.
  */
-import { mkdir } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { copyFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { chromium } from '@playwright/test';
 
@@ -169,6 +174,72 @@ async function capture(browser, baseUrl, viewport, path) {
   throw new Error(`could not capture a fixed win from ${baseUrl} at ${viewport.label}`);
 }
 
+/** Play the deterministic win through the After build's debug seam. */
+async function playDebugWin(page) {
+  return page.evaluate(() => {
+    const api = window.__playground;
+    if (api?.gameId !== 'zhen-sha') {
+      throw new Error('zhen-sha debug seam is not available');
+    }
+    api.step(180);
+    api.input('block');
+    api.step(1);
+    api.step(179);
+    api.input('block');
+    api.step(1);
+    api.step(179);
+    api.input('block');
+    api.step(1);
+    api.input('charge');
+    api.step(1);
+    api.input('strike');
+    api.step(1);
+    return api.getState();
+  });
+}
+
+/** Save one real PNG through the "保存战绩符" button and record its header. */
+async function captureSeal(browser, baseUrl, path) {
+  const viewport = VIEWPORTS[0];
+  const context = await browser.newContext({
+    viewport: { width: viewport.width, height: viewport.height },
+    deviceScaleFactor: 1,
+    colorScheme: 'dark',
+    reducedMotion: 'reduce',
+  });
+  try {
+    const page = await context.newPage();
+    await page.goto(`${baseUrl}/#/games/zhen-sha?debug=1`);
+    await page.getByTestId('zhen-sha-game').waitFor();
+    await page.evaluate(() => document.fonts.ready);
+
+    const state = await playDebugWin(page);
+    if (state.status !== 'won') {
+      throw new Error(`expected a won duel, got ${String(state.status)}`);
+    }
+
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByTestId('overlay-save-seal').click(),
+    ]);
+    const source = await download.path();
+    if (source === null) {
+      throw new Error('the download has no local path');
+    }
+    await copyFile(source, path);
+    const png = readFileSync(path);
+    return {
+      path,
+      filename: download.suggestedFilename(),
+      width: png.readUInt32BE(16),
+      height: png.readUInt32BE(20),
+      bytes: png.byteLength,
+    };
+  } finally {
+    await context.close();
+  }
+}
+
 const options = parseArgs(process.argv.slice(2));
 await mkdir(options.out, { recursive: true });
 const browser = await chromium.launch();
@@ -184,5 +255,11 @@ for (const viewport of VIEWPORTS) {
     console.log(`${side} ${viewport.label}: ${JSON.stringify(state)}`);
   }
 }
+const seal = await captureSeal(
+  browser,
+  options.after,
+  join(options.out, 'plan-251-t1-after-seal-1080x1440.png'),
+);
+console.log(`after seal: ${JSON.stringify(seal)}`);
 await browser.close();
 console.log(`\nCaptured ${report.length} screenshots into ${options.out}`);

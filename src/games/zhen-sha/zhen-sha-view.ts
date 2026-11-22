@@ -17,6 +17,7 @@ import {
   SETTLEMENT_HEIGHT,
   SETTLEMENT_WIDTH,
   createSettlement,
+  downloadSettlementPng,
   drawSettlement,
   formatSettlementElapsed,
   type ZhenShaSettlement,
@@ -25,6 +26,8 @@ import './zhen-sha.css';
 
 /** Hold this long without lifting to turn the tap into a charged strike. */
 const HOLD_TO_CHARGE_MS = 220;
+/** Upper bound for one debug step call, so a typo cannot hang the tab. */
+const MAX_DEBUG_STEPS = 10_000;
 /** Logical canvas size; CSS scales it down to the available 320px-wide stage. */
 const CANVAS_WIDTH = 360;
 const CANVAS_HEIGHT = 560;
@@ -106,6 +109,8 @@ const VIEW_HTML = `
               <div class="zhen-sha-overlay-actions">
                 <button class="button button--primary" type="button" data-action="restart"
                   data-testid="overlay-restart">再来一局</button>
+                <button class="button button--ghost" type="button" data-action="save-seal"
+                  data-testid="overlay-save-seal">保存战绩符</button>
                 <a class="button button--ghost" href="#/" data-testid="overlay-lobby">返回大厅</a>
               </div>
             </div>
@@ -204,7 +209,7 @@ function debugWindow(): ZhenShaDebugWindow {
  */
 function debugEnabled(): boolean {
   const query = window.location.hash.split('?')[1];
-  return query ? new URLSearchParams(query).has('debug') : false;
+  return query ? new URLSearchParams(query).get('debug') === '1' : false;
 }
 
 /** Mount the minimal playable Zhen Sha duel: canvas scene plus pointer gestures. */
@@ -226,6 +231,7 @@ export function mountZhenSha(
   const overlayKicker = query<HTMLElement>(root, '[data-testid="overlay-kicker"]');
   const overlayTitle = query<HTMLElement>(root, '[data-testid="overlay-title"]');
   const overlayRestart = query<HTMLButtonElement>(root, '[data-testid="overlay-restart"]');
+  const saveSealButton = query<HTMLButtonElement>(root, '[data-testid="overlay-save-seal"]');
   const restartButton = query<HTMLButtonElement>(root, '[data-testid="restart-button"]');
   const momentumElement = query<HTMLElement>(root, '[data-testid="momentum"]');
   const pips = Array.from(momentumElement.querySelectorAll<HTMLElement>('.zhen-sha-pip'));
@@ -267,6 +273,10 @@ export function mountZhenSha(
   let duelEvents: ZhenShaEvent[] = [];
   /** Created once when the duel ends; later frames never rebuild or redraw it. */
   let settlement: ZhenShaSettlement | null = null;
+  /** Guards the async export so a double tap cannot start two downloads. */
+  let savingSeal = false;
+  /** Bumped on restart so an in-flight save cannot announce over the new duel. */
+  let duelGeneration = 0;
 
   function sync(): void {
     const state = engine.snapshot();
@@ -298,8 +308,8 @@ export function mountZhenSha(
         // event list, and the seal canvas is drawn exactly once.
         settlement = createSettlement(state, duelEvents);
         stampSeal(settlement);
+        showSettlement(settlement);
       }
-      showSettlement(settlement);
       if (state.status === 'won') {
         setText(overlayKicker, 'VICTORY');
         setText(overlayTitle, '一棍定魂');
@@ -342,6 +352,40 @@ export function mountZhenSha(
     setText(settlementElapsed, formatSettlementElapsed(model.elapsedMs));
     setText(settlementSlashes, `${model.slashes.length} 道`);
     setText(settlementBoss, `${model.boss.name} · 第 ${model.boss.phase} 阶段`);
+  }
+
+  /**
+   * Save this duel's battle seal as a 1080x1440 PNG. The settlement module
+   * draws a detached canvas and downloads it through a blob URL and synthetic
+   * `<a download>`, so the whole path works offline and needs no fetch/XHR.
+   * The object URL is released by the download helper before it resolves.
+   */
+  async function saveSeal(): Promise<void> {
+    if (!running || settlement === null || savingSeal) {
+      return;
+    }
+    const generation = duelGeneration;
+    savingSeal = true;
+    saveSealButton.setAttribute('aria-busy', 'true');
+    saveSealButton.setAttribute('aria-disabled', 'true');
+    try {
+      await downloadSettlementPng(settlement, { timestamp: Date.now() });
+      if (running && generation === duelGeneration) {
+        setText(announcer, '战绩符已保存');
+      }
+    } catch {
+      if (running && generation === duelGeneration) {
+        setText(announcer, '战绩符保存失败，请重试');
+      }
+    } finally {
+      // A restart owns the button state for the new duel; the old export must
+      // not clear its busy state or announce over it.
+      if (generation === duelGeneration) {
+        savingSeal = false;
+        saveSealButton.removeAttribute('aria-busy');
+        saveSealButton.removeAttribute('aria-disabled');
+      }
+    }
   }
 
   function render(): void {
@@ -495,6 +539,10 @@ export function mountZhenSha(
     flash = null;
     duelEvents = [];
     settlement = null;
+    duelGeneration += 1;
+    savingSeal = false;
+    saveSealButton.removeAttribute('aria-busy');
+    saveSealButton.removeAttribute('aria-disabled');
     settlementCanvas.dataset.stamps = '0';
     lastStatus = engine.currentStatus;
     overlay.hidden = true;
@@ -519,6 +567,11 @@ export function mountZhenSha(
     detachListeners();
   }
 
+  /** Keep the click handler a plain callback; the export promise owns errors. */
+  function onSaveSeal(): void {
+    void saveSeal();
+  }
+
   function detachListeners(): void {
     mountSignal.removeEventListener('abort', onAbort);
     stage.removeEventListener('pointerdown', onPointerDown);
@@ -528,6 +581,7 @@ export function mountZhenSha(
     document.removeEventListener('visibilitychange', onVisibilityChange);
     restartButton.removeEventListener('click', restart);
     overlayRestart.removeEventListener('click', restart);
+    saveSealButton.removeEventListener('click', onSaveSeal);
   }
 
   stage.addEventListener('pointerdown', onPointerDown);
@@ -537,6 +591,7 @@ export function mountZhenSha(
   document.addEventListener('visibilitychange', onVisibilityChange);
   restartButton.addEventListener('click', restart);
   overlayRestart.addEventListener('click', restart);
+  saveSealButton.addEventListener('click', onSaveSeal);
   mountSignal.addEventListener('abort', onAbort, { once: true });
 
   render();
@@ -568,11 +623,17 @@ export function mountZhenSha(
       gameId: 'zhen-sha',
       getState: () => ({ ...engine.snapshot(), settlement }),
       input: (action) => {
+        if (destroyed) {
+          return;
+        }
         engine.input(action);
         render();
       },
       step: (ticks = 1) => {
-        if (!Number.isInteger(ticks) || ticks < 0) {
+        if (destroyed) {
+          return;
+        }
+        if (!Number.isInteger(ticks) || ticks < 0 || ticks > MAX_DEBUG_STEPS) {
           throw new RangeError(`Invalid Zhen Sha debug step count: ${String(ticks)}`);
         }
         for (let index = 0; index < ticks; index += 1) {
@@ -584,7 +645,11 @@ export function mountZhenSha(
         }
         render();
       },
-      restart,
+      restart: () => {
+        if (!destroyed) {
+          restart();
+        }
+      },
       destroy,
     };
     installedDebugApi = api;

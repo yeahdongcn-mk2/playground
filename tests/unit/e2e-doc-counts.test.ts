@@ -32,8 +32,8 @@ const E2E_DOC_PATHS = ['README.md', 'docs/framework.md'] as const;
  * the `playwright test --list` output.
  */
 const EXPECTED_E2E_COUNTS = {
-  total: 162,
-  chromium: 94,
+  total: 164,
+  chromium: 96,
   mobile: 36,
   mobileWebkit: 32,
 } as const;
@@ -656,7 +656,7 @@ describe('verifyE2eDocCounts', () => {
 });
 
 describe('committed e2e documentation', () => {
-  it('matches the actual Playwright --list manifest and the locked 162 / 94 / 36 / 32', () => {
+  it('matches the actual Playwright --list manifest and the locked 164 / 96 / 36 / 32', () => {
     const result = spawnSync(
       PLAYWRIGHT_BIN,
       ['test', '--list', '--reporter=json'],
