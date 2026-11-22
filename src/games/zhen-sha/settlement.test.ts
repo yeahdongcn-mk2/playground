@@ -12,7 +12,6 @@ import {
   drawSettlement,
   exportSettlementPng,
   formatSettlementElapsed,
-  settlementPngFilename,
   type ZhenShaSettlement,
 } from './settlement';
 
@@ -324,6 +323,8 @@ interface FakeExportCanvas {
   readonly requestedSizes: Array<readonly [number, number]>;
   readonly toBlobTypes: string[];
   readonly toDataUrlTypes: string[];
+  /** The blob the fake `toBlob` returns; null on the toDataURL fallback variants. */
+  readonly toBlobResult: Blob | null;
 }
 
 /** Canvas stub that records sizing, encoding and the shared 2D drawing calls. */
@@ -333,6 +334,7 @@ function createFakeExportCanvas(
     readonly dataUrl?: string;
     readonly withoutToBlob?: boolean;
     readonly toBlobError?: boolean;
+    readonly withoutContext?: boolean;
   } = {},
 ): FakeExportCanvas {
   const { context, calls } = createFakeContext();
@@ -350,7 +352,7 @@ function createFakeExportCanvas(
     height: 0,
     getContext(kind: string) {
       calls.push(`getContext:${kind}`);
-      return context;
+      return options.withoutContext === true ? null : context;
     },
     toBlob(callback: BlobCallback, type?: string) {
       toBlobTypes.push(type ?? '');
@@ -375,6 +377,7 @@ function createFakeExportCanvas(
     requestedSizes,
     toBlobTypes,
     toDataUrlTypes,
+    toBlobResult: blob,
   };
 }
 
@@ -449,6 +452,38 @@ describe('zhen-sha settlement PNG export', () => {
     expect(fixture.toDataUrlTypes).toEqual(['image/png']);
     expect(blob.type).toBe('image/png');
   });
+
+  it('reports a missing 2D context instead of exporting a blank bitmap', async () => {
+    const fixture = createFakeExportCanvas({ withoutContext: true });
+
+    await expect(
+      exportSettlementPng(EXPECTED, { createCanvas: useFakeCanvas(fixture) }),
+    ).rejects.toThrow('无法为战绩符创建 1080x1440 的 2D canvas 上下文');
+    expect(fixture.toBlobTypes).toEqual([]);
+    expect(fixture.toDataUrlTypes).toEqual([]);
+  });
+
+  it('reports a toDataURL result that is not a base64 PNG data URL', async () => {
+    const withoutBase64 = createFakeExportCanvas({
+      withoutToBlob: true,
+      dataUrl: 'data:image/png,not-base64',
+    });
+    await expect(
+      exportSettlementPng(EXPECTED, {
+        createCanvas: useFakeCanvas(withoutBase64),
+      }),
+    ).rejects.toThrow('canvas.toDataURL 未返回 base64 编码的 PNG data URL');
+    expect(withoutBase64.toDataUrlTypes).toEqual(['image/png']);
+
+    const withoutComma = createFakeExportCanvas({
+      withoutToBlob: true,
+      dataUrl: 'data:image/png;base64',
+    });
+    await expect(
+      exportSettlementPng(EXPECTED, { createCanvas: useFakeCanvas(withoutComma) }),
+    ).rejects.toThrow('canvas.toDataURL 未返回 base64 编码的 PNG data URL');
+    expect(withoutComma.toDataUrlTypes).toEqual(['image/png']);
+  });
 });
 
 describe('zhen-sha settlement PNG download', () => {
@@ -487,16 +522,22 @@ describe('zhen-sha settlement PNG download', () => {
     if (anchor === undefined) {
       throw new Error('下载没有点击合成的 <a>');
     }
-    expect(anchor.download).toBe(settlementPngFilename(1_700_000_000_000));
-    expect(anchor.download).toMatch(/^zhen-sha-seal-\d+\.png$/);
+    // Literal expectation: the caller timestamp must reach the file name
+    // verbatim, so a `settlementPngFilename` regression cannot self-confirm.
+    expect(anchor.download).toBe('zhen-sha-seal-1700000000000.png');
     expect(anchor.getAttribute('href')).toBe('blob:zhen-sha-seal');
     expect(anchor.isConnected).toBe(false);
+    expect(fixture.toBlobTypes).toEqual(['image/png']);
     expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
     expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1);
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:zhen-sha-seal');
-    const downloaded = vi.mocked(URL.createObjectURL).mock.calls[0]?.[0] as
-      | Blob
-      | undefined;
-    expect(downloaded?.type).toBe('image/png');
+    const exported = fixture.toBlobResult;
+    if (exported === null) {
+      throw new Error('假 canvas 没有导出 blob');
+    }
+    const downloaded = vi.mocked(URL.createObjectURL).mock.calls[0]?.[0];
+    // The object URL must wrap the very blob the export produced; an empty
+    // placeholder blob would still carry the image/png MIME type.
+    expect(downloaded).toBe(exported);
   });
 });
