@@ -142,8 +142,12 @@ test.describe('zhen-sha hero feature card at 1440x1000', () => {
 
     const art = await readFeatureArt(page);
     expectInlineInkAndGold(art);
-    // The feature card keeps the base card art height on desktop.
-    expect(art.svgHeight).toBeGreaterThan(0);
+    // The feature card keeps the base card art height on desktop; the 320x640
+    // case below pins the 156px narrow override. Mutation: changing
+    // `.game-card-art { height: 184px }` to 100px must fail this assertion.
+    const artBox = await page.locator(FEATURE_ART).boundingBox();
+    expect(artBox).not.toBeNull();
+    expect(artBox!.height).toBe(184);
 
     await expectInsideViewport(page, FEATURE_CARD, 1440, 1000);
     await expectInsideViewport(page, FEATURE_ART, 1440, 1000);

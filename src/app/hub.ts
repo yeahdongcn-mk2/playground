@@ -187,14 +187,15 @@ function renderFeaturedCard(
   now: number,
 ): string {
   const meta = game.meta;
+  const art = cardArtFor(meta.id);
   return `
         <div class="hero-visual">
           <a class="game-card game-card--feature" href="${gameHref(meta.id)}"
             data-testid="game-card-${escapeHtml(meta.id)}"
             style="--game-accent: ${escapeHtml(meta.accent)}">
-            <div class="game-card-art game-card-art--zhen-sha" aria-hidden="true">
+            <div class="game-card-art game-card-art--${art}" aria-hidden="true">
               <span class="game-card-engine">${escapeHtml(engineLabel(meta.engine))}</span>
-              ${renderCardArt('zhen-sha')}
+              ${renderCardArt(art)}
             </div>
             ${renderCardBody(meta, playHistory, now)}
           </a>
