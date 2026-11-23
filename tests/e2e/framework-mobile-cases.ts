@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 import { waitForBlankSettled } from '../../scripts/lib/blank-settle.mjs';
 import { canvasBox, expect, openBlankGame, test } from './fixtures';
 import {
@@ -13,9 +13,7 @@ import {
 /** The product-level position tolerance already used by this case. */
 const TAP_TOLERANCE = 8;
 
-const ZHEN_SHA_CARD = '[data-testid="game-card-zhen-sha"]';
-const ZHEN_SHA_CTA = '[data-testid="enter-zhen-sha"]';
-/** The six entries that stay in the lobby grid next to the featured card. */
+/** The six entries that stay in the lobby grid below the hero. */
 const GRID_GAME_IDS = ['snake', 'tetris', '2048', 'breakout', 'minesweeper', 'blank'] as const;
 
 function errorMessage(error: unknown): string {
@@ -25,7 +23,7 @@ function errorMessage(error: unknown): string {
 /** Assert a locator's border box is completely inside the visible viewport. */
 async function expectFullyInViewport(
   page: Page,
-  selector: string,
+  target: Locator,
   label: string,
 ): Promise<void> {
   const viewport = page.viewportSize();
@@ -33,7 +31,7 @@ async function expectFullyInViewport(
   if (viewport === null) {
     return;
   }
-  const box = await page.locator(selector).boundingBox();
+  const box = await target.boundingBox();
   expect(box, `${label} should render a box`).not.toBeNull();
   if (box === null) {
     return;
@@ -48,6 +46,19 @@ async function expectFullyInViewport(
   expect(box.y + box.height, `${label} should end inside the viewport height`).toBeLessThanOrEqual(
     viewport.height,
   );
+}
+
+/** Assert the element hit at the locator's centre is the locator or a descendant. */
+async function expectNotObstructed(target: Locator, label: string): Promise<void> {
+  const obstructed = await target.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const top = document.elementFromPoint(
+      rect.left + rect.width / 2,
+      rect.top + rect.height / 2,
+    );
+    return top === null || !(top === element || element.contains(top));
+  });
+  expect(obstructed, `${label} must not be covered by another element`).toBe(false);
 }
 
 /**
@@ -159,7 +170,7 @@ export function defineFrameworkMobileCases(): void {
       // of the shared case, not a separate test, so the documented Playwright
       // manifest counts do not move when the narrow lobby assertions change.
       // The case title stays because the flake guard matches it by name. The
-      // hub fixture is the production hero from #430.
+      // hub under test is the production lobby built from #430.
       await test.step('zhen-sha lobby at 320x640', async () => {
         await page.setViewportSize({ width: 320, height: 640 });
         expect(page.viewportSize()).toEqual({ width: 320, height: 640 });
@@ -175,9 +186,10 @@ export function defineFrameworkMobileCases(): void {
         await expect(card).toBeVisible();
         await expectFullyInViewport(
           page,
-          ZHEN_SHA_CARD,
+          card,
           'the zhen-sha featured card on the first screen',
         );
+        await expectNotObstructed(card, 'the zhen-sha featured card');
 
         // At the <=860px breakpoint #430 orders the featured visual above the
         // hero copy. On the current #430 layout at 320x640 the 435px card starts
@@ -186,28 +198,16 @@ export function defineFrameworkMobileCases(): void {
         // first screen at scrollY=0. Both boxes cannot share the first screen
         // without changing that layout. Issue #252's human acceptance asks for
         // the featured card inside the first screen and a CTA that is visible,
-        // linked and unobstructed; the scroll below proves reachability and
-        // obstruction, not first-screen placement. Moving the CTA into the
-        // first screen is a #430 narrow-layout change outside this test-only
-        // task.
-        const cta = page.locator(ZHEN_SHA_CTA);
+        // linked and unobstructed; the scroll below proves the CTA can be
+        // scrolled fully into view and is hit-testable, not that it starts in
+        // the first screen. Moving the CTA into the first screen is a #430
+        // narrow-layout change outside this test-only task.
+        const cta = page.getByTestId('enter-zhen-sha');
         await expect(cta).toBeVisible();
         await expect(cta).toHaveAttribute('href', '#/games/zhen-sha');
         await cta.scrollIntoViewIfNeeded();
         await expect(cta).toBeInViewport({ ratio: 1 });
-
-        // The CTA must be the element hit at its own centre; a collapsed or
-        // overlapped button still has a bounding box, so geometry alone is not
-        // enough to prove it is reachable.
-        const obstructed = await cta.evaluate((element) => {
-          const rect = element.getBoundingClientRect();
-          const top = document.elementFromPoint(
-            rect.left + rect.width / 2,
-            rect.top + rect.height / 2,
-          );
-          return top === null || !(top === element || element.contains(top));
-        });
-        expect(obstructed, 'the hero CTA must not be covered by another element').toBe(false);
+        await expectNotObstructed(cta, 'the hero CTA');
 
         // Only zhen-sha is promoted: the hero carries exactly one primary button.
         const primaryButtons = page.locator('.hero .button--primary');
@@ -220,15 +220,21 @@ export function defineFrameworkMobileCases(): void {
           scrollWidth: document.documentElement.scrollWidth,
           clientWidth: document.documentElement.clientWidth,
         }));
+        // The 1px tolerance matches the two existing phone overflow checks in
+        // this case; WebKit can round subpixel layout to a different integer.
         expect(
           overflow.scrollWidth,
           'the lobby must not scroll horizontally at 320px',
-        ).toBeLessThanOrEqual(overflow.clientWidth);
+        ).toBeLessThanOrEqual(overflow.clientWidth + 1);
 
         for (const id of GRID_GAME_IDS) {
-          const entry = page.getByTestId(`game-card-${id}`);
+          const entry = page.locator(`.game-grid [data-testid="game-card-${id}"]`);
           await expect(entry, `grid entry ${id} should appear exactly once`).toHaveCount(1);
-          await expect(entry, `grid entry ${id} should stay visible`).toBeVisible();
+          await expect(entry, `grid entry ${id} should link to its game`).toHaveAttribute(
+            'href',
+            `#/games/${id}`,
+          );
+          await expect(entry, `grid entry ${id} should render visible`).toBeVisible();
         }
       });
     });
