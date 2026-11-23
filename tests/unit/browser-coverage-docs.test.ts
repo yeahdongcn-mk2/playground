@@ -710,12 +710,13 @@ describe('browser coverage documentation', () => {
     expect(frameworkBreakdown).toEqual(readmeBreakdown);
     const [desktop, mobile, webkit] = readmeBreakdown ?? [0, 0, 0];
     expect(desktop + mobile + webkit).toBe(counts.readmeE2e);
-    // The WebKit project now runs framework, the minesweeper touch gestures
+    // The WebKit project now runs framework (including the 320×640 zhen-sha
+    // lobby case), the minesweeper touch gestures
     // (including the real tap pointerdown / click shape and the two long-press
     // flag cases), the touch difficulty form, the snake / tetris phone cases,
     // the 2048 / breakout phone cases and the 2048 READY two-run byte guard on
     // top of the contract / smoke cases.
-    expect(webkit).toBe(32);
+    expect(webkit).toBe(33);
   });
 
   it('keeps the README unit-test line to one total and a qualitative summary', () => {

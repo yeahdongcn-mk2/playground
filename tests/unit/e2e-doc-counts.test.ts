@@ -32,10 +32,10 @@ const E2E_DOC_PATHS = ['README.md', 'docs/framework.md'] as const;
  * the `playwright test --list` output.
  */
 const EXPECTED_E2E_COUNTS = {
-  total: 159,
+  total: 161,
   chromium: 91,
-  mobile: 36,
-  mobileWebkit: 32,
+  mobile: 37,
+  mobileWebkit: 33,
 } as const;
 
 type E2eField = 'total' | 'chromium' | 'mobile' | 'mobile-webkit';

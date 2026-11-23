@@ -1,3 +1,4 @@
+import type { Page } from '@playwright/test';
 import { waitForBlankSettled } from '../../scripts/lib/blank-settle.mjs';
 import { canvasBox, expect, openBlankGame, test } from './fixtures';
 import {
@@ -12,8 +13,41 @@ import {
 /** The product-level position tolerance already used by this case. */
 const TAP_TOLERANCE = 8;
 
+const ZHEN_SHA_CARD = '[data-testid="game-card-zhen-sha"]';
+const ZHEN_SHA_CTA = '[data-testid="enter-zhen-sha"]';
+/** The six entries that stay in the lobby grid next to the featured card. */
+const GRID_GAME_IDS = ['snake', 'tetris', '2048', 'breakout', 'minesweeper', 'blank'] as const;
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Assert a locator's border box is completely inside the visible viewport. */
+async function expectFullyOnFirstScreen(
+  page: Page,
+  selector: string,
+  label: string,
+): Promise<void> {
+  const viewport = page.viewportSize();
+  expect(viewport, 'viewport size should be available').not.toBeNull();
+  if (viewport === null) {
+    return;
+  }
+  const box = await page.locator(selector).boundingBox();
+  expect(box, `${label} should render a box`).not.toBeNull();
+  if (box === null) {
+    return;
+  }
+  expect(box.width, `${label} should have a non-zero width`).toBeGreaterThan(0);
+  expect(box.height, `${label} should have a non-zero height`).toBeGreaterThan(0);
+  expect(box.x, `${label} should start at or after the left edge`).toBeGreaterThanOrEqual(0);
+  expect(box.y, `${label} should start at or after the top edge`).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width, `${label} should end inside the viewport width`).toBeLessThanOrEqual(
+    viewport.width,
+  );
+  expect(box.y + box.height, `${label} should end inside the viewport height`).toBeLessThanOrEqual(
+    viewport.height,
+  );
 }
 
 /**
@@ -119,6 +153,73 @@ export function defineFrameworkMobileCases(): void {
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
         (await page.evaluate(() => window.innerWidth)) + 1,
       );
+    });
+  });
+
+  // The narrowest supported phone width, exercised by both the Chromium
+  // `mobile` project and the WebKit `mobile-webkit` project. The hub fixture is
+  // the production hero from #430; this case pins the phone regression that the
+  // desktop project's 320x640 case cannot see (touch device emulation).
+  test.describe('zhen-sha lobby at 320x640', () => {
+    test.use({ viewport: { width: 320, height: 640 } });
+
+    test('keeps the featured card in the first screen with a reachable primary CTA and six entries', async ({
+      page,
+    }) => {
+      await page.goto('/');
+      expect(page.viewportSize()).toEqual({ width: 320, height: 640 });
+
+      const card = page.getByTestId('game-card-zhen-sha');
+      await expect(card).toHaveCount(1);
+      await expect(card).toHaveClass(/game-card--feature/);
+      await expect(card).toBeVisible();
+      await expectFullyOnFirstScreen(page, ZHEN_SHA_CARD, 'the zhen-sha featured card');
+
+      // At the <=860px breakpoint the featured visual is ordered above the
+      // hero copy, so the CTA itself sits below the promoted card instead of
+      // inside the first 640px. Issue #252 pins the card's bounding box to the
+      // first screen and only requires the CTA to stay visible, linked and
+      // unobstructed, so scroll it in and assert that reachability.
+      const cta = page.locator(ZHEN_SHA_CTA);
+      await expect(cta).toBeVisible();
+      await expect(cta).toHaveAttribute('href', '#/games/zhen-sha');
+      await cta.scrollIntoViewIfNeeded();
+      await expect(cta).toBeInViewport({ ratio: 1 });
+
+      // The CTA must be the element hit at its own centre; a collapsed or
+      // overlapped button still has a bounding box, so geometry alone is not
+      // enough to prove it is reachable.
+      const obstructed = await cta.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        const top = document.elementFromPoint(
+          rect.left + rect.width / 2,
+          rect.top + rect.height / 2,
+        );
+        return top === null || !(top === element || element.contains(top));
+      });
+      expect(obstructed, 'the hero CTA must not be covered by another element').toBe(false);
+
+      // Only zhen-sha is promoted: the hero carries exactly one primary button.
+      const primaryButtons = page.locator('.hero .button--primary');
+      await expect(primaryButtons).toHaveCount(1);
+      expect(
+        await primaryButtons.evaluate((element) => element.getAttribute('data-testid')),
+      ).toBe('enter-zhen-sha');
+
+      const overflow = await page.evaluate(() => ({
+        scrollWidth: document.documentElement.scrollWidth,
+        clientWidth: document.documentElement.clientWidth,
+      }));
+      expect(
+        overflow.scrollWidth,
+        'the lobby must not scroll horizontally at 320px',
+      ).toBeLessThanOrEqual(overflow.clientWidth);
+
+      for (const id of GRID_GAME_IDS) {
+        const entry = page.getByTestId(`game-card-${id}`);
+        await expect(entry, `grid entry ${id} should appear exactly once`).toHaveCount(1);
+        await expect(entry, `grid entry ${id} should stay visible`).toBeVisible();
+      }
     });
   });
 }
