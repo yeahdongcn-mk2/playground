@@ -316,6 +316,23 @@ describe('parseDocDimensions', () => {
       width: 780,
       height: 1688,
     });
+
+    // The 320×640 hero row must not claim the primary CTA is visible in this
+    // viewport capture: the CTA starts below the first screen (the prose above
+    // the table says the same), so the row documents that instead.
+    const readmeText = readFileSync(README, 'utf8');
+    const heroRows = readmeText
+      .split(/\r?\n/)
+      .filter(
+        (line) => line.startsWith('|') && line.includes('`after-hub-hero-320x640.png`'),
+      );
+    expect(heroRows).toHaveLength(1);
+    const [heroRow = ''] = heroRows;
+    expect(heroRow).toContain('主 CTA 位于首屏下方');
+    expect(heroRow).not.toContain('镇煞 hero 特色卡 + 「开始《镇煞》」主 CTA');
+    // Keep the row's documented CSS viewport / PNG size and complete sha256.
+    expect(heroRow).toContain('320×640 / 640×1280');
+    expect(heroRow).toMatch(/`[0-9a-f]{64}`/);
   });
 
   it('documents a complete sha256 for the 14 viewport rows and 2 hub full-page rows', () => {
