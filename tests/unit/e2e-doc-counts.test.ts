@@ -32,8 +32,8 @@ const E2E_DOC_PATHS = ['README.md', 'docs/framework.md'] as const;
  * the `playwright test --list` output.
  */
 const EXPECTED_E2E_COUNTS = {
-  total: 159,
-  chromium: 91,
+  total: 167,
+  chromium: 99,
   mobile: 36,
   mobileWebkit: 32,
 } as const;
