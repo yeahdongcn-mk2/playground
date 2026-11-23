@@ -4,7 +4,6 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import playwrightConfig from '../../playwright.config';
-import { EXPECTED_E2E_COUNTS } from './e2e-count-lock';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (path: string): string => readFileSync(join(ROOT, path), 'utf8');
@@ -711,10 +710,12 @@ describe('browser coverage documentation', () => {
     expect(frameworkBreakdown).toEqual(readmeBreakdown);
     const [desktop, mobile, webkit] = readmeBreakdown ?? [0, 0, 0];
     expect(desktop + mobile + webkit).toBe(counts.readmeE2e);
-    // The WebKit project runs the shared framework phone case plus the
-    // contract, smoke and narrow suites. The expected count lives once in
-    // e2e-count-lock.ts so this assertion cannot drift from e2e-doc-counts.
-    expect(webkit).toBe(EXPECTED_E2E_COUNTS.mobileWebkit);
+    // The WebKit project now runs framework, the minesweeper touch gestures
+    // (including the real tap pointerdown / click shape and the two long-press
+    // flag cases), the touch difficulty form, the snake / tetris phone cases,
+    // the 2048 / breakout phone cases and the 2048 READY two-run byte guard on
+    // top of the contract / smoke cases.
+    expect(webkit).toBe(32);
   });
 
   it('keeps the README unit-test line to one total and a qualitative summary', () => {

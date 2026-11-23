@@ -3,7 +3,6 @@ import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { EXPECTED_E2E_COUNTS } from './e2e-count-lock';
 
 /**
  * Guard the whole-project e2e count documented next to `npm run test:e2e`.
@@ -24,6 +23,20 @@ const PLAYWRIGHT_BIN = join(
 
 /** Documents that record the whole-project `npm run test:e2e` count. */
 const E2E_DOC_PATHS = ['README.md', 'docs/framework.md'] as const;
+
+/**
+ * Locked e2e manifest counts, split by Playwright project.
+ *
+ * Update this together with README.md / docs/framework.md when a spec is added
+ * or removed; the test then fails until both the docs and this lock agree with
+ * the `playwright test --list` output.
+ */
+const EXPECTED_E2E_COUNTS = {
+  total: 159,
+  chromium: 91,
+  mobile: 36,
+  mobileWebkit: 32,
+} as const;
 
 type E2eField = 'total' | 'chromium' | 'mobile' | 'mobile-webkit';
 
