@@ -168,13 +168,13 @@
 
 - 目的：记录大厅首屏从 orb 视觉区 + 「开始贪食蛇」主 CTA 改为《镇煞》主推后的 Before / After：主 CTA 变成「开始《镇煞》」，镇煞卡从网格移入 hero 视觉区并以 `hub.ts` 内联 SVG 卡面呈现；其余五款游戏与空白画布仍从网格进入。
 - Before 基线：`7f90dcd`（`origin/main` 的 merge-base，干净 worktree `/home/xiaodongye/dsh-3090/work/plan-252-base-7f90dcd`，`npm ci && npm run build`）。
-- After 构建源码提交：`9e22c8eafb1c1d1653ce11960c2ff073c4b95537`（分支 `agent/plan-252-t0`；截图 PNG 与本节是其后的证据提交，不改变构建产物）。
-- 捕获方式：同一台宿主机上分别用 `vite preview --host 127.0.0.1 --port 4198|4199 --strictPort` 提供两份生产产物，再用 `node evidence/plan-252-t0/capture-hub.mjs <url> <prefix>` 真实渲染 `/`：等待 `networkidle`、`document.fonts.ready` 与 400 ms 后截视口图（`fullPage: false`），与「大厅六款计数文案证据」使用同一等待与截取口径。
+- After 构建源码提交：原证据为 `9e22c8eafb1c1d1653ce11960c2ff073c4b95537`（分支 `agent/plan-252-t0`；截图 PNG 与本节是其后的证据提交，不改变构建产物）；评审修复后的源码提交 `d6d9d94` 重新构建并重拍四张 PNG，sha256 与本表完全一致。
+- 捕获方式：同一台宿主机上分别用 `vite preview --host 127.0.0.1 --port 4198|4199 --strictPort` 提供两份生产产物，再用一次性 Playwright Chromium 脚本真实渲染 `/`：等待 `networkidle`、`document.fonts.ready` 与 400 ms 后截视口图（`fullPage: false`），与「大厅六款计数文案证据」使用同一等待与截取口径（该临时脚本不随 PR 提交）。
 - 状态一致性：Before 两张 PNG 与既有的 `after-hub-copy-desktop.png` / `after-hub-copy-320x640.png` 逐字节一致（sha256 相同），说明 Before 就是当前 main 的大厅首屏；After 只含本任务改动。
 - 视口 / 主题：桌面 1440×1000 CSS px、DPR 1；手机 320×640 CSS px、DPR 2、`isMobile: true`、`hasTouch: true`。四张均为深色主题、`reducedMotion: reduce`。
-- 首屏 / 布局断言（`node evidence/plan-252-t0/verify-visual.mjs <before> <after>`，两个视口都通过）：After 的 hero 特色卡完整落在视口内（桌面 879,238→1399,655；手机 12,115→308,550），320 下 `scrollWidth == clientWidth`（无横向滚动）；`.hero` 内只有一个 `.button--primary` 且为 `[data-testid="enter-zhen-sha"]`、链接为 `#/games/zhen-sha`；镇煞特色卡不在 `aria-hidden` 子树、卡面为内联 SVG（无 CSS data URI / `::before`）；网格恰好是贪食蛇、俄罗斯方块、2048、打砖块、扫雷与空白画布各一次，不再重复镇煞。
+- 首屏 / 布局断言：在 Before / After 两个生产产物上、两个视口都通过（一次性 Playwright 脚本复核；等价断言已固化在 `tests/e2e/hub-card-art.spec.ts`）：After 的 hero 特色卡完整落在视口内（桌面 879,238→1399,655；手机 12,115→308,550），桌面卡面高 184 px、手机卡面高 156 px，320 下 `scrollWidth == clientWidth`（无横向滚动）；`.hero` 内只有一个 `.button--primary` 且为 `[data-testid="enter-zhen-sha"]`、链接为 `#/games/zhen-sha`；镇煞特色卡不在 `aria-hidden` 子树、卡面为内联 SVG（无 CSS data URI / `::before`）；网格恰好是贪食蛇、俄罗斯方块、2048、打砖块、扫雷与空白画布各一次，不再重复镇煞。
 - 说明：手机 320×640 首屏先显示 hero 特色卡与 eyebrow / 标题，主 CTA 位于首屏下方但没有被折叠或遮挡；`#/games/zhen-sha` 路由由 e2e 覆盖点击到达。
-- 预算（`npm run check:budget`，After 实测）：入口 35.66 KB / 11.62 KB gzip（上限 50 KB）；全部 JS 411.04 KB gzip（上限 450 KB）；CSS 14.00 KB gzip。
+- 预算（`npm run check:budget`，评审修复后的源码提交实测）：入口 35.66 KB / 11.61 KB gzip（上限 50 KB）；全部 JS 411.03 KB gzip（上限 450 KB）；CSS 14.00 KB gzip；`zhen-sha-view-CkhNnHlr.js` 5.22 KB gzip。
 
 | 文件 | 场景 | CSS 视口 / PNG 尺寸 | sha256 |
 | --- | --- | --- | --- |
