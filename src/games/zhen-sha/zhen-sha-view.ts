@@ -2,6 +2,7 @@ import type { SoundEvent } from '../../core/audio';
 import { query, setText } from '../../core/dom';
 import type { GameHandle, GameServices } from '../../core/game';
 import {
+  FIXED_STEP_MS,
   MAX_HITS,
   MOMENTUM_FOR_BREAK,
   TELEGRAPH_TICKS,
@@ -12,6 +13,13 @@ import {
   type ZhenShaSnapshot,
   type ZhenShaStatus,
 } from './engine';
+import {
+  debugQueryFromHash,
+  MAX_DEBUG_STEP_TICKS,
+  parseDebugQuery,
+  type ZhenShaDebugOptions,
+  type ZhenShaDebugWindow,
+} from './debug';
 import './zhen-sha.css';
 
 /** Hold this long without lifting to turn the tap into a charged strike. */
@@ -137,6 +145,29 @@ function abortError(): DOMException {
   return new DOMException('Game mount aborted', 'AbortError');
 }
 
+/**
+ * Debug seam: only an explicit `?debug=1` after the hash route enables it.
+ * The dev server does not turn it on implicitly, so a normal entry never
+ * installs `window.__playground` and never loses its live frame loop.
+ */
+function currentDebugOptions(): ZhenShaDebugOptions {
+  return parseDebugQuery(
+    debugQueryFromHash(window.location.hash, window.location.search),
+  );
+}
+
+function debugWindow(): ZhenShaDebugWindow {
+  return window as unknown as ZhenShaDebugWindow;
+}
+
+function removeDebugApi(owner: () => void): void {
+  const win = debugWindow();
+  const api = win.__playground;
+  if (api !== undefined && api.gameId === 'zhen-sha' && api.destroy === owner) {
+    delete win.__playground;
+  }
+}
+
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
@@ -181,7 +212,21 @@ export function mountZhenSha(
   const context = canvas.getContext('2d');
 
   const engine = new ZhenShaEngine();
+  const debugOptions = currentDebugOptions();
   const audio = services.audio;
+
+  function scheduleDebugInputs(): void {
+    if (!debugOptions.enabled) {
+      return;
+    }
+    for (const input of debugOptions.inputs) {
+      engine.input(input.action, input.tick);
+    }
+  }
+
+  // Pre-schedule the URL's absolute-tick replay before the first snapshot, so
+  // `step(n)` alone reproduces the whole run.
+  scheduleDebugInputs();
 
   let lastStatus: ZhenShaStatus = engine.currentStatus;
   let pointerDown = false;
@@ -289,7 +334,9 @@ export function mountZhenSha(
   }
 
   function startLoop(): void {
-    if (!running) {
+    // The debug seam owns time: `step(n)` advances exact fixed ticks, so the
+    // wall-clock frame loop must not run behind the test's back.
+    if (!running || debugOptions.enabled) {
       return;
     }
     lastFrameMs = null;
@@ -385,11 +432,52 @@ export function mountZhenSha(
     audio.unlock();
     audio.play('reset');
     engine.restart();
+    scheduleDebugInputs();
     resetPointer();
     flash = null;
     lastStatus = engine.currentStatus;
     overlay.hidden = true;
     startLoop();
+    render();
+  }
+
+  /**
+   * Test seam: advance exactly `ticks` fixed steps, mirroring one live frame's
+   * bookkeeping (held-press ageing, event drain, flash decay) without any
+   * wall-clock dependency. The held gesture uses `FIXED_STEP_MS`, so a 220 ms
+   * long press becomes `charge` on tick 27 of a fixed-step run too.
+   */
+  function stepTicks(ticks: number): void {
+    if (!running || !debugOptions.enabled || !Number.isFinite(ticks)) {
+      return;
+    }
+    const count = Math.min(MAX_DEBUG_STEP_TICKS, Math.max(0, Math.floor(ticks)));
+    let advanced = 0;
+    for (let index = 0; index < count; index += 1) {
+      if (pointerDown && !charged) {
+        holdMs += FIXED_STEP_MS;
+        if (holdMs >= HOLD_TO_CHARGE_MS) {
+          charged = true;
+          engine.input('charge');
+        }
+      }
+      engine.step();
+      advanced += 1;
+      if (engine.currentStatus !== 'playing') {
+        break;
+      }
+    }
+
+    const events = engine.drainEvents();
+    if (events.length > 0) {
+      handleEvents(events);
+    }
+    if (flash !== null) {
+      flash.remainingMs -= advanced * FIXED_STEP_MS;
+      if (flash.remainingMs <= 0) {
+        flash = null;
+      }
+    }
     render();
   }
 
@@ -403,10 +491,7 @@ export function mountZhenSha(
   }
 
   function onAbort(): void {
-    running = false;
-    resetPointer();
-    stopLoop();
-    detachListeners();
+    destroy();
   }
 
   function detachListeners(): void {
@@ -433,17 +518,35 @@ export function mountZhenSha(
   startLoop();
 
   let destroyed = false;
-  return {
-    destroy(): void {
-      if (destroyed) {
-        return;
-      }
-      destroyed = true;
-      running = false;
-      stopLoop();
-      detachListeners();
-    },
+  const destroy: () => void = () => {
+    if (destroyed) {
+      return;
+    }
+    destroyed = true;
+    running = false;
+    resetPointer();
+    stopLoop();
+    detachListeners();
+    removeDebugApi(destroy);
   };
+
+  if (debugOptions.enabled) {
+    debugWindow().__playground = {
+      gameId: 'zhen-sha',
+      getState: () => ({ ...engine.snapshot(), seed: debugOptions.seed }),
+      input: (action, atStep) => {
+        if (!running) {
+          return;
+        }
+        engine.input(action, atStep);
+      },
+      step: stepTicks,
+      restart,
+      destroy,
+    };
+  }
+
+  return { destroy };
 }
 
 function judgementText(state: ZhenShaSnapshot): string {
