@@ -31,9 +31,12 @@ import {
  * input lines, the pointer adapters and the layout assertions here means the
  * mobile, WebKit and lifecycle suites cannot drift from the desktop one.
  *
- * Everything is driven by the `?debug=1` seam from t1: a fixed `seed` plus
- * absolute-tick `inputs` fully describe a duel, and `stepZhenSha` advances the
- * simulation without a wall clock. No helper calls `page.waitForTimeout`.
+ * The deterministic paths are driven by the `?debug=1` seam from t1: a fixed
+ * `seed` plus absolute-tick `inputs` fully describe a duel, and `stepZhenSha`
+ * advances the simulation without a wall clock. The module also exposes the
+ * live-mode entries the lifecycle suite needs; no helper owns a wall-clock
+ * wait, and the re-exported `expectNoAnimationFrames` only observes a bounded
+ * window. `destroyZhenSha` calls the view handle's destroy.
  */
 
 /** Fixed ticks of the view's 220 ms long-press threshold at 120 ticks/s. */
@@ -51,6 +54,15 @@ export const WIN_INPUTS: readonly ZhenShaDebugInput[] = [
   { action: 'charge', tick: 541 },
   { action: 'strike', tick: 542 },
 ];
+
+/**
+ * The three killing-move impact ticks derived from {@link WIN_INPUTS}. The
+ * mobile and WebKit suites parry the same three strikes instead of copying
+ * the numbers, so the replay contract has one source.
+ */
+export const IMPACT_TICKS: readonly number[] = WIN_INPUTS.filter(
+  ({ action }) => action === 'block',
+).map(({ tick }) => tick);
 
 /**
  * A deliberately early tap whiffs and commits the first killing move, so the
@@ -96,6 +108,22 @@ export const EXPECTED_LOSS: ZhenShaExpectation = {
   body: '中招 3 次 · 再来一局找回节奏',
   settledAtStep: 595,
 };
+
+/**
+ * Assert a settled snapshot matches the shared win/loss expectation. The
+ * mobile and WebKit suites reuse this instead of duplicating the field list;
+ * overlay text is asserted separately once the settlement is on screen.
+ */
+export function expectZhenShaSettlementState(
+  state: ZhenShaDebugState,
+  expected: ZhenShaExpectation,
+): void {
+  expect(state.status).toBe(expected.status);
+  expect(state.perfects).toBe(expected.perfects);
+  expect(state.hits).toBe(expected.hits);
+  expect(state.score).toBe(expected.score);
+  expect(state.step).toBe(expected.settledAtStep);
+}
 
 export interface ZhenShaDebugUrlOptions {
   readonly seed?: number;
@@ -261,20 +289,25 @@ export async function restartZhenSha(page: Page): Promise<ZhenShaDebugState> {
 }
 
 /** Assert that no Zhen Sha debug seam is installed. */
-export async function expectNoDebugSeam(page: Page): Promise<void> {
+export async function expectNoDebugSeam(
+  page: Page,
+  message = 'the Zhen Sha debug seam must not be installed',
+): Promise<void> {
   await expect
-    .poll(() =>
-      page.evaluate(
-        () => (window as unknown as ZhenShaDebugHelpersWindow).__playground === undefined,
-      ),
+    .poll(
+      () =>
+        page.evaluate(
+          () => (window as unknown as ZhenShaDebugHelpersWindow).__playground === undefined,
+        ),
+      { message },
     )
     .toBe(true);
 }
 
 /**
  * Destroy the view's seam and listeners, then confirm the API is gone.
- * `times` calls the captured product `destroy` that many times inside one
- * evaluate, so lifecycle tests can prove the engine's own destroy is
+ * `times` calls the captured view `destroy` that many times inside one
+ * evaluate, so lifecycle tests can prove the view handle's destroy is
  * idempotent even after the first call removed `window.__playground`.
  */
 export async function destroyZhenSha(page: Page, times = 1): Promise<void> {
@@ -537,7 +570,12 @@ export async function expectZhenShaTouchTargets(page: Page): Promise<void> {
   }
 }
 
-async function expectInsideFirstScreen(
+/**
+ * Assert that a visible element starts and ends inside the current viewport.
+ * Exported so the mobile and WebKit suites can reuse the first-screen contract
+ * for the gesture hints, not only for the settlement content.
+ */
+export async function expectZhenShaInsideFirstScreen(
   page: Page,
   locator: Locator,
   label: string,
@@ -569,9 +607,17 @@ async function expectInsideFirstScreen(
  */
 export async function expectZhenShaSettlementInFirstScreen(page: Page): Promise<void> {
   await expect(page.getByTestId('overlay')).toBeVisible();
-  await expectInsideFirstScreen(page, page.getByTestId('overlay-title'), 'settlement title');
-  await expectInsideFirstScreen(page, page.getByTestId('overlay-body'), 'settlement body');
-  await expectInsideFirstScreen(
+  await expectZhenShaInsideFirstScreen(
+    page,
+    page.getByTestId('overlay-title'),
+    'settlement title',
+  );
+  await expectZhenShaInsideFirstScreen(
+    page,
+    page.getByTestId('overlay-body'),
+    'settlement body',
+  );
+  await expectZhenShaInsideFirstScreen(
     page,
     page.getByTestId('overlay-restart'),
     'settlement restart',

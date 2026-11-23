@@ -2,6 +2,7 @@ import { expect, test } from './fixtures';
 import {
   EXPECTED_LOSS,
   EXPECTED_WIN,
+  IMPACT_TICKS,
   LOSS_INPUTS,
   WIN_INPUTS,
   ZHEN_SHA_HOLD_TICKS,
@@ -9,8 +10,11 @@ import {
   enterZhenShaFromHub,
   enterZhenShaLiveFromHub,
   expectNoAnimationFrames,
+  expectNoDebugSeam,
   expectNoZhenShaHorizontalOverflow,
+  expectZhenShaInsideFirstScreen,
   expectZhenShaSettlementInFirstScreen,
+  expectZhenShaSettlementState,
   expectZhenShaTouchTargets,
   holdZhenShaWithMouse,
   inputZhenSha,
@@ -29,24 +33,9 @@ import {
   stepZhenSha,
   trackProbeTarget,
   trackZhenShaConsoleErrors,
-  type ZhenShaDebugState,
-  type ZhenShaExpectation,
 } from './zhen-sha-helpers';
 
-const IMPACT_TICKS = [180, 360, 540] as const;
-
-function expectSettlementState(
-  state: ZhenShaDebugState,
-  expected: ZhenShaExpectation,
-): void {
-  expect(state.status).toBe(expected.status);
-  expect(state.perfects).toBe(expected.perfects);
-  expect(state.hits).toBe(expected.hits);
-  expect(state.score).toBe(expected.score);
-  expect(state.step).toBe(expected.settledAtStep);
-}
-
-test.describe('320×640 gesture hints', () => {
+test.describe('320×640 first screen', () => {
   test.use({ viewport: { width: 320, height: 640 } });
 
   test('shows the three gesture hints inside the 320x640 first screen', async ({ page }) => {
@@ -56,14 +45,12 @@ test.describe('320×640 gesture hints', () => {
     const hints = page.getByTestId('gesture-hints');
     await expect(hints).toBeVisible();
     await expect(hints.locator('li')).toHaveCount(3);
-
-    const hintsBox = await hints.boundingBox();
-    expect(hintsBox).not.toBeNull();
-    expect(hintsBox!.y).toBeGreaterThanOrEqual(0);
-    expect(hintsBox!.y + hintsBox!.height).toBeLessThanOrEqual(640);
+    await expectZhenShaInsideFirstScreen(page, hints, 'gesture hints');
 
     // On phones the hints lead the stage so they are not pushed below the fold by
     // the tall play area.
+    const hintsBox = await hints.boundingBox();
+    expect(hintsBox).not.toBeNull();
     const stageBox = await page.getByTestId('zhen-sha-stage').boundingBox();
     expect(stageBox).not.toBeNull();
     expect(stageBox!.y).toBeGreaterThanOrEqual(hintsBox!.y + hintsBox!.height);
@@ -82,7 +69,7 @@ test.describe('320×640 gesture hints', () => {
     expect(await page.evaluate(() => window.scrollY)).toBeLessThanOrEqual(1);
 
     const state = await stepZhenSha(page, 700);
-    expectSettlementState(state, EXPECTED_LOSS);
+    expectZhenShaSettlementState(state, EXPECTED_LOSS);
 
     await expectNoZhenShaHorizontalOverflow(page);
     await expectZhenShaSettlementInFirstScreen(page);
@@ -119,11 +106,7 @@ test.describe('desktop 1440×1000', () => {
     await inputZhenSha(page, 'charge', 541);
     await inputZhenSha(page, 'strike', 542);
     state = await stepZhenSha(page, 2);
-    expect(state.status).toBe('won');
-    expect(state.perfects).toBe(3);
-    expect(state.hits).toBe(0);
-    expect(state.score).toBe(1900);
-    expect(state.step).toBe(EXPECTED_WIN.settledAtStep);
+    expectZhenShaSettlementState(state, EXPECTED_WIN);
 
     await expect(page.getByTestId('overlay')).toBeVisible();
     await expect(page.getByTestId('overlay-title')).toHaveText(EXPECTED_WIN.title);
@@ -178,10 +161,10 @@ test.describe('desktop 1440×1000', () => {
     expect(charged.step).toBe(541 + ZHEN_SHA_HOLD_TICKS);
 
     const won = await stepZhenSha(page, 1);
-    expect(won.status).toBe('won');
-    expect(won.perfects).toBe(3);
-    expect(won.score).toBe(1900);
-    expect(won.step).toBe(541 + ZHEN_SHA_HOLD_TICKS + 1);
+    expectZhenShaSettlementState(won, {
+      ...EXPECTED_WIN,
+      settledAtStep: 541 + ZHEN_SHA_HOLD_TICKS + 1,
+    });
     await expect(page.getByTestId('overlay-title')).toHaveText(EXPECTED_WIN.title);
     expect(errors).toEqual([]);
   });
@@ -194,7 +177,7 @@ test.describe('desktop 1440×1000', () => {
     expect(initial.seed).toBe(253);
 
     const first = await stepZhenSha(page, 700);
-    expectSettlementState(first, EXPECTED_WIN);
+    expectZhenShaSettlementState(first, EXPECTED_WIN);
     await expect(page.getByTestId('overlay-title')).toHaveText(EXPECTED_WIN.title);
     await expect(page.getByTestId('overlay-body')).toHaveText(EXPECTED_WIN.body);
 
@@ -202,7 +185,7 @@ test.describe('desktop 1440×1000', () => {
     expect(restarted.status).toBe('playing');
     expect(restarted.step).toBe(0);
     const second = await stepZhenSha(page, 700);
-    expectSettlementState(second, EXPECTED_WIN);
+    expectZhenShaSettlementState(second, EXPECTED_WIN);
     expect(second.perfects).toBe(first.perfects);
     expect(second.score).toBe(first.score);
     expect(second.hits).toBe(first.hits);
@@ -214,8 +197,7 @@ test.describe('desktop 1440×1000', () => {
     await openZhenShaDebug(page, { seed: 253, inputs: LOSS_INPUTS });
 
     const state = await stepZhenSha(page, 700);
-    expectSettlementState(state, EXPECTED_LOSS);
-    expect(state.score).toBe(0);
+    expectZhenShaSettlementState(state, EXPECTED_LOSS);
     await expect(page.getByTestId('overlay-title')).toHaveText(EXPECTED_LOSS.title);
     await expect(page.getByTestId('overlay-body')).toHaveText(EXPECTED_LOSS.body);
     expect(errors).toEqual([]);
@@ -223,21 +205,12 @@ test.describe('desktop 1440×1000', () => {
 
   test('opens normal play without installing the debug seam', async ({ page }) => {
     const errors = trackZhenShaConsoleErrors(page);
-    const readDebugApi = () =>
-      page.evaluate(
-        () =>
-          (window as unknown as { __playground?: unknown }).__playground === undefined,
-      );
 
     await openZhenShaLive(page);
-    expect(await readDebugApi(), 'normal entry must not install window.__playground').toBe(
-      true,
-    );
+    await expectNoDebugSeam(page, 'normal entry must not install window.__playground');
 
     await enterZhenShaLiveFromHub(page);
-    expect(await readDebugApi(), 'normal hub entry must not install window.__playground').toBe(
-      true,
-    );
+    await expectNoDebugSeam(page, 'normal hub entry must not install window.__playground');
     await expect(page.getByTestId('zhen-sha-stage')).toBeVisible();
     expect(errors).toEqual([]);
   });
