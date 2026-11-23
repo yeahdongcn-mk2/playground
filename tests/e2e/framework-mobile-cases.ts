@@ -175,16 +175,21 @@ export function defineFrameworkMobileCases(): void {
       await expect(card).toBeVisible();
       await expectFullyOnFirstScreen(page, ZHEN_SHA_CARD, 'the zhen-sha featured card');
 
-      // At the <=860px breakpoint the featured visual is ordered above the
-      // hero copy, so the CTA itself sits below the promoted card instead of
-      // inside the first 640px. Issue #252 pins the card's bounding box to the
-      // first screen and only requires the CTA to stay visible, linked and
-      // unobstructed, so scroll it in and assert that reachability.
+      // At the <=860px breakpoint #430 orders the featured visual above the
+      // hero copy, so the CTA sits below the promoted card. At 320×640 the
+      // 435px card fills the first screen on its own and the CTA starts below
+      // the 640px fold (measured y≈900.9 at scrollY=0), so no scroll-free
+      // assertion can require both boxes inside the first screen. Issue #252's
+      // human acceptance — and the merged desktop t1 case — require the card
+      // inside the first screen and the CTA visible, linked and unobstructed;
+      // this case follows that acceptance. Requiring the CTA in the first
+      // screen would need a #430 layout change outside t2's test-only scope,
+      // which is raised on PR #437 instead of hidden by scrolling first.
       const cta = page.locator(ZHEN_SHA_CTA);
       await expect(cta).toBeVisible();
       await expect(cta).toHaveAttribute('href', '#/games/zhen-sha');
       await cta.scrollIntoViewIfNeeded();
-      await expect(cta).toBeInViewport({ ratio: 1 });
+      await expectFullyOnFirstScreen(page, ZHEN_SHA_CTA, 'the zhen-sha primary CTA after scrolling');
 
       // The CTA must be the element hit at its own centre; a collapsed or
       // overlapped button still has a bounding box, so geometry alone is not

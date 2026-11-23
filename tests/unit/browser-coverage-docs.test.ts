@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import playwrightConfig from '../../playwright.config';
+import { EXPECTED_E2E_COUNTS } from './e2e-count-lock';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (path: string): string => readFileSync(join(ROOT, path), 'utf8');
@@ -715,8 +716,9 @@ describe('browser coverage documentation', () => {
     // (including the real tap pointerdown / click shape and the two long-press
     // flag cases), the touch difficulty form, the snake / tetris phone cases,
     // the 2048 / breakout phone cases and the 2048 READY two-run byte guard on
-    // top of the contract / smoke cases.
-    expect(webkit).toBe(33);
+    // top of the contract / smoke cases. The expected count lives once in
+    // e2e-count-lock.ts so this assertion cannot drift from e2e-doc-counts.
+    expect(webkit).toBe(EXPECTED_E2E_COUNTS.mobileWebkit);
   });
 
   it('keeps the README unit-test line to one total and a qualitative summary', () => {
