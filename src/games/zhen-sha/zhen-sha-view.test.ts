@@ -41,6 +41,8 @@ function createServices(reduceMotion = false): GameServices {
 
 interface FakeContext {
   readonly calls: string[];
+  /** `strokeStyle` captured at each `stroke()` call, in call order. */
+  readonly strokeStyles: string[];
   fillStyle: string;
   strokeStyle: string;
   lineWidth: number;
@@ -62,13 +64,15 @@ interface FakeContext {
 /** Minimal 2D context stub: records every call so the test can prove drawing ran. */
 function createFakeContext(): FakeContext {
   const calls: string[] = [];
+  const strokeStyles: string[] = [];
   const record =
     (name: string) =>
     (): void => {
       calls.push(name);
     };
-  return {
+  const context: FakeContext = {
     calls,
+    strokeStyles,
     fillStyle: '#000000',
     strokeStyle: '#000000',
     lineWidth: 1,
@@ -80,12 +84,16 @@ function createFakeContext(): FakeContext {
     beginPath: record('beginPath'),
     arc: record('arc'),
     fill: record('fill'),
-    stroke: record('stroke'),
+    stroke: () => {
+      calls.push('stroke');
+      strokeStyles.push(context.strokeStyle);
+    },
     closePath: record('closePath'),
     moveTo: record('moveTo'),
     lineTo: record('lineTo'),
     quadraticCurveTo: record('quadraticCurveTo'),
   };
+  return context;
 }
 
 let activeContext: FakeContext;
@@ -319,6 +327,16 @@ function unmountView(view: MountedView): void {
   if (mounted === view) {
     mounted = null;
   }
+}
+
+/**
+ * Flash strokes are the only ones drawn in this gold, so their presence proves
+ * a flash effect survived the step and reached the canvas.
+ */
+function goldFlashStrokes(context: FakeContext, from = 0): string[] {
+  return context.strokeStyles
+    .slice(from)
+    .filter((style) => style.startsWith('rgba(255, 233, 168,'));
 }
 
 function pointerEvent(type: string): PointerEvent {
@@ -713,9 +731,30 @@ describe('zhen-sha debug seam', () => {
 
     unmountView(first);
     const second = mountView();
+    const callsBefore = second.context.calls.length;
+    const strokesBefore = second.context.strokeStyles.length;
     debugApi()!.step(543);
     expect(debugApi()!.getState()).toEqual(replay);
-    expect(second.context.calls.length).toBeGreaterThan(0);
+    // The step must render synchronously, and the winning flash raised on the
+    // last tick must still be drawn instead of being aged out by all 543 ticks.
+    expect(second.context.calls.length).toBeGreaterThan(callsBefore);
+    expect(goldFlashStrokes(second.context, strokesBefore).length).toBeGreaterThan(0);
+  });
+
+  it('ages the flash from its event tick instead of the whole step span', () => {
+    window.location.hash = '#/games/zhen-sha?debug=1&inputs=block@180';
+    const view = mountView();
+    const api = debugApi()!;
+
+    // One call spans 181 ticks but the perfect parry lands on the last one, so
+    // its flash must be almost full rather than already expired.
+    api.step(181);
+    expect(api.getState()).toMatchObject({ status: 'playing', perfects: 1 });
+    expect(goldFlashStrokes(view.context).length).toBeGreaterThan(0);
+
+    const strokesBeforeDecay = view.context.strokeStyles.length;
+    api.step(60);
+    expect(goldFlashStrokes(view.context, strokesBeforeDecay)).toHaveLength(0);
   });
 
   it('steps 180 ticks then lands three blocks and the 541/542 finisher', () => {

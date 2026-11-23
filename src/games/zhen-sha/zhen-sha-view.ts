@@ -452,7 +452,7 @@ export function mountZhenSha(
       return;
     }
     const count = Math.min(MAX_DEBUG_STEP_TICKS, Math.max(0, Math.floor(ticks)));
-    let advanced = 0;
+    const startStep = engine.state.step;
     for (let index = 0; index < count; index += 1) {
       if (pointerDown && !charged) {
         holdMs += FIXED_STEP_MS;
@@ -462,18 +462,24 @@ export function mountZhenSha(
         }
       }
       engine.step();
-      advanced += 1;
       if (engine.currentStatus !== 'playing') {
         break;
       }
     }
+    const finalStep = engine.state.step;
 
     const events = engine.drainEvents();
     if (events.length > 0) {
       handleEvents(events);
     }
     if (flash !== null) {
-      flash.remainingMs -= advanced * FIXED_STEP_MS;
+      // Age the flash from the tick that raised it. One `step(n)` call can
+      // cross its event by hundreds of ticks; charging that whole span against
+      // a flash that only appeared on the last tick would hide it entirely.
+      const lastEvent = events.at(-1);
+      const elapsedTicks =
+        lastEvent === undefined ? finalStep - startStep : finalStep - lastEvent.step;
+      flash.remainingMs -= elapsedTicks * FIXED_STEP_MS;
       if (flash.remainingMs <= 0) {
         flash = null;
       }
