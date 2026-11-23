@@ -199,11 +199,11 @@ async function captureWebkitMobile(browser) {
   // screenshot; the blank scene below reuses the same seam after its own
   // settle step (Issue #326).
   await settleSharedHeaderCompositing(page);
-  // The hub page's only large pixel drift is the hero orb core: a loaded WebKit
-  // can composite the reduced-motion `breathe` animation's scale(0.97) instead
-  // of the resting scale(1). The same seam finishes the page's animations and
-  // requires committed frames, so the screenshot cannot capture that residual
-  // transform (Issue #341 t2).
+  // A loaded WebKit can composite a hub hero reduced-motion animation's end
+  // frame instead of the resting style (Issue #341 t2). The same seam finishes
+  // the page's animations and requires committed frames, so the screenshot
+  // cannot capture that residual transform; Issue #252 retargeted it from the
+  // retired orb to the zhen-sha feature card that now carries the hero visual.
   await settleHubHeroCompositing(page);
   await captureScreenshot(page, 'after-hub-webkit.png', {
     engine: ENGINE,

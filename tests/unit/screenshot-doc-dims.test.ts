@@ -250,18 +250,18 @@ describe('parseDocDimensions', () => {
     ]);
   });
 
-  it('lists the 16 full-page and 8 viewport rows in the committed README', () => {
+  it('lists the 16 full-page and 12 viewport rows in the committed README', () => {
     const rows = parseDocDimensions(readFileSync(README, 'utf8'));
     const fullPage = rows.filter((row) => row.kind === 'full-page');
     const viewport = rows.filter((row) => row.kind === 'viewport');
     const fullPageFiles = fullPage.flatMap((row) => row.files);
     const viewportFiles = viewport.flatMap((row) => row.files);
 
-    expect(rows).toHaveLength(24);
+    expect(rows).toHaveLength(28);
     expect(fullPage).toHaveLength(16);
     expect(fullPageFiles).toHaveLength(16);
-    expect(viewport).toHaveLength(8);
-    expect(viewportFiles).toHaveLength(8);
+    expect(viewport).toHaveLength(12);
+    expect(viewportFiles).toHaveLength(12);
     expect(
       fullPageFiles.filter((file) => file.includes('scores') && !file.includes('clear')),
     ).toHaveLength(4);
@@ -277,6 +277,10 @@ describe('parseDocDimensions', () => {
         'after-hub-copy-desktop.png',
         'before-hub-copy-320x640.png',
         'after-hub-copy-320x640.png',
+        'before-hub-hero-1440x1000.png',
+        'after-hub-hero-1440x1000.png',
+        'before-hub-hero-320x640.png',
+        'after-hub-hero-320x640.png',
       ]),
     );
 
@@ -284,7 +288,8 @@ describe('parseDocDimensions', () => {
       viewport.flatMap((row) => row.files.map((file) => [file, row] as const)),
     );
     for (const file of ['before-zhen-sha-route-desktop.png', 'after-zhen-sha-route-desktop.png',
-      'before-hub-copy-desktop.png', 'after-hub-copy-desktop.png']) {
+      'before-hub-copy-desktop.png', 'after-hub-copy-desktop.png',
+      'before-hub-hero-1440x1000.png', 'after-hub-hero-1440x1000.png']) {
       expect(viewportByFile.get(file)).toMatchObject({
         viewportWidth: 1440,
         viewportHeight: 1000,
@@ -293,7 +298,8 @@ describe('parseDocDimensions', () => {
       });
     }
     for (const file of ['before-zhen-sha-route-320x640.png', 'after-zhen-sha-route-320x640.png',
-      'before-hub-copy-320x640.png', 'after-hub-copy-320x640.png']) {
+      'before-hub-copy-320x640.png', 'after-hub-copy-320x640.png',
+      'before-hub-hero-320x640.png', 'after-hub-hero-320x640.png']) {
       expect(viewportByFile.get(file)).toMatchObject({
         viewportWidth: 320,
         viewportHeight: 640,
@@ -303,7 +309,7 @@ describe('parseDocDimensions', () => {
     }
   });
 
-  it('documents a complete sha256 for the 8 viewport rows and 2 hub full-page rows', () => {
+  it('documents a complete sha256 for the 12 viewport rows and 2 hub full-page rows', () => {
     const readmeText = readFileSync(README, 'utf8');
     const rows = parseDocDimensions(readmeText);
     const hashedRows = rows.filter((row) => row.hashes.some((hash) => hash !== null));
@@ -319,6 +325,10 @@ describe('parseDocDimensions', () => {
       'after-hub-copy-desktop.png',
       'before-hub-copy-320x640.png',
       'after-hub-copy-320x640.png',
+      'before-hub-hero-1440x1000.png',
+      'after-hub-hero-1440x1000.png',
+      'before-hub-hero-320x640.png',
+      'after-hub-hero-320x640.png',
     ]);
     for (const row of hashedRows) {
       expect(row.files).toHaveLength(1);
@@ -839,18 +849,18 @@ describe('parsePngDimensions', () => {
 });
 
 describe('verifyDocDimensions', () => {
-  it('passes for the committed README with 24 rows and 24 files', () => {
+  it('passes for the committed README with 28 rows and 28 files', () => {
     const report = verifyDocDimensions({
       readmeText: readFileSync(README, 'utf8'),
       dir: SCREENSHOT_DIR,
     });
 
     expect(report).toEqual({
-      rows: 24,
-      files: 24,
+      rows: 28,
+      files: 28,
       fullPageRows: 16,
-      viewportRows: 8,
-      sha256Files: 10,
+      viewportRows: 12,
+      sha256Files: 14,
       problems: [],
     });
   });
