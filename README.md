@@ -229,7 +229,7 @@ pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和
 | `npm run typecheck` | 只做 TypeScript 类型检查 |
 | `npm run test:unit` | Vitest 单元测试 |
 | `npm run verify:doc-counts` | 校验三份文档记录的单测计数与 Vitest 实测 `numTotalTests` 一致 |
-| `npm run sync:zhen-sha-size` | 重新生成 `docs/zhen-sha-production-size.json`：当前生产规模由滚动快照校验，历史评估表不再随引擎 PR 回写 |
+| `npm run sync:zhen-sha-size` | 重新生成 `docs/zhen-sha-production-size.json`：当前生产规模由滚动快照校验；历史评估表的冻结见 #433（在 #433 合并前仍随引擎 PR 回写） |
 | `npm run score` | 运行 score 时先执行 `npm run build`（`check:budget` 读取 `dist/`，因此干净检出上无需手动预构建），再汇总六条校验并与 `docs/score-baseline.json` 对比：默认打印「指标 / 当前值 / 基线值 / 差值」表格，并在末尾输出一行 `SCORE_JSON <json>`；任一指标退化时退出 1，指标变好只报差值、不自动更新基线；`npm run score -- --update` 用当前值重建基线（快照不完整时拒绝写入并退出 2） |
 | `npm run test:e2e` | 先构建，再用 `vite preview` 跑全部 Playwright 项目（Chromium 桌面 / Pixel 7 + `mobile-webkit`） |
 | `npm run test:e2e:webkit` | 先构建，再只跑 `mobile-webkit` 项目（iPhone SE (3rd gen)）：framework 手机端、扫雷 WebKit 冒烟、触屏手势 / 触屏难度表单、贪食蛇 / 俄罗斯方块 / 2048 / 打砖块的手机端用例，2048 READY 两跑字节守卫，以及 320×640 / 360×640 / 375×667 / 412×839 窄屏契约 |
@@ -397,7 +397,7 @@ games/<game>/scene → 对应引擎（动态 import）
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过（oxlint 覆盖 src、tests 与 scripts；error 与 warning 都会失败，warning 经 --deny-warnings 升级；另跑 scripts/check-boundaries.mjs，失败返回非 0）
-npm run test:unit    # 1673 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
+npm run test:unit    # 1677 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
 npm run build        # 通过
 npm run check:budget # 通过，实际输出：
 # Entry JS: 35.66 KB (11.61 KB gzip)

@@ -137,6 +137,73 @@ describe('zhen-sha production size snapshot', () => {
     expect(verification.problems.join('\n')).toContain(SYNC_COMMAND);
   });
 
+  it('reports a snapshot directory that no longer matches the production directory', () => {
+    const measurement = measureProductionSize(ROOT);
+    const tampered = parseSizeSnapshot(readSnapshotText());
+    tampered.directory = 'src/games/other';
+
+    const verification = verifySizeSnapshot({
+      snapshotText: JSON.stringify(tampered, null, 2),
+      measurement,
+    });
+
+    expect(verification.ok).toBe(false);
+    const problems = verification.problems.join('\n');
+    expect(problems).toContain('快照的目录为 src/games/other');
+    expect(problems).toContain(`当前为 ${measurement.directory}`);
+    expect(problems).toContain(SYNC_COMMAND);
+  });
+
+  it('reports a snapshot caliber that no longer matches the implementation', () => {
+    const measurement = measureProductionSize(ROOT);
+    const tampered = parseSizeSnapshot(readSnapshotText());
+    tampered.caliber = '只统计 .ts；与当前口径不同';
+
+    const verification = verifySizeSnapshot({
+      snapshotText: JSON.stringify(tampered, null, 2),
+      measurement,
+    });
+
+    expect(verification.ok).toBe(false);
+    expect(verification.problems.join('\n')).toContain('快照的统计口径与当前实现不一致');
+    expect(verification.problems.join('\n')).toContain(SYNC_COMMAND);
+  });
+
+  it('reports files that exist only in a tampered snapshot', () => {
+    const measurement = measureProductionSize(ROOT);
+    const tampered = parseSizeSnapshot(readSnapshotText());
+    tampered.files.push({ file: 'ghost.ts', lines: 4 });
+    tampered.total += 4;
+
+    const verification = verifySizeSnapshot({
+      snapshotText: JSON.stringify(tampered, null, 2),
+      measurement,
+    });
+
+    expect(verification.ok).toBe(false);
+    const problems = verification.problems.join('\n');
+    expect(problems).toContain('快照多出 ghost.ts');
+    expect(problems).toContain('当前树中不存在');
+    expect(problems).toContain(SYNC_COMMAND);
+  });
+
+  it('reports a snapshot total that disagrees with its own file entries', () => {
+    const measurement = measureProductionSize(ROOT);
+    const tampered = parseSizeSnapshot(readSnapshotText());
+    tampered.total += 1;
+
+    const verification = verifySizeSnapshot({
+      snapshotText: JSON.stringify(tampered, null, 2),
+      measurement,
+    });
+
+    expect(verification.ok).toBe(false);
+    const problems = verification.problems.join('\n');
+    expect(problems).toContain('快照内部不一致');
+    expect(problems).toContain(`total 为 ${tampered.total} 行`);
+    expect(problems).toContain(SYNC_COMMAND);
+  });
+
   it('rejects a malformed snapshot with an actionable error', () => {
     const verification = verifySizeSnapshot({
       snapshotText: '{not json',
@@ -165,12 +232,16 @@ describe('zhen-sha production size snapshot', () => {
         { file: 'zhen-sha.css', lines: 2 },
         { file: 'engine.ts', lines: 3 },
       ],
-      total: 5,
+      // Deliberately inconsistent: the derived total (5) must win.
+      total: 999,
     };
-    expect(buildSizeSnapshot(unsorted).files.map((entry) => entry.file)).toEqual([
+    const built = buildSizeSnapshot(unsorted);
+    expect(built.total).toBe(5);
+    expect(built.files.map((entry) => entry.file)).toEqual([
       'engine.ts',
       'zhen-sha.css',
     ]);
+    expect(parseSizeSnapshot(serializeSizeSnapshot(unsorted)).total).toBe(5);
     expect(serializeSizeSnapshot(unsorted)).toBe(
       serializeSizeSnapshot({ ...unsorted, files: [...unsorted.files].reverse() }),
     );
