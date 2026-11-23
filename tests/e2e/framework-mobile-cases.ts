@@ -183,11 +183,11 @@ export function defineFrameworkMobileCases(): void {
       // scrollY=0. Both boxes physically cannot share the first screen without
       // changing that layout. Issue #252's human acceptance — and the merged
       // desktop t1 case, where both fit at 1440x1000 — require the card inside
-      // the first screen and the CTA visible, linked and unobstructed. This
-      // case follows that acceptance; the scroll below only proves
-      // reachability, not first-screen placement. The stricter t2 detail would
-      // need a #430 layout change outside this test-only task and is raised on
-      // PR #437.
+      // the first screen and the CTA visible, linked and unobstructed. The t2
+      // detail is amended to that acceptance (plan-side decision recorded on
+      // PR #437); the scroll below only proves reachability, not first-screen
+      // placement. No #430 narrow-layout change is authorized by this
+      // test-only task.
       const cta = page.locator(ZHEN_SHA_CTA);
       await expect(cta).toBeVisible();
       await expect(cta).toHaveAttribute('href', '#/games/zhen-sha');
