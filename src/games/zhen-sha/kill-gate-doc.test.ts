@@ -1,31 +1,25 @@
-import { readFileSync, readdirSync } from 'node:fs';
-import { dirname, extname, join, resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-const GAME_DIR = join(ROOT, 'src', 'games', 'zhen-sha');
 const DOC = readFileSync(join(ROOT, 'docs', 'zhen-sha-kill-gate.md'), 'utf8');
 
-/** Whether a file in the game directory contributes to the production build. */
-function isProductionFile(name: string): boolean {
-  const extension = extname(name);
-  if (extension !== '.ts' && extension !== '.css') {
-    return false;
-  }
-  return !name.endsWith('.test.ts') && !name.endsWith('.test.css') && !name.endsWith('.d.ts');
-}
+/**
+ * Production size frozen at baseline 43c9ab1, as `{ name, lines }`.
+ * The historical assessment must not follow the current working tree; the
+ * rolling snapshot owns the current production size instead.
+ */
+const BASELINE_FILES = [
+  { name: 'engine.ts', lines: 457 },
+  { name: 'index.ts', lines: 29 },
+  { name: 'zhen-sha-view.ts', lines: 676 },
+  { name: 'zhen-sha.css', lines: 254 },
+] as const;
 
-/** Count lines exactly the way `wc -l` does: the number of newline characters. */
-function countLines(text: string): number {
-  return text.split('\n').length - 1;
-}
-
-const PRODUCTION_FILES = readdirSync(GAME_DIR).filter(isProductionFile).sort();
-const PRODUCTION_LINES = PRODUCTION_FILES.reduce(
-  (total, name) => total + countLines(readFileSync(join(GAME_DIR, name), 'utf8')),
-  0,
-);
+const PRODUCTION_FILES: string[] = BASELINE_FILES.map((file) => file.name).sort();
+const PRODUCTION_LINES = BASELINE_FILES.reduce((total, file) => total + file.lines, 0);
 
 /** A `标签：数字` metric claimed by the assessment document. */
 function claimedNumber(label: string): number {
@@ -123,10 +117,16 @@ const PLAYTEST = section('## 3 人试玩');
 
 describe('zhen-sha kill gate engineering assessment', () => {
   it('measures only build-participating production sources', () => {
+    // The frozen set must not absorb test files or files added after 43c9ab1.
+    expect(PRODUCTION_FILES).toEqual(['engine.ts', 'index.ts', 'zhen-sha-view.ts', 'zhen-sha.css']);
+    expect(PRODUCTION_FILES.length).toBe(4);
     expect(PRODUCTION_FILES).not.toContain('engine.test.ts');
     expect(PRODUCTION_FILES).not.toContain('zhen-sha-view.test.ts');
     expect(PRODUCTION_FILES).not.toContain('kill-gate-doc.test.ts');
-    expect(PRODUCTION_FILES.length).toBeGreaterThan(0);
+    expect(PRODUCTION_FILES).not.toContain('boss-chart.ts');
+    expect(PRODUCTION_FILES).not.toContain('bosses.ts');
+    expect(PRODUCTION_FILES).not.toContain('settlement.ts');
+    expect(PRODUCTION_LINES).toBe(1416);
   });
 
   it('matches the documented prototype file count and line total', () => {
@@ -144,10 +144,9 @@ describe('zhen-sha kill gate engineering assessment', () => {
     const table = parsePrototypeTable();
     expect(table.files.map((row) => row.name).sort()).toEqual(PRODUCTION_FILES);
     for (const row of table.files) {
-      expect(
-        row.lines,
-        `原型表格中 ${row.name} 的行数应等于实际 \`wc -l\``,
-      ).toBe(countLines(readFileSync(join(GAME_DIR, row.name), 'utf8')));
+      const frozen = BASELINE_FILES.find((file) => file.name === row.name);
+      expect(frozen, `原型表格中的 ${row.name} 必须属于 43c9ab1 冻结基线`).toBeDefined();
+      expect(frozen?.lines, `原型表格中 ${row.name} 的行数应等于 43c9ab1 冻结值`).toBe(row.lines);
     }
     expect(table.total).toBe(PRODUCTION_LINES);
   });
