@@ -228,9 +228,13 @@ test.describe('additional input paths', () => {
     await expect(page.getByTestId('overlay-title')).toHaveText('已暂停');
   });
 
-  test('the hero CTA opens the snake game', async ({ page }) => {
+  test('the lobby card opens the snake game', async ({ page }) => {
     await page.goto('/');
-    await page.getByTestId('enter-snake').click();
+    // Snake stays in the lobby grid; its old hero CTA now promotes zhen-sha.
+    const card = page.getByTestId('game-card-snake');
+    await expect(card).toHaveCount(1);
+    await expect(card).toBeVisible();
+    await card.click();
     await expect(page).toHaveURL(/#\/games\/snake/);
     await expect(page.locator('[data-testid="snake-board"] canvas')).toBeVisible();
   });

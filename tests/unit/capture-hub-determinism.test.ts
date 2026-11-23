@@ -18,6 +18,8 @@ import type {
   HubHeroAnimationsResult,
   SharedHeaderRepaintOptions,
 } from '../../scripts/lib/webkit-compositing-settle.mjs';
+import { renderHub } from '../../src/app/hub';
+import { games } from '../../src/games/registry';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SCRIPT = readFileSync(
@@ -83,13 +85,15 @@ afterEach(() => {
  * Guard for the committed hub WebKit PNG.
  *
  * The `99dfef39…` hub drift (Issue #341 t2) is two effects in one frame: the
- * shared header's known 1-step backdrop snapshot (2429 px) and, far larger, the
- * hero orb core composited at the reduced-motion `breathe` animation's
- * scale(0.97) instead of the resting scale(1). Both seams therefore run between
- * the hub load and the `after-hub-webkit.png` screenshot. Static pins keep the
- * order, the WebKit-only scope and the Chromium captures untouched; jsdom cases
- * prove the animation settle finishes before the committed-frame waits and that
- * a missing header / hero fails the capture instead of silently skipping it.
+ * shared header's known 1-step backdrop snapshot (2429 px) and, far larger, a
+ * hero visual composited at a reduced-motion animation's end frame instead of
+ * the resting style. Both seams therefore run between the hub load and the
+ * `after-hub-webkit.png` screenshot. Issue #252 replaced the orb with the
+ * zhen-sha feature card, so the hero selector moved to that card while the seam
+ * itself is unchanged. Static pins keep the order, the WebKit-only scope and the
+ * Chromium captures untouched; jsdom cases prove the animation settle finishes
+ * before the committed-frame waits and that a missing header / hero fails the
+ * capture instead of silently skipping it.
  */
 describe('hub WebKit screenshot determinism guard', () => {
   it('reuses the shared compositing seam instead of a second paint recipe', () => {
@@ -179,11 +183,17 @@ describe('hub WebKit screenshot determinism guard', () => {
     );
 
     await expect(settleHubHeroCompositing(page)).rejects.toThrow(
-      'Hub hero ".orb-core" was not found',
+      'Hub hero "[data-testid="game-card-zhen-sha"]" was not found',
     );
     expect(APP).toContain('<header class="site-header">');
-    expect(HUB_VIEW).toContain('class="orb-core"');
-    expect(HUB_HERO_SELECTOR).toBe('.orb-core');
+    // Render the real hub instead of grepping the template: the test id is
+    // emitted from the registry, so only the rendered string proves the
+    // selector still targets the shipped feature card.
+    expect(HUB_VIEW).toContain("FEATURE_GAME_ID = 'zhen-sha'");
+    expect(
+      renderHub(games, { lastPlayed: () => null }),
+    ).toContain('data-testid="game-card-zhen-sha"');
+    expect(HUB_HERO_SELECTOR).toBe('[data-testid="game-card-zhen-sha"]');
     expect(HUB_HERO_SETTLE_FRAMES).toBe(2);
     expect(SHARED_HEADER_SELECTOR).toBe('.site-header');
     expect(SHARED_HEADER_SETTLE_FRAMES).toBe(2);
@@ -192,7 +202,7 @@ describe('hub WebKit screenshot determinism guard', () => {
   it('finishes running animations, then waits committed frames', async () => {
     stubFonts();
     document.body.innerHTML =
-      '<div class="hero-visual"><span class="orb-core"></span></div>';
+      '<div class="hero-visual"><a data-testid="game-card-zhen-sha"></a></div>';
     let rafCalls = 0;
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
       rafCalls += 1;
@@ -242,7 +252,7 @@ describe('hub WebKit screenshot determinism guard', () => {
   it('fails when an animation never finishes instead of capturing it', async () => {
     stubFonts();
     document.body.innerHTML =
-      '<div class="hero-visual"><span class="orb-core"></span></div>';
+      '<div class="hero-visual"><a data-testid="game-card-zhen-sha"></a></div>';
     let rafCalls = 0;
     vi.stubGlobal('requestAnimationFrame', () => {
       rafCalls += 1;
