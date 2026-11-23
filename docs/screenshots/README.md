@@ -181,7 +181,7 @@
 | `before-hub-hero-1440x1000.png` | 大厅首屏（Before：orb 视觉区 + 「开始贪食蛇」主 CTA） | 1440×1000 / 1440×1000 | `72b976e5a9ff2f39a89a5d192a417c595d6bb202df8c441d29b257b52e7e77a8` |
 | `after-hub-hero-1440x1000.png` | 大厅首屏（After：镇煞 hero 特色卡 + 「开始《镇煞》」主 CTA） | 1440×1000 / 1440×1000 | `e2f9e762db3a1fe286f38a2f6d4543623e4994df5f3da475100c6e8ed2651ccb` |
 | `before-hub-hero-320x640.png` | 大厅首屏（Before：orb 视觉区 + 「开始贪食蛇」主 CTA） | 320×640 / 640×1280 | `d01ee645cf07577a2abdea391fef8546b1d196de20711bf09f2a5c12601cb660` |
-| `after-hub-hero-320x640.png` | 大厅首屏（After：镇煞 hero 特色卡 + 「开始《镇煞》」主 CTA） | 320×640 / 640×1280 | `9b36cb06ad7584110f241ab36939caf1b4daa3de29043b394efe3beed727ffc4` |
+| `after-hub-hero-320x640.png` | 大厅首屏（After：镇煞 hero 特色卡；主 CTA 位于首屏下方） | 320×640 / 640×1280 | `9b36cb06ad7584110f241ab36939caf1b4daa3de29043b394efe3beed727ffc4` |
 
 ## 历史 After 证据与当前构建不一致（Issue #137）
 
