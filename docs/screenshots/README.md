@@ -51,7 +51,7 @@
 | 文件 | sha256 | 固定容器内重拍命令 | 捕获 commit |
 | --- | --- | --- | --- |
 | `after-blank-webkit.png` | `cd4ed3fea1e0a068661c8102ee0b58b0601b3a249e480d76224d22782a0e088f` | `npm run screenshots:container -- screenshots:webkit` | `f5b87c05b3c55694c3605530de4bcf8e20097a80`（#162） |
-| `after-hub-webkit.png` | `6c2856e33a5619dc2eff5833c059608c74f03492192029515edf345b165581f4` | `npm run screenshots:container -- screenshots:webkit` | `c6a8c6c0b6cb70aac968f12d834d00f1073ade61`（#318 t3） |
+| `after-hub-webkit.png` | `cb44465556dab743c8df792aa1ea088843ac084ac07e8f644fc9c551ce33e745` | `npm run screenshots:container -- screenshots:webkit` | `9e22c8eafb1c1d1653ce11960c2ff073c4b95537`（#252 t1） |
 | `after-snake-webkit.png` | `d8e262f366b11436d5a1dc309f01ee86a473b23f74684fd92e03392fc28450ba` | `npm run screenshots:container -- screenshots:snake:webkit` | `c6a8c6c0b6cb70aac968f12d834d00f1073ade61`（#318 t3） |
 | `after-2048-playing-webkit.png` | `4173dce84c814f2573fa506360f95bab477c985b37a2dfe2d5b0d1c2c5992a91` | `npm run screenshots:container -- screenshots:2048:webkit` | `8dbe3e7e40e1a17ac84f5b715ce6383cbf039187`（#145） |
 | `after-2048-gameover-webkit.png` | `bf7548b7c7fc696b89e9d1ed00c48f0d1bdb2274575c278240e6c801630ba837` | `npm run screenshots:container -- screenshots:2048:webkit` | `8dbe3e7e40e1a17ac84f5b715ce6383cbf039187`（#145） |
@@ -125,8 +125,8 @@
 
 | 文件 | 场景 | 视口 / 主题 | 整页尺寸 | 捕获命令 / sha256 |
 | --- | --- | --- | --- | --- |
-| `after-hub-desktop.png` | 大厅（Chromium 桌面，含页脚） | 1440×1000 / 深色 / DPR 1，fullPage: true | 整页 1440×3496 | `npm run screenshots:container -- screenshots` / `b868bd53d1065756f2b63324e26e3a739e1f1b36b37c0ab441f94d22dc6c740a` |
-| `after-hub-mobile.png` | 大厅（Chromium 手机） | 390×844（DPR 2）/ 深色，fullPage: true | 整页 780×14100 | `npm run screenshots:container -- screenshots` / `6a680519290b4467635fe054437352b1724c0bc6762682f795e9b58c782f4c3c` |
+| `after-hub-desktop.png` | 大厅（Chromium 桌面，含页脚） | 1440×1000 / 深色 / DPR 1，fullPage: true | 整页 1440×3496 | `npm run screenshots:container -- screenshots` / `62a1773e0bd825bcef44a0b0e0e70b47bc434b84c36ea22647a0e109ed353046` |
+| `after-hub-mobile.png` | 大厅（Chromium 手机） | 390×844（DPR 2）/ 深色，fullPage: true | 整页 780×13658 | `npm run screenshots:container -- screenshots` / `4230fb8c15285331686cedffae816e69dcaaa850443ab571b8ae9828a2446850` |
 
 ## zhen-sha：镇煞游戏首屏命名证据（Issue #274 / t1）
 
@@ -164,6 +164,25 @@
 | `before-hub-copy-320x640.png` | 大厅首屏（Before：eyebrow 为 `ISSUE #11`、lede 未含镇煞） | 320×640 / 640×1280 | `bbcf73a1dbe7d9822c5e7b9da464cf165ace935cdf01c837731c03aeeee4002e` |
 | `after-hub-copy-320x640.png` | 大厅首屏（After：「六款游戏已上线」+「镇煞」） | 320×640 / 640×1280 | `d01ee645cf07577a2abdea391fef8546b1d196de20711bf09f2a5c12601cb660` |
 
+## 大厅首屏主推《镇煞》证据（Issue #252 / t1）
+
+- 目的：记录大厅首屏从 orb 视觉区 + 「开始贪食蛇」主 CTA 改为《镇煞》主推后的 Before / After：主 CTA 变成「开始《镇煞》」，镇煞卡从网格移入 hero 视觉区并以 `hub.ts` 内联 SVG 卡面呈现；其余五款游戏与空白画布仍从网格进入。
+- Before 基线：`7f90dcd`（`origin/main` 的 merge-base，干净 worktree `/home/xiaodongye/dsh-3090/work/plan-252-base-7f90dcd`，`npm ci && npm run build`）。
+- After 构建源码提交：`9e22c8eafb1c1d1653ce11960c2ff073c4b95537`（分支 `agent/plan-252-t0`；截图 PNG 与本节是其后的证据提交，不改变构建产物）。
+- 捕获方式：同一台宿主机上分别用 `vite preview --host 127.0.0.1 --port 4198|4199 --strictPort` 提供两份生产产物，再用 `node evidence/plan-252-t0/capture-hub.mjs <url> <prefix>` 真实渲染 `/`：等待 `networkidle`、`document.fonts.ready` 与 400 ms 后截视口图（`fullPage: false`），与「大厅六款计数文案证据」使用同一等待与截取口径。
+- 状态一致性：Before 两张 PNG 与既有的 `after-hub-copy-desktop.png` / `after-hub-copy-320x640.png` 逐字节一致（sha256 相同），说明 Before 就是当前 main 的大厅首屏；After 只含本任务改动。
+- 视口 / 主题：桌面 1440×1000 CSS px、DPR 1；手机 320×640 CSS px、DPR 2、`isMobile: true`、`hasTouch: true`。四张均为深色主题、`reducedMotion: reduce`。
+- 首屏 / 布局断言（`node evidence/plan-252-t0/verify-visual.mjs <before> <after>`，两个视口都通过）：After 的 hero 特色卡完整落在视口内（桌面 879,238→1399,655；手机 12,115→308,550），320 下 `scrollWidth == clientWidth`（无横向滚动）；`.hero` 内只有一个 `.button--primary` 且为 `[data-testid="enter-zhen-sha"]`、链接为 `#/games/zhen-sha`；镇煞特色卡不在 `aria-hidden` 子树、卡面为内联 SVG（无 CSS data URI / `::before`）；网格恰好是贪食蛇、俄罗斯方块、2048、打砖块、扫雷与空白画布各一次，不再重复镇煞。
+- 说明：手机 320×640 首屏先显示 hero 特色卡与 eyebrow / 标题，主 CTA 位于首屏下方但没有被折叠或遮挡；`#/games/zhen-sha` 路由由 e2e 覆盖点击到达。
+- 预算（`npm run check:budget`，After 实测）：入口 35.66 KB / 11.62 KB gzip（上限 50 KB）；全部 JS 411.04 KB gzip（上限 450 KB）；CSS 14.00 KB gzip。
+
+| 文件 | 场景 | CSS 视口 / PNG 尺寸 | sha256 |
+| --- | --- | --- | --- |
+| `before-hub-hero-1440x1000.png` | 大厅首屏（Before：orb 视觉区 + 「开始贪食蛇」主 CTA） | 1440×1000 / 1440×1000 | `72b976e5a9ff2f39a89a5d192a417c595d6bb202df8c441d29b257b52e7e77a8` |
+| `after-hub-hero-1440x1000.png` | 大厅首屏（After：镇煞 hero 特色卡 + 「开始《镇煞》」主 CTA） | 1440×1000 / 1440×1000 | `e2f9e762db3a1fe286f38a2f6d4543623e4994df5f3da475100c6e8ed2651ccb` |
+| `before-hub-hero-320x640.png` | 大厅首屏（Before：orb 视觉区 + 「开始贪食蛇」主 CTA） | 320×640 / 640×1280 | `d01ee645cf07577a2abdea391fef8546b1d196de20711bf09f2a5c12601cb660` |
+| `after-hub-hero-320x640.png` | 大厅首屏（After：镇煞 hero 特色卡 + 「开始《镇煞》」主 CTA） | 320×640 / 640×1280 | `9b36cb06ad7584110f241ab36939caf1b4daa3de29043b394efe3beed727ffc4` |
+
 ## 历史 After 证据与当前构建不一致（Issue #137）
 
 - 权威对照口径：逐字节比较只在同一构建、同一捕获环境下的确定性产物之间成立。需要与历史提交对照时，用同一脚本在父提交（或该图的历史捕获 commit）的干净 worktree 里重拍，再与同一次重拍的另一次运行比较；不要求重跑结果等于已提交的历史 `fullPage` PNG。历史 After 图只代表各自 PR 时点的 UI 快照，不是当前构建的确定性基准。
@@ -184,8 +203,8 @@
 
 - 覆盖范围：`docs/screenshots/README.md` 表格里的尺寸行、完整 sha256 与 `docs/screenshots/<file>.png` 逐项比对：
   - 整页行 `整页 W×H`：把文档尺寸与 PNG 签名 / IHDR 宽高比对，共 16 行 / 16 个文件，其中包括「通用大厅整页证据」收录的 `after-hub-desktop.png` / `after-hub-mobile.png`。
-  - 视口行 `CSS 视口 / PNG 尺寸`（`W1×H1 / W2×H2`）：只把斜杠后的 `W2×H2` 与 PNG 签名 / IHDR 宽高比对；斜杠前的 CSS 视口按 DPR 可能与 PNG 尺寸不同，仅作为文档元数据保留。现有 8 条视口证据是 `before/after-zhen-sha-route-desktop`、`before/after-zhen-sha-route-320x640`、`before/after-hub-copy-desktop`、`before/after-hub-copy-320x640`，共 8 行 / 8 个文件。
-  - 完整 sha256：同一表格行最后一列（捕获命令 / sha256）里反引号包裹的哈希按文件位置一一对齐（每个文件一个哈希槽），完整 64 位哈希用 `node:crypto` 的 SHA-256 计算 `docs/screenshots/<file>.png` 的实际哈希后比对；现有 8 条视口证据与「通用大厅整页证据」两行各带 1 个完整哈希，共 10 个文件。哈希与尺寸在同一行、同一次遍历中校验。
+  - 视口行 `CSS 视口 / PNG 尺寸`（`W1×H1 / W2×H2`）：只把斜杠后的 `W2×H2` 与 PNG 签名 / IHDR 宽高比对；斜杠前的 CSS 视口按 DPR 可能与 PNG 尺寸不同，仅作为文档元数据保留。现有 12 条视口证据是 `before/after-zhen-sha-route-desktop`、`before/after-zhen-sha-route-320x640`、`before/after-hub-copy-desktop`、`before/after-hub-copy-320x640`、`before/after-hub-hero-1440x1000`、`before/after-hub-hero-320x640`，共 12 行 / 12 个文件。
+  - 完整 sha256：同一表格行最后一列（捕获命令 / sha256）里反引号包裹的哈希按文件位置一一对齐（每个文件一个哈希槽），完整 64 位哈希用 `node:crypto` 的 SHA-256 计算 `docs/screenshots/<file>.png` 的实际哈希后比对；现有 12 条视口证据与「通用大厅整页证据」两行各带 1 个完整哈希，共 14 个文件。哈希与尺寸在同一行、同一次遍历中校验。
   - 省略号简写：解析器把带 `…` 的缩略哈希当作空槽跳过，不与文件比较；本 README 的表格已无缩略哈希写法（「通用大厅整页证据」两行已改用完整哈希），解析器保留该兼容分支并由测试覆盖。不带省略号的 8–63 位短十六进制若恰好是文件 sha256 的前缀，会作为截断报告（见失败表现），以免把写短的完整哈希静默放过；普通短十六进制（如表格里的 7 位提交前缀）不受影响。
   - 合计 24 行 / 24 个文件，其中 10 个文件校验完整 sha256。只读 README 与已提交 PNG，不执行截图脚本、不写文件，也不需要浏览器或生产构建。
 - CI 位置：`.github/workflows/ci.yml` 的 `verify` job，在 `Unit tests`（`npm run test:unit`）之后、`Production build`（`npm run build`）之前新增名为 `Screenshot doc dimensions` 的步骤；`verify` 的 `timeout-minutes` 保持 20。放在构建前，尺寸或哈希漂移会尽早失败。
@@ -820,7 +839,7 @@ npm run screenshots
   sha256sum docs/screenshots/after-blank-{desktop,mobile,webkit}.png
   ```
 
-  上述次数的运行（WebKit 至少 4 次）写出的 3 个 sha256 应完全一致，并等于已提交产物：`after-blank-desktop.png` `24c34e278b7272834077ea6696cc0b5087d87dfb20323ec796ba97c719f3fb47`、`after-blank-mobile.png` `a097836e00acfe0c9965ecde6e72b7f40b366e4bdd82b1d6af705bcbefa685ff`、`after-blank-webkit.png` `cd4ed3fea1e0a068661c8102ee0b58b0601b3a249e480d76224d22782a0e088f`；同一条 WebKit 命令写出的 `after-hub-webkit.png` 也应为 `6c2856e33a5619dc2eff5833c059608c74f03492192029515edf345b165581f4`（Issue #341 t2）。WebKit 产物在官方 Playwright 容器（`mcr.microsoft.com/playwright:v1.64.1-noble`，与仓库的 Playwright 1.64.1 对应）内捕获，避免宿主 EGL / 字体环境差异（本机直接运行会因 `Could not create surfaceless EGL display` 失败）。
+  上述次数的运行（WebKit 至少 4 次）写出的 3 个 sha256 应完全一致，并等于已提交产物：`after-blank-desktop.png` `24c34e278b7272834077ea6696cc0b5087d87dfb20323ec796ba97c719f3fb47`、`after-blank-mobile.png` `a097836e00acfe0c9965ecde6e72b7f40b366e4bdd82b1d6af705bcbefa685ff`、`after-blank-webkit.png` `cd4ed3fea1e0a068661c8102ee0b58b0601b3a249e480d76224d22782a0e088f`；同一条 WebKit 命令写出的 `after-hub-webkit.png` 在 #341 t2 时点为 `6c2856e33a5619dc2eff5833c059608c74f03492192029515edf345b165581f4`；#252 t1 把大厅 hero 改为镇煞特色卡后，该图更新为 `cb44465556dab743c8df792aa1ea088843ac084ac07e8f644fc9c551ce33e745`（见「大厅首屏主推《镇煞》证据」）。WebKit 产物在官方 Playwright 容器（`mcr.microsoft.com/playwright:v1.64.1-noble`，与仓库的 Playwright 1.64.1 对应）内捕获，避免宿主 EGL / 字体环境差异（本机直接运行会因 `Could not create surfaceless EGL display` 失败）。
 - Before / After：旧产物 sha256 分别为 `0aa5b5d35c5c4894423f8a37fb97bddf0731206a1435a786ae3a4be01a14f0c6`、`155681ac86f01f8d7b728e2e0569b30a9fbc519565744087f7524dc54b1fb5d3`、`5274dcadc087a17f0e03e243edc4be83ab2f743d8a908e9d64943ced384230b8`；本轮 3 张图都按上述等待重新生成。旧 desktop / mobile 产物来自 t2 时期，后续任务改过页面文案与布局，因此新旧图的差异不只在 orb / trail 位置；本子任务只对当前 head 的逐字节可复现性负责，不把旧图当作像素级回归基准。`after-blank-desktop.png` 是 1440×1000 视口截图（`fullPage: false`），不是整页图，不包含页脚；`npm run screenshots`（owner 命令）仍会写出 hub 图，提交前用 `git checkout -- docs/screenshots/after-hub-*.png` 还原，保持未受影响的已提交产物不变。
 - 回归护栏：`tests/unit/capture-blank-determinism.test.ts` 用 fake page 运行时覆盖 `scripts/lib/blank-settle.mjs` 的 `waitForBlankSettled`（未连续 N 次落点且 `trail` 未清零就不返回、移动会重置连续计数、超时带最后读数报错）与 `nextBlankStableStreak`，并静态钉住 `capture-screenshots.mjs` 的 `tapBlankCanvas` 内确实 `await waitForBlankSettled(page, target)`、3 个场景都走同一等待、脚本不再含 `waitForTimeout(700)`、`view.ts` 暴露 `data-trail`。删除该等待会让单测失败。Issue #326 的 header 接缝现在由通用模块与 blank 包装共同覆盖：`tests/unit/webkit-compositing-settle.test.ts` 用 jsdom 运行时测试 `settleSharedHeaderCompositing` / `repaintSharedHeader` 必须等待 `document.fonts.ready`，在两次 toggle 之间各等待配置的 commit 数，最后恢复为空值，header 缺失时抛错，并覆盖注入 `evaluate` 与自定义 `selector` / `frames` 的非 blank 编排；`tests/unit/capture-blank-determinism.test.ts` 静态钉住 `captureWebkitMobile` 中 `tapBlankCanvas` → `settleBlankHeader` → `after-blank-webkit.png` 的顺序、该接缝只出现一次且不进入 hub / Chromium 空白路径，断言 blank 模块只复用通用模块而不保留第二套 toggle / rAF 实现，并把选择器与 `src/app/app.ts` 的真实 `.site-header` 关联。Issue #341 t2 的 hub 接线由 `tests/unit/capture-hub-determinism.test.ts` 钉住：`captureWebkitMobile` 里 `settleSharedHeaderCompositing` 与 `settleHubHeroCompositing` 都必须位于 hub 加载之后、`after-hub-webkit.png` 截图之前且各出现一次（hero 动画落定最靠近截图），blank 路径的顺序保持不变，Chromium 的 `captureDesktop` / `captureMobile` 不得调用它们；jsdom 运行时用例证明 `settleHubHeroAnimations` 会先 finish 动画、等动画全部结束后才走配置的 commit 等待，动画仍在跑时抛错，复用同一 jsdom 用例证明 header / hero 缺失时捕获失败而不是静默跳过。删除调用、少一次 toggle / commit 等待、去掉恢复或跳过缺失元素都会让单测失败。
 

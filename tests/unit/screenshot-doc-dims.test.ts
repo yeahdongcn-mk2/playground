@@ -1292,10 +1292,10 @@ describe('check-screenshot-doc-dims CLI', () => {
 
     expect(stderr).toBe('');
     expect(status).toBe(0);
-    expect(stdout).toContain('24 个文件');
-    expect(stdout).toContain('24 行 README');
-    expect(stdout).toContain('整页 16 行 / 视口 8 行');
-    expect(stdout).toContain('sha256 10 个文件');
+    expect(stdout).toContain('28 个文件');
+    expect(stdout).toContain('28 行 README');
+    expect(stdout).toContain('整页 16 行 / 视口 12 行');
+    expect(stdout).toContain('sha256 14 个文件');
     expect(stdout).toContain('尺寸与 sha256 全部一致');
   });
 
