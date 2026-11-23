@@ -116,16 +116,10 @@ const CONCLUSION = parseConclusion(DOC);
 const PLAYTEST = section('## 3 人试玩');
 
 describe('zhen-sha kill gate engineering assessment', () => {
-  it('measures only build-participating production sources', () => {
-    // The frozen set must not absorb test files or files added after 43c9ab1.
+  it('keeps the 43c9ab1 production set frozen', () => {
+    // 冻结基线契约：只允许 43c9ab1 的四个生产文件，测试文件与基线后新增的
+    // bosses.ts / settlement.ts / boss-chart.ts 等都不会进入这个集合。
     expect(PRODUCTION_FILES).toEqual(['engine.ts', 'index.ts', 'zhen-sha-view.ts', 'zhen-sha.css']);
-    expect(PRODUCTION_FILES.length).toBe(4);
-    expect(PRODUCTION_FILES).not.toContain('engine.test.ts');
-    expect(PRODUCTION_FILES).not.toContain('zhen-sha-view.test.ts');
-    expect(PRODUCTION_FILES).not.toContain('kill-gate-doc.test.ts');
-    expect(PRODUCTION_FILES).not.toContain('boss-chart.ts');
-    expect(PRODUCTION_FILES).not.toContain('bosses.ts');
-    expect(PRODUCTION_FILES).not.toContain('settlement.ts');
     expect(PRODUCTION_LINES).toBe(1416);
   });
 
