@@ -711,12 +711,8 @@ describe('browser coverage documentation', () => {
     expect(frameworkBreakdown).toEqual(readmeBreakdown);
     const [desktop, mobile, webkit] = readmeBreakdown ?? [0, 0, 0];
     expect(desktop + mobile + webkit).toBe(counts.readmeE2e);
-    // The WebKit project now runs framework (including the 320×640 zhen-sha
-    // lobby case), the minesweeper touch gestures
-    // (including the real tap pointerdown / click shape and the two long-press
-    // flag cases), the touch difficulty form, the snake / tetris phone cases,
-    // the 2048 / breakout phone cases and the 2048 READY two-run byte guard on
-    // top of the contract / smoke cases. The expected count lives once in
+    // The WebKit project runs the shared framework phone case plus the
+    // contract, smoke and narrow suites. The expected count lives once in
     // e2e-count-lock.ts so this assertion cannot drift from e2e-doc-counts.
     expect(webkit).toBe(EXPECTED_E2E_COUNTS.mobileWebkit);
   });

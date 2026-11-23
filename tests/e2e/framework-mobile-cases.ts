@@ -23,7 +23,7 @@ function errorMessage(error: unknown): string {
 }
 
 /** Assert a locator's border box is completely inside the visible viewport. */
-async function expectFullyOnFirstScreen(
+async function expectFullyInViewport(
   page: Page,
   selector: string,
   label: string,
@@ -158,38 +158,41 @@ export function defineFrameworkMobileCases(): void {
 
   // The narrowest supported phone width, exercised by both the Chromium
   // `mobile` project and the WebKit `mobile-webkit` project. The hub fixture is
-  // the production hero from #430; this case pins the phone regression that the
-  // desktop project's 320x640 case cannot see (touch device emulation).
+  // the production hero from #430; this case pins the 320x640 lobby regression
+  // on both phone engines, which the desktop `chromium` project cannot cover.
   test.describe('zhen-sha lobby at 320x640', () => {
     test.use({ viewport: { width: 320, height: 640 } });
 
-    test('keeps the featured card in the first screen with a reachable primary CTA and six entries', async ({
+    test('keeps the featured card in the first screen with a reachable primary CTA, six entries and no horizontal overflow', async ({
       page,
     }) => {
       await page.goto('/');
       expect(page.viewportSize()).toEqual({ width: 320, height: 640 });
+      expect(await page.evaluate(() => window.scrollY), 'the page should start unscrolled').toBe(0);
 
       const card = page.getByTestId('game-card-zhen-sha');
       await expect(card).toHaveCount(1);
       await expect(card).toHaveClass(/game-card--feature/);
       await expect(card).toBeVisible();
-      await expectFullyOnFirstScreen(page, ZHEN_SHA_CARD, 'the zhen-sha featured card');
+      await expectFullyInViewport(page, ZHEN_SHA_CARD, 'the zhen-sha featured card on the first screen');
 
       // At the <=860px breakpoint #430 orders the featured visual above the
-      // hero copy, so the CTA sits below the promoted card. At 320×640 the
-      // 435px card fills the first screen on its own and the CTA starts below
-      // the 640px fold (measured y≈900.9 at scrollY=0), so no scroll-free
-      // assertion can require both boxes inside the first screen. Issue #252's
-      // human acceptance — and the merged desktop t1 case — require the card
-      // inside the first screen and the CTA visible, linked and unobstructed;
-      // this case follows that acceptance. Requiring the CTA in the first
-      // screen would need a #430 layout change outside t2's test-only scope,
-      // which is raised on PR #437 instead of hidden by scrolling first.
+      // hero copy. On the current #430 layout at 320x640 the 435px card starts
+      // at y≈115 and ends at y≈549.9, then the hero copy follows, so the CTA
+      // starts at y≈900.9 and sits outside the 640px first screen at
+      // scrollY=0. Both boxes physically cannot share the first screen without
+      // changing that layout. Issue #252's human acceptance — and the merged
+      // desktop t1 case, where both fit at 1440x1000 — require the card inside
+      // the first screen and the CTA visible, linked and unobstructed. This
+      // case follows that acceptance; the scroll below only proves
+      // reachability, not first-screen placement. The stricter t2 detail would
+      // need a #430 layout change outside this test-only task and is raised on
+      // PR #437.
       const cta = page.locator(ZHEN_SHA_CTA);
       await expect(cta).toBeVisible();
       await expect(cta).toHaveAttribute('href', '#/games/zhen-sha');
       await cta.scrollIntoViewIfNeeded();
-      await expectFullyOnFirstScreen(page, ZHEN_SHA_CTA, 'the zhen-sha primary CTA after scrolling');
+      await expect(cta).toBeInViewport({ ratio: 1 });
 
       // The CTA must be the element hit at its own centre; a collapsed or
       // overlapped button still has a bounding box, so geometry alone is not
