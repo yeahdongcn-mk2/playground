@@ -250,18 +250,18 @@ describe('parseDocDimensions', () => {
     ]);
   });
 
-  it('lists the 16 full-page and 12 viewport rows in the committed README', () => {
+  it('lists the 16 full-page and 14 viewport rows in the committed README', () => {
     const rows = parseDocDimensions(readFileSync(README, 'utf8'));
     const fullPage = rows.filter((row) => row.kind === 'full-page');
     const viewport = rows.filter((row) => row.kind === 'viewport');
     const fullPageFiles = fullPage.flatMap((row) => row.files);
     const viewportFiles = viewport.flatMap((row) => row.files);
 
-    expect(rows).toHaveLength(28);
+    expect(rows).toHaveLength(30);
     expect(fullPage).toHaveLength(16);
     expect(fullPageFiles).toHaveLength(16);
-    expect(viewport).toHaveLength(12);
-    expect(viewportFiles).toHaveLength(12);
+    expect(viewport).toHaveLength(14);
+    expect(viewportFiles).toHaveLength(14);
     expect(
       fullPageFiles.filter((file) => file.includes('scores') && !file.includes('clear')),
     ).toHaveLength(4);
@@ -281,6 +281,8 @@ describe('parseDocDimensions', () => {
         'after-hub-hero-1440x1000.png',
         'before-hub-hero-320x640.png',
         'after-hub-hero-320x640.png',
+        'after-blank-desktop.png',
+        'after-blank-mobile.png',
       ]),
     );
 
@@ -289,7 +291,8 @@ describe('parseDocDimensions', () => {
     );
     for (const file of ['before-zhen-sha-route-desktop.png', 'after-zhen-sha-route-desktop.png',
       'before-hub-copy-desktop.png', 'after-hub-copy-desktop.png',
-      'before-hub-hero-1440x1000.png', 'after-hub-hero-1440x1000.png']) {
+      'before-hub-hero-1440x1000.png', 'after-hub-hero-1440x1000.png',
+      'after-blank-desktop.png']) {
       expect(viewportByFile.get(file)).toMatchObject({
         viewportWidth: 1440,
         viewportHeight: 1000,
@@ -307,9 +310,15 @@ describe('parseDocDimensions', () => {
         height: 1280,
       });
     }
+    expect(viewportByFile.get('after-blank-mobile.png')).toMatchObject({
+      viewportWidth: 390,
+      viewportHeight: 844,
+      width: 780,
+      height: 1688,
+    });
   });
 
-  it('documents a complete sha256 for the 12 viewport rows and 2 hub full-page rows', () => {
+  it('documents a complete sha256 for the 14 viewport rows and 2 hub full-page rows', () => {
     const readmeText = readFileSync(README, 'utf8');
     const rows = parseDocDimensions(readmeText);
     const hashedRows = rows.filter((row) => row.hashes.some((hash) => hash !== null));
@@ -329,6 +338,8 @@ describe('parseDocDimensions', () => {
       'after-hub-hero-1440x1000.png',
       'before-hub-hero-320x640.png',
       'after-hub-hero-320x640.png',
+      'after-blank-desktop.png',
+      'after-blank-mobile.png',
     ]);
     for (const row of hashedRows) {
       expect(row.files).toHaveLength(1);
@@ -351,6 +362,35 @@ describe('parseDocDimensions', () => {
       expect(row?.hashes).toEqual([
         sha256Of(readFileSync(join(SCREENSHOT_DIR, file))),
       ]);
+    }
+
+    const blankRows = rows.filter((row) =>
+      row.files.some(
+        (file) => file === 'after-blank-desktop.png' || file === 'after-blank-mobile.png',
+      ),
+    );
+    expect(blankRows).toHaveLength(2);
+    const blankRowsByFile = new Map(
+      blankRows.flatMap((row) => row.files.map((file) => [file, row] as const)),
+    );
+    for (const [file, expected] of [
+      [
+        'after-blank-desktop.png',
+        { viewportWidth: 1440, viewportHeight: 1000, width: 1440, height: 1000 },
+      ],
+      [
+        'after-blank-mobile.png',
+        { viewportWidth: 390, viewportHeight: 844, width: 780, height: 1688 },
+      ],
+    ] as const) {
+      const row = blankRowsByFile.get(file);
+      expect(row?.kind).toBe('viewport');
+      expect(row).toMatchObject(expected);
+      expect(row?.hashes).toEqual([sha256Of(readFileSync(join(SCREENSHOT_DIR, file)))]);
+      expect(readPngDimensions(join(SCREENSHOT_DIR, file))).toEqual({
+        width: expected.width,
+        height: expected.height,
+      });
     }
   });
 });
@@ -849,18 +889,18 @@ describe('parsePngDimensions', () => {
 });
 
 describe('verifyDocDimensions', () => {
-  it('passes for the committed README with 28 rows and 28 files', () => {
+  it('passes for the committed README with 30 rows and 30 files', () => {
     const report = verifyDocDimensions({
       readmeText: readFileSync(README, 'utf8'),
       dir: SCREENSHOT_DIR,
     });
 
     expect(report).toEqual({
-      rows: 28,
-      files: 28,
+      rows: 30,
+      files: 30,
       fullPageRows: 16,
-      viewportRows: 12,
-      sha256Files: 14,
+      viewportRows: 14,
+      sha256Files: 16,
       problems: [],
     });
   });
@@ -1292,10 +1332,10 @@ describe('check-screenshot-doc-dims CLI', () => {
 
     expect(stderr).toBe('');
     expect(status).toBe(0);
-    expect(stdout).toContain('28 个文件');
-    expect(stdout).toContain('28 行 README');
-    expect(stdout).toContain('整页 16 行 / 视口 12 行');
-    expect(stdout).toContain('sha256 14 个文件');
+    expect(stdout).toContain('30 个文件');
+    expect(stdout).toContain('30 行 README');
+    expect(stdout).toContain('整页 16 行 / 视口 14 行');
+    expect(stdout).toContain('sha256 16 个文件');
     expect(stdout).toContain('尺寸与 sha256 全部一致');
   });
 

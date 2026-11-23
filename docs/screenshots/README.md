@@ -203,37 +203,37 @@
 
 - 覆盖范围：`docs/screenshots/README.md` 表格里的尺寸行、完整 sha256 与 `docs/screenshots/<file>.png` 逐项比对：
   - 整页行 `整页 W×H`：把文档尺寸与 PNG 签名 / IHDR 宽高比对，共 16 行 / 16 个文件，其中包括「通用大厅整页证据」收录的 `after-hub-desktop.png` / `after-hub-mobile.png`。
-  - 视口行 `CSS 视口 / PNG 尺寸`（`W1×H1 / W2×H2`）：只把斜杠后的 `W2×H2` 与 PNG 签名 / IHDR 宽高比对；斜杠前的 CSS 视口按 DPR 可能与 PNG 尺寸不同，仅作为文档元数据保留。现有 12 条视口证据是 `before/after-zhen-sha-route-desktop`、`before/after-zhen-sha-route-320x640`、`before/after-hub-copy-desktop`、`before/after-hub-copy-320x640`、`before/after-hub-hero-1440x1000`、`before/after-hub-hero-320x640`，共 12 行 / 12 个文件。
-  - 完整 sha256：同一表格行最后一列（捕获命令 / sha256）里反引号包裹的哈希按文件位置一一对齐（每个文件一个哈希槽），完整 64 位哈希用 `node:crypto` 的 SHA-256 计算 `docs/screenshots/<file>.png` 的实际哈希后比对；现有 12 条视口证据与「通用大厅整页证据」两行各带 1 个完整哈希，共 14 个文件。哈希与尺寸在同一行、同一次遍历中校验。
+  - 视口行 `CSS 视口 / PNG 尺寸`（`W1×H1 / W2×H2`）：只把斜杠后的 `W2×H2` 与 PNG 签名 / IHDR 宽高比对；斜杠前的 CSS 视口按 DPR 可能与 PNG 尺寸不同，仅作为文档元数据保留。现有 14 条视口证据：`before/after-zhen-sha-route-desktop`、`before/after-zhen-sha-route-320x640`、`before/after-hub-copy-desktop`、`before/after-hub-copy-320x640`、`before/after-hub-hero-1440x1000`、`before/after-hub-hero-320x640` 共 12 条，加上 t2「After」表的 `after-blank-desktop.png` / `after-blank-mobile.png` 2 条，共 14 行 / 14 个文件。
+  - 完整 sha256：同一表格行最后一列（捕获命令 / sha256）里反引号包裹的哈希按文件位置一一对齐（每个文件一个哈希槽），完整 64 位哈希用 `node:crypto` 的 SHA-256 计算 `docs/screenshots/<file>.png` 的实际哈希后比对；现有 14 条视口证据与「通用大厅整页证据」两行各带 1 个完整哈希，共 16 个文件。哈希与尺寸在同一行、同一次遍历中校验。
   - 省略号简写：解析器把带 `…` 的缩略哈希当作空槽跳过，不与文件比较；本 README 的表格已无缩略哈希写法（「通用大厅整页证据」两行已改用完整哈希），解析器保留该兼容分支并由测试覆盖。不带省略号的 8–63 位短十六进制若恰好是文件 sha256 的前缀，会作为截断报告（见失败表现），以免把写短的完整哈希静默放过；普通短十六进制（如表格里的 7 位提交前缀）不受影响。
-  - 合计 28 行 / 28 个文件，其中 14 个文件校验完整 sha256。只读 README 与已提交 PNG，不执行截图脚本、不写文件，也不需要浏览器或生产构建。
+  - 合计 30 行 / 30 个文件，其中 16 个文件校验完整 sha256。只读 README 与已提交 PNG，不执行截图脚本、不写文件，也不需要浏览器或生产构建。
 - CI 位置：`.github/workflows/ci.yml` 的 `verify` job，在 `Unit tests`（`npm run test:unit`）之后、`Production build`（`npm run build`）之前新增名为 `Screenshot doc dimensions` 的步骤；`verify` 的 `timeout-minutes` 保持 20。放在构建前，尺寸或哈希漂移会尽早失败。
 - 步骤命令：`npm run verify:screenshots:doc-dims`（即 `node scripts/check-screenshot-doc-dims.mjs`）。
-- 复现命令：`npm run verify:screenshots:doc-dims`。通过时输出 `OK: 检查了 28 个文件 / 28 行 README（整页 16 行 / 视口 12 行，sha256 14 个文件），尺寸与 sha256 全部一致。` 并以 0 退出；该计数与 `tests/unit/screenshot-doc-dims.test.ts` 的 CLI 契约断言一致。
+- 复现命令：`npm run verify:screenshots:doc-dims`。通过时输出 `OK: 检查了 30 个文件 / 30 行 README（整页 16 行 / 视口 14 行，sha256 16 个文件），尺寸与 sha256 全部一致。` 并以 0 退出；该计数与 `tests/unit/screenshot-doc-dims.test.ts` 的 CLI 契约断言一致。
 - 失败表现：尺寸问题与哈希问题进入同一个问题列表，并以相同的非 0 状态退出。把 `after-hub-copy-desktop.png` 行斜杠后的 `1440×1000` 改成 `1441×1000` 后，本地实测输出：
 
 ```text
-FAIL: 发现 1 处尺寸 / sha256 问题（检查了 28 个文件 / 28 行 README，整页 16 行 / 视口 12 行）：
+FAIL: 发现 1 处尺寸 / sha256 问题（检查了 30 个文件 / 30 行 README，整页 16 行 / 视口 14 行）：
   README 87: after-hub-copy-desktop.png: 视口 PNG 1441×1000 != PNG 1440×1000（尺寸不一致）
 ```
 
   把 `after-zhen-sha-route-desktop.png` 行的完整 sha256 首字符 `8` 改成 `0` 后输出：
 
 ```text
-FAIL: 发现 1 处尺寸 / sha256 问题（检查了 28 个文件 / 28 行 README，整页 16 行 / 视口 12 行）：
+FAIL: 发现 1 处尺寸 / sha256 问题（检查了 30 个文件 / 30 行 README，整页 16 行 / 视口 14 行）：
   README 68: after-zhen-sha-route-desktop.png: sha256 文档 0f903d39bb5e681ec9a59a322ab5a759c5058df6c24f6ffa44a11785ef1a8002 != 实际 8f903d39bb5e681ec9a59a322ab5a759c5058df6c24f6ffa44a11785ef1a8002（sha256 不一致）
 ```
 
   把同一行的完整 sha256 去掉最后一位（截断成 63 位）后输出：
 
 ```text
-FAIL: 发现 1 处尺寸 / sha256 问题（检查了 28 个文件 / 28 行 README，整页 16 行 / 视口 12 行）：
+FAIL: 发现 1 处尺寸 / sha256 问题（检查了 30 个文件 / 30 行 README，整页 16 行 / 视口 14 行）：
   README 68: after-zhen-sha-route-desktop.png: sha256 文档 8f903d39bb5e681ec9a59a322ab5a759c5058df6c24f6ffa44a11785ef1a800 != 实际 8f903d39bb5e681ec9a59a322ab5a759c5058df6c24f6ffa44a11785ef1a8002（sha256 截断：文档 63 位，实际 64 位）
 ```
 
   以上修改都以 1 退出，恢复文档后重新通过；「通用大厅整页证据」两行现在也校验完整 sha256，改错一个字符，或删掉末尾一位（得到 63 位前缀），同样以 1 退出并给出行号、文件名与两份哈希。整页行仍按原口径校验，把 `after-minesweeper-scores-desktop.png` 行的 `整页 1440×1606` 改成 `1440×1607` 时输出 `README 296: after-minesweeper-scores-desktop.png: 整页 1440×1607 != PNG 1440×1606（尺寸不一致）`。PNG 缺失、PNG 签名错误或 IHDR 截断时同样逐条给出 README 行号、文件名、文档值与实际 PNG 状态。
 - 实测耗时：2026-11-11 在 `agent/plan-134-t1` 的本地 worktree 实测，`npm run verify:screenshots:doc-dims` 约 0.08–0.09 s（`node scripts/check-screenshot-doc-dims.mjs` 本身约 0.02 s，其余为 npm 启动开销），属于毫秒级；相对 `verify` job 的分钟级耗时（见下节 WebKit 冒烟步骤的参考 run）可忽略。CI runner 的绝对耗时不同，以实际 run 为准。
-- 防回归：`tests/unit/ci-workflow.test.ts` 断言 `Screenshot doc dimensions` 步骤存在、其 `run` 恰为 `npm run verify:screenshots:doc-dims`、位于 `npm run test:unit` 之后且在 `npm run build` 之前，并继续钉住 `verify` 的 `timeout-minutes: 20`；脚本行为（整页 / 视口尺寸写错、完整 sha256 写错与截断、省略号简写跳过、PNG 缺失 / 签名错误 / IHDR 截断、CLI 退出码与 28 行 / 28 文件 / 14 个哈希文件计数）由 `tests/unit/screenshot-doc-dims.test.ts` 覆盖。
+- 防回归：`tests/unit/ci-workflow.test.ts` 断言 `Screenshot doc dimensions` 步骤存在、其 `run` 恰为 `npm run verify:screenshots:doc-dims`、位于 `npm run test:unit` 之后且在 `npm run build` 之前，并继续钉住 `verify` 的 `timeout-minutes: 20`；脚本行为（整页 / 视口尺寸写错、完整 sha256 写错与截断、省略号简写跳过、PNG 缺失 / 签名错误 / IHDR 截断、CLI 退出码与 30 行 / 30 文件 / 16 个哈希文件计数）由 `tests/unit/screenshot-doc-dims.test.ts` 覆盖。
 
 ## CI：WebKit 窄屏截图冒烟（Issue #121）
 
@@ -808,20 +808,22 @@ npm run screenshots:baseline
 
 ### After
 
-| 文件 | 场景 | 视口 / 主题 | 说明 |
+| 文件 | 场景 | CSS 视口 / PNG 尺寸 | sha256 |
 | --- | --- | --- | --- |
-| `after-blank-desktop.png` | 空白画布游戏（指针移动并停稳后） | 1440×1000 / 深色 | 可交互画布、HUD、操作面板与重置入口。 |
-| `after-blank-mobile.png` | 空白画布游戏（触屏移动并停稳后） | 390×844（DPR 2）/ 深色 | 自适应画布、触屏操作与面板堆叠。 |
+| `after-blank-desktop.png` | 空白画布游戏（指针移动并停稳后；深色 / DPR 1，视口截图） | 1440×1000 / 1440×1000 | `e8b5ec8bf0da1687dcc103cd5e4c5b67ba10cf1a06662e22b641a370e1507184` |
+| `after-blank-mobile.png` | 空白画布游戏（触屏移动并停稳后；深色 / DPR 2，视口截图） | 390×844 / 780×1688 | `5fde4b2657d17525894dec7aee66c16906b2d91fcbb7f99527a1fdfa8245aa7d` |
+
+这两行是两张空白画布图尺寸与完整 sha256 的唯一自动校验来源：`npm run verify:screenshots:doc-dims` 会用表中的 PNG 尺寸与哈希校验已提交字节。
 
 `after-hub-desktop.png` / `after-hub-mobile.png` 已由后续 t4 / t5 / t6 更新为含 2048、打砖块与扫雷的五游戏大厅；t2 表格里的「只有空白画布卡片」描述的是 t2 当时状态。
 
-生成方式（会先构建，再用 `vite preview` 在 4174 端口启动生产预览）：
+生成方式（固定 Playwright 容器内先构建，再用 `vite preview` 在 4174 端口启动生产预览；宿主 `npm run screenshots` 只用于本地预览，不作为已提交证据的复现基准）：
 
 ```bash
-npm run screenshots
+npm run screenshots:container -- screenshots
 ```
 
-截图使用 `reducedMotion: 'reduce'`，避免动效造成每张图不一致。
+`npm run screenshots:container -- screenshots` 还会写出 `after-hub-desktop.png` / `after-hub-mobile.png`；提交本任务证据前用 `git checkout -- docs/screenshots/after-hub-*.png` 还原，保持未受影响的已提交产物不变。截图使用 `reducedMotion: 'reduce'`，避免动效造成每张图不一致。
 
 ### 空白画布截图确定性（plan-135 子任务 3）
 
@@ -831,16 +833,18 @@ npm run screenshots
 - 确定性条件：`reducedMotion: reduce` 下目标圆环不脉冲、orb 缩放固定为 1；orb 到达目标后场景把 `target` 置空并精确落到点击点，trail 按 1.15 s 生命衰减并从数组移除。等 `data-trail="0"` 后画面只剩固定 backdrop / 网格 / 静态 orb，不再随时间变化，因此同一构建的截图在场景内逐字节一致；正常交互没有变化，也不需要新增调试接缝。WebKit 空白路径还额外等待共享 header 的字体并在截图前重绘其 `backdrop-filter` 快照（`settleSharedHeaderCompositing`，blank 路径经 `settleBlankHeader` 复用，见下条），避免站点头部在路由切换后以每通道 1 个色阶的差异被合成；正常页面渲染不变，也不是产品调试接缝。
 - WebKit 共享 header 合成落定（Issue #326）：`waitForBlankSettled` 只证明空白 canvas 停稳；站点共享 header 在客户端路由切换后仍可能以另一份 `backdrop-filter: blur(18px)` 合成结果入库。未加接缝时在同一固定容器内连续重拍 15 跑（2026-11-19，含 `npm ci` 后的首跑），12 跑得到 `cd4ed3fe…`、3 跑得到 `5569689d97ee9dadf8725dd5e8d043acf758ce92d56731f0f4d1ea53c4b9be95`；两版都是 750×1334，差异恰好 1892 个像素，bbox rows 23–114 / cols 24–725（共享 header），每通道最大差 1，空白 canvas、HUD 与画布外区域逐像素一致；同一批 15 跑里 `after-hub-webkit.png` 全部为 `6c2856e3…`。通用接缝 `settleSharedHeaderCompositing`（`scripts/lib/webkit-compositing-settle.mjs`）等待 `document.fonts.ready`，把目标 header 的 `backdrop-filter` / `-webkit-backdrop-filter` 置为 `none` 并等待 2 次 commit（每次双 `requestAnimationFrame`），再恢复空值（移除内联覆盖，未加前缀的 `backdrop-filter` 回落到样式表的 `blur(18px)`，`-webkit-backdrop-filter` 清除内联值）并等待 2 次 commit；header 找不到时捕获直接失败，不会静默跳过。blank 路径由 `settleBlankHeader`（`scripts/lib/blank-settle.mjs`）复用同一实现，只在空白场景 settle 之后、`after-blank-webkit.png` 截图之前运行；任意 WebKit capture 都可向通用模块传入自定义 `selector` / `frames` / `evaluate`（Issue #341 t1 抽出该模块，供 t2 / t3 使用）。`captureWebkitMobile` 现在调用同一模块三处：hub 截图前的共享 header 接缝、hub 截图前的 hero 动画落定（`settleHubHeroCompositing`，Issue #341 t2，见「大厅复核」）与 blank 场景 settle 之后的 `settleBlankHeader`；Chromium desktop / mobile 与正常页面渲染都不经过这些接缝。加 blank 接缝后 2026-11-19 在同一固定容器连续 16 跑（宿主并发负载，load average 峰值约 30；当时 hub 路径尚未接入，hub 路径的 4 跑见「大厅复核」）sha256 全部为 `cd4ed3fea1e0a068661c8102ee0b58b0601b3a249e480d76224d22782a0e088f`，`after-hub-webkit.png` 全部为 `6c2856e33a5619dc2eff5833c059608c74f03492192029515edf345b165581f4`，16 份日志的 capture-env 指纹逐项一致且分别执行 `node scripts/verify-screenshot-sha256.mjs --log <log>` 全部退出 0。这些运行早于 #329 的修复：当时的 `--log` 只校验当前 PNG 与日志环境指纹、不读取日志内的 captured sha256，因此每跑字节相等仍由每跑写后 `sha256sum` 的 `cd4ed3fe…` 与写前护栏共同证明，不应把它们说成已被新的日志哈希校验验证过。字节未变，因此 `capture-sha256-manifest.json` 的 `sha256` / `provenance.captureCommit` 与本表都不改动；本条只记录本次漂移与新增接缝。Issue #341 t2 的 hub 差分与 4 跑验证见「大厅复核」：hub 的主体漂移不是 header，而是 hero orb 的 reduced-motion 动画残留；同一模块新增 `settleHubHeroCompositing` 处理它，hub 的 header 接缝仍保留（该变体里 header 也有 2429 个像素差 1 个色阶）。
 - 验证噪声：2026-11-19 首次 `npm run verify:screenshots:repro` 在宿主并发负载下失败，失败不在 blank：`screenshots:webkit` 首跑把 `after-hub-webkit.png` 写成 `99dfef398ad544f4c1f496904d9f8e015867a8827e614bfef78a3c95dc714571`（第二跑回到 `6c2856e3…`），该 hub 部分已由 Issue #341 t2 在 hub 截图前接入共享 header 接缝修复（见「大厅复核」）；`screenshots:minesweeper:scores:webkit` 第二跑把 `after-minesweeper-scores-webkit.png` 写成 `b7f08eac34dbf325f00bbbb195f9726b49b03a207acd9e17e6bf3249eb21c89d`（相对清单 3416 个像素差，rows 2853–2944，每通道最大差 1），scores 部分仍不在本条范围。`after-blank-webkit.png` 在该轮两跑均为 `cd4ed3fe…`，`after-breakout-playing-webkit.png` 本轮仍为 `27297f5f…`（未触发 #328）。宿主负载回落后用 `PREVIEW_PORT=4212 npm run verify:screenshots:repro` 重跑通过：6 个 target × 2 跑、15 个文件同时等于清单与彼此，`after-blank-webkit.png` / `after-hub-webkit.png` 均等于清单；`PREVIEW_PORT` 只改变 preview 监听端口，不进入 capture-env 指纹，也不影响像素。
-- 复现（同一构建、预览端口 4174 空闲；Chromium 在宿主、WebKit 在固定容器内各跑至少两次；WebKit 空白图按 Issue #326、hub 图按 Issue #341 t2 改为固定容器内连跑至少 4 次，并包含一次冷启动或并发负载）：
+- 复现（同一构建、固定 Playwright 容器内；Chromium 桌面 / 手机用同一条命令连续两跑；WebKit 空白图按 Issue #326、hub 图按 Issue #341 t2 连跑至少 4 次，并包含一次冷启动或并发负载）：
 
   ```sh
-  npm run screenshots
+  npm run screenshots:container -- screenshots
   npm run screenshots:container -- screenshots:webkit
   sha256sum docs/screenshots/after-blank-{desktop,mobile,webkit}.png
   ```
 
-  上述次数的运行（WebKit 至少 4 次）写出的 3 个 sha256 应完全一致，并等于已提交产物：`after-blank-desktop.png` `24c34e278b7272834077ea6696cc0b5087d87dfb20323ec796ba97c719f3fb47`、`after-blank-mobile.png` `a097836e00acfe0c9965ecde6e72b7f40b366e4bdd82b1d6af705bcbefa685ff`、`after-blank-webkit.png` `cd4ed3fea1e0a068661c8102ee0b58b0601b3a249e480d76224d22782a0e088f`；同一条 WebKit 命令写出的 `after-hub-webkit.png` 在 #341 t2 时点为 `6c2856e33a5619dc2eff5833c059608c74f03492192029515edf345b165581f4`；#252 t1 把大厅 hero 改为镇煞特色卡后，该图更新为 `cb44465556dab743c8df792aa1ea088843ac084ac07e8f644fc9c551ce33e745`（见「大厅首屏主推《镇煞》证据」）。WebKit 产物在官方 Playwright 容器（`mcr.microsoft.com/playwright:v1.64.1-noble`，与仓库的 Playwright 1.64.1 对应）内捕获，避免宿主 EGL / 字体环境差异（本机直接运行会因 `Could not create surfaceless EGL display` 失败）。
-- Before / After：旧产物 sha256 分别为 `0aa5b5d35c5c4894423f8a37fb97bddf0731206a1435a786ae3a4be01a14f0c6`、`155681ac86f01f8d7b728e2e0569b30a9fbc519565744087f7524dc54b1fb5d3`、`5274dcadc087a17f0e03e243edc4be83ab2f743d8a908e9d64943ced384230b8`；本轮 3 张图都按上述等待重新生成。旧 desktop / mobile 产物来自 t2 时期，后续任务改过页面文案与布局，因此新旧图的差异不只在 orb / trail 位置；本子任务只对当前 head 的逐字节可复现性负责，不把旧图当作像素级回归基准。`after-blank-desktop.png` 是 1440×1000 视口截图（`fullPage: false`），不是整页图，不包含页脚；`npm run screenshots`（owner 命令）仍会写出 hub 图，提交前用 `git checkout -- docs/screenshots/after-hub-*.png` 还原，保持未受影响的已提交产物不变。
+  Chromium 桌面 / 手机两跑写出的 `after-blank-desktop.png` / `after-blank-mobile.png` 必须逐字节相同，并等于上方「After」表记录的 PNG 尺寸与完整 sha256（该表由 `npm run verify:screenshots:doc-dims` 校验，是这两张图唯一的自动校验来源）；WebKit 至少 4 跑写出的 `after-blank-webkit.png` 应为 `cd4ed3fea1e0a068661c8102ee0b58b0601b3a249e480d76224d22782a0e088f`（由 `capture-sha256-manifest.json` 与 `npm run verify:screenshots:sha256` 校验）。同一条 WebKit 命令写出的 `after-hub-webkit.png` 在 #341 t2 时点为 `6c2856e33a5619dc2eff5833c059608c74f03492192029515edf345b165581f4`；#252 t1 把大厅 hero 改为镇煞特色卡后，该图更新为 `cb44465556dab743c8df792aa1ea088843ac084ac07e8f644fc9c551ce33e745`（见「大厅首屏主推《镇煞》证据」）。WebKit 产物在官方 Playwright 容器（`mcr.microsoft.com/playwright:v1.64.1-noble`，与仓库的 Playwright 1.64.1 对应）内捕获，避免宿主 EGL / 字体环境差异（本机直接运行会因 `Could not create surfaceless EGL display` 失败）。
+- 宿主命令不再是复现基准：宿主 `npm run screenshots` 使用宿主安装的 Chromium、字体与 EGL 环境，写出的字节可以不同于固定容器产物，因此不能用来重写或校验已提交的空白画布 PNG；已提交 After 图只代表各自捕获时点的构建，跨构建 / 跨宿主的像素差异按「历史 After 证据与当前构建不一致（Issue #137）」处理，不要求宿主重跑等于已提交快照。
+- 固定容器重拍（Issue #429）：2026-11-23 在固定容器内用 `npm run screenshots:container -- screenshots` 连续两跑，两跑写出的两张空白画布图逐字节相同，并与 base `7f90dcd` 的固定容器记录一致；本次提交以上述两跑 PNG 为准，尺寸与完整 sha256 只记录在上方「After」表（由 `verify:screenshots:doc-dims` 自动校验）。#429 之前的已提交 PNG 是更早构建的历史快照，不再声称等于当前构建。
+- Before / After：旧产物 sha256 分别为 `0aa5b5d35c5c4894423f8a37fb97bddf0731206a1435a786ae3a4be01a14f0c6`、`155681ac86f01f8d7b728e2e0569b30a9fbc519565744087f7524dc54b1fb5d3`、`5274dcadc087a17f0e03e243edc4be83ab2f743d8a908e9d64943ced384230b8`；本轮 3 张图都按上述等待重新生成。旧 desktop / mobile 产物来自 t2 时期，后续任务改过页面文案与布局，因此新旧图的差异不只在 orb / trail 位置；本子任务只对当前 head 的逐字节可复现性负责，不把旧图当作像素级回归基准。`after-blank-desktop.png` 是 1440×1000 视口截图（`fullPage: false`），不是整页图，不包含页脚；`npm run screenshots:container -- screenshots`（owner 命令）仍会写出 hub 图，提交前用 `git checkout -- docs/screenshots/after-hub-*.png` 还原，保持未受影响的已提交产物不变。
 - 回归护栏：`tests/unit/capture-blank-determinism.test.ts` 用 fake page 运行时覆盖 `scripts/lib/blank-settle.mjs` 的 `waitForBlankSettled`（未连续 N 次落点且 `trail` 未清零就不返回、移动会重置连续计数、超时带最后读数报错）与 `nextBlankStableStreak`，并静态钉住 `capture-screenshots.mjs` 的 `tapBlankCanvas` 内确实 `await waitForBlankSettled(page, target)`、3 个场景都走同一等待、脚本不再含 `waitForTimeout(700)`、`view.ts` 暴露 `data-trail`。删除该等待会让单测失败。Issue #326 的 header 接缝现在由通用模块与 blank 包装共同覆盖：`tests/unit/webkit-compositing-settle.test.ts` 用 jsdom 运行时测试 `settleSharedHeaderCompositing` / `repaintSharedHeader` 必须等待 `document.fonts.ready`，在两次 toggle 之间各等待配置的 commit 数，最后恢复为空值，header 缺失时抛错，并覆盖注入 `evaluate` 与自定义 `selector` / `frames` 的非 blank 编排；`tests/unit/capture-blank-determinism.test.ts` 静态钉住 `captureWebkitMobile` 中 `tapBlankCanvas` → `settleBlankHeader` → `after-blank-webkit.png` 的顺序、该接缝只出现一次且不进入 hub / Chromium 空白路径，断言 blank 模块只复用通用模块而不保留第二套 toggle / rAF 实现，并把选择器与 `src/app/app.ts` 的真实 `.site-header` 关联。Issue #341 t2 的 hub 接线由 `tests/unit/capture-hub-determinism.test.ts` 钉住：`captureWebkitMobile` 里 `settleSharedHeaderCompositing` 与 `settleHubHeroCompositing` 都必须位于 hub 加载之后、`after-hub-webkit.png` 截图之前且各出现一次（hero 动画落定最靠近截图），blank 路径的顺序保持不变，Chromium 的 `captureDesktop` / `captureMobile` 不得调用它们；jsdom 运行时用例证明 `settleHubHeroAnimations` 会先 finish 动画、等动画全部结束后才走配置的 commit 等待，动画仍在跑时抛错，复用同一 jsdom 用例证明 header / hero 缺失时捕获失败而不是静默跳过。删除调用、少一次 toggle / commit 等待、去掉恢复或跳过缺失元素都会让单测失败。
 
 ### 证据限制
