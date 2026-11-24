@@ -19,7 +19,7 @@ const LOAD_WORKFLOW_PATH = join(ROOT, '.github', 'workflows', 'capture-repro-loa
 const NIGHTLY_WORKFLOW_PATH = join(ROOT, '.github', 'workflows', 'capture-repro.yml');
 const LOAD_SECTION_HEADING = '## 并发负载截图复现（Issue #352）';
 const MANIFEST_UNCHANGED_COMMAND =
-  'git diff --exit-code -- docs/screenshots/capture-sha256-manifest.json';
+  "git diff --exit-code -- 'docs/screenshots/capture-sha256-manifest*.json'";
 
 interface WorkflowInput {
   default?: string;

@@ -45,7 +45,7 @@ import {
  * it only runs the existing capture scripts (which write their normal evidence
  * paths), and a mismatch is reported (with expected / actual sha256, both
  * logs, the environment fingerprint and the re-capture steps) instead of being
- * accepted. The scheduled workflow uploads the logs and asserts the manifests
+ * accepted. The scheduled workflows upload the logs and assert the manifests
  * are still byte-identical.
  */
 

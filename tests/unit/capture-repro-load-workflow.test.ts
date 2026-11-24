@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -12,7 +12,9 @@ import {
 } from '../../scripts/lib/repro-load-inputs.mjs';
 import { deriveReproPlans } from '../../scripts/lib/screenshot-repro.mjs';
 import {
+  DEFAULT_MANIFEST_DIR,
   DEFAULT_MANIFEST_PATH,
+  loadSha256Manifests,
   parseSha256Manifest,
 } from '../../scripts/lib/screenshot-sha256.mjs';
 
@@ -24,6 +26,49 @@ const NIGHTLY_SOURCE = readFileSync(NIGHTLY_PATH, 'utf8');
 const MANIFEST_PATH = join(ROOT, DEFAULT_MANIFEST_PATH);
 const PACKAGE_PATH = join(ROOT, 'package.json');
 const INPUT_VALIDATOR = 'node scripts/check-repro-load-inputs.mjs';
+/** Every manifest the repro entry discovers, including the target splits. */
+const MANIFESTS = loadSha256Manifests({ dir: join(ROOT, DEFAULT_MANIFEST_DIR) });
+/** The read-only assertion both repro workflows run after the capture step. */
+const MANIFEST_UNCHANGED_COMMAND =
+  "git diff --exit-code -- 'docs/screenshots/capture-sha256-manifest*.json'";
+
+/** The pathspecs after `--` in one git command, with their quotes removed. */
+function commandPathspecs(command: string): string[] {
+  const match = /\s--\s+(.+)$/.exec(command.trim());
+  if (!match?.[1]) {
+    throw new Error(
+      `expected a git command with a pathspec, got ${JSON.stringify(command)}`,
+    );
+  }
+  return match[1]
+    .trim()
+    .split(/\s+/)
+    .map((pathspec) => pathspec.replace(/^['"]|['"]$/g, ''));
+}
+
+/** Match one git pathspec glob (`*` / `?`) against a repository-relative path. */
+function pathspecMatches(pathspec: string, path: string): boolean {
+  if (pathspec === path) {
+    return true;
+  }
+  const source = [...pathspec]
+    .map((char) => {
+      if (char === '*') {
+        return '.*';
+      }
+      if (char === '?') {
+        return '.';
+      }
+      return /[.*+?^${}()|[\]\\]/.test(char) ? `\\${char}` : char;
+    })
+    .join('');
+  return new RegExp(`^${source}$`).test(path);
+}
+
+/** Whether the step's pathspecs cover one discovered manifest path. */
+function pathspecsCover(path: string, pathspecs: string[]): boolean {
+  return pathspecs.some((pathspec) => pathspecMatches(pathspec, path));
+}
 
 interface WorkflowStep {
   id?: string;
@@ -226,7 +271,7 @@ describe('capture-repro-load workflow (Issue #352)', () => {
     expect(captureIndex).toBeGreaterThan(installIndex);
   });
 
-  it('uploads both run logs and checks the manifest even after a failure', () => {
+  it('uploads both run logs and checks every manifest even after a failure', () => {
     const upload = requireStep(
       (step) => (step.uses ?? '').startsWith('actions/upload-artifact@'),
       'an artifact upload',
@@ -237,12 +282,29 @@ describe('capture-repro-load workflow (Issue #352)', () => {
     expect(upload.with?.path).toContain('test-results/capture-container/');
 
     const manifestCheck = requireStep(
-      (step) =>
-        (step.run ?? '').trim() ===
-        'git diff --exit-code -- docs/screenshots/capture-sha256-manifest.json',
-      'a manifest-unchanged assertion',
+      (step) => (step.run ?? '').trim() === MANIFEST_UNCHANGED_COMMAND,
+      'a manifests-unchanged assertion',
     );
     expect(manifestCheck.if).toBe('always()');
+
+    // The load gate accepts manifest targets, so its read-only step must cover
+    // every discovered manifest (WebKit + desktop + mobile), not only WebKit.
+    const manifestPaths = MANIFESTS.map(({ path }) =>
+      relative(ROOT, path).split('\\').join('/'),
+    );
+    for (const required of [
+      DEFAULT_MANIFEST_PATH,
+      'docs/screenshots/capture-sha256-manifest-desktop.json',
+      'docs/screenshots/capture-sha256-manifest-mobile.json',
+    ]) {
+      expect(manifestPaths).toContain(required);
+    }
+
+    const pathspecs = commandPathspecs(manifestCheck.run ?? '');
+    expect(pathspecs.length).toBeGreaterThan(0);
+    for (const path of manifestPaths) {
+      expect(pathspecsCover(path, pathspecs)).toBe(true);
+    }
 
     for (const step of steps) {
       const command = (step.run ?? '').trim();
