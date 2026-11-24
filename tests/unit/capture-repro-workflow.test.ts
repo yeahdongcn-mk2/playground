@@ -188,7 +188,7 @@ describe('capture-repro workflow', () => {
     expect(job?.container).toBeUndefined();
   });
 
-  it('keeps a bounded timeout for fourteen container captures', () => {
+  it('keeps a bounded timeout for twelve container captures', () => {
     expect(job?.['timeout-minutes']).toBe(60);
   });
 
