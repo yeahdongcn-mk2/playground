@@ -57,8 +57,8 @@
 - `boss-chart.ts`：134 行，由 #407 拆出。其中 `boss-chart.ts:39-97` 的 59 行接口声明若保留独立文件，应从 `bosses.ts` 的 300 行估算中移出，不能重复计入：完整特性为 8 个生产文件、约 2,229 行（2,154 + 134 − 59）；2,288 行（直接相加）只作为未扣除类型时的保守上限。两种算法都超过本文 2,200 行上沿，需按结论中的 L 条件重新复核。
 - `boss-chart-adapter.ts`：90 行，由 #449 t2（#454）落地，#431 t2 收敛时保留。它是 `bosses.ts` 与引擎 `BossChart` 契约之间唯一的单位换算层：`telegraphMs` / `parryWindowMs` 原样传递，`activeMs` 作为完整普通判定带宽度，`bosses.ts` 的 7–13 展示点数原样传递（引擎每次未弹反固定只记 1 hit，damage 不参与中招预算）；源表没有 `recoveryMs` / `firstTelegraphMs`，引擎按 0 ms 恢复、第一招自己的 telegraph 开场。真实 3×2 引擎集成用例由 #431 t2 补在 `engine.test.ts`，覆盖 1-1 → 3-2、逐招判定窗与阶段推进。该文件只被 `engine.test.ts` / `boss-chart-adapter.test.ts` 引用，按本文「仅测试引用，不计」口径不计入当前生产规模。
 - `zhen-sha-view.ts`：676 → 790 行，由 #443 的固定步长调试接缝与 #249 t2 的朱砂印 / 字标 / 金边状态切换新增。
-- `zhen-sha.css`：254 → 583 行，由 #406 的 4+1 色板与黑宣纸 / 飞白边缘、#249 t2 的朱砂印 / 字标与金边 `clip-path` 多边形新增（金边几何烘进 CSS，不占 JS 体积）。
-- 当前生产规模（实测于 #428 t0 分支合并 `main` `68f376c` 后的 HEAD）：8 个文件 / 3,020 行（`engine.ts` 678 + `index.ts` 29 + `settlement.ts` 518 + `debug.ts` 140 + `bosses.ts` 148 + `boss-chart.ts` 134 + `zhen-sha-view.ts` 790 + `zhen-sha.css` 583），已超出 M 区间 2,200 行上沿 820 行。当前生产规模由独立滚动快照校验跟踪，超限重估由跟进单 [#417](https://github.com/yeahdongcn-mk2/playground/issues/417) 跟踪。
+- `zhen-sha.css`：254 → 684 行，由 #406 的 4+1 色板与黑宣纸 / 飞白边缘、#249 t2 的朱砂印 / 字标与金边 `clip-path` 多边形，以及 #412 的循环墨雾 / 边缘抖动 / 扫描线动画新增（金边几何烘进 CSS，不占 JS 体积）。
+- 当前生产规模（实测于本 PR HEAD，合并 `main` `900423e` 后）：8 个文件 / 3,121 行（`engine.ts` 678 + `index.ts` 29 + `settlement.ts` 518 + `debug.ts` 140 + `bosses.ts` 148 + `boss-chart.ts` 134 + `zhen-sha-view.ts` 790 + `zhen-sha.css` 684），已超出 M 区间 2,200 行上沿 921 行。当前生产规模由独立滚动快照校验跟踪，超限重估由跟进单 [#417](https://github.com/yeahdongcn-mk2/playground/issues/417) 跟踪。
 
 ### 新概念（2 个）
 
@@ -77,7 +77,7 @@
 - 视图与手势：`zhen-sha-view.test.ts`（jsdom）覆盖轻点 / 长按 / 松手到引擎输入的映射、HUD 随快照更新、结算与重开、pointer capture 丢失、destroy / abort 的监听与 rAF 清理、页面隐藏暂停、音效事件映射。
 - 入口与路由：懒加载入口不把 view / engine 拉进 shell 包；`#/games/zhen-sha` 可从大厅进入；320×640 首屏三手势提示由 `tests/e2e/zhen-sha.spec.ts` 断言。
 - 构建与预算：`npm run typecheck`、`npm run lint`、`npm run test:unit`、`npm run build`、`npm run check:budget` 可重复执行。
-- 风格层可自动化的部分：核心色数量、无外部图片 / 字体 / URL 与黑宣纸 / 飞白规则由 `style.test.ts` 守护；`prefers-reduced-motion` 分支仍未实现、未测，由后续子任务补。
+- 风格层可自动化的部分：核心色数量、无外部图片 / 字体 / URL 与黑宣纸 / 飞白规则由 `style.test.ts` 守护；循环墨雾 / 边缘抖动 / 扫描线及其 `prefers-reduced-motion` 关闭逻辑由 `motion.test.ts` 守护，静态纸底与金色对比在 reduced-motion 下保留。
 - 本评估文档自身由 `kill-gate-doc.test.ts` 校验：本表冻结于 43c9ab1，当前生产规模由独立滚动快照校验跟踪；文档逐文件表、生产文件数 / 生产行数与结论段原型数字必须与冻结常量一致，结论、#261、试玩状态与「未新增系统」陈述必须存在。
 
 ### 不可自动验收面
@@ -86,7 +86,7 @@
 - **手感**：60–120ms 顿帧、棍影、音效与触感是否让「按下去的那一下」成立；截图和 DOM 断言只能证明状态与像素存在，不能证明手感。
 - **风格可读性**：水墨 / 武侠 / 红金气质是否被未看设计说明的人识别，是否有人觉得像卡牌 / 表格；#249 另有人工指认。
 - **学习成本**：60 秒内能否无需解释学会三种手势；只能由试玩观察。
-- **真实设备触感与低端机性能**：Playwright 设备模拟能覆盖布局与事件路径，但不能替代真实手机上的触感、延迟与帧率感受。
+- **真实设备触感与低端机性能**：Playwright 设备模拟能覆盖布局与事件路径，但不能替代真实手机上的触感、延迟与帧率感受；循环墨雾 / 扫描线在低端机上的实际重绘开销也只能真机验证。
 
 ### 未新增的系统
 
