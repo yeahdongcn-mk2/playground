@@ -1026,7 +1026,6 @@ export async function runScreenshotRepro({
   verifyLog = (options) => spawnSha256Verifier({ ...options, spawnSync: spawnSyncVerifier }),
 } = {}) {
   const manifests = loadReproManifests({ manifestPath, manifestDir, readText });
-  const manifestPaths = manifests.map((entry) => entry.path);
 
   const environmentProblems = [];
   for (const { path, manifest } of manifests) {
@@ -1043,6 +1042,16 @@ export async function runScreenshotRepro({
   }
 
   const plans = selectReproPlans(deriveReproPlansFromManifests(manifests), targets);
+  // A `--target` subset only runs the commands of the selected plans, so the
+  // reports and the result must name just the manifests those plans cover.
+  // Keep discovery order instead of plan order: one command may draw captures
+  // from several manifests, and a second plan may start in an earlier one.
+  const coveredManifestPaths = new Set(
+    plans.flatMap((plan) => plan.captures.map((capture) => capture.manifestPath)),
+  );
+  const manifestPaths = manifests
+    .map((entry) => entry.path)
+    .filter((path) => coveredManifestPaths.has(path));
   const runsPerTarget = normalizeRunCount(requestedRuns);
   mkdir(logDir, { recursive: true });
 

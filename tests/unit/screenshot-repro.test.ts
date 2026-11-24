@@ -198,6 +198,50 @@ function multiManifestFixture(): MultiManifestFixture {
   return { root, dir, logDir, desktopManifestPath, mobileManifestPath };
 }
 
+interface TargetManifestFixture {
+  root: string;
+  dir: string;
+  logDir: string;
+  webkitManifestPath: string;
+  desktopManifestPath: string;
+  mobileManifestPath: string;
+}
+
+/**
+ * Three target-split manifests with one command each, so a `--target` subset
+ * leaves manifests that the run never covered.
+ */
+function targetManifestFixture(): TargetManifestFixture {
+  const root = mkdtempSync(join(tmpdir(), 'screenshot-repro-targets-'));
+  tempDirs.push(root);
+  const dir = join(root, 'docs', 'screenshots');
+  const logDir = join(root, 'test-results', 'screenshot-repro');
+  mkdirSync(dir, { recursive: true });
+  const webkitManifestPath = join(dir, 'capture-sha256-manifest-webkit.json');
+  const desktopManifestPath = join(dir, 'capture-sha256-manifest-desktop.json');
+  const mobileManifestPath = join(dir, 'capture-sha256-manifest-mobile.json');
+  writeFileSync(
+    webkitManifestPath,
+    `${JSON.stringify(manifestFor([CAPTURES[0]!], { target: 'webkit', dpr: 2 }), null, 2)}\n`,
+  );
+  writeFileSync(
+    desktopManifestPath,
+    `${JSON.stringify(manifestFor([BLANK_CAPTURES[0]!], { target: 'desktop', dpr: 1 }), null, 2)}\n`,
+  );
+  writeFileSync(
+    mobileManifestPath,
+    `${JSON.stringify(manifestFor([BLANK_CAPTURES[1]!], { target: 'mobile', dpr: 2 }), null, 2)}\n`,
+  );
+  return {
+    root,
+    dir,
+    logDir,
+    webkitManifestPath,
+    desktopManifestPath,
+    mobileManifestPath,
+  };
+}
+
 /**
  * Put a fake `npm` executable on PATH. It prints to both streams and exits
  * with `code`, so the real spawn path can be exercised without Docker.
@@ -695,6 +739,52 @@ describe('screenshot repro two-run check', () => {
     expect(report).toContain(`run 1 sha256: ${sha256('blank-mobile-v1')}`);
     expect(report).toContain(`run 2 sha256: ${sha256('blank-mobile-v2')}`);
     expect(report).toContain(CHROMIUM_COMMAND);
+  });
+
+  it('reports only the manifests covered by a --target subset', async () => {
+    const setup = targetManifestFixture();
+    const result = await runScreenshotRepro({
+      dir: setup.dir,
+      manifestDir: setup.dir,
+      logDir: setup.logDir,
+      targets: ['screenshots:webkit'],
+      runCapture: fakeRunner({ dir: setup.dir, captures: [CAPTURES[0]!] }),
+      verifyLog: verifyOk,
+    });
+
+    expect(result.ok).toBe(true);
+    // The other two manifests are still discovered, but the run never covers
+    // their commands, so naming them would point the reader at untouched files.
+    expect(result.manifestPaths).toEqual([setup.webkitManifestPath]);
+    expect(result.manifestPath).toBe(setup.webkitManifestPath);
+    expect(result.report).toContain(`manifest: ${setup.webkitManifestPath}`);
+    expect(result.report).not.toContain(setup.desktopManifestPath);
+    expect(result.report).not.toContain(setup.mobileManifestPath);
+  });
+
+  it('lists only the covered manifests in the --target recapture step', async () => {
+    const setup = targetManifestFixture();
+    const result = await runScreenshotRepro({
+      dir: setup.dir,
+      manifestDir: setup.dir,
+      logDir: setup.logDir,
+      targets: ['screenshots:webkit'],
+      runCapture: fakeRunner({
+        dir: setup.dir,
+        captures: [CAPTURES[0]!],
+        writes: { 'after-blank-webkit.png': { 2: 'blank-v2' } },
+      }),
+      verifyLog: verifyOk,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.manifestPaths).toEqual([setup.webkitManifestPath]);
+    const report = result.report;
+    expect(report).toContain(
+      `update the owning manifest(s) (${setup.webkitManifestPath}) with sha256`,
+    );
+    expect(report).not.toContain(setup.desktopManifestPath);
+    expect(report).not.toContain(setup.mobileManifestPath);
   });
 
   it('fails with expected / actual sha256, both logs, fingerprint and recapture steps on drift', async () => {
@@ -2076,6 +2166,28 @@ describe('verify-screenshot-repro CLI', () => {
     expect(code).toBe(2);
     expect(log.lines.join('\n')).toContain('screenshot repro could not run');
     expect(log.lines.join('\n')).toContain('duplicate capture file');
+  });
+
+  it('fails closed with exit 2 when no manifest is discovered', async () => {
+    // The default discovery mode is the nightly job's only safety net: an empty
+    // docs/screenshots must never look like "0 targets x 0 files" success. Use
+    // the real runner (no runRepro stub) so this covers the discovery guard.
+    const root = mkdtempSync(join(tmpdir(), 'screenshot-repro-empty-'));
+    tempDirs.push(root);
+    mkdirSync(join(root, 'docs', 'screenshots'), { recursive: true });
+
+    const log = logger();
+    const code = await main([], {
+      env: { GITHUB_STEP_SUMMARY: '' },
+      logger: log,
+      appendFile: appendFileSync,
+      repoRoot: root,
+    });
+
+    expect(code).toBe(2);
+    const output = log.lines.join('\n');
+    expect(output).toContain('screenshot repro could not run');
+    expect(output).toContain('no capture-sha256-manifest*.json');
   });
 
   it('returns 0 and prints usage for --help', async () => {
