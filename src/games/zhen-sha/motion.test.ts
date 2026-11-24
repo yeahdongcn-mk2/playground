@@ -62,10 +62,57 @@ function keyframes(name: string): string {
   return blockAfter(new RegExp(`@keyframes\\s+${name}\\s*\\{`));
 }
 
+/** The media feature that turns the decorative loops off. */
+const REDUCED_MOTION_FEATURE = /prefers-reduced-motion\s*:\s*reduce/i;
+
+/** The part of a media prelude outside any parenthesised feature. */
+function topLevelMediaText(prelude: string): string {
+  let depth = 0;
+  let topLevel = '';
+  for (const char of prelude.toLowerCase()) {
+    if (char === '(') {
+      depth += 1;
+    } else if (char === ')') {
+      depth = Math.max(0, depth - 1);
+    } else if (depth === 0) {
+      topLevel += char;
+    }
+  }
+  return topLevel;
+}
+
+/**
+ * Whether a media prelude is a positive `prefers-reduced-motion: reduce`
+ * query. A top-level `not (...)`, `... or (...)` or comma-separated query list
+ * (an implicit `or`) changes who the block applies to and must not be mistaken
+ * for the reduce off switch: `not (...)` is active when the user did *not* ask
+ * for reduced motion, while `... or (...)` widens the block to every user.
+ * Nested conditions inside `and (...)` stay accepted because the block still
+ * only applies to reduce users. The equivalent `screen and (...)` write for
+ * this screen-only app counts as positive.
+ */
+function isReducedMotionPrelude(prelude: string): boolean {
+  const topLevel = topLevelMediaText(prelude);
+  if (/\bnot\b/.test(topLevel) || /\bor\b/.test(topLevel) || topLevel.includes(',')) {
+    return false;
+  }
+  return REDUCED_MOTION_FEATURE.test(prelude);
+}
+
+/** Every media block that mentions `prefers-reduced-motion: reduce`. */
+function reducedMotionMentions(): {
+  prelude: string;
+  body: string;
+  start: number;
+  end: number;
+}[] {
+  return mediaBlocks().filter(({ prelude }) => REDUCED_MOTION_FEATURE.test(prelude));
+}
+
 /**
  * Every media block whose condition asks for `prefers-reduced-motion: reduce`.
- * `@media screen and (...)` is an equivalent write for this screen-only app,
- * so match the feature semantically instead of one canonical prelude.
+ * A `not` / `or` variant is not the off switch this test is about, so it is
+ * excluded here and then rejected explicitly against the mentions list.
  */
 function reducedMotionBlocks(): {
   prelude: string;
@@ -73,9 +120,7 @@ function reducedMotionBlocks(): {
   start: number;
   end: number;
 }[] {
-  return mediaBlocks().filter(({ prelude }) =>
-    compactPrelude(prelude).includes('prefers-reduced-motion:reduce'),
-  );
+  return reducedMotionMentions().filter(({ prelude }) => isReducedMotionPrelude(prelude));
 }
 
 /** The single `prefers-reduced-motion: reduce` block start, body and end. */
@@ -291,7 +336,217 @@ function topLevelItemCount(value: string): number {
   return topLevelItems(value).length;
 }
 
+/** The shortest loop duration that still reads as motion rather than a blur. */
+const MIN_LOOP_DURATION_MS = 1000;
+
+/**
+ * Every CSS time token in a value, normalised to milliseconds. The lookbehind
+ * keeps a digit inside an identifier out, and exponent numbers such as `1e3ms`
+ * stay one token instead of being read as `3ms`.
+ */
+function timeValuesIn(value: string): number[] {
+  return [
+    ...value.matchAll(
+      /(?<![\w.-])(-?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+-]?\d+)?)(ms|s)(?![\w-])/gi,
+    ),
+  ].map((match) => {
+    const amount = Number.parseFloat(match[1] ?? '0');
+    return match[2]?.toLowerCase() === 's' ? amount * 1000 : amount;
+  });
+}
+
+/**
+ * Assert one `animation` shorthand actually runs: every item must carry a
+ * duration of at least {@link MIN_LOOP_DURATION_MS}, must not contain the
+ * `paused` play-state keyword, and must not postpone the loop with a positive
+ * delay. Merely finding `infinite` would still pass `0s`, `paused` or a
+ * 999 s delay, where the loops become invisible even in the normal
+ * (no-preference) case.
+ */
+function expectRunningAnimation(value: string, label: string): void {
+  const items = topLevelItems(value);
+  expect(items.length, `${label} 至少应有一条动画`).toBeGreaterThan(0);
+  for (const item of items) {
+    expect(item, `${label} 不得把 play-state 写成 paused`).not.toMatch(
+      /(?:^|\s)paused(?:\s|$)/i,
+    );
+    // The first time value is the duration; a shorthand without one falls
+    // back to 0s, so it must be declared explicitly and stay visible. The
+    // second time value is the delay, which must not park the loop offscreen.
+    const times = timeValuesIn(item);
+    expect(times.length, `${label} 必须显式声明 duration`).toBeGreaterThan(0);
+    expect(times[0], `${label} 的 duration 必须至少 ${MIN_LOOP_DURATION_MS}ms`).toBeGreaterThanOrEqual(
+      MIN_LOOP_DURATION_MS,
+    );
+    for (const delay of times.slice(1)) {
+      expect(delay, `${label} 不得用正延迟推迟循环`).toBeLessThanOrEqual(0);
+    }
+  }
+}
+
+/**
+ * Reject longhands that would silently stop a loop the `animation` shorthand
+ * just started: `animation-play-state: paused`, `animation-duration: 0s`,
+ * `animation-name: none`, a finite `animation-iteration-count` and a positive
+ * `animation-delay`. Harmless explicit equivalents (`running`, a non-zero
+ * duration list, `infinite`, zero or negative delay) pass.
+ */
+function expectNoStoppingAnimationOverrides(
+  selector: string,
+  declarations: { property: string; value: string }[],
+): void {
+  for (const { property, value } of declarations) {
+    const unprefixed = unprefixedAnimationProperty(property);
+    if (unprefixed === 'animation-play-state') {
+      for (const item of topLevelItems(value)) {
+        expect(
+          item.toLowerCase(),
+          `${selector} 的 animation-play-state 不得暂停`,
+        ).toBe('running');
+      }
+      continue;
+    }
+    if (unprefixed === 'animation-duration') {
+      const times = timeValuesIn(value);
+      expect(times.length, `${selector} 的 animation-duration 必须有时长`).toBeGreaterThan(0);
+      for (const time of times) {
+        expect(
+          time,
+          `${selector} 的 animation-duration 必须至少 ${MIN_LOOP_DURATION_MS}ms`,
+        ).toBeGreaterThanOrEqual(MIN_LOOP_DURATION_MS);
+      }
+      continue;
+    }
+    if (unprefixed === 'animation-name') {
+      for (const item of topLevelItems(value)) {
+        expect(item.toLowerCase(), `${selector} 的 animation-name 不得置为 none`).not.toBe('none');
+      }
+      continue;
+    }
+    if (unprefixed === 'animation-iteration-count') {
+      for (const item of topLevelItems(value)) {
+        expect(
+          item.toLowerCase(),
+          `${selector} 的 animation-iteration-count 必须保持 infinite`,
+        ).toBe('infinite');
+      }
+      continue;
+    }
+    if (unprefixed === 'animation-delay') {
+      const times = timeValuesIn(value);
+      expect(times.length, `${selector} 的 animation-delay 必须有时长`).toBeGreaterThan(0);
+      for (const time of times) {
+        expect(time, `${selector} 的 animation-delay 不得用正延迟推迟循环`).toBeLessThanOrEqual(0);
+      }
+    }
+  }
+}
+
 describe('zhen-sha procedural motion layer', () => {
+  it('classifies reduced-motion preludes by their effective media condition', () => {
+    // Positive reduce queries are accepted, including the equivalent
+    // `screen and (...)` write this screen-only app may use.
+    expect(isReducedMotionPrelude('(prefers-reduced-motion: reduce)'), '基础 reduce 查询').toBe(
+      true,
+    );
+    expect(
+      isReducedMotionPrelude('screen and (prefers-reduced-motion: reduce)'),
+      'screen and (...) 等价写法',
+    ).toBe(true);
+    expect(
+      isReducedMotionPrelude('(prefers-reduced-motion: reduce) and (min-width: 0px)'),
+      '与其它正向条件相与仍是 reduce 查询',
+    ).toBe(true);
+    expect(
+      isReducedMotionPrelude('(prefers-reduced-motion: reduce) and (not (prefers-contrast: more))'),
+      '括号内的嵌套 not 不改变外层 reduce 生效人群',
+    ).toBe(true);
+    expect(
+      isReducedMotionPrelude(
+        '(prefers-reduced-motion: reduce) and ((min-width: 0px) or (min-height: 0px))',
+      ),
+      '括号内的嵌套 or 不改变外层 reduce 生效人群',
+    ).toBe(true);
+
+    // A top-level `not (...)`, `... or (...)` or comma list changes who the
+    // block applies to, so none of them may serve as the reduce off switch.
+    expect(
+      isReducedMotionPrelude('not (prefers-reduced-motion: reduce)'),
+      '顶层 not 变体',
+    ).toBe(false);
+    expect(
+      isReducedMotionPrelude('(prefers-reduced-motion: reduce) or (min-width: 0px)'),
+      '顶层 or 变体',
+    ).toBe(false);
+    expect(
+      isReducedMotionPrelude('(prefers-reduced-motion: reduce), (min-width: 0px)'),
+      '逗号媒体查询列表等价于 or',
+    ).toBe(false);
+    expect(
+      isReducedMotionPrelude('not (prefers-reduced-motion: no-preference)'),
+      '顶层 not 仍视为非正向查询',
+    ).toBe(false);
+    expect(
+      isReducedMotionPrelude('(prefers-reduced-motion: no-preference)'),
+      'no-preference 不是关闭条件',
+    ).toBe(false);
+    expect(isReducedMotionPrelude('print'), '没有 reduce 条件的媒体类型').toBe(false);
+  });
+
+  it('rejects zero-duration and paused animation declarations', () => {
+    // Guard the guard: the CSS-driven assertions below must really fail when
+    // a loop is frozen through a shorthand, a longhand or a tiny duration.
+    expect(() =>
+      expectRunningAnimation('zhen-sha-ink-mist 38s ease-in-out infinite', '纸面'),
+    ).not.toThrow();
+    expect(() =>
+      expectRunningAnimation('zhen-sha-ink-mist 1000ms ease-in-out infinite', '纸面'),
+    ).not.toThrow();
+    for (const [value, pattern] of [
+      ['zhen-sha-ink-mist 0s ease-in-out infinite', /duration/],
+      ['zhen-sha-ink-mist 0.001s ease-in-out infinite', /duration/],
+      ['zhen-sha-ink-mist ease-in-out infinite', /duration/],
+      ['zhen-sha-ink-mist 38s ease-in-out infinite paused', /paused/],
+      ['zhen-sha-ink-mist 38s 999s ease-in-out infinite', /延迟/],
+    ] as const) {
+      expect(() => expectRunningAnimation(value, '纸面')).toThrow(pattern);
+    }
+
+    expect(() =>
+      expectNoStoppingAnimationOverrides('纸面', [
+        { property: 'animation-play-state', value: 'paused' },
+      ]),
+    ).toThrow(/play-state/);
+    expect(() =>
+      expectNoStoppingAnimationOverrides('纸面', [
+        { property: 'animation-duration', value: '38s, 0s' },
+      ]),
+    ).toThrow(/duration/);
+    expect(() =>
+      expectNoStoppingAnimationOverrides('纸面', [
+        { property: 'animation-name', value: 'none' },
+      ]),
+    ).toThrow(/animation-name/);
+    expect(() =>
+      expectNoStoppingAnimationOverrides('纸面', [
+        { property: 'animation-iteration-count', value: '1' },
+      ]),
+    ).toThrow(/iteration-count/);
+    expect(() =>
+      expectNoStoppingAnimationOverrides('纸面', [
+        { property: 'animation-delay', value: '999s' },
+      ]),
+    ).toThrow(/delay/);
+    expect(() =>
+      expectNoStoppingAnimationOverrides('纸面', [
+        { property: '-webkit-animation-play-state', value: 'running' },
+        { property: 'animation-duration', value: '38s, 9s' },
+        { property: 'animation-iteration-count', value: 'infinite' },
+        { property: 'animation-delay', value: '0s' },
+      ]),
+    ).not.toThrow();
+  });
+
   it('declares looping mist, scanline and jitter keyframes', () => {
     const mist = keyframes('zhen-sha-ink-mist');
     expect(mist).toMatch(/transform:\s*translate3d\(/);
@@ -380,13 +635,32 @@ describe('zhen-sha procedural motion layer', () => {
         new RegExp(`(?:^|\\s)${name}(?:\\s|$)`).test(animation),
       );
       expect(loops, `${name} 应恰好是一条纸面循环`).toHaveLength(1);
-      expect(loops[0], `${name} 循环必须带 infinite`).toMatch(/\binfinite\b/);
+      expect(loops[0], `${name} 循环必须带 infinite`).toMatch(/\binfinite\b/i);
+      expectRunningAnimation(loops[0] ?? '', `${name} 循环`);
+    }
+    expectNoStoppingAnimationOverrides(
+      '.zhen-sha-stage::before',
+      ruleBodies('.zhen-sha-stage::before').flatMap(declarationsIn),
+    );
+    // `declarationsIn` cannot see escaped property names such as
+    // `animation-play\2d state`, so require every token in the running rule
+    // bodies to parse as a declaration too.
+    for (const body of ruleBodies('.zhen-sha-stage::before')) {
+      expect(undeclaredTextIn(body), '::before 的声明应能被完整解析').toBe('');
     }
 
     const edge = ruleBody('.zhen-sha-stage::after');
     const edgeAnimation = declarationValue(edge, 'animation');
     expect(edgeAnimation, '边缘层应跑抖动循环').toMatch(/zhen-sha-jitter\b/);
-    expect(edgeAnimation, '边缘抖动必须带 infinite').toMatch(/\binfinite\b/);
+    expect(edgeAnimation, '边缘抖动必须带 infinite').toMatch(/\binfinite\b/i);
+    expectRunningAnimation(edgeAnimation, '边缘抖动循环');
+    expectNoStoppingAnimationOverrides(
+      '.zhen-sha-stage::after',
+      ruleBodies('.zhen-sha-stage::after').flatMap(declarationsIn),
+    );
+    for (const body of ruleBodies('.zhen-sha-stage::after')) {
+      expect(undeclaredTextIn(body), '::after 的声明应能被完整解析').toBe('');
+    }
 
     // Content, HUD, hints and the settlement overlay stay free of looping
     // animation, including the judgement feedback that must survive reduced
@@ -483,7 +757,14 @@ describe('zhen-sha procedural motion layer', () => {
     // Exactly one media block may request `prefers-reduced-motion: reduce`.
     // The semantic match keeps a second reduce block out while accepting the
     // equivalent `@media screen and (...)` prelude for this screen-only app
-    // instead of pinning one canonical spelling.
+    // instead of pinning one canonical spelling. Every block that mentions the
+    // feature must be a positive reduce query: `not (...)` applies to users
+    // who did NOT ask for reduced motion, and `... or (...)` applies to
+    // everyone, so neither may ride along as the off switch.
+    expect(
+      reducedMotionMentions().map(({ prelude }) => compactPrelude(prelude)),
+      'prefers-reduced-motion: reduce 只允许正向查询（not / or 变体会改变生效人群）',
+    ).toEqual(reducedMotionBlocks().map(({ prelude }) => compactPrelude(prelude)));
     expect(
       reducedMotionBlocks().map(({ prelude }) => compactPrelude(prelude)),
       'prefers-reduced-motion: reduce 媒体块只能有一条',
