@@ -306,11 +306,16 @@ function required<T extends Element>(root: ParentNode, selector: string): T {
 }
 
 function mountView(signal: AbortSignal = new AbortController().signal): MountedView {
+  const root = document.createElement('div');
+  document.body.append(root);
+  return mountAt(root, signal);
+}
+
+/** Mount into a root that is already attached to the document. */
+function mountAt(root: HTMLElement, signal: AbortSignal): MountedView {
   if (!activeContext) {
     throw new Error('the canvas stub was not installed');
   }
-  const root = document.createElement('div');
-  document.body.append(root);
   const handle = mountZhenSha(root, createServices(), signal);
   const view: MountedView = {
     root,
@@ -407,6 +412,9 @@ afterEach(() => {
   mounted?.handle.destroy();
   mounted?.root.remove();
   mounted = null;
+  // Settlement modal tests mount inside a page-shell fixture; clear it so the
+  // next test starts with an empty body.
+  document.body.replaceChildren();
   delete (window as unknown as ZhenShaDebugWindow).__playground;
   vi.restoreAllMocks();
   window.location.hash = '';
@@ -415,6 +423,73 @@ afterEach(() => {
   restoreProperty(HTMLCanvasElement.prototype, 'getContext', ORIGINAL_GET_CONTEXT);
   restoreProperty(window, 'PointerEvent', ORIGINAL_POINTER_EVENT);
 });
+
+/** The same debug replay the seam test uses: three perfects, charge, strike. */
+const WIN_DEBUG_HASH =
+  '#/games/zhen-sha?debug=1&seed=7&inputs=block@180,block@360,block@540,charge@541,strike@542';
+
+interface SettlementShell {
+  readonly view: HTMLElement;
+  readonly header: HTMLElement;
+  readonly footer: HTMLElement;
+  readonly skipLink: HTMLAnchorElement;
+  readonly navLink: HTMLAnchorElement;
+}
+
+/**
+ * Mount the game inside a stand-in for the app shell so the modal's background
+ * (`skip-link`, `header`, `footer`) is present. This is a copy kept in sync
+ * with App's `SHELL_HTML`, not a rendering of it, so extend this fixture when
+ * that template gains focusable regions or changes their nesting.
+ */
+function installSettlementShell(): SettlementShell {
+  document.body.innerHTML = `
+    <div id="app">
+      <a class="skip-link" href="#/">跳到主要内容</a>
+      <header class="site-header">
+        <a class="brand" href="#/">Playground Arcade</a>
+        <nav class="site-nav" aria-label="站点导航">
+          <a class="nav-link" id="nav-link" href="#/">大厅</a>
+          <button class="icon-button" type="button" id="sound-toggle" aria-label="关闭音效">音效</button>
+        </nav>
+      </header>
+      <main id="view" class="view" tabindex="-1"></main>
+      <footer class="site-footer">
+        <a id="footer-link" href="https://github.com/yeahdongcn-mk2/playground">GitHub</a>
+      </footer>
+    </div>
+  `;
+  return {
+    view: required<HTMLElement>(document.body, '#view'),
+    header: required<HTMLElement>(document.body, '.site-header'),
+    footer: required<HTMLElement>(document.body, '.site-footer'),
+    skipLink: required<HTMLAnchorElement>(document.body, '.skip-link'),
+    navLink: required<HTMLAnchorElement>(document.body, '#nav-link'),
+  };
+}
+
+function mountInShell(
+  shell: SettlementShell,
+  signal: AbortSignal = new AbortController().signal,
+): MountedView {
+  const root = document.createElement('div');
+  root.className = 'game-mount';
+  shell.view.append(root);
+  return mountAt(root, signal);
+}
+
+function pressTab(shiftKey = false): KeyboardEvent {
+  const target =
+    document.activeElement instanceof HTMLElement ? document.activeElement : document.body;
+  const event = new KeyboardEvent('keydown', {
+    key: 'Tab',
+    shiftKey,
+    bubbles: true,
+    cancelable: true,
+  });
+  target.dispatchEvent(event);
+  return event;
+}
 
 describe('zhen-sha view', () => {
   it('renders the canvas scene, HUD and the three gesture hints', () => {
@@ -745,6 +820,167 @@ describe('zhen-sha view', () => {
       expect(pendingFrames.size).toBe(1);
     } finally {
       restoreProperty(document, 'hidden', originalHidden);
+    }
+  });
+});
+
+describe('zhen-sha settlement modal', () => {
+  it('opens with dialog semantics named by the settlement heading', () => {
+    window.location.hash = WIN_DEBUG_HASH;
+    const shell = installSettlementShell();
+    mountInShell(shell);
+    const overlay = required<HTMLElement>(shell.view, '[data-testid="overlay"]');
+    const title = required<HTMLElement>(shell.view, '[data-testid="overlay-title"]');
+    const body = required<HTMLElement>(shell.view, '[data-testid="overlay-body"]');
+    expect(overlay.hidden).toBe(true);
+
+    debugApi()!.step(543);
+
+    expect(text('status')).toBe('胜利');
+    expect(overlay.hidden).toBe(false);
+    expect(overlay.getAttribute('role')).toBe('dialog');
+    expect(overlay.getAttribute('aria-modal')).toBe('true');
+    expect(overlay.getAttribute('aria-labelledby')).toBe('zhen-sha-overlay-title');
+    expect(overlay.getAttribute('aria-describedby')).toBe('zhen-sha-overlay-body');
+    expect(title.id).toBe('zhen-sha-overlay-title');
+    expect(title.textContent?.trim()).toBe('一棍定魂');
+    expect(body.id).toBe('zhen-sha-overlay-body');
+    expect(body.textContent?.trim()).toBe('完美 3 次 · 得分 1900');
+  });
+
+  it('moves focus into the dialog and keeps Tab / Shift+Tab inside it', () => {
+    window.location.hash = WIN_DEBUG_HASH;
+    const shell = installSettlementShell();
+    const view = mountInShell(shell);
+    const panelRestart = required<HTMLButtonElement>(
+      view.root,
+      '[data-testid="restart-button"]',
+    );
+    panelRestart.focus();
+    expect(document.activeElement).toBe(panelRestart);
+
+    debugApi()!.step(543);
+
+    const overlayRestart = required<HTMLButtonElement>(
+      view.root,
+      '[data-testid="overlay-restart"]',
+    );
+    expect(document.activeElement).toBe(overlayRestart);
+    for (const shiftKey of [false, true]) {
+      const event = pressTab(shiftKey);
+      expect(event.defaultPrevented, `Tab (shift=${String(shiftKey)}) is trapped`).toBe(true);
+      expect(document.activeElement).toBe(overlayRestart);
+    }
+    // The focus must not land on the now-inert shell or the game panel.
+    expect(document.activeElement).not.toBe(shell.navLink);
+    expect(document.activeElement).not.toBe(panelRestart);
+  });
+
+  it('inerts the page shell while open and clears it on restart and destroy', () => {
+    window.location.hash = WIN_DEBUG_HASH;
+    const shell = installSettlementShell();
+    const view = mountInShell(shell);
+    const overlay = required<HTMLElement>(shell.view, '[data-testid="overlay"]');
+    const background: readonly HTMLElement[] = [shell.header, shell.footer, shell.skipLink];
+    for (const element of background) {
+      expect(element.hasAttribute('inert')).toBe(false);
+    }
+
+    debugApi()!.step(543);
+
+    expect(overlay.hidden).toBe(false);
+    for (const element of background) {
+      expect(element.hasAttribute('inert')).toBe(true);
+    }
+    // The modal's container and every ancestor stay interactive.
+    expect(overlay.hasAttribute('inert')).toBe(false);
+    expect(view.root.hasAttribute('inert')).toBe(false);
+    expect(shell.view.hasAttribute('inert')).toBe(false);
+
+    required<HTMLButtonElement>(view.root, '[data-testid="overlay-restart"]').click();
+    expect(text('status')).toBe('进行中');
+    expect(overlay.hidden).toBe(true);
+    for (const element of background) {
+      expect(element.hasAttribute('inert')).toBe(false);
+    }
+
+    // A reopened settlement re-applies the background contract.
+    debugApi()!.step(543);
+    expect(overlay.hidden).toBe(false);
+    for (const element of background) {
+      expect(element.hasAttribute('inert')).toBe(true);
+    }
+
+    view.handle.destroy();
+    for (const element of background) {
+      expect(element.hasAttribute('inert')).toBe(false);
+    }
+  });
+
+  it('restores the pre-open focus on restart and destroy', () => {
+    window.location.hash = WIN_DEBUG_HASH;
+    const shell = installSettlementShell();
+    const view = mountInShell(shell);
+    const panelRestart = required<HTMLButtonElement>(
+      view.root,
+      '[data-testid="restart-button"]',
+    );
+    const overlayRestart = required<HTMLButtonElement>(
+      view.root,
+      '[data-testid="overlay-restart"]',
+    );
+    panelRestart.focus();
+
+    debugApi()!.step(543);
+    expect(document.activeElement).toBe(overlayRestart);
+
+    overlayRestart.click();
+    expect(text('status')).toBe('进行中');
+    expect(document.activeElement).toBe(panelRestart);
+
+    debugApi()!.step(543);
+    expect(document.activeElement).toBe(overlayRestart);
+
+    view.handle.destroy();
+    expect(document.activeElement).toBe(panelRestart);
+  });
+
+  it('falls back to the back link when the pre-open focus element is gone', () => {
+    window.location.hash = WIN_DEBUG_HASH;
+    const shell = installSettlementShell();
+    const view = mountInShell(shell);
+    const panelRestart = required<HTMLButtonElement>(
+      view.root,
+      '[data-testid="restart-button"]',
+    );
+    const overlayRestart = required<HTMLButtonElement>(
+      view.root,
+      '[data-testid="overlay-restart"]',
+    );
+    panelRestart.focus();
+    debugApi()!.step(543);
+    expect(document.activeElement).toBe(overlayRestart);
+
+    panelRestart.remove();
+    overlayRestart.click();
+
+    const backLink = required<HTMLAnchorElement>(view.root, '.back-link');
+    expect(text('status')).toBe('进行中');
+    expect(document.activeElement).toBe(backLink);
+  });
+
+  it('does not inert the page shell while the match is playing', () => {
+    window.location.hash = WIN_DEBUG_HASH;
+    const shell = installSettlementShell();
+    mountInShell(shell);
+    const overlay = required<HTMLElement>(shell.view, '[data-testid="overlay"]');
+
+    debugApi()!.step(180);
+
+    expect(text('status')).toBe('进行中');
+    expect(overlay.hidden).toBe(true);
+    for (const element of [shell.header, shell.footer, shell.skipLink]) {
+      expect(element.hasAttribute('inert')).toBe(false);
     }
   });
 });
