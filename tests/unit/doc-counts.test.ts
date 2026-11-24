@@ -95,16 +95,22 @@ function committedCount(): number {
   return parseDocumentedCount(readme, 'README.md').count;
 }
 
+/**
+ * A deliberately non-canonical JSON fixture: 4-space indentation, a different
+ * key order, and extra spaces around the `unitTests` colon. The writer must
+ * preserve these bytes, so a `JSON.stringify(parsed, null, 2)` implementation
+ * cannot pass the byte-for-byte assertions below.
+ */
 function baselineFixture(count: number): string {
   return [
     '{',
-    `  "unitTests": ${count},`,
-    '  "entryGzipBytes": 11889,',
-    '  "totalJsGzipBytes": 422390,',
-    '  "checks": {',
-    '    "lint": "pass",',
-    '    "verify:doc-counts": "pass"',
-    '  }',
+    '    "checks": {',
+    '        "verify:doc-counts": "pass",',
+    '        "lint": "pass"',
+    '    },',
+    `    "unitTests" :   ${count},`,
+    '    "totalJsGzipBytes": 422390,',
+    '    "entryGzipBytes": 11889',
     '}',
     '',
   ].join('\n');
@@ -728,9 +734,11 @@ describe('sync-doc-counts CLI', () => {
     () => {
       const dir = makeTempDir();
       writeFixtureProject(dir, 1280);
+      const argsFile = join(makeTempDir(), 'npm-args.txt');
       const fakeNpm = writeFakeNpm(
         [
           '#!/bin/sh',
+          'printf \'%s\\n\' "$@" > "$DOC_COUNTS_NPM_ARGS"',
           'out=""',
           'for arg in "$@"; do',
           '  case "$arg" in',
@@ -743,12 +751,21 @@ describe('sync-doc-counts CLI', () => {
         ].join('\n'),
       );
 
-      const { status, stdout, stderr } = runSyncCli([], dir, { PATH: pathWith(fakeNpm) });
+      const { status, stdout, stderr } = runSyncCli([], dir, {
+        PATH: pathWith(fakeNpm),
+        DOC_COUNTS_NPM_ARGS: argsFile,
+      });
 
       expect(stderr).toBe('');
       expect(status).toBe(0);
       expect(stdout).toContain('Running npm run test:unit');
       expect(stdout).toContain('已把 4 个文件同步为 1290');
+
+      const argv = readFileSync(argsFile, 'utf8').trim().split('\n');
+      expect(argv.slice(0, 2)).toEqual(['run', 'test:unit']);
+      expect(argv).toContain('--reporter=json');
+      expect(argv.some((arg) => arg.startsWith('--outputFile='))).toBe(true);
+
       expect(
         parseDocumentedCount(readFileSync(join(dir, 'README.md'), 'utf8'), 'README.md').count,
       ).toBe(1290);
