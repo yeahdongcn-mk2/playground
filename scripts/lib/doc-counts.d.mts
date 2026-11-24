@@ -40,11 +40,36 @@ export interface DocCountsVerification {
   problems: DocCountsProblem[];
 }
 
+export interface PlannedDocCountWrite {
+  path: string;
+  before: string;
+  after: string;
+  changed: boolean;
+}
+
+export interface PlanDocCountWritesOptions {
+  documents: DocCountsSource[];
+  baselineText: string;
+  total: number;
+  numFailedTests?: number;
+}
+
+export interface DocCountWritesPlan {
+  total: number;
+  documents: PlannedDocCountWrite[];
+  baseline: PlannedDocCountWrite;
+  changedPaths: string[];
+}
+
 export const TEST_COMMAND: string;
 export const DOC_COUNT_PATHS: readonly string[];
+export const BASELINE_RELATIVE_PATH: string;
 
 export class DocCountsError extends Error {}
 
 export function parseDocumentedCount(text: string, file?: string): DocumentedCount;
 export function parseVitestReport(text: string, source?: string): VitestReportCounts;
 export function verifyDocCounts(options: VerifyDocCountsOptions): DocCountsVerification;
+export function rewriteDocumentedCount(text: string, total: number, file?: string): string;
+export function rewriteBaselineUnitTests(text: string, total: number, source?: string): string;
+export function planDocCountWrites(options: PlanDocCountWritesOptions): DocCountWritesPlan;

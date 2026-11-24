@@ -57,7 +57,8 @@
     "verify:screenshots:sha256": "node scripts/verify-screenshot-sha256.mjs",
     "verify:screenshots:repro": "node scripts/verify-screenshot-repro.mjs",
     "verify:screenshots:doc-dims": "node scripts/check-screenshot-doc-dims.mjs",
-    "verify:doc-counts": "node scripts/check-doc-counts.mjs"
+    "verify:doc-counts": "node scripts/check-doc-counts.mjs",
+    "docs:counts:write": "node scripts/sync-doc-counts.mjs"
   },
   "dependencies": {
     "phaser": "^4.2.1"
