@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   CAPTURE_EGL_ENV,
@@ -14,12 +14,15 @@ import {
 /**
  * Reusable verifier for the fixed-environment screenshot evidence (Issue #199).
  *
- * `docs/screenshots/capture-sha256-manifest.json` records the committed WebKit
- * evidence that is byte-for-byte reproducible inside the pinned Playwright
- * container: the file name, expected sha256, capture command and provenance
- * (container image and capture commit), plus the expected capture environment
- * fingerprint (image tag / digest, platform, EGL variables, target DPR and font
- * package versions recorded from the container).
+ * Evidence is recorded per capture target: the WebKit manifest stays at
+ * `docs/screenshots/capture-sha256-manifest.json`, while the Chromium desktop
+ * and mobile blank evidence lives in the matching
+ * `docs/screenshots/capture-sha256-manifest-<target>.json` file. Each manifest
+ * records the committed evidence that is byte-for-byte reproducible inside the
+ * pinned Playwright container: the file name, expected sha256, capture command
+ * and provenance (container image and capture commit), plus the expected
+ * capture environment fingerprint (image tag / digest, platform, EGL
+ * variables, target DPR and font package versions recorded from the container).
  *
  * The hash check only reads committed files. Passing a capture log additionally
  * verifies the environment fingerprint printed by the capture runtime, and the
@@ -33,6 +36,18 @@ import {
 
 export const DEFAULT_SCREENSHOT_DIR = 'docs/screenshots';
 export const DEFAULT_MANIFEST_PATH = 'docs/screenshots/capture-sha256-manifest.json';
+/** Directory the per-target sha256 manifest set is discovered in. */
+export const DEFAULT_MANIFEST_DIR = 'docs/screenshots';
+/**
+ * File name of one sha256 manifest in {@link DEFAULT_MANIFEST_DIR}.
+ *
+ * The WebKit manifest is `capture-sha256-manifest.json`; a target-split
+ * manifest appends the target, for example
+ * `capture-sha256-manifest-desktop.json`. Every other JSON file in the
+ * directory (fixtures, `ci-webkit-narrow-manifest.json`, ...) is ignored.
+ */
+export const MANIFEST_FILE_PATTERN =
+  /^capture-sha256-manifest(?:-[a-z0-9]+(?:-[a-z0-9]+)*)?\.json$/;
 
 /** A PNG sha256 as lower-case hex, exactly 64 characters. */
 export const SHA256_PATTERN = /^[0-9a-f]{64}$/;
@@ -416,15 +431,20 @@ export function manifestPlatformMismatch(manifest) {
 }
 
 /**
- * The fixed-container recapture command for a committed WebKit evidence file.
+ * The fixed-container recapture command for a committed evidence file.
  *
- * The manifest only records WebKit evidence, so the game-specific scripts are
- * derived from the file prefix and every other file belongs to the generic
- * `screenshots:webkit` capture. Comparing the whole command (not just its
- * prefix) stops a stale or shell-extended command from being printed as the
- * recapture hint.
+ * WebKit evidence uses the game-specific scripts derived from the file prefix,
+ * and every other WebKit file belongs to the generic `screenshots:webkit`
+ * capture. The Chromium blank evidence for the desktop and mobile targets is
+ * written by the unfiltered `screenshots` command, which also rewrites the hub
+ * images; the caller restores those before committing. Comparing the whole
+ * command (not just its prefix) stops a stale or shell-extended command from
+ * being printed as the recapture hint.
  */
 export function expectedRecaptureCommand(file) {
+  if (file === 'after-blank-desktop.png' || file === 'after-blank-mobile.png') {
+    return 'npm run screenshots:container -- screenshots';
+  }
   if (file.startsWith('after-2048-')) {
     return 'npm run screenshots:container -- screenshots:2048:webkit';
   }
@@ -949,6 +969,138 @@ export function findSha256ManifestCapture(manifest, file) {
     return null;
   }
   return manifest.captures.find((capture) => capture.file === file) ?? null;
+}
+
+function errorCode(error) {
+  return typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined;
+}
+
+function errorDetail(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * List manifest file names in a directory, ignoring every non-manifest entry.
+ *
+ * A missing directory is not an error: the write-time guard treats it as "no
+ * evidence recorded", so the capture keeps its pre-guard behaviour. Any other
+ * directory error is a {@link ScreenshotSha256Error} because it would silently
+ * hide the evidence contract.
+ */
+function readManifestFileNames(readDir, dir) {
+  let names;
+  try {
+    names = Array.from(readDir(dir));
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT' || errorCode(error) === 'ENOTDIR') {
+      return [];
+    }
+    throw new ScreenshotSha256Error(
+      `cannot read screenshot manifest directory ${dir}: ${errorDetail(error)}`,
+    );
+  }
+  return names.filter(
+    (name) => typeof name === 'string' && MANIFEST_FILE_PATTERN.test(name),
+  );
+}
+
+/**
+ * Discover the per-target sha256 manifests below the screenshot directory.
+ *
+ * The files are returned as full `<dir>/<name>` paths and sorted by file name,
+ * so a verification run reports the same order on every host. Only files that
+ * match {@link MANIFEST_FILE_PATTERN} are considered; other JSON files in the
+ * directory do not describe committed evidence and are ignored.
+ *
+ * @param {{
+ *   dir?: string,
+ *   readDir?: (dir: string) => readonly string[],
+ * }} [options]
+ * @returns {string[]}
+ */
+export function discoverSha256ManifestPaths({
+  dir = DEFAULT_MANIFEST_DIR,
+  readDir = readdirSync,
+} = {}) {
+  return readManifestFileNames(readDir, dir)
+    .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0))
+    .map((name) => join(dir, name));
+}
+
+/**
+ * Load and validate every sha256 manifest below the screenshot directory.
+ *
+ * The result keeps the manifest path so a failure can name the file that owns
+ * a capture, and it is sorted by file name for a stable report order. The
+ * per-manifest parser already rejects duplicate files inside one manifest;
+ * this loader additionally rejects a file recorded by more than one manifest,
+ * because a screenshot would then have two competing environments.
+ *
+ * @param {{
+ *   dir?: string,
+ *   readDir?: (dir: string) => readonly string[],
+ *   readFile?: (path: string) => string | Buffer,
+ * }} [options]
+ * @returns {Array<{path: string, manifest: ReturnType<typeof parseSha256Manifest>}>}
+ */
+export function loadSha256Manifests({
+  dir = DEFAULT_MANIFEST_DIR,
+  readDir = readdirSync,
+  readFile = readFileSync,
+} = {}) {
+  const manifests = discoverSha256ManifestPaths({ dir, readDir }).map((path) => {
+    let text;
+    try {
+      text = readFile(path);
+    } catch (error) {
+      throw new ScreenshotSha256Error(
+        `cannot read screenshot manifest ${path}: ${errorDetail(error)}`,
+      );
+    }
+    return { path, manifest: parseSha256Manifest(text, { source: path }) };
+  });
+
+  const owners = new Map();
+  for (const { path, manifest } of manifests) {
+    for (const capture of manifest.captures) {
+      // Match the per-manifest duplicate rule: case / Unicode aliases resolve
+      // to the same file on case-insensitive filesystems.
+      const key = capture.file.normalize('NFC').toLowerCase();
+      const owner = owners.get(key);
+      if (owner !== undefined) {
+        throw new ScreenshotSha256Error(
+          `duplicate capture file "${capture.file}" is recorded in both ${owner} and ${path}`,
+        );
+      }
+      owners.set(key, path);
+    }
+  }
+
+  return manifests;
+}
+
+/**
+ * Find the manifest that owns one screenshot file.
+ *
+ * @param {Array<{path: string, manifest: ReturnType<typeof parseSha256Manifest>}> | null | undefined} manifests
+ * @param {string} file
+ * @returns {{
+ *   path: string,
+ *   manifest: ReturnType<typeof parseSha256Manifest>,
+ *   capture: ReturnType<typeof findSha256ManifestCapture>,
+ * } | null} `null` when no loaded manifest records the file.
+ */
+export function findSha256ManifestCaptureInSet(manifests, file) {
+  if (!Array.isArray(manifests)) {
+    return null;
+  }
+  for (const { path, manifest } of manifests) {
+    const capture = findSha256ManifestCapture(manifest, file);
+    if (capture !== null) {
+      return { path, manifest, capture };
+    }
+  }
+  return null;
 }
 
 /**
