@@ -13,7 +13,7 @@ name: Screenshot repro
 # is started by scripts/run-container-capture.mjs from the ordinary
 # ubuntu-latest runner (Docker is available there), so the job-level image
 # cannot shadow the capture environment. The workflow never commits or pushes
-# and never edits the manifest; the manifest-unchanged step asserts that below.
+# and never edits the manifests; the manifest-unchanged step asserts that below.
 on:
   schedule:
     # Daily at 04:41 UTC; off the top of the hour to avoid GitHub's peak.
@@ -47,12 +47,12 @@ jobs:
         # re-capture steps to $GITHUB_STEP_SUMMARY.
         run: npm run verify:screenshots:repro
 
-      - name: Assert the manifest was not modified
+      - name: Assert the manifests were not modified
         # The repro captures evidence; it must never accept a new hash by
-        # editing the manifest. Run even after a failed repro so the readonly
+        # editing a manifest. Run even after a failed repro so the readonly
         # contract is still checked.
         if: always()
-        run: git diff --exit-code -- docs/screenshots/capture-sha256-manifest.json
+        run: git diff --exit-code -- 'docs/screenshots/capture-sha256-manifest*.json'
 
       - name: Upload capture logs
         if: always()

@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -23,6 +23,47 @@ const MANIFEST_DIR = join(ROOT, DEFAULT_MANIFEST_DIR);
 
 /** Every manifest the repro entry discovers: the WebKit one plus target splits. */
 const MANIFESTS = loadSha256Manifests({ dir: MANIFEST_DIR });
+/** The read-only assertion both repro workflows run after the capture step. */
+const MANIFEST_UNCHANGED_COMMAND =
+  "git diff --exit-code -- 'docs/screenshots/capture-sha256-manifest*.json'";
+
+/** The pathspecs after `--` in one git command, with their quotes removed. */
+function commandPathspecs(command: string): string[] {
+  const match = /\s--\s+(.+)$/.exec(command.trim());
+  if (!match?.[1]) {
+    throw new Error(
+      `expected a git command with a pathspec, got ${JSON.stringify(command)}`,
+    );
+  }
+  return match[1]
+    .trim()
+    .split(/\s+/)
+    .map((pathspec) => pathspec.replace(/^['"]|['"]$/g, ''));
+}
+
+/** Match one git pathspec glob (`*` / `?`) against a repository-relative path. */
+function pathspecMatches(pathspec: string, path: string): boolean {
+  if (pathspec === path) {
+    return true;
+  }
+  const source = [...pathspec]
+    .map((char) => {
+      if (char === '*') {
+        return '.*';
+      }
+      if (char === '?') {
+        return '.';
+      }
+      return /[.*+?^${}()|[\]\\]/.test(char) ? `\\${char}` : char;
+    })
+    .join('');
+  return new RegExp(`^${source}$`).test(path);
+}
+
+/** Whether the step's pathspecs cover one discovered manifest path. */
+function pathspecsCover(path: string, pathspecs: string[]): boolean {
+  return pathspecs.some((pathspec) => pathspecMatches(pathspec, path));
+}
 
 interface WorkflowStep {
   name?: string;
@@ -280,7 +321,7 @@ describe('capture-repro workflow', () => {
     );
   });
 
-  it('never commits, restores or rewrites the manifest', () => {
+  it('never commits, restores or rewrites the manifests', () => {
     const commands = steps.map((step) => (step.run ?? '').trim());
     for (const command of commands) {
       expect(command).not.toMatch(/\bgit\s+(?:commit|add|checkout|restore)\b/);
@@ -288,12 +329,31 @@ describe('capture-repro workflow', () => {
     }
 
     const manifestCheck = requireStep(
-      (step) => (step.run ?? '').trim() === 'git diff --exit-code -- docs/screenshots/capture-sha256-manifest.json',
-      'a manifest-unchanged assertion',
+      (step) => (step.run ?? '').trim() === MANIFEST_UNCHANGED_COMMAND,
+      'a manifests-unchanged assertion',
     );
     // It must run even after a failed repro, so the readonly contract is
     // checked on the failure path too.
     expect(manifestCheck.if).toBe('always()');
+
+    // The discovered set is the WebKit manifest plus the Chromium desktop /
+    // mobile splits; the pathspec must cover every one, not just WebKit.
+    const manifestPaths = MANIFESTS.map(({ path }) =>
+      relative(ROOT, path).split('\\').join('/'),
+    );
+    for (const required of [
+      DEFAULT_MANIFEST_PATH,
+      'docs/screenshots/capture-sha256-manifest-desktop.json',
+      'docs/screenshots/capture-sha256-manifest-mobile.json',
+    ]) {
+      expect(manifestPaths).toContain(required);
+    }
+
+    const pathspecs = commandPathspecs(manifestCheck.run ?? '');
+    expect(pathspecs.length).toBeGreaterThan(0);
+    for (const path of manifestPaths) {
+      expect(pathspecsCover(path, pathspecs)).toBe(true);
+    }
   });
 
   it('uploads both run logs even when the repro fails', () => {
@@ -334,7 +394,7 @@ describe('nightly screenshot repro docs (Issue #199)', () => {
   });
 
   it('documents the manifest-driven two-run contract and both logs', () => {
-    expect(reproDocs).toContain('docs/screenshots/capture-sha256-manifest.json');
+    expect(reproDocs).toContain('docs/screenshots/capture-sha256-manifest*.json');
     expect(reproDocs).toContain('command');
     expect(reproDocs).toContain('连续两跑');
     expect(reproDocs).toContain('test-results/screenshot-repro/');

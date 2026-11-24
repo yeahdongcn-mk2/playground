@@ -4,13 +4,13 @@ name: Screenshot repro under concurrent load
 # evidence (Issue #352).
 #
 # The nightly .github/workflows/capture-repro.yml stays unchanged: it derives
-# every target from docs/screenshots/capture-sha256-manifest.json and runs each
-# one twice without injected load. This workflow repeats a small set of the
-# WebKit targets that only drifted under host concurrency (#328 / #341 / #342)
-# at least four times while CPU-burning workers keep the runner loaded. Any run
-# whose bytes differ from the manifest makes npm run verify:screenshots:repro
-# exit non-zero, so an intermittent, load-only drift fails CI instead of
-# slipping through the two-run nightly.
+# every target from the docs/screenshots/capture-sha256-manifest*.json set and
+# runs each one twice without injected load. This workflow repeats a small set
+# of the WebKit targets that only drifted under host concurrency (#328 / #341 /
+# #342) at least four times while CPU-burning workers keep the runner loaded.
+# Any run whose bytes differ from the manifests makes
+# npm run verify:screenshots:repro exit non-zero, so an intermittent, load-only
+# drift fails CI instead of slipping through the two-run nightly.
 #
 # The dispatch inputs are validated by scripts/check-repro-load-inputs.mjs
 # before use: every target must be a manifest target and runs / load must be
@@ -91,12 +91,12 @@ jobs:
           done
           npm run verify:screenshots:repro -- "${target_args[@]}" --runs "$RUNS" --load "$LOAD"
 
-      - name: Assert the manifest was not modified
+      - name: Assert the manifests were not modified
         # A load-triggered mismatch must never be accepted by editing the
-        # manifest. Run even after a failed repro so the readonly contract is
+        # manifests. Run even after a failed repro so the readonly contract is
         # checked on the failure path too.
         if: always()
-        run: git diff --exit-code -- docs/screenshots/capture-sha256-manifest.json
+        run: git diff --exit-code -- 'docs/screenshots/capture-sha256-manifest*.json'
 
       - name: Upload capture and load logs
         if: always()
