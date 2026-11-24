@@ -1,7 +1,9 @@
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import {
   BASELINE_RELATIVE_PATH,
@@ -172,6 +174,7 @@ describe('doc test count generation and sync workflows', () => {
   it('stages exactly the four count files and does nothing when they are current', () => {
     const commit = requireStep(syncSteps, isCommit, 'a commit step');
     const run = commit.run ?? '';
+    expect(commit.shell).toBe('bash');
 
     // Nothing to commit: the generator reported the committed counts as fresh.
     expect(run).toContain('if git diff --quiet; then');
@@ -209,5 +212,245 @@ describe('doc test count generation and sync workflows', () => {
       expect(command).not.toMatch(/git push[^\n]*\s-f(?:\s|$)/);
       expect(command).not.toMatch(/git push[^\n]*\+HEAD/);
     }
+  });
+});
+
+/**
+ * The commit step is the only runtime logic in the sync workflow: it decides
+ * whether the regenerated counts are committable, stages exactly the four
+ * generated paths, commits and pushes. Text assertions cannot falsify those
+ * branches, so every case below executes the YAML `run` block itself against a
+ * throwaway git repository and a local bare remote.
+ */
+const commitStepScript = requireStep(syncSteps, isCommit, 'a commit step').run ?? '';
+
+interface ScratchRepository {
+  root: string;
+  work: string;
+  remote: string;
+  env: NodeJS.ProcessEnv;
+}
+
+const scratchRoots: string[] = [];
+
+afterEach(() => {
+  for (const root of scratchRoots.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function scratchEnv(root: string): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    GIT_CONFIG_GLOBAL: join(root, 'empty-gitconfig'),
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_TERMINAL_PROMPT: '0',
+    // git push's rejection text is localized; pin the messages the test reads.
+    LC_ALL: 'C',
+  };
+}
+
+function git(
+  cwd: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+): { status: number | null; stdout: string; stderr: string } {
+  const result = spawnSync('git', args, { cwd, env, encoding: 'utf8' });
+  if (result.error) throw result.error;
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
+function gitOk(cwd: string, args: string[], env: NodeJS.ProcessEnv): string {
+  const result = git(cwd, args, env);
+  if (result.status !== 0) {
+    throw new Error(`git ${args.join(' ')} failed (${result.status}): ${result.stderr}`);
+  }
+  return result.stdout;
+}
+
+function writeTrackedFile(work: string, relativePath: string, contents: string): void {
+  const absolutePath = join(work, relativePath);
+  mkdirSync(dirname(absolutePath), { recursive: true });
+  writeFileSync(absolutePath, contents);
+}
+
+function createScratchRepository(): ScratchRepository {
+  const root = mkdtempSync(join(tmpdir(), 'doc-counts-sync-'));
+  scratchRoots.push(root);
+  writeFileSync(join(root, 'empty-gitconfig'), '');
+
+  const env = scratchEnv(root);
+  const work = join(root, 'work');
+  const remote = join(root, 'remote.git');
+  mkdirSync(work);
+  gitOk(root, ['init', '--bare', '--initial-branch=main', remote], env);
+  gitOk(work, ['init', '--initial-branch=main'], env);
+  gitOk(work, ['config', 'user.name', 'Doc counts test'], env);
+  gitOk(work, ['config', 'user.email', 'doc-counts-test@example.com'], env);
+
+  writeTrackedFile(work, 'package.json', '{"name":"scratch"}\n');
+  for (const relativePath of COUNT_FILE_PATHS) {
+    writeTrackedFile(work, relativePath, `counts for ${relativePath}\n`);
+  }
+
+  gitOk(work, ['add', '--all'], env);
+  gitOk(work, ['commit', '-m', 'initial'], env);
+  gitOk(work, ['remote', 'add', 'origin', remote], env);
+  gitOk(work, ['push', '--set-upstream', 'origin', 'main'], env);
+  return { root, work, remote, env };
+}
+
+function regenerateCountFile(scratch: ScratchRepository, relativePath: string): void {
+  writeFileSync(join(scratch.work, relativePath), `regenerated ${relativePath}\n`);
+}
+
+function runCommitStep(scratch: ScratchRepository): {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+} {
+  const scriptPath = join(scratch.root, 'commit-counts.sh');
+  writeFileSync(scriptPath, commitStepScript);
+  const result = spawnSync('bash', ['--noprofile', '--norc', scriptPath], {
+    cwd: scratch.work,
+    env: scratch.env,
+    encoding: 'utf8',
+  });
+  if (result.error) throw result.error;
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
+function remoteMainHead(scratch: ScratchRepository): string {
+  return gitOk(scratch.remote, ['rev-parse', 'main'], scratch.env).trim();
+}
+
+function remoteMainCommitCount(scratch: ScratchRepository): number {
+  return Number(gitOk(scratch.remote, ['rev-list', '--count', 'main'], scratch.env).trim());
+}
+
+function workHead(scratch: ScratchRepository): string {
+  return gitOk(scratch.work, ['rev-parse', 'HEAD'], scratch.env).trim();
+}
+
+function remoteChangedPaths(scratch: ScratchRepository): string[] {
+  return gitOk(scratch.remote, ['diff-tree', '--no-commit-id', '--name-only', '-r', 'main'], scratch.env)
+    .trim()
+    .split('\n')
+    .filter((path) => path.length > 0)
+    .sort();
+}
+
+describe('doc test count sync commit step in a scratch repository', () => {
+  it('exits 0 without committing when the generated counts are already current', () => {
+    const scratch = createScratchRepository();
+    const before = remoteMainHead(scratch);
+
+    const result = runCommitStep(scratch);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('nothing to commit');
+    expect(remoteMainHead(scratch)).toBe(before);
+    expect(workHead(scratch)).toBe(before);
+    expect(remoteMainCommitCount(scratch)).toBe(1);
+  });
+
+  it('commits and pushes exactly the four regenerated count files', () => {
+    const scratch = createScratchRepository();
+    const before = remoteMainHead(scratch);
+
+    for (const relativePath of COUNT_FILE_PATHS) {
+      regenerateCountFile(scratch, relativePath);
+    }
+    const result = runCommitStep(scratch);
+
+    expect(result.status).toBe(0);
+    expect(remoteMainHead(scratch)).not.toBe(before);
+    expect(workHead(scratch)).toBe(remoteMainHead(scratch));
+    expect(remoteMainCommitCount(scratch)).toBe(2);
+    expect(remoteChangedPaths(scratch)).toEqual([...COUNT_FILE_PATHS].sort());
+    expect(
+      gitOk(scratch.remote, ['log', '-1', '--format=%s', 'main'], scratch.env).trim(),
+    ).toBe('docs: sync generated unit test counts [skip ci]');
+    expect(gitOk(scratch.remote, ['log', '-1', '--format=%an', 'main'], scratch.env).trim()).toBe(
+      'github-actions[bot]',
+    );
+    expect(gitOk(scratch.remote, ['log', '-1', '--format=%ae', 'main'], scratch.env).trim()).toBe(
+      '41898282+github-actions[bot]@users.noreply.github.com',
+    );
+    expect(gitOk(scratch.work, ['status', '--porcelain'], scratch.env).trim()).toBe('');
+  });
+
+  it('refuses a partial regeneration instead of committing half the set', () => {
+    const scratch = createScratchRepository();
+    const before = remoteMainHead(scratch);
+
+    const [firstCountFile] = COUNT_FILE_PATHS;
+    if (!firstCountFile) throw new Error('the generator has no count documents');
+    regenerateCountFile(scratch, firstCountFile);
+    const result = runCommitStep(scratch);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('unexpected paths');
+    expect(result.stderr).toContain(firstCountFile);
+    expect(remoteMainHead(scratch)).toBe(before);
+    expect(workHead(scratch)).toBe(before);
+    expect(remoteMainCommitCount(scratch)).toBe(1);
+  });
+
+  it('refuses a diff that touches an extra tracked path next to the four', () => {
+    const scratch = createScratchRepository();
+    const before = remoteMainHead(scratch);
+
+    for (const relativePath of COUNT_FILE_PATHS) {
+      regenerateCountFile(scratch, relativePath);
+    }
+    writeFileSync(join(scratch.work, 'package.json'), '{"name":"scratch","extra":true}\n');
+    const result = runCommitStep(scratch);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('unexpected paths');
+    expect(result.stderr).toContain('package.json');
+    expect(remoteMainHead(scratch)).toBe(before);
+    expect(remoteMainCommitCount(scratch)).toBe(1);
+  });
+
+  it('refuses a diff that only touches an unrelated tracked path', () => {
+    const scratch = createScratchRepository();
+    const before = remoteMainHead(scratch);
+
+    writeFileSync(join(scratch.work, 'package.json'), '{"name":"scratch","extra":true}\n');
+    const result = runCommitStep(scratch);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('unexpected paths');
+    expect(remoteMainHead(scratch)).toBe(before);
+    expect(remoteMainCommitCount(scratch)).toBe(1);
+  });
+
+  it('does not force-push over a main commit that landed first', () => {
+    const scratch = createScratchRepository();
+    const other = join(scratch.root, 'other');
+    gitOk(scratch.root, ['clone', scratch.remote, other], scratch.env);
+    gitOk(other, ['config', 'user.name', 'Doc counts test'], scratch.env);
+    gitOk(other, ['config', 'user.email', 'doc-counts-test@example.com'], scratch.env);
+    writeTrackedFile(other, 'README.md', 'advanced on remote\n');
+    gitOk(other, ['add', '--all'], scratch.env);
+    gitOk(other, ['commit', '-m', 'advance main'], scratch.env);
+    gitOk(other, ['push', 'origin', 'main'], scratch.env);
+    const remoteAhead = remoteMainHead(scratch);
+    expect(remoteMainCommitCount(scratch)).toBe(2);
+
+    for (const relativePath of COUNT_FILE_PATHS) {
+      regenerateCountFile(scratch, relativePath);
+    }
+    const result = runCommitStep(scratch);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr.toLowerCase()).toContain('rejected');
+    expect(remoteMainHead(scratch)).toBe(remoteAhead);
+    expect(remoteMainCommitCount(scratch)).toBe(2);
+    expect(gitOk(scratch.remote, ['show', 'main:README.md'], scratch.env)).toBe(
+      'advanced on remote\n',
+    );
   });
 });
