@@ -20,6 +20,7 @@ import {
   type ZhenShaDebugOptions,
   type ZhenShaDebugWindow,
 } from './debug';
+import { createModalFocus } from './modal-focus';
 import './zhen-sha.css';
 
 /** Hold this long without lifting to turn the tap into a charged strike. */
@@ -86,12 +87,12 @@ aria-label="势 0 / 3">
 <canvas class="zhen-sha-canvas" data-testid="zhen-sha-canvas"
 role="img" aria-label="黑宣纸上的黑煞首领与金棍"></canvas>
 <div class=zhen-sha-marks aria-hidden=true><span class=zhen-sha-wordmark>镇煞</span><span class=zhen-sha-seal>镇煞</span><span class=zhen-sha-arc-glow></span><span class=zhen-sha-arc-edge></span></div>
-<div class="zhen-sha-overlay" data-testid="overlay" role="group"
-aria-labelledby="zhen-sha-overlay-title" hidden>
+<div class="zhen-sha-overlay" data-testid="overlay" role="dialog" aria-modal="true"
+aria-labelledby="zhen-sha-overlay-title" aria-describedby="zhen-sha-overlay-body" hidden>
 <div class="zhen-sha-overlay-card">
 <p class="panel-kicker" data-testid="overlay-kicker">RESULT</p>
 <h2 id="zhen-sha-overlay-title" data-testid="overlay-title">对决结束</h2>
-<p class="zhen-sha-overlay-body" data-testid="overlay-body">再来一局。</p>
+<p class="zhen-sha-overlay-body" id="zhen-sha-overlay-body" data-testid="overlay-body">再来一局。</p>
 <button class="button button--primary" type="button" data-action="restart"
 data-testid="overlay-restart">再来一局</button>
 </div>
@@ -154,6 +155,34 @@ function debugWindow(): ZhenShaDebugWindow {
   return window as unknown as ZhenShaDebugWindow;
 }
 
+/** Metadata elements that cannot receive focus and should not be made inert. */
+const NON_RENDERED_TAGS = new Set(['LINK', 'META', 'NOSCRIPT', 'SCRIPT', 'STYLE', 'TEMPLATE']);
+
+/**
+ * Everything outside the game's mount subtree that receives focus: the page
+ * shell (skip link, site header and nav, footer). The settlement overlay lives
+ * inside the mount root, so walking up and inverting each ancestor's children
+ * never contains an ancestor of the overlay and cannot inert it.
+ */
+function collectPageShell(root: HTMLElement): HTMLElement[] {
+  const shell: HTMLElement[] = [];
+  let node: HTMLElement = root;
+  while (node.parentElement !== null && node.parentElement !== document.documentElement) {
+    const parent: HTMLElement = node.parentElement;
+    for (const sibling of parent.children) {
+      if (
+        sibling !== node
+        && sibling instanceof HTMLElement
+        && !NON_RENDERED_TAGS.has(sibling.tagName)
+      ) {
+        shell.push(sibling);
+      }
+    }
+    node = parent;
+  }
+  return shell;
+}
+
 function removeDebugApi(owner: () => void): void {
   const win = debugWindow();
   const api = win.__playground;
@@ -192,6 +221,7 @@ export function mountZhenSha(
   const overlayBody = query<HTMLElement>(root, '[data-testid="overlay-body"]');
   const overlayRestart = query<HTMLButtonElement>(root, '[data-testid="overlay-restart"]');
   const restartButton = query<HTMLButtonElement>(root, '[data-testid="restart-button"]');
+  const backLink = query<HTMLAnchorElement>(root, '.back-link');
   const momentumElement = query<HTMLElement>(root, '[data-testid="momentum"]');
   const pips = Array.from(momentumElement.querySelectorAll<HTMLElement>('.zhen-sha-pip'));
   const perfectsElement = query<HTMLElement>(root, '[data-testid="perfects"]');
@@ -208,6 +238,11 @@ export function mountZhenSha(
   const engine = new ZhenShaEngine();
   const debugOptions = currentDebugOptions();
   const audio = services.audio;
+  const settlementFocus = createModalFocus({
+    container: overlay,
+    initialFocus: overlayRestart,
+    background: collectPageShell(root),
+  });
 
   function scheduleDebugInputs(): void {
     if (!debugOptions.enabled) {
@@ -255,6 +290,7 @@ export function mountZhenSha(
     const previousStatus = lastStatus;
     lastStatus = state.status;
     if (state.status === 'playing') {
+      closeSettlement();
       overlay.hidden = true;
     } else {
       overlay.hidden = false;
@@ -268,7 +304,7 @@ export function mountZhenSha(
         setText(overlayBody, `中招 ${state.hits} 次 · 再来一局找回节奏`);
       }
       if (previousStatus === 'playing') {
-        overlayRestart.focus({ preventScroll: true });
+        settlementFocus.open();
       }
     }
 
@@ -280,6 +316,23 @@ export function mountZhenSha(
       } else {
         setText(announcer, '新的一局开始');
       }
+    }
+  }
+
+  /**
+   * Closes the settlement modal at the point the overlay stops being the
+   * active surface, restoring the background and the pre-open focus. If that
+   * focus owner is gone, leave focus on the game's back link instead of on a
+   * hidden modal or `<body>`.
+   */
+  function closeSettlement(): void {
+    if (!settlementFocus.isOpen()) {
+      return;
+    }
+    settlementFocus.close();
+    const active = document.activeElement;
+    if (active === null || active === document.body || overlay.contains(active)) {
+      backLink.focus({ preventScroll: true });
     }
   }
 
@@ -526,6 +579,7 @@ export function mountZhenSha(
     }
     destroyed = true;
     running = false;
+    closeSettlement();
     resetPointer();
     stopLoop();
     detachListeners();
