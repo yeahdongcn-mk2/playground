@@ -9,7 +9,7 @@ const DOC = readFileSync(join(ROOT, 'docs', 'zhen-sha-kill-gate.md'), 'utf8');
 /**
  * Production size frozen at baseline 43c9ab1, as `{ name, lines }`.
  * The historical assessment must not follow the current working tree; the
- * rolling snapshot owns the current production size instead.
+ * rolling section of the document records the current size manually.
  */
 const BASELINE_FILES = [
   { name: 'engine.ts', lines: 457 },

@@ -62,4 +62,4 @@ node evidence/plan-245-t0/verify-tutorial.mjs http://127.0.0.1:4182 after
 
 首招 ≥1.5× 基准、首次完美后持久化 `done`、普通格挡不结束教学、挂载中清空键后点重开恢复提示与延长首招、两个重开入口与重新挂载不再显示、清空键后重新挂载恢复、教程可见时手势与结算仍正常，由 `src/games/zhen-sha/tutorial.test.ts`、`engine.test.ts`、`zhen-sha-view.test.ts` 与 `style.test.ts` 覆盖；`capture-tutorial.mjs` / `verify-tutorial.mjs` 只补充真实浏览器截图与 DOM 证据。
 
-reduced-motion 的「无布局跳动」是上述真实 Chromium 截图里对静态 / 动画两支布局盒的测量结果；单测只断言 `data-motion="static"`、静态分支无动画且仍能打出完美，不量布局，布局断言留给 t3 的 e2e。
+reduced-motion 的「无布局跳动」由上述真实 Chromium 截图的元素盒尺寸佐证：After 的动画 / 静态两支同为 1392×860（桌面）与 366×1385（手机），Before 则为 1392×908 / 366×1486，差值来自被隐藏的两段长说明。`capture-tutorial.mjs` / `verify-tutorial.mjs` 不单独断言几何；单测只断言 `data-motion="static"`、静态分支无动画且仍能打出完美，几何断言留给 t3 的 e2e。
