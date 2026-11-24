@@ -247,6 +247,82 @@ describe('createModalFocus', () => {
     expect(document.activeElement).toBe(must('#lobby'));
   });
 
+  it('重复 open() 不覆盖打开前记录的焦点', () => {
+    const fixture = mount(THREE_BUTTONS);
+    const controller = makeController({
+      container: fixture.modal,
+      initialFocus: must('#again'),
+    });
+
+    fixture.opener.focus();
+    controller.open();
+    must<HTMLButtonElement>('#close').focus();
+
+    controller.open();
+    expect(controller.isOpen()).toBe(true);
+    controller.close();
+
+    expect(document.activeElement).toBe(fixture.opener);
+  });
+
+  it('从未打开就 close() 不动背景 inert，也不移动焦点', () => {
+    const fixture = mount(THREE_BUTTONS);
+    const controller = makeController({
+      container: fixture.modal,
+      background: [fixture.header, fixture.main],
+    });
+    // The caller already marked one background element inert for another layer;
+    // closing a controller that never opened must not clear it.
+    fixture.header.setAttribute('inert', '');
+    fixture.opener.focus();
+
+    expect(() => controller.close()).not.toThrow();
+    expect(controller.isOpen()).toBe(false);
+    expect(fixture.header.hasAttribute('inert')).toBe(true);
+    expect(fixture.main.hasAttribute('inert')).toBe(false);
+    expect(document.activeElement).toBe(fixture.opener);
+  });
+
+  it('容器内没有可聚焦元素时 open() 不抛错，Tab 不被拦截', () => {
+    const fixture = mount('<p id="copy">本局结算</p>');
+    const controller = makeController({ container: fixture.modal });
+    fixture.opener.focus();
+
+    expect(() => controller.open()).not.toThrow();
+    expect(controller.isOpen()).toBe(true);
+    expect(controller.focusables()).toEqual([]);
+
+    const event = pressTab();
+    expect(event.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(fixture.opener);
+  });
+
+  it('跳过 aria-hidden 祖先、CSS 隐藏与不可编辑 contenteditable 的元素', () => {
+    const fixture = mount(`
+      <div aria-hidden="true"><button id="hidden-ancestor" type="button">读屏隐藏</button></div>
+      <button id="css-display" type="button" style="display: none">显示隐藏</button>
+      <div style="display: none"><button id="css-display-ancestor" type="button">祖先隐藏</button></div>
+      <button id="css-visibility" type="button" style="visibility: hidden">可见性隐藏</button>
+      <div style="visibility: hidden"><button id="css-visibility-ancestor" type="button">继承隐藏</button></div>
+      <div id="editable-empty" contenteditable=""></div>
+      <div id="editable-plain" contenteditable="plaintext-only"></div>
+      <div id="editable-false" contenteditable="false"></div>
+      <button id="close" type="button">关闭</button>
+    `);
+    const controller = makeController({ container: fixture.modal });
+
+    expect(controller.focusables().map((element) => element.id)).toEqual([
+      'editable-empty',
+      'editable-plain',
+      'close',
+    ]);
+
+    controller.open();
+    expect(document.activeElement).toBe(must('#editable-empty'));
+    pressTab();
+    expect(document.activeElement).toBe(must('#editable-plain'));
+  });
+
   it('重复关闭是幂等的，并停止拦截 Tab', () => {
     const fixture = mount(THREE_BUTTONS);
     const controller = makeController({

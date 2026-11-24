@@ -22,7 +22,15 @@ export interface ModalFocusOptions {
   readonly container: HTMLElement;
   /** Element focused on open; defaults to the container's first focusable element. */
   readonly initialFocus?: HTMLElement | null;
-  /** Elements outside the modal that become inert while it is open. */
+  /**
+   * Elements outside the modal that become inert while it is open.
+   *
+   * Each element must be owned by this controller: do not pass an element that
+   * another layer already made inert, because {@link ModalFocusController.close}
+   * removes the `inert` attribute by value rather than tracking which controller
+   * added it. Callers that share a background element between layers must
+   * coordinate the attribute themselves and leave this list to a single owner.
+   */
   readonly background?: Iterable<HTMLElement>;
 }
 
@@ -51,19 +59,40 @@ const FOCUSABLE_SELECTOR = [
   'audio[controls]',
   'video[controls]',
   '[contenteditable="true"]',
+  '[contenteditable=""]',
+  '[contenteditable="plaintext-only"]',
   '[tabindex]',
 ].join(', ');
+
+function isHiddenByCss(element: HTMLElement): boolean {
+  // `visibility` inherits, so the element's own computed value already accounts
+  // for a hidden ancestor unless the element explicitly overrides it.
+  if (getComputedStyle(element).visibility === 'hidden') {
+    return true;
+  }
+  // `display: none` is not inherited, so walk up to catch a hidden ancestor.
+  for (let node: HTMLElement | null = element; node !== null; node = node.parentElement) {
+    if (getComputedStyle(node).display === 'none') {
+      return true;
+    }
+  }
+  return false;
+}
 
 function isFocusable(element: HTMLElement): boolean {
   if (element.hasAttribute('disabled')) {
     return false;
   }
   // `closest` also covers the element itself, so this skips elements hidden
-  // through a hidden ancestor as well.
+  // through a hidden ancestor as well, including an `aria-hidden` ancestor that
+  // keeps assistive technology out of the subtree.
   if (element.closest('[hidden]') !== null) {
     return false;
   }
-  if (element.getAttribute('aria-hidden') === 'true') {
+  if (element.closest('[aria-hidden="true"]') !== null) {
+    return false;
+  }
+  if (isHiddenByCss(element)) {
     return false;
   }
   if (element instanceof HTMLInputElement && element.type === 'hidden') {
