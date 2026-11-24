@@ -368,7 +368,7 @@ games/<game>/scene → 对应引擎（动态 import）
 ## 新增一个游戏
 
 1. 新建 `src/games/<id>/index.ts`，导出 `GameModule`：编写 `meta`，在 `mount()` 内动态 `import()` 自己的视图。
-2. 新建场景 / 逻辑 / DOM 外壳。2D 游戏可复用 `src/engine/phaser2d.ts` 的 `createPhaser2DGame()`；完整玩法参考 `src/games/snake/`（规则与渲染分离、最高分、触屏与测试）、`src/games/tetris/`（旋转 / 消行 / 等级、触屏按钮与调试接缝）、`src/games/2048/`（数字合并、键盘 + 滑动与固定初始棋盘）、`src/games/breakout/`（固定步长模拟、触屏拖动挡板与固定初始状态）、`src/games/minesweeper/`（纯 DOM 网格、左右键与固定雷盘）和 `src/games/zhen-sha/`（镇煞：纯 DOM 轻点 / 长按 / 松手手势、结算战绩符、调试接缝与测试）；其中扫雷与镇煞是 2 款纯 DOM 参考，其余四款使用 Phaser 场景；最小示例参考 `src/games/blank/`。
+2. 新建场景 / 逻辑 / DOM 外壳。2D 游戏可复用 `src/engine/phaser2d.ts` 的 `createPhaser2DGame()`；完整玩法参考 `src/games/snake/`（规则与渲染分离、最高分、触屏与测试）、`src/games/tetris/`（旋转 / 消行 / 等级、触屏按钮与调试接缝）、`src/games/2048/`（数字合并、键盘 + 滑动与固定初始棋盘）、`src/games/breakout/`（固定步长模拟、触屏拖动挡板与固定初始状态）、`src/games/minesweeper/`（纯 DOM 网格、左右键与固定雷盘）和 `src/games/zhen-sha/`（镇煞：纯 DOM 轻点 / 长按 / 松手手势、结算战绩符与测试；hash 路由后加 `?debug=1`（例如 `#/games/zhen-sha?debug=1`）安装调试接缝，用 `seed` 固定种子（缺省或非法值回退 `1`），用 `inputs=block@180,charge@541,strike@542` 指定绝对 tick 动作计划（非法条目逐条忽略），用 `step(n)` 手动固定步进，并通过 `window.__playground` 暴露 `getState` / `input` / `step` / `restart` / `destroy`）；其中扫雷与镇煞是 2 款纯 DOM 参考，其余四款使用 Phaser 场景；最小示例参考 `src/games/blank/`。
 3. 在 `src/games/registry.ts` 的 `games` 数组里注册；大厅会自动出现一张卡片。
 4. 需要新资源时放到 `public/games/<id>/`，在场景 `preload()` 里加载。
 

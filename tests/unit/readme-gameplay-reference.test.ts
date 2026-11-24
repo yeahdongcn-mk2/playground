@@ -59,15 +59,19 @@ describe('README gameplay reference', () => {
     expect(reference).toContain(`其余${phaserCountLabel}款使用 Phaser 场景`);
   });
 
-  it('describes zhen-sha with its tests, settlement sheet and debug seam', () => {
+  it('documents zhen-sha with its tests, settlement sheet and debug URL seam', () => {
     const reference = gameplayReference(README);
     const zhenShaIndex = reference.indexOf('src/games/zhen-sha/');
     expect(zhenShaIndex).toBeGreaterThanOrEqual(0);
-    // 镇煞 ships view / settlement tests and the same hash-only ?debug=1 seam as
-    // the other games, so its fragment names both.
+    // 镇煞 ships view / settlement tests and documents the same hash-only
+    // ?debug=1 seam as the other games: a pinned seed, an absolute-tick inputs
+    // plan, manual step(n) stepping and the window.__playground API.
     const zhenShaFragment = reference.slice(zhenShaIndex);
     expect(zhenShaFragment).toContain('与测试');
     expect(zhenShaFragment).toContain('结算战绩符');
     expect(zhenShaFragment).toContain('调试接缝');
+    for (const keyword of ['?debug=1', 'seed', 'inputs', 'step', '__playground']) {
+      expect(zhenShaFragment).toContain(keyword);
+    }
   });
 });
