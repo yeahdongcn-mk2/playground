@@ -926,6 +926,63 @@ describe('boss chart contract', () => {
     // Acceptance #4 greps boss-chart.ts verbatim, so comments must not match.
     expect(source).not.toMatch(ACCEPTANCE_PURITY_GREP);
   });
+
+  it('describes an engine that already consumes charts', () => {
+    const source = readFileSync(
+      new URL('./boss-chart.ts', import.meta.url),
+      'utf8',
+    );
+
+    // The engine has scheduled from charts since #448, so the old "not wired
+    // yet" wording must not come back.
+    expect(source).not.toMatch(/Today the engine still reads/);
+    expect(source).not.toMatch(/Until the wiring lands/);
+    expect(source).not.toMatch(/once it is wired to charts/i);
+
+    // Guard the positive claims too. Limit the module-header claims to the top
+    // doc comment: the fields are declared again in the interfaces below, so a
+    // whole-file check would not prove the header says what we claim.
+    const headerEnd = source.indexOf('*/') + 2;
+    expect(headerEnd).toBeGreaterThan(2);
+    const header = source.slice(0, headerEnd);
+    for (const expectedText of [
+      'Since #448 the engine consumes a chart',
+      'normalizeChart(chart)',
+      'telegraphMs',
+      'activeMs',
+      'parryWindowMs',
+      'recoveryMs',
+      '`damage` takes no part in judgement',
+      'only checks that it is positive',
+    ]) {
+      expect(header).toContain(expectedText);
+    }
+
+    // The default chart's doc block covers the argument-free default, the tick
+    // constants and the fact that the engine no longer schedules from them.
+    const chartExport = source.indexOf('export const DEFAULT_BOSS_CHART');
+    expect(chartExport).toBeGreaterThanOrEqual(0);
+    const chartDoc = source.slice(
+      source.lastIndexOf('/**', chartExport),
+      chartExport,
+    );
+    expect(chartDoc).toMatch(/^\/\*\*/);
+    // Fold the comment's leading asterisks so a claim may span source lines.
+    const chartDocProse = chartDoc.replace(/\s*\*\s*/g, ' ');
+    for (const expectedText of [
+      'argument-free engine',
+      'TELEGRAPH_TICKS',
+      'FIRST_TELEGRAPH_TICKS',
+      'RECOVERY_TICKS',
+      'NORMAL_BAND_HALF_TICKS',
+      'PERFECT_BAND_HALF_TICKS',
+    ]) {
+      expect(chartDocProse).toContain(expectedText);
+    }
+    expect(chartDocProse).toContain(
+      'the engine already schedules from the chart and no longer reads them',
+    );
+  });
 });
 
 const STAGE_FIRST_TELEGRAPH_MS = 500;
