@@ -1135,6 +1135,50 @@ const SEQUENCE_CHART: BossChart = {
   ],
 };
 
+/** Move tells for a chart without firstTelegraphMs: 400 ms, then 800 ms. */
+const FALLBACK_FIRST_MS = 400;
+const FALLBACK_SECOND_MS = 800;
+
+const FALLBACK_TIMING = {
+  first: toTicks(FALLBACK_FIRST_MS),
+  second: toTicks(FALLBACK_SECOND_MS),
+} as const;
+
+/**
+ * A chart with no firstTelegraphMs, so the opening tell must fall back to the
+ * first move's 400 ms and a restart that keeps a stale move index would pick
+ * the 800 ms tell instead.
+ */
+const FALLBACK_CHART: BossChart = {
+  recoveryMs: SEQUENCE_RECOVERY_MS,
+  bosses: [
+    {
+      name: '回退 boss',
+      phases: [
+        {
+          id: 'fallback-phase',
+          moves: [
+            {
+              id: 'fallback-fast',
+              telegraphMs: FALLBACK_FIRST_MS,
+              activeMs: SEQUENCE_ACTIVE_MS,
+              parryWindowMs: SEQUENCE_PARRY_MS,
+              damage: 1,
+            },
+            {
+              id: 'fallback-slow',
+              telegraphMs: FALLBACK_SECOND_MS,
+              activeMs: SEQUENCE_ACTIVE_MS,
+              parryWindowMs: SEQUENCE_PARRY_MS,
+              damage: 1,
+            },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
 /** Impact ticks of the first three perfect parries in SEQUENCE_CHART phase 1. */
 function sequencePerfectImpacts(): readonly [number, number, number] {
   const second =
@@ -1528,6 +1572,93 @@ describe('boss chart stages', () => {
     expect(engine.drainEvents()).toEqual([]);
   });
 
+  it('restart drops a stale phase and move index in a multi-phase chart', () => {
+    const engine = new ZhenShaEngine(SEQUENCE_CHART);
+    for (const impact of sequencePerfectImpacts()) {
+      engine.input('block', impact);
+    }
+    const strikeStep = sequencePerfectImpacts()[2] + 10;
+    engine.input('charge', strikeStep - 5);
+    engine.input('strike', strikeStep);
+    advance(engine, strikeStep + 1);
+
+    // Land one perfect in 1-2 so restart starts from non-zero phase and move
+    // indices: phaseIndex = 1 and moveIndex = 1.
+    const phaseTwoSpawn = strikeStep + SEQUENCE_TIMING.recovery;
+    const phaseTwoFirstImpact =
+      phaseTwoSpawn + SEQUENCE_TIMING.nextTelegraphs[0]!;
+    engine.input('block', phaseTwoFirstImpact);
+    advance(engine, phaseTwoFirstImpact + 1 - engine.snapshot().step);
+    const phaseTwoSecondSpawn =
+      phaseTwoFirstImpact + SEQUENCE_TIMING.recovery;
+    advance(engine, phaseTwoSecondSpawn + 1 - engine.snapshot().step);
+
+    expect(engine.snapshot().boss).toMatchObject({ phase: 2, guard: 'up' });
+    // The queued attack uses 1-2 move 2's 450 ms tell, so moveIndex is 1 and
+    // a restart that keeps it would skip the first move.
+    expect(engine.snapshot().attack).toMatchObject({
+      impactStep: phaseTwoSecondSpawn + SEQUENCE_TIMING.nextTelegraphs[1]!,
+    });
+
+    engine.restart();
+
+    expect(engine.snapshot()).toEqual(
+      new ZhenShaEngine(SEQUENCE_CHART).snapshot(),
+    );
+    // The opening attack uses firstTelegraphMs, not a stale phase/move tell.
+    expect(engine.snapshot().boss.phase).toBe(1);
+    expect(engine.snapshot().attack).toMatchObject({
+      impactStep: SEQUENCE_TIMING.firstTelegraph,
+    });
+
+    // 1-1 starts at move 1, so move 2 must wind up for 500 ms, not the stale
+    // 750 ms / 1000 ms move a kept moveIndex would select.
+    engine.input('block', SEQUENCE_TIMING.firstTelegraph);
+    advance(engine, SEQUENCE_TIMING.firstTelegraph + 1);
+    const restartSecondSpawn =
+      SEQUENCE_TIMING.firstTelegraph + SEQUENCE_TIMING.recovery;
+    advance(engine, restartSecondSpawn + 1 - engine.snapshot().step);
+    expect(engine.snapshot().attack).toMatchObject({
+      impactStep: restartSecondSpawn + SEQUENCE_TIMING.telegraphs[1]!,
+      phase: 'telegraph',
+    });
+  });
+
+  it('restart falls back to the first move telegraph without firstTelegraphMs', () => {
+    const engine = new ZhenShaEngine(FALLBACK_CHART);
+    expect(engine.snapshot().attack).toMatchObject({
+      impactStep: FALLBACK_TIMING.first,
+    });
+
+    // One perfect moves the cursor to move 2 (an 800 ms tell).
+    engine.input('block', FALLBACK_TIMING.first);
+    advance(engine, FALLBACK_TIMING.first + 1);
+    const secondSpawn = FALLBACK_TIMING.first + SEQUENCE_TIMING.recovery;
+    advance(engine, secondSpawn + 1 - engine.snapshot().step);
+    expect(engine.snapshot().attack).toMatchObject({
+      impactStep: secondSpawn + FALLBACK_TIMING.second,
+    });
+
+    engine.restart();
+
+    expect(engine.snapshot()).toEqual(
+      new ZhenShaEngine(FALLBACK_CHART).snapshot(),
+    );
+    // With no firstTelegraphMs, restart opens on the first move's 400 ms tell.
+    expect(engine.snapshot().attack).toMatchObject({
+      impactStep: FALLBACK_TIMING.first,
+    });
+
+    // The fallback also resets the move cursor: move 2 keeps its 800 ms tell.
+    engine.input('block', FALLBACK_TIMING.first);
+    advance(engine, FALLBACK_TIMING.first + 1);
+    const restartSpawn = FALLBACK_TIMING.first + SEQUENCE_TIMING.recovery;
+    advance(engine, restartSpawn + 1 - engine.snapshot().step);
+    expect(engine.snapshot().attack).toMatchObject({
+      impactStep: restartSpawn + FALLBACK_TIMING.second,
+    });
+  });
+
   it('defaults to DEFAULT_BOSS_CHART and keeps the kill-gate schedule', () => {
     const implicit = new ZhenShaEngine();
     const explicit = new ZhenShaEngine(DEFAULT_BOSS_CHART);
@@ -1549,6 +1680,99 @@ describe('boss chart stages', () => {
 });
 
 describe('chart validation', () => {
+  const VALIDATION_MOVE: BossMoveChart = {
+    id: 'validation-move',
+    telegraphMs: 900,
+    activeMs: 300,
+    parryWindowMs: 100,
+    damage: 1,
+  };
+
+  /** One valid boss/phase/move, with `overrides` applied to that move. */
+  function chartWithMove(overrides: Partial<BossMoveChart>): BossChart {
+    return {
+      bosses: [
+        {
+          name: '校验 boss',
+          phases: [
+            {
+              id: 'validation-phase',
+              moves: [{ ...VALIDATION_MOVE, ...overrides }],
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  const INVALID_MOVE_TIMINGS: ReadonlyArray<
+    readonly [label: string, move: Partial<BossMoveChart>]
+  > = [
+    ['telegraphMs = 0', { telegraphMs: 0 }],
+    ['telegraphMs negative', { telegraphMs: -900 }],
+    ['telegraphMs NaN', { telegraphMs: Number.NaN }],
+    ['telegraphMs infinite', { telegraphMs: Number.POSITIVE_INFINITY }],
+    ['activeMs = 0', { activeMs: 0 }],
+    ['activeMs NaN', { activeMs: Number.NaN }],
+    ['parryWindowMs negative', { parryWindowMs: -100 }],
+  ];
+
+  it.each(INVALID_MOVE_TIMINGS)(
+    'rejects a move with %s',
+    (_label, move) => {
+      expect(() => new ZhenShaEngine(chartWithMove(move))).toThrow(
+        /must be a positive number of milliseconds/,
+      );
+    },
+  );
+
+  it.each([1, 10, 12])(
+    'rejects activeMs = %i because it spans less than one band tick',
+    (activeMs) => {
+      expect(() => new ZhenShaEngine(chartWithMove({ activeMs }))).toThrow(
+        /activeMs must span at least one tick/,
+      );
+    },
+  );
+
+  const INVALID_BOSS_NAMES: ReadonlyArray<readonly [label: string, name: string]> =
+    [
+      ['an empty', ''],
+      ['a whitespace-only', '   '],
+    ];
+
+  it.each(INVALID_BOSS_NAMES)(
+    'rejects %s boss name',
+    (_label, name) => {
+      expect(
+        () =>
+          new ZhenShaEngine({
+            bosses: [
+              {
+                name,
+                phases: [{ id: 'validation-phase', moves: [VALIDATION_MOVE] }],
+              },
+            ],
+          }),
+      ).toThrow(/needs a name/);
+    },
+  );
+
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    'rejects firstTelegraphMs = %s',
+    (firstTelegraphMs) => {
+      expect(
+        () =>
+          new ZhenShaEngine({
+            ...chartWithMove({}),
+            firstTelegraphMs,
+          }),
+      ).toThrow(
+        /firstTelegraphMs must be a positive number of milliseconds/,
+      );
+    },
+  );
+
   it('rejects a chart without a complete first stage', () => {
     expect(() => new ZhenShaEngine({ bosses: [] })).toThrow(RangeError);
     expect(

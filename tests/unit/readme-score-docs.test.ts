@@ -38,7 +38,7 @@ describe('README score documentation', () => {
   it('lists npm run score in the command table against the baseline file', () => {
     expect(commandRow('npm run score')).toContain('docs/score-baseline.json');
     // 门槛只许抬不许降：基线被悄悄调低会重新留下余量（Issue #389）。
-    expect(BASELINE.unitTests).toBeGreaterThanOrEqual(1729);
+    expect(BASELINE.unitTests).toBeGreaterThanOrEqual(1747);
   });
 
   it('documents the comparison table, SCORE_JSON line, exit code, --update and build step', () => {
