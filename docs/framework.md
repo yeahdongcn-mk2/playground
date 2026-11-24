@@ -251,7 +251,7 @@ const vector = directions.vector(); // 对角线已归一化
 3. **DOM 外壳** `view.ts`：负责 HUD、覆盖层、按钮、触屏辅助键；2D 游戏用 `createPhaser2DGame()` 创建 2D 运行时，DOM 游戏（如扫雷）直接操作 DOM（见 10.1），返回的 `destroy()` 里释放引擎、监听器与计时器。
 4. **注册**：在 `src/games/registry.ts` 的 `games` 数组加入 `myGame`，大厅自动出现卡片。
 5. **资源**：放到 `public/games/my-game/`，场景 `preload()` 里加载；体积大的资源按需加载。
-6. **测试**：规则单测放 `engine.test.ts`；浏览器行为加到 `tests/e2e/`，用 `data-testid` 定位。需要读取只读状态或固定初始数据时，可参考 snake / tetris / 2048 / breakout / minesweeper 只在 `import.meta.env.DEV` 或 hash 路由后的 `?debug=1`（例如 `#/games/breakout?debug=1`）下安装 `window.__playground`，生产默认入口不会暴露调试 API。
+6. **测试**：规则单测放 `engine.test.ts`；浏览器行为加到 `tests/e2e/`，用 `data-testid` 定位。需要读取只读状态或固定初始数据时，可参考 snake / tetris / 2048 / breakout / minesweeper / 镇煞 只在 `import.meta.env.DEV` 或 hash 路由后的 `?debug=1`（例如 `#/games/breakout?debug=1`）下安装 `window.__playground`，生产默认入口不会暴露调试 API。
 
 ### 10.1 DOM 游戏（不加载引擎）
 
@@ -263,6 +263,7 @@ const vector = directions.vector(); // 对角线已归一化
 - 棋盘用左右键交互：左键翻开、右键插旗并 `preventDefault()` 掉浏览器菜单；
 - 棋盘、难度选择器与按钮监听器挂在 `AbortController` 的 signal 上；`mountSignal` 的 abort 监听在 `destroy()` 中显式移除，计时器也在那里清理；
 - `?debug=1&rows=...&cols=...&mineCount=...&safeFirst=...` 提供只读状态与棋盘配置（另可用 `mines=row,col;...` 固定雷盘、`seed` 固定随机数；缺省、空串、非数字或非有限值回退为 1，只有显式 `seed=0` 才是 0），以及 e2e 专用的 `destroy()`，正常入口不安装调试 API。
+- 镇煞（`src/games/zhen-sha/`）同样演示 `engine: 'dom'`，并提供纯 DOM 调试接缝：hash 路由后只有精确的 `debug=1` 才启用（例如 `#/games/zhen-sha?debug=1`），正常入口不安装 `window.__playground`；`seed` 固定并记录回放种子（当前决斗无随机，保留给后续随机规则），`inputs=<action>@<tick>,...`（如 `block@180,charge@541,strike@542`）按绝对固定 tick 调度 block / charge / strike，手动 `step(n)` 推进 n 个固定步长，`restart()` 重置决斗并重新排定 URL 输入，`destroy()` 清理监听器、循环与调试接缝。
 - 新增 DOM 游戏时不需要 Phaser；`meta.engine` 写 `'dom'`，大厅会自动显示对应的引擎标签。
 
 ## 11. 3D（Three.js）接入

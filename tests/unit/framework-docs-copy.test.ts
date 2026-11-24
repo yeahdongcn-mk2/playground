@@ -64,6 +64,26 @@ function treeEntry(tree: string, id: string): string {
   return line;
 }
 
+/** The body of section 10, which documents the debug seams and the DOM notes. */
+function sectionTen(source: string): string {
+  const start = source.indexOf('## 10. ');
+  const end = source.indexOf('\n## 11. ', start);
+  if (start < 0 || end < 0) {
+    throw new Error('docs/framework.md is missing section 10 (新增一个 2D 游戏)');
+  }
+  return source.slice(start, end);
+}
+
+/** The body of the 10.1 DOM debug seam subsection. */
+function domSeamSection(source: string): string {
+  const start = source.indexOf('### 10.1 ');
+  const end = source.indexOf('\n## 11. ', start);
+  if (start < 0 || end < 0) {
+    throw new Error('docs/framework.md is missing section 10.1 (DOM 游戏)');
+  }
+  return source.slice(start, end);
+}
+
 describe('framework docs game copy', () => {
   it('derives six complete games with two DOM and four Phaser engines from the registry', () => {
     expect(shippedGames).toHaveLength(6);
@@ -92,7 +112,7 @@ describe('framework docs game copy', () => {
     );
   });
 
-  it('lists every complete game in the section 10 split example and the gameplay reference', () => {
+  it('lists every complete game in the section 10 split example, the gameplay reference and the zhen-sha debug seam', () => {
     const splitExamples = splitExample(FRAMEWORK);
     for (const game of shippedGames) {
       expect(
@@ -117,6 +137,32 @@ describe('framework docs game copy', () => {
     expect(reference).toContain(domCopy);
     expect(phaserGames).toHaveLength(4);
     expect(reference).toContain('其余四款使用 Phaser 场景');
+
+    // Section 10 step 6 names the games that install the debug seam.
+    const ten = sectionTen(FRAMEWORK);
+    const testingStep = ten.split('\n').find((line) => line.startsWith('6. **测试**'));
+    expect(testingStep, 'section 10 step 6 should list the debug seam games').toBeDefined();
+    expect(testingStep).toContain('minesweeper');
+    expect(testingStep).toContain('镇煞');
+
+    // §10.1 documents the zhen-sha engine-free seam: exact ?debug=1 only.
+    const seam = domSeamSection(FRAMEWORK);
+    for (const marker of [
+      'src/games/zhen-sha/',
+      '镇煞',
+      '#/games/zhen-sha?debug=1',
+      'seed',
+      'inputs=<action>@<tick>,...',
+      'block@180,charge@541,strike@542',
+      'step(n)',
+      'restart()',
+      'destroy()',
+      '__playground',
+      '只有精确的 `debug=1`',
+      '正常入口不安装 `window.__playground`',
+    ]) {
+      expect(seam, `§10.1 should document the zhen-sha debug seam: ${marker}`).toContain(marker);
+    }
   });
 
   it('removes the stale five-game unit-test wording', () => {
