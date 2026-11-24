@@ -176,7 +176,7 @@ interface TimedChart {
 }
 
 function durationToTicks(ms: number, label: string): number {
-  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) {
+  if (!Number.isFinite(ms) || ms <= 0) {
     throw new RangeError(`${label} must be a positive number of milliseconds`);
   }
   return Math.max(1, Math.round((ms * TICKS_PER_SECOND) / 1000));
@@ -223,6 +223,9 @@ function normalizeChart(chart: BossChart): TimedChart {
             const label = `BossChart boss ${bossIndex + 1} phase ${
               phaseIndex + 1
             } move ${moveIndex + 1}`;
+            if (!Number.isFinite(move.damage) || move.damage <= 0) {
+              throw new RangeError(`${label} damage must be positive`);
+            }
             const telegraphTicks = durationToTicks(
               move.telegraphMs,
               `${label} telegraphMs`,
@@ -256,11 +259,7 @@ function normalizeChart(chart: BossChart): TimedChart {
 
   let recoveryTicks = 0;
   if (chart.recoveryMs !== undefined) {
-    if (
-      typeof chart.recoveryMs !== 'number' ||
-      !Number.isFinite(chart.recoveryMs) ||
-      chart.recoveryMs < 0
-    ) {
+    if (!Number.isFinite(chart.recoveryMs) || chart.recoveryMs < 0) {
       throw new RangeError(
         'BossChart recoveryMs must be a non-negative number of milliseconds',
       );
