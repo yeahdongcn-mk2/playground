@@ -548,15 +548,17 @@
     0 0 26px color-mix(in srgb, var(--zhen-gold) 42%, transparent);
 }
 
-.zhen-sha-tutorial[data-motion="animated"] .zhen-sha-tutorial-ring {
-  animation: zhen-sha-tutorial-pulse 1100ms ease-in-out infinite;
-}
-
+/*
+ * Reduce motion keeps a static gold contour. The pulse is applied by
+ * zhen-sha-view.ts as an inline animation; keep the keyframes name below in
+ * sync with TUTORIAL_PULSE_ANIMATION. motion.test.ts reserves every stylesheet
+ * animation declaration outside the prefers-reduced-motion override for the
+ * two stage pseudo-elements; the hint picks its branch from `reduceMotion`.
+ */
 .zhen-sha-tutorial[data-motion="static"] .zhen-sha-tutorial-ring {
   border-color: var(--zhen-gold);
   background: color-mix(in srgb, var(--zhen-gold) 16%, transparent);
   box-shadow: none;
-  animation: none;
 }
 
 .zhen-sha-tutorial-copy {

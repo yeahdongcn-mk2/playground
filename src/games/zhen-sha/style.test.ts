@@ -199,12 +199,17 @@ describe('zhen-sha palette and procedural paper theme', () => {
     expect(tutorial).toBeLessThan(overlay);
     expect(declarationValue(ruleBody('.zhen-sha-tutorial'), 'pointer-events')).toBe('none');
 
-    // Animation is opt-in; reduce motion keeps a static gold contour.
-    expect(CSS).toContain('.zhen-sha-tutorial[data-motion="animated"] .zhen-sha-tutorial-ring');
+    // The view applies the pulse from `services.reduceMotion`; the stylesheet
+    // keeps the frames and the static contour only, so motion.test.ts still
+    // owns every stylesheet animation declaration.
+    const keyframes = /@keyframes\s+zhen-sha-tutorial-pulse\s*\{([\s\S]*?)\n\}/
+      .exec(CSS_WITHOUT_COMMENTS)?.[1];
+    expect(keyframes, 'zhen-sha.css 应定义提示环脉冲帧').toBeDefined();
+    expect(keyframes).toContain('transform');
+    expect(keyframes).toContain('opacity');
     const staticRing = ruleBody(
       '.zhen-sha-tutorial[data-motion="static"] .zhen-sha-tutorial-ring',
     );
-    expect(staticRing).toMatch(/animation:\s*none/);
     expect(staticRing).toContain('var(--zhen-gold)');
     expect(CSS).toContain('@media (prefers-reduced-motion: reduce)');
   });

@@ -785,29 +785,24 @@ describe('zhen-sha procedural motion layer', () => {
     // The reduced block must not keep any of the zhen-sha animation names alive.
     expect(reduced).not.toMatch(/zhen-sha-ink-mist|zhen-sha-scanlines|zhen-sha-jitter/);
 
-    // Only the two decorative pseudo-element rules and the first-visit hint
-    // ring may declare animation before the override; a higher-specificity
-    // stage selector (for example `.zhen-sha-stage.is-playing::before`) would
-    // beat the reduced rule in the cascade even though it comes earlier in the
-    // file. The hint ring's static rule deliberately declares `animation:
-    // none`; the view selects it with `data-motion="static"` from
-    // `services.reduceMotion`, so it needs no cascade battle.
-    const animationRules = rulesIn(CSS.slice(0, reducedStart)).filter(
+    // Only the two decorative pseudo-element rules may run animation before the
+    // override; a third selector (for example a higher-specificity
+    // `.zhen-sha-stage.is-playing::before`) would beat the reduced rule in the
+    // cascade even though it comes earlier in the file.
+    const runningRules = rulesIn(CSS.slice(0, reducedStart)).filter(
       (rule) => animationPropertiesIn(rule.body).length > 0,
     );
-    expect(animationRules.map((rule) => rule.selector)).toEqual([
+    expect(runningRules.map((rule) => rule.selector)).toEqual([
       '.zhen-sha-stage::before',
       '.zhen-sha-stage::after',
-      '.zhen-sha-tutorial[data-motion="animated"] .zhen-sha-tutorial-ring',
-      '.zhen-sha-tutorial[data-motion="static"] .zhen-sha-tutorial-ring',
     ]);
 
     // `animation: none` in the media block is normal, so a running declaration
     // with `!important` would beat it regardless of source order. Reject any
-    // `!` in a declared animation value instead of spelling `important`: CSS
+    // `!` in a running animation value instead of spelling `important`: CSS
     // escapes such as `!\69 mportant` form the same token, and a literal `!`
     // cannot be escaped without ceasing to be the `!important` delimiter.
-    for (const rule of animationRules) {
+    for (const rule of runningRules) {
       for (const { property, value } of declarationsIn(rule.body)) {
         const unprefixed = unprefixedAnimationProperty(property);
         if (unprefixed === 'animation' || unprefixed.startsWith('animation-')) {

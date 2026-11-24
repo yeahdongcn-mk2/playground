@@ -57,9 +57,9 @@
 - `bosses.ts`：148 行，由 #405 / #408 新增的 boss 数据与差异。
 - `boss-chart.ts`：134 行，由 #407 拆出。其中 `boss-chart.ts:39-97` 的 59 行接口声明若保留独立文件，应从 `bosses.ts` 的 300 行估算中移出，不能重复计入：完整特性为 8 个生产文件、约 2,229 行（2,154 + 134 − 59）；2,288 行（直接相加）只作为未扣除类型时的保守上限。两种算法都超过本文 2,200 行上沿，需按结论中的 L 条件重新复核。
 - `boss-chart-adapter.ts`：90 行，由 #449 t2（#454）落地，#431 t2 收敛时保留。它是 `bosses.ts` 与引擎 `BossChart` 契约之间唯一的单位换算层：`telegraphMs` / `parryWindowMs` 原样传递，`activeMs` 作为完整普通判定带宽度，`bosses.ts` 的 7–13 展示点数原样传递（引擎每次未弹反固定只记 1 hit，damage 不参与中招预算）；源表没有 `recoveryMs` / `firstTelegraphMs`，引擎按 0 ms 恢复、第一招自己的 telegraph 开场。真实 3×2 引擎集成用例由 #431 t2 补在 `engine.test.ts`，覆盖 1-1 → 3-2、逐招判定窗与阶段推进。该文件只被 `engine.test.ts` / `boss-chart-adapter.test.ts` 引用，按本文「仅测试引用，不计」口径不计入当前生产规模。
-- `zhen-sha-view.ts`：676 → 836 行，由 #443 的固定步长调试接缝、#249 t2 的朱砂印 / 字标 / 金边状态切换，以及 #245 t1 的首启提示显隐与首次完美后持久化隐藏新增。
-- `zhen-sha.css`：254 → 753 行，由 #406 的 4+1 色板与黑宣纸 / 飞白边缘、#249 t2 的朱砂印 / 字标与金边 `clip-path` 多边形、#412 的循环墨雾 / 边缘抖动 / 扫描线动画，以及 #245 t1 的教学提示环 / 静态 reduced-motion 轮廓新增（金边几何烘进 CSS，不占 JS 体积）。
-- 当前生产规模（实测于本 PR HEAD，合并 `main` `9147cdc` 后）：9 个文件 / 3,334 行（`engine.ts` 712 + `index.ts` 29 + `settlement.ts` 518 + `debug.ts` 140 + `bosses.ts` 148 + `boss-chart.ts` 134 + `tutorial.ts` 64 + `zhen-sha-view.ts` 836 + `zhen-sha.css` 753），已超出 M 区间 2,200 行上沿 1,134 行。当前生产规模为人工实测（暂无自动滚动校验），超限重估由跟进单 [#417](https://github.com/yeahdongcn-mk2/playground/issues/417) 跟踪。
+- `zhen-sha-view.ts`：676 → 846 行，由 #443 的固定步长调试接缝、#249 t2 的朱砂印 / 字标 / 金边状态切换，以及 #245 t1 的首启提示显隐与首次完美后持久化隐藏新增。
+- `zhen-sha.css`：254 → 755 行，由 #406 的 4+1 色板与黑宣纸 / 飞白边缘、#249 t2 的朱砂印 / 字标与金边 `clip-path` 多边形、#412 的循环墨雾 / 边缘抖动 / 扫描线动画，以及 #245 t1 的教学提示环 / 静态 reduced-motion 轮廓新增（金边几何烘进 CSS，不占 JS 体积）。
+- 当前生产规模（实测于本 PR HEAD，合并 `main` `9147cdc` 后）：9 个文件 / 3,346 行（`engine.ts` 712 + `index.ts` 29 + `settlement.ts` 518 + `debug.ts` 140 + `bosses.ts` 148 + `boss-chart.ts` 134 + `tutorial.ts` 64 + `zhen-sha-view.ts` 846 + `zhen-sha.css` 755），已超出 M 区间 2,200 行上沿 1,146 行。当前生产规模为人工实测（暂无自动滚动校验），超限重估由跟进单 [#417](https://github.com/yeahdongcn-mk2/playground/issues/417) 跟踪。
 
 ### 新概念（2 个）
 

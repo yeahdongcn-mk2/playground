@@ -396,13 +396,13 @@ games/<game>/scene → 对应引擎（动态 import）
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过（oxlint 覆盖 src、tests 与 scripts；error 与 warning 都会失败，warning 经 --deny-warnings 升级；另跑 scripts/check-boundaries.mjs，失败返回非 0）
-npm run test:unit    # 1845 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
+npm run test:unit    # 1846 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
 npm run build        # 通过
 npm run check:budget # 通过，实际输出：
-# Entry JS: 35.66 KB (11.60 KB gzip)
-# All JS chunks: 412.80 KB gzip (2D game budget 450 KB)
-# CSS: 15.43 KB gzip
-# Zhen Sha view JS: zhen-sha-view-DSmcoASs.js 7.00 KB gzip (per-game budget 35 KB)
+# Entry JS: 35.66 KB (11.61 KB gzip)
+# All JS chunks: 412.87 KB gzip (2D game budget 450 KB)
+# CSS: 15.41 KB gzip
+# Zhen Sha view JS: zhen-sha-view-BYnoInRl.js 7.07 KB gzip (per-game budget 35 KB)
 # Budget check OK: shell is engine-free and within the 2D download budget.
 npm run score        # 通过（打印「指标 / 当前值 / 基线值 / 差值」表与末行 SCORE_JSON；退化退出 1，变好只报差值）
 npm run test:e2e     # 162 passed（桌面 94 + 手机 36 + WebKit 32）

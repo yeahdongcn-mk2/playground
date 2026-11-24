@@ -39,6 +39,8 @@ const CANVAS_HEIGHT = 560;
 const FLASH_MS = 420;
 const RESULT_FLASH_MS = 900;
 const TAU = Math.PI * 2;
+/** Hint ring pulse; keep in sync with the @keyframes name in zhen-sha.css. */
+const TUTORIAL_PULSE_ANIMATION = 'zhen-sha-tutorial-pulse 1100ms ease-in-out infinite';
 
 const STATUS_LABELS: Readonly<Record<ZhenShaStatus, string>> = {
   playing: '进行中',
@@ -95,7 +97,7 @@ aria-label="势 0 / 3">
 role="img" aria-label="黑宣纸上的黑煞首领与金棍"></canvas>
 <div class="zhen-sha-tutorial" data-testid="tutorial-hint"
 data-motion="animated" hidden>
-<span class="zhen-sha-tutorial-ring" aria-hidden="true"></span>
+<span class="zhen-sha-tutorial-ring" data-testid="tutorial-ring" aria-hidden="true"></span>
 <span class="zhen-sha-tutorial-copy" data-testid="tutorial-copy">${TUTORIAL_HINT_TEXT}</span>
 </div>
 <div class=zhen-sha-marks aria-hidden=true><span class=zhen-sha-wordmark>镇煞</span><span class=zhen-sha-seal>镇煞</span><span class=zhen-sha-arc-glow></span><span class=zhen-sha-arc-edge></span></div>
@@ -205,6 +207,7 @@ export function mountZhenSha(
   const stage = query<HTMLElement>(root, '[data-testid="zhen-sha-stage"]');
   const canvas = query<HTMLCanvasElement>(root, '[data-testid="zhen-sha-canvas"]');
   const tutorialHint = query<HTMLElement>(root, '[data-testid="tutorial-hint"]');
+  const tutorialRing = query<HTMLElement>(root, '[data-testid="tutorial-ring"]');
   const gestureNote = query<HTMLElement>(root, '[data-testid="gesture-note"]');
   const sidebarNote = query<HTMLElement>(root, '[data-testid="sidebar-note"]');
   const overlay = query<HTMLElement>(root, '[data-testid="overlay"]');
@@ -236,6 +239,13 @@ export function mountZhenSha(
   const engine = new ZhenShaEngine(undefined, tutorialTiming(tutorial));
   const audio = services.audio;
   tutorialHint.dataset.motion = services.reduceMotion ? 'static' : 'animated';
+  // The pulse is applied from the view, not declared in the stylesheet:
+  // motion.test.ts reserves every CSS animation outside the reduced-motion
+  // override for the two stage pseudo-elements, and the hint already decides
+  // its branch from `services.reduceMotion` here.
+  if (!services.reduceMotion) {
+    tutorialRing.style.setProperty('animation', TUTORIAL_PULSE_ANIMATION);
+  }
 
   function scheduleDebugInputs(): void {
     if (!debugOptions.enabled) {

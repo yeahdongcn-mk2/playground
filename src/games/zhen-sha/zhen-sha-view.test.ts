@@ -1011,6 +1011,25 @@ describe('first-visit tutorial', () => {
     expect(text('judgement')).toBe('完美格挡');
   });
 
+  it('pulses the hint ring only when reduce motion is off', () => {
+    const animated = mountFirstVisit();
+    const animatedRing = required<HTMLElement>(
+      animated.view.root,
+      '[data-testid="tutorial-ring"]',
+    );
+    expect(animatedRing.style.getPropertyValue('animation')).toBe(
+      'zhen-sha-tutorial-pulse 1100ms ease-in-out infinite',
+    );
+    unmountView(animated.view);
+
+    const reduced = mountFirstVisit(true);
+    const reducedRing = required<HTMLElement>(
+      reduced.view.root,
+      '[data-testid="tutorial-ring"]',
+    );
+    expect(reducedRing.style.getPropertyValue('animation')).toBe('');
+  });
+
   it('hides the hint immediately and persists done on the first perfect parry', () => {
     const { view, services } = mountFirstVisit();
     primeLoop();
