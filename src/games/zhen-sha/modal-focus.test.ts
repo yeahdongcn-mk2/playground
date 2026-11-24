@@ -195,6 +195,30 @@ describe('createModalFocus', () => {
     expect(document.activeElement).toBe(must('#again'));
   });
 
+  it('按计算样式判断可聚焦：hidden 属性被 CSS 重新显示后仍可聚焦', () => {
+    // `[hidden]` 的 UA 样式是 `display: none`，由计算样式过滤命中；作者用 CSS
+    // 把它改回可见后，元素在屏幕上可聚焦，焦点陷阱也应当收录它。
+    const fixture = mount(`
+      <button id="again" type="button">再来一局</button>
+      <button id="hidden-shown" type="button" hidden style="display: block">重新显示</button>
+      <button id="close" type="button">关闭</button>
+    `);
+    const controller = makeController({
+      container: fixture.modal,
+      initialFocus: must('#again'),
+    });
+
+    expect(controller.focusables().map((element) => element.id)).toEqual([
+      'again',
+      'hidden-shown',
+      'close',
+    ]);
+
+    controller.open();
+    pressTab();
+    expect(document.activeElement).toBe(must('#hidden-shown'));
+  });
+
   it('打开时给背景元素加 inert，关闭时移除', () => {
     const fixture = mount(THREE_BUTTONS);
     const controller = makeController({

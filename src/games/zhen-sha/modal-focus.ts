@@ -71,6 +71,8 @@ function isHiddenByCss(element: HTMLElement): boolean {
     return true;
   }
   // `display: none` is not inherited, so walk up to catch a hidden ancestor.
+  // This also covers the UA `[hidden] { display: none }` style; an element the
+  // author deliberately re-shows through CSS stays focusable.
   for (let node: HTMLElement | null = element; node !== null; node = node.parentElement) {
     if (getComputedStyle(node).display === 'none') {
       return true;
@@ -83,12 +85,9 @@ function isFocusable(element: HTMLElement): boolean {
   if (element.hasAttribute('disabled')) {
     return false;
   }
-  // `closest` also covers the element itself, so this skips elements hidden
-  // through a hidden ancestor as well, including an `aria-hidden` ancestor that
-  // keeps assistive technology out of the subtree.
-  if (element.closest('[hidden]') !== null) {
-    return false;
-  }
+  // `closest` also covers the element itself and every ancestor, so elements
+  // inside an `aria-hidden` subtree that assistive technology cannot reach are
+  // skipped as well.
   if (element.closest('[aria-hidden="true"]') !== null) {
     return false;
   }
