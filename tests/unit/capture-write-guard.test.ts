@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -32,6 +33,11 @@ import {
 const ROOT = process.cwd();
 const FILE = 'after-blank-webkit.png';
 const RECAPTURE = 'npm run screenshots:container -- screenshots:webkit';
+const DESKTOP_FILE = 'after-blank-desktop.png';
+const MOBILE_FILE = 'after-blank-mobile.png';
+const DESKTOP_MANIFEST = 'capture-sha256-manifest-desktop.json';
+const MOBILE_MANIFEST = 'capture-sha256-manifest-mobile.json';
+const CHROMIUM_RECAPTURE = 'npm run screenshots:container -- screenshots';
 const IMAGE = {
   repository: PLAYWRIGHT_IMAGE_REPOSITORY,
   tag: PLAYWRIGHT_IMAGE_PIN.tag,
@@ -46,12 +52,18 @@ function sha256(bytes: Buffer | string): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
-function sampleManifest(overrides: { sha256?: string; command?: string } = {}): ScreenshotSha256Manifest {
+/** A one-capture manifest for one capture target. */
+function manifestFor(
+  file: string,
+  target: string,
+  dpr: number,
+  overrides: { sha256?: string; command?: string } = {},
+): ScreenshotSha256Manifest {
   return {
     environment: {
       source: 'container',
-      target: 'webkit',
-      dpr: 2,
+      target,
+      dpr,
       platform: CAPTURE_PLATFORM,
       image: IMAGE,
       egl: { ...CAPTURE_EGL_ENV },
@@ -59,7 +71,7 @@ function sampleManifest(overrides: { sha256?: string; command?: string } = {}): 
     },
     captures: [
       {
-        file: FILE,
+        file,
         sha256: overrides.sha256 ?? sha256('captured png bytes'),
         command: overrides.command ?? RECAPTURE,
         provenance: {
@@ -69,6 +81,10 @@ function sampleManifest(overrides: { sha256?: string; command?: string } = {}): 
       },
     ],
   };
+}
+
+function sampleManifest(overrides: { sha256?: string; command?: string } = {}): ScreenshotSha256Manifest {
+  return manifestFor(FILE, 'webkit', 2, overrides);
 }
 
 /** A fingerprint that matches {@link sampleManifest}. */
@@ -100,6 +116,28 @@ function hostFingerprint(): Record<string, unknown> {
     fonts: null,
     env: null,
   };
+}
+
+/** A container / host fingerprint for one target, keeping every other field. */
+function targetFingerprint(
+  target: string,
+  dpr: number,
+  source: 'container' | 'host' = 'container',
+): Record<string, unknown> {
+  const fingerprint = source === 'container' ? containerFingerprint() : hostFingerprint();
+  return { ...fingerprint, target, dpr };
+}
+
+/** Write one manifest into a temp directory the guard discovers. */
+function writeManifest(
+  dir: string,
+  name: string,
+  manifest: ScreenshotSha256Manifest,
+): string {
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, name);
+  writeFileSync(path, JSON.stringify(manifest, null, 2));
+  return path;
 }
 
 interface FakePageOptions {
@@ -500,6 +538,319 @@ describe('captureScreenshot write-time environment guard', () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
+  it('rejects a host capture of after-blank-desktop.png before writing and names the container command', async () => {
+    const dir = tempScreenshotDir();
+    const targetPath = join(dir, DESKTOP_FILE);
+    writeFileSync(targetPath, 'old committed bytes');
+    const manifestDir = tempScreenshotDir();
+    const manifestPath = writeManifest(
+      manifestDir,
+      DESKTOP_MANIFEST,
+      manifestFor(DESKTOP_FILE, 'desktop', 1, { command: CHROMIUM_RECAPTURE }),
+    );
+    const { page, screenshotSpy } = fakePage();
+
+    let message = '';
+    try {
+      await captureScreenshot(page, DESKTOP_FILE, {
+        engine: 'chromium',
+        outputDir: dir,
+        manifestDir,
+        fingerprint: targetFingerprint('desktop', 1, 'host') as never,
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain(
+      `Refusing to write ${join(dir, DESKTOP_FILE)} before writing any bytes`,
+    );
+    expect(message).toContain(DESKTOP_FILE);
+    expect(message).toContain(manifestPath);
+    expect(message).toContain('capture environment source is "host", expected "container"');
+    expect(message).toContain(CHROMIUM_RECAPTURE);
+    expect(message).toContain('The target PNG was not created or replaced.');
+    expect(readFileSync(targetPath, 'utf8')).toBe('old committed bytes');
+    expect(readdirSync(dir)).toEqual([DESKTOP_FILE]);
+    assertNoTempFiles(dir);
+    expect(screenshotSpy).not.toHaveBeenCalled();
+  });
+
+  it('writes the desktop and mobile blank evidence atomically when their fingerprints match', async () => {
+    const manifestDir = tempScreenshotDir();
+    writeManifest(
+      manifestDir,
+      DESKTOP_MANIFEST,
+      manifestFor(DESKTOP_FILE, 'desktop', 1, { command: CHROMIUM_RECAPTURE }),
+    );
+    writeManifest(
+      manifestDir,
+      MOBILE_MANIFEST,
+      manifestFor(MOBILE_FILE, 'mobile', 2, { command: CHROMIUM_RECAPTURE }),
+    );
+
+    for (const [file, target, dpr] of [
+      [DESKTOP_FILE, 'desktop', 1],
+      [MOBILE_FILE, 'mobile', 2],
+    ] as const) {
+      const dir = tempScreenshotDir();
+      const targetPath = join(dir, file);
+      writeFileSync(targetPath, 'old committed bytes');
+      const log = { warn: vi.fn() };
+      const { page, screenshotSpy } = fakePage();
+
+      await captureScreenshot(page, file, {
+        engine: 'chromium',
+        outputDir: dir,
+        manifestDir,
+        fingerprint: targetFingerprint(target, dpr) as never,
+        log,
+      });
+
+      expect(readFileSync(targetPath, 'utf8')).toBe('captured png bytes');
+      expect(readdirSync(dir)).toEqual([file]);
+      expect(screenshotSpy).toHaveBeenCalledWith({
+        fullPage: false,
+        animations: 'disabled',
+      });
+      expect(log.warn).not.toHaveBeenCalled();
+    }
+  });
+
+  it('compares a file against the environment of its owning manifest, not another target', async () => {
+    const dir = tempScreenshotDir();
+    const manifestDir = tempScreenshotDir();
+    writeManifest(
+      manifestDir,
+      DESKTOP_MANIFEST,
+      manifestFor(DESKTOP_FILE, 'desktop', 1),
+    );
+    writeManifest(
+      manifestDir,
+      MOBILE_MANIFEST,
+      manifestFor(MOBILE_FILE, 'mobile', 2),
+    );
+    const { page, screenshotSpy } = fakePage();
+
+    await expect(
+      captureScreenshot(page, MOBILE_FILE, {
+        engine: 'chromium',
+        outputDir: dir,
+        manifestDir,
+        // The WebKit fingerprint is valid for the base manifest but must not
+        // satisfy the mobile manifest that owns this file.
+        fingerprint: containerFingerprint() as never,
+      }),
+    ).rejects.toThrow(/capture environment target is "webkit", expected "mobile"/s);
+
+    expect(readdirSync(dir)).toEqual([]);
+    expect(screenshotSpy).not.toHaveBeenCalled();
+  });
+
+  it('fails closed before writing when two manifests record the same file', async () => {
+    const dir = tempScreenshotDir();
+    const targetPath = join(dir, DESKTOP_FILE);
+    writeFileSync(targetPath, 'old committed bytes');
+    const manifestDir = tempScreenshotDir();
+    writeManifest(
+      manifestDir,
+      DESKTOP_MANIFEST,
+      manifestFor(DESKTOP_FILE, 'desktop', 1),
+    );
+    writeManifest(
+      manifestDir,
+      MOBILE_MANIFEST,
+      manifestFor(DESKTOP_FILE, 'mobile', 2),
+    );
+    const { page, screenshotSpy } = fakePage();
+
+    await expect(
+      captureScreenshot(page, DESKTOP_FILE, {
+        engine: 'chromium',
+        outputDir: dir,
+        manifestDir,
+        fingerprint: targetFingerprint('desktop', 1) as never,
+      }),
+    ).rejects.toThrow(/duplicate capture file "after-blank-desktop\.png"/s);
+
+    expect(readFileSync(targetPath, 'utf8')).toBe('old committed bytes');
+    expect(readdirSync(dir)).toEqual([DESKTOP_FILE]);
+    assertNoTempFiles(dir);
+    expect(screenshotSpy).not.toHaveBeenCalled();
+  });
+
+  it('fails closed before writing when a discovered manifest is invalid', async () => {
+    const dir = tempScreenshotDir();
+    const targetPath = join(dir, DESKTOP_FILE);
+    writeFileSync(targetPath, 'old committed bytes');
+    const manifestDir = tempScreenshotDir();
+    writeFileSync(join(manifestDir, DESKTOP_MANIFEST), '{"captures": []}');
+    const { page, screenshotSpy } = fakePage();
+
+    await expect(
+      captureScreenshot(page, DESKTOP_FILE, {
+        engine: 'chromium',
+        outputDir: dir,
+        manifestDir,
+      }),
+    ).rejects.toThrow(
+      /Cannot load the screenshot sha256 manifest set in .*capture-sha256-manifest-desktop\.json/s,
+    );
+
+    expect(readFileSync(targetPath, 'utf8')).toBe('old committed bytes');
+    expect(readdirSync(dir)).toEqual([DESKTOP_FILE]);
+    assertNoTempFiles(dir);
+    expect(screenshotSpy).not.toHaveBeenCalled();
+  });
+
+  it('treats a missing manifest directory as unrecorded evidence', async () => {
+    const dir = tempScreenshotDir();
+    // The parent exists but not the manifest directory itself.
+    const manifestDir = join(tempScreenshotDir(), 'missing');
+    const { page, screenshotSpy } = fakePage();
+
+    await captureScreenshot(page, FILE, {
+      engine: 'webkit',
+      outputDir: dir,
+      manifestDir,
+      fingerprint: hostFingerprint() as never,
+    });
+
+    expect(screenshotSpy).toHaveBeenCalledWith({
+      path: join(dir, FILE),
+      fullPage: false,
+      animations: 'disabled',
+    });
+    expect(readFileSync(join(dir, FILE), 'utf8')).toBe('captured png bytes');
+  });
+
+  it('keeps the previous write path for an unrecorded Chromium desktop image in the committed set', async () => {
+    const dir = tempScreenshotDir();
+    const { page, screenshotSpy } = fakePage();
+
+    // after-hub-desktop.png is not in any committed manifest; the default set
+    // must not turn it into a guarded capture. This asserts the committed set
+    // on purpose: if a later manifest starts recording this file, pick another
+    // still-unrecorded name for this test.
+    await captureScreenshot(page, 'after-hub-desktop.png', {
+      engine: 'chromium',
+      outputDir: dir,
+      fingerprint: hostFingerprint() as never,
+    });
+
+    expect(screenshotSpy).toHaveBeenCalledWith({
+      path: join(dir, 'after-hub-desktop.png'),
+      fullPage: false,
+      animations: 'disabled',
+    });
+    expect(readFileSync(join(dir, 'after-hub-desktop.png'), 'utf8')).toBe(
+      'captured png bytes',
+    );
+  });
+
+  it('keeps an injected single manifest authoritative over the discovered set', async () => {
+    const dir = tempScreenshotDir();
+    const manifestDir = tempScreenshotDir();
+    // A broken discovered set would fail closed if it were read; the injected
+    // single manifest stays the compatibility entry point and wins.
+    writeFileSync(join(manifestDir, DESKTOP_MANIFEST), 'not json');
+    const { page, screenshotSpy } = fakePage();
+
+    await captureScreenshot(page, FILE, {
+      engine: 'webkit',
+      outputDir: dir,
+      manifestDir,
+      manifest: sampleManifest(),
+      fingerprint: containerFingerprint() as never,
+    });
+
+    expect(readFileSync(join(dir, FILE), 'utf8')).toBe('captured png bytes');
+    expect(readdirSync(dir)).toEqual([FILE]);
+    expect(screenshotSpy).toHaveBeenCalledWith({
+      fullPage: false,
+      animations: 'disabled',
+    });
+  });
+
+  it('finds the expected sha256 in the owning manifest of the set', () => {
+    const manifestDir = tempScreenshotDir();
+    const desktopSha = sha256('desktop png bytes');
+    writeManifest(
+      manifestDir,
+      DESKTOP_MANIFEST,
+      manifestFor(DESKTOP_FILE, 'desktop', 1, { sha256: desktopSha }),
+    );
+    writeManifest(
+      manifestDir,
+      MOBILE_MANIFEST,
+      manifestFor(MOBILE_FILE, 'mobile', 2),
+    );
+
+    expect(expectedCaptureSha256(DESKTOP_FILE, { manifestDir })).toBe(desktopSha);
+    expect(expectedCaptureSha256(FILE, { manifestDir })).toBeNull();
+  });
+
+  it('names the owning manifest and its command in the hash-drift checklist', async () => {
+    const dir = tempScreenshotDir();
+    const manifestDir = tempScreenshotDir();
+    const oldSha = sha256('old desktop evidence');
+    const newBytes = Buffer.from('new desktop evidence');
+    const newSha = sha256(newBytes);
+    const manifestPath = writeManifest(
+      manifestDir,
+      DESKTOP_MANIFEST,
+      manifestFor(DESKTOP_FILE, 'desktop', 1, {
+        sha256: oldSha,
+        command: CHROMIUM_RECAPTURE,
+      }),
+    );
+    const committedManifest = readFileSync(manifestPath, 'utf8');
+    const log = { warn: vi.fn() };
+    const { page } = fakePage({ bytes: newBytes });
+
+    await captureScreenshot(page, DESKTOP_FILE, {
+      engine: 'chromium',
+      outputDir: dir,
+      manifestDir,
+      fingerprint: targetFingerprint('desktop', 1) as never,
+      log,
+    });
+
+    expect(readFileSync(join(dir, DESKTOP_FILE))).toEqual(newBytes);
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    const checklist = String(log.warn.mock.calls[0]?.[0]);
+    expect(checklist).toContain(`differs from ${manifestPath}`);
+    expect(checklist).toContain(`- ${manifestPath}: captures[0].sha256 -> ${newSha}`);
+    expect(checklist).toContain(
+      `npm run verify:screenshots:sha256 -- --manifest ${manifestPath}`,
+    );
+    expect(checklist).toContain(`Re-capture with: ${CHROMIUM_RECAPTURE}`);
+    // The owning manifest on disk was not silently rewritten.
+    expect(readFileSync(manifestPath, 'utf8')).toBe(committedManifest);
+  });
+
+  it('uses an explicit manifestPath as the label of an injected manifest', async () => {
+    const dir = tempScreenshotDir();
+    const manifestPath = join(tempScreenshotDir(), DESKTOP_MANIFEST);
+    const { page } = fakePage();
+
+    let message = '';
+    try {
+      await captureScreenshot(page, FILE, {
+        engine: 'webkit',
+        outputDir: dir,
+        manifest: sampleManifest(),
+        manifestPath,
+        fingerprint: hostFingerprint() as never,
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain(`tracked by ${manifestPath}`);
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
   it('writes but keeps the manifest failing when the fixed environment produces a new sha256', async () => {
     const dir = tempScreenshotDir();
     const target = join(dir, FILE);
@@ -663,12 +1014,12 @@ describe('captureScreenshot write-time environment guard', () => {
     expect(screenshotSpy).not.toHaveBeenCalled();
   });
 
-  it('uses the default manifest path for the repo when none is passed', async () => {
+  it('uses the committed manifest set when no manifest is passed', async () => {
     const dir = tempScreenshotDir();
     const { page, screenshotSpy } = fakePage();
-    // The committed manifest is parseable and tracks the file; a host capture
-    // must be refused without touching the committed PNG. Injecting an empty
-    // env keeps the host fingerprint independent of the caller's environment.
+    // The committed set is parseable and tracks the file; a host capture must
+    // be refused without touching the committed PNG. Injecting an empty env
+    // keeps the host fingerprint independent of the caller's environment.
     await expect(
       captureScreenshot(page, FILE, { engine: 'webkit', outputDir: dir, env: {} }),
     ).rejects.toThrow(new RegExp(`tracked by ${DEFAULT_MANIFEST_PATH.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
