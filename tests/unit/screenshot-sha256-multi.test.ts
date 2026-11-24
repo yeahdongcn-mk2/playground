@@ -385,6 +385,90 @@ describe('verify-screenshot-sha256 multi-manifest default', () => {
     );
   });
 
+  it('reports a manifest platform drift in its owning manifest only', () => {
+    const fixture = prepareDesktopAndMobile();
+    const drifted = manifestFor(DESKTOP_FILE, 'desktop', fixture.desktopBytes);
+    drifted.environment.platform = 'linux/arm64';
+    writeManifest(fixture.manifests, DESKTOP_MANIFEST, drifted);
+
+    const result = runCli([
+      '--dir',
+      fixture.shots,
+      '--manifest-dir',
+      fixture.manifests,
+    ]);
+
+    // A manifest recorded on another CPU architecture is evidence drift, not a
+    // malformed manifest: the platform section must name the manifest and the
+    // run exits 1 instead of the exit 2 used for fixed-contract violations.
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      `Platform mismatch (1) in ${fixture.desktopManifestPath}:`,
+    );
+    expect(result.stderr).toContain('source:            sha256 manifest');
+    expect(result.stderr).toContain('expected platform: linux/amd64');
+    expect(result.stderr).toContain('actual platform:   linux/arm64');
+    expect(result.stderr).toContain(
+      `${DESKTOP_FILE}: npm run screenshots:container -- screenshots`,
+    );
+    expect(result.stderr).toContain(
+      `FAIL: 1 platform mismatch(es) across 2 manifests in ${fixture.shots}.`,
+    );
+    // The matching mobile manifest has no platform section of its own.
+    expect(result.stderr).not.toContain(
+      `Platform mismatch (1) in ${fixture.mobileManifestPath}:`,
+    );
+    expect(result.stderr).not.toContain(
+      `error: sha256 manifest ${fixture.desktopManifestPath} does not match the fixed capture environment:`,
+    );
+  });
+
+  it('reports a logged fingerprint platform drift in its owning manifest only', () => {
+    const fixture = prepareDesktopAndMobile();
+    const drifted = environmentFor('desktop');
+    drifted.platform = 'linux/arm64';
+    const logPath = join(fixture.manifests, 'capture.log');
+    writeFileSync(
+      logPath,
+      [
+        fingerprintLine(drifted),
+        driftRecord(DESKTOP_FILE, sha256(fixture.desktopBytes)),
+        fingerprintLine(environmentFor('mobile')),
+        driftRecord(MOBILE_FILE, sha256(fixture.mobileBytes)),
+      ].join('\n'),
+    );
+
+    const result = runCli([
+      '--dir',
+      fixture.shots,
+      '--manifest-dir',
+      fixture.manifests,
+      '--log',
+      logPath,
+    ]);
+
+    // The log fingerprint platform is compared with each manifest's own
+    // environment.platform, and the drift is aggregated into the multi-manifest
+    // summary without blaming the manifest whose target selected the other
+    // fingerprint.
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      `Platform mismatch (1) in ${fixture.desktopManifestPath}:`,
+    );
+    expect(result.stderr).toContain('source:            capture log fingerprint');
+    expect(result.stderr).toContain('expected platform: linux/amd64');
+    expect(result.stderr).toContain('actual platform:   linux/arm64');
+    expect(result.stderr).toContain(
+      `FAIL: 1 platform mismatch(es) across 2 manifests in ${fixture.shots}.`,
+    );
+    expect(result.stderr).not.toContain(
+      `Platform mismatch (1) in ${fixture.mobileManifestPath}:`,
+    );
+    expect(result.stderr).not.toContain(
+      `Environment fingerprint mismatch (${logPath}) for ${fixture.desktopManifestPath}:`,
+    );
+  });
+
   it('exits 2 when one discovered manifest is invalid', () => {
     const fixture = prepareDesktopAndMobile();
     const broken = join(fixture.manifests, 'capture-sha256-manifest-broken.json');
