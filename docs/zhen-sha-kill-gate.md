@@ -52,7 +52,7 @@
 - `settlement.ts`：512 行，由 #251（结算战绩符）的 #422 / #427 新增，不属于 #250 的完整特性估算。
 - `bosses.ts`：144 行，由 #405 / #408 新增的 boss 数据与差异。
 - `boss-chart.ts`：128 行，由 #407 拆出。其中 `boss-chart.ts:35-92` 的 58 行接口声明若保留独立文件，应从 `bosses.ts` 的 300 行估算中移出，不能重复计入：完整特性为 8 个生产文件、约 2,224 行（2,154 + 128 − 58）；2,282 行（直接相加）只作为未扣除类型时的保守上限。两种算法都超过本文 2,200 行上沿，需按结论中的 L 条件重新复核。
-- `boss-chart-adapter.ts`：89 行，由 #248 的真实 3×2 谱面接线在 #431 收口时保留。它是 `bosses.ts` 与引擎 `BossChart` 契约之间唯一的单位换算层：`telegraphMs` / `parryWindowMs` 原样传递，`activeMs` 作为完整普通判定带宽度，`bosses.ts` 的 7–13 展示点数统一映射为 `damage: 1`；引擎每次未弹反仍只记 1 hit，默认 1×1 kill-gate 谱面不变。
+- `boss-chart-adapter.ts`：90 行，由 #449 t2（#454）落地，#431 t2 收敛时保留。它是 `bosses.ts` 与引擎 `BossChart` 契约之间唯一的单位换算层：`telegraphMs` / `parryWindowMs` 原样传递，`activeMs` 作为完整普通判定带宽度，`bosses.ts` 的 7–13 展示点数原样传递（引擎每次未弹反固定只记 1 hit，damage 不参与中招预算）；源表没有 `recoveryMs` / `firstTelegraphMs`，引擎按 0 ms 恢复、第一招自己的 telegraph 开场。真实 3×2 引擎集成用例由 #431 t2 补在 `engine.test.ts`，覆盖 1-1 → 3-2、逐招判定窗与阶段推进。
 - `zhen-sha.css`：254 → 371 行，由 #406 的 4+1 色板与黑宣纸 / 飞白边缘新增。
 - 当前生产规模（实测于 `627a9c4`）：7 个文件 / 2,317 行，已超出 M 区间 2,200 行上沿 117 行。当前生产规模由独立滚动快照校验跟踪，超限重估由跟进单 [#417](https://github.com/yeahdongcn-mk2/playground/issues/417) 跟踪。
 

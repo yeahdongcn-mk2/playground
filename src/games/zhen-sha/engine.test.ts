@@ -5,7 +5,7 @@ import {
   type BossChart,
   type BossMoveChart,
 } from './boss-chart';
-import { REAL_BOSS_CHART, REAL_CHART_RECOVERY_MS } from './boss-chart-adapter';
+import { REAL_BOSS_CHART } from './boss-chart-adapter';
 import {
   BREAK_TICKS,
   FIXED_STEP_MS,
@@ -1722,13 +1722,18 @@ describe('boss chart stages', () => {
   });
 });
 
-
 /** Mirror the engine's `durationToTicks` rounding for chart durations. */
 function durationTicks(ms: number): number {
   return Math.round((ms * TICKS_PER_SECOND) / 1000);
 }
 
-const REAL_RECOVERY_TICKS = durationTicks(REAL_CHART_RECOVERY_MS);
+/**
+ * The adapter omits `recoveryMs`, so the real chart rests for 0 ms. The engine
+ * still costs one tick before it spawns the next attack, so `max(recovery, 1)`
+ * is the gap between one resolution tick and the next impact.
+ */
+const REAL_RECOVERY_TICKS = durationTicks(REAL_BOSS_CHART.recoveryMs ?? 0);
+const REAL_NEXT_SPAWN_TICKS = Math.max(REAL_RECOVERY_TICKS, 1);
 
 interface RealPhasePlan {
   readonly bossIndex: number;
@@ -1745,8 +1750,9 @@ function stageLabel(bossIndex: number, phaseIndex: number): string {
 
 /**
  * Derive the exact tick plan of three perfect parries plus a finisher for every
- * real boss phase, straight from the adapted chart's telegraphs and recovery.
- * A wrong mapping, recovery or stage reset shifts every later impact.
+ * real boss phase, straight from the adapted chart's telegraphs and the
+ * 0 ms recovery. A wrong mapping, spawn gap or stage reset shifts every later
+ * impact.
  */
 function realPhasePlan(): RealPhasePlan[] {
   const plan: RealPhasePlan[] = [];
@@ -1766,9 +1772,9 @@ function realPhasePlan(): RealPhasePlan[] {
           : first.telegraphMs;
       const firstImpact = entry + durationTicks(openingTelegraphMs);
       const secondImpact =
-        firstImpact + REAL_RECOVERY_TICKS + durationTicks(second.telegraphMs);
+        firstImpact + REAL_NEXT_SPAWN_TICKS + durationTicks(second.telegraphMs);
       const thirdImpact =
-        secondImpact + REAL_RECOVERY_TICKS + durationTicks(third.telegraphMs);
+        secondImpact + REAL_NEXT_SPAWN_TICKS + durationTicks(third.telegraphMs);
       const strikeStep = thirdImpact + 10;
       plan.push({
         bossIndex,
@@ -1777,7 +1783,7 @@ function realPhasePlan(): RealPhasePlan[] {
         breakStart: thirdImpact,
         strikeStep,
       });
-      entry = strikeStep + REAL_RECOVERY_TICKS;
+      entry = strikeStep + REAL_NEXT_SPAWN_TICKS;
     });
   });
 
@@ -1813,9 +1819,30 @@ function judgeRealFirstTap(offset: number): ZhenShaSnapshot {
   return engine.snapshot();
 }
 
+/** Perfect the first real move, then tap `offset` ticks from the second impact. */
+function judgeRealSecondTap(offset: number): ZhenShaSnapshot {
+  const phase = REAL_BOSS_CHART.bosses[0]?.phases[0];
+  const first = phase?.moves[0];
+  const second = phase?.moves[1];
+  if (phase === undefined || first === undefined || second === undefined) {
+    throw new Error('real chart must have two opening moves');
+  }
+  const firstImpact = durationTicks(
+    REAL_BOSS_CHART.firstTelegraphMs ?? first.telegraphMs,
+  );
+  const secondImpact =
+    firstImpact + REAL_NEXT_SPAWN_TICKS + durationTicks(second.telegraphMs);
+  const engine = new ZhenShaEngine(REAL_BOSS_CHART);
+  engine.input('block', firstImpact);
+  engine.input('block', secondImpact + offset);
+  advance(engine, secondImpact + offset + 1);
+  return engine.snapshot();
+}
+
 /**
  * Landing ticks of the first three real moves when every move is left
- * unparried. Each landing costs one hit and is followed by the chart recovery.
+ * unparried. Each landing costs one hit and is followed by the adapter's
+ * 0 ms recovery plus the one-tick spawn gap.
  */
 function realMissLandings(): readonly number[] {
   const phase = REAL_BOSS_CHART.bosses[0]?.phases[0];
@@ -1837,7 +1864,7 @@ function realMissLandings(): readonly number[] {
     const impact = spawnTick + durationTicks(telegraphMs);
     // Mirror the engine's conversion: round the full width, then halve/floor.
     landings.push(impact + Math.floor(durationTicks(move.activeMs) / 2));
-    spawnTick = landings[index]! + REAL_RECOVERY_TICKS;
+    spawnTick = landings[index]! + REAL_NEXT_SPAWN_TICKS;
   }
   return landings;
 }
@@ -1917,7 +1944,6 @@ describe('real boss chart wiring', () => {
           score: perfects * SCORE_PERFECT + (index + 1) * SCORE_FINISHER,
           lastJudgement: null,
         });
-        expect(cleared.attack).toBeNull();
       } else {
         const lastBoss = REAL_BOSS_CHART.bosses[2];
         if (lastBoss === undefined) {
@@ -1941,65 +1967,101 @@ describe('real boss chart wiring', () => {
     expect(types.filter((type) => type === 'win')).toHaveLength(1);
   });
 
-  it('reads the real move windows and the adapter recovery', () => {
-    // The real opening move is 320 ms active / 160 ms parry: 38 and 19 full
-    // ticks, so the halves are 19 and 9 — not the default 18 and 6.
-    const opening = REAL_BOSS_CHART.bosses[0]?.phases[0]?.moves[0];
-    if (opening === undefined) {
-      throw new Error('real chart must have an opening move');
+  it('reads each real move\'s own parry bands and the 0 ms recovery', () => {
+    const phase = REAL_BOSS_CHART.bosses[0]?.phases[0];
+    const opening = phase?.moves[0];
+    const second = phase?.moves[1];
+    if (phase === undefined || opening === undefined || second === undefined) {
+      throw new Error('real chart must have two opening moves');
     }
+    expect(REAL_BOSS_CHART.recoveryMs).toBeUndefined();
+    expect(REAL_NEXT_SPAWN_TICKS).toBe(1);
+
+    const openingNormal = Math.floor(durationTicks(opening.activeMs) / 2);
+    const openingPerfect = Math.floor(durationTicks(opening.parryWindowMs) / 2);
     expect(opening).toMatchObject({ activeMs: 320, parryWindowMs: 160 });
-    const normalHalf = Math.floor(durationTicks(opening.activeMs) / 2);
-    const perfectHalf = Math.floor(durationTicks(opening.parryWindowMs) / 2);
-    expect(normalHalf).toBe(19);
-    expect(perfectHalf).toBe(9);
-    // 600 ms is also the kill-gate default; the full walk proves the engine
-    // actually reads it, while this pins the adapter's tick conversion.
-    expect(REAL_RECOVERY_TICKS).toBe(72);
+    expect([openingNormal, openingPerfect]).toEqual([19, 9]);
+    expect(judgeRealFirstTap(0)).toMatchObject({
+      boss: { name: 'boss-1', phase: 1 },
+      lastJudgement: 'perfect',
+    });
 
-    const cases: ReadonlyArray<
-      readonly [offset: number, judgement: ParryJudgement, hits: number]
+    const openingCases: ReadonlyArray<
+      readonly [number, ParryJudgement, number]
     > = [
-      [-perfectHalf - 1, 'normal', 0],
-      [-perfectHalf, 'perfect', 0],
-      [perfectHalf - 1, 'perfect', 0],
-      [perfectHalf, 'perfect', 0],
-      [perfectHalf + 1, 'normal', 0],
-      [-normalHalf - 1, 'miss', 0],
-      [-normalHalf, 'normal', 0],
-      [normalHalf - 1, 'normal', 0],
-      [normalHalf, 'normal', 0],
-      [normalHalf + 1, 'miss', 1],
+      [-openingPerfect - 1, 'normal', 0],
+      [-openingPerfect, 'perfect', 0],
+      [openingPerfect, 'perfect', 0],
+      [openingPerfect + 1, 'normal', 0],
+      [-openingNormal - 1, 'miss', 0],
+      [-openingNormal, 'normal', 0],
+      [openingNormal, 'normal', 0],
+      [openingNormal + 1, 'miss', 1],
     ];
-
-    for (const [offset, judgement, hits] of cases) {
+    for (const [offset, judgement, hits] of openingCases) {
       const snapshot = judgeRealFirstTap(offset);
-      expect(snapshot.lastJudgement, `offset ${offset}`).toBe(judgement);
-      expect(snapshot.hits, `offset ${offset}`).toBe(hits);
-      expect(snapshot.boss).toMatchObject({ name: 'boss-1', phase: 1 });
+      expect(snapshot.lastJudgement, `opening offset ${offset}`).toBe(
+        judgement,
+      );
+      expect(snapshot.hits, `opening offset ${offset}`).toBe(hits);
+    }
+
+    // The second move has different bands (280 / 140 ms), so this also proves
+    // the engine reads each move's own data rather than the opening's.
+    const secondNormal = Math.floor(durationTicks(second.activeMs) / 2);
+    const secondPerfect = Math.floor(durationTicks(second.parryWindowMs) / 2);
+    expect(second).toMatchObject({ activeMs: 280, parryWindowMs: 140 });
+    expect([secondNormal, secondPerfect]).toEqual([17, 8]);
+    expect(judgeRealSecondTap(0)).toMatchObject({
+      boss: { name: 'boss-1', phase: 1 },
+      lastJudgement: 'perfect',
+      perfects: 2,
+    });
+
+    const secondCases: ReadonlyArray<
+      readonly [number, ParryJudgement, number]
+    > = [
+      [-secondPerfect - 1, 'normal', 0],
+      [-secondPerfect, 'perfect', 0],
+      [secondPerfect, 'perfect', 0],
+      [secondPerfect + 1, 'normal', 0],
+      [-secondNormal - 1, 'miss', 0],
+      [-secondNormal, 'normal', 0],
+      [secondNormal, 'normal', 0],
+      [secondNormal + 1, 'miss', 1],
+    ];
+    for (const [offset, judgement, hits] of secondCases) {
+      const snapshot = judgeRealSecondTap(offset);
+      expect(snapshot.lastJudgement, `second offset ${offset}`).toBe(
+        judgement,
+      );
+      expect(snapshot.hits, `second offset ${offset}`).toBe(hits);
     }
   });
 
   it('honours a non-default recovery on an adapted real chart', () => {
-    const fastRecovery: BossChart = { ...REAL_BOSS_CHART, recoveryMs: 200 };
+    const recoveryMs = 200;
+    const fastRecovery: BossChart = { ...REAL_BOSS_CHART, recoveryMs };
     const phase = REAL_BOSS_CHART.bosses[0]?.phases[0];
-    if (phase === undefined) {
-      throw new Error('real chart must have an opening phase');
-    }
-    const [opening, second] = phase.moves;
-    if (opening === undefined || second === undefined) {
+    const opening = phase?.moves[0];
+    const second = phase?.moves[1];
+    if (phase === undefined || opening === undefined || second === undefined) {
       throw new Error('real chart must have two opening moves');
     }
     const firstImpact = durationTicks(
       REAL_BOSS_CHART.firstTelegraphMs ?? opening.telegraphMs,
     );
+    const recoveryTicks = Math.max(durationTicks(recoveryMs), 1);
+    expect(recoveryTicks).toBe(24);
+
     const engine = new ZhenShaEngine(fastRecovery);
     engine.input('block', firstImpact);
     advance(engine, firstImpact + 1);
     expect(engine.snapshot()).toMatchObject({ perfects: 1, attack: null });
 
-    // 200 ms is 24 ticks, not the adapter's 600 ms / 72 ticks.
-    const nextSpawn = firstImpact + durationTicks(200);
+    // The engine spawns at the start of tick `nextSpawn`; the snapshot's step
+    // is the next tick to run, hence `nextSpawn + 1`.
+    const nextSpawn = firstImpact + recoveryTicks;
     advance(engine, nextSpawn + 1 - engine.snapshot().step);
     expect(engine.snapshot()).toMatchObject({
       step: nextSpawn + 1,
@@ -2010,7 +2072,14 @@ describe('real boss chart wiring', () => {
     });
   });
 
-  it('loses on the third unparried real move without touching 1-2', () => {
+  it('costs one hit per unparried real move and loses on the third', () => {
+    const opening = REAL_BOSS_CHART.bosses[0]?.phases[0]?.moves[0];
+    if (opening === undefined) {
+      throw new Error('real chart must have an opening move');
+    }
+    // The source's 7–13 display points must not change the hit budget.
+    expect(opening.damage).toBeGreaterThan(1);
+
     const landings = realMissLandings();
     expect(new Set(landings).size).toBe(MAX_HITS);
 

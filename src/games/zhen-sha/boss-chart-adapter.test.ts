@@ -1,214 +1,182 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_BOSS_CHART, type BossChart } from './boss-chart';
-import {
-  REAL_BOSS_CHART,
-  REAL_CHART_RECOVERY_MS,
-  toBossChart,
-} from './boss-chart-adapter';
 import { BOSSES } from './bosses';
+import type { BossMove } from './bosses';
+import { REAL_BOSS_CHART, toBossChart } from './boss-chart-adapter';
 import {
-  FIXED_STEP_MS,
   MAX_HITS,
   MOMENTUM_FOR_BREAK,
-  SCORE_FINISHER,
-  SCORE_PERFECT,
   TICKS_PER_SECOND,
   ZhenShaEngine,
 } from './engine';
+import type { ZhenShaSnapshot } from './engine';
 
-/** Mirror the engine's `durationToTicks`: round ms to whole ticks. */
-function durationTicks(ms: number): number {
+function expectDefined<T>(value: T | undefined, label: string): T {
+  if (value === undefined) {
+    throw new Error(`missing ${label}`);
+  }
+  return value;
+}
+
+function toTicks(ms: number): number {
   return Math.round((ms * TICKS_PER_SECOND) / 1000);
 }
 
-/** Advance exactly `ticks` fixed steps. */
-function advance(engine: ZhenShaEngine, ticks: number): void {
-  for (let index = 0; index < ticks; index += 1) {
+function advanceUntil(
+  engine: ZhenShaEngine,
+  predicate: (snapshot: ZhenShaSnapshot) => boolean,
+  limit = 5000,
+): ZhenShaSnapshot {
+  for (let index = 0; index <= limit; index += 1) {
+    const snapshot = engine.snapshot();
+    if (predicate(snapshot)) {
+      return snapshot;
+    }
     engine.step();
   }
+  throw new Error('engine did not reach the expected state');
+}
+
+function advanceTo(engine: ZhenShaEngine, step: number): ZhenShaSnapshot {
+  return advanceUntil(engine, (snapshot) => snapshot.step >= step);
+}
+
+function firstPhaseMove(index: number): BossMove {
+  return expectDefined(
+    BOSSES[0]?.phases[0]?.moves[index],
+    `BOSSES[0].phases[0].moves[${String(index)}]`,
+  );
 }
 
 /**
- * Landing ticks of the first three real moves when left unparried. Each
- * landing is followed by the adapter's 600 ms recovery before the next spawn.
+ * Impact ticks for perfect parries on the first boss's first phase. With no
+ * chart-level recovery the next attack spawns on the tick after a parry, so
+ * each later impact is the previous one plus one tick plus its own wind-up.
  */
-function realMissLandings(): readonly number[] {
-  const phase = REAL_BOSS_CHART.bosses[0]?.phases[0];
-  if (phase === undefined) {
-    throw new Error('real chart must have an opening phase');
-  }
-
-  const recoveryTicks = durationTicks(REAL_CHART_RECOVERY_MS);
-  const landings: number[] = [];
-  let spawnTick = 0;
-  for (let index = 0; index < MAX_HITS; index += 1) {
-    const move = phase.moves[index];
-    if (move === undefined) {
-      throw new Error(`${phase.id} needs at least ${MAX_HITS} moves`);
+function firstPhaseImpacts(count: number): number[] {
+  const impacts: number[] = [];
+  for (let index = 0; index < count; index += 1) {
+    if (index === 0) {
+      impacts.push(toTicks(firstPhaseMove(0).telegraphMs));
+      continue;
     }
-    const telegraphMs =
-      index === 0
-        ? (REAL_BOSS_CHART.firstTelegraphMs ?? move.telegraphMs)
-        : move.telegraphMs;
-    const impact = spawnTick + durationTicks(telegraphMs);
-    landings.push(impact + Math.floor(durationTicks(move.activeMs) / 2));
-    spawnTick = landings[index]! + recoveryTicks;
+    const previous = expectDefined(impacts[index - 1], `impact ${String(index)}`);
+    impacts.push(previous + 1 + toTicks(firstPhaseMove(index).telegraphMs));
   }
-  return landings;
+  return impacts;
 }
 
-/** The real chart with every display-damage value raised to 13. */
-const HEAVY_REAL_CHART: BossChart = {
-  ...REAL_BOSS_CHART,
-  bosses: REAL_BOSS_CHART.bosses.map((boss) => ({
-    ...boss,
-    phases: boss.phases.map((phase) => ({
-      ...phase,
-      moves: phase.moves.map((move) => ({ ...move, damage: 13 })),
-    })),
-  })),
-};
-
-describe('real boss chart adapter', () => {
-  it('maps the real 3 × 2 BOSSES table into the engine chart in order', () => {
+describe('BOSSES to BossChart adapter', () => {
+  it('maps three bosses with two phases each and keeps every source id', () => {
     expect(REAL_BOSS_CHART.bosses).toHaveLength(3);
-    expect(REAL_BOSS_CHART.bosses).toHaveLength(BOSSES.length);
 
-    const mappedMoveIds: string[] = [];
-    REAL_BOSS_CHART.bosses.forEach((boss, bossIndex) => {
-      const source = BOSSES[bossIndex];
-      if (source === undefined) {
-        throw new Error(`missing source boss ${String(bossIndex + 1)}`);
-      }
-      expect(boss.name).toBe(source.id);
-      expect(boss.phases).toHaveLength(2);
-      expect(boss.phases).toHaveLength(source.phases.length);
+    BOSSES.forEach((sourceBoss, bossIndex) => {
+      const mappedBoss = expectDefined(
+        REAL_BOSS_CHART.bosses[bossIndex],
+        `mapped boss ${String(bossIndex + 1)}`,
+      );
+      expect(mappedBoss.name).toBe(sourceBoss.id);
+      expect(mappedBoss.phases).toHaveLength(2);
 
-      boss.phases.forEach((phase, phaseIndex) => {
-        const sourcePhase = source.phases[phaseIndex];
-        if (sourcePhase === undefined) {
-          throw new Error(`missing source phase ${String(phaseIndex + 1)}`);
-        }
-        expect(phase.id).toBe(sourcePhase.id);
-        expect(phase.moves).toHaveLength(sourcePhase.moves.length);
-
-        phase.moves.forEach((move, moveIndex) => {
-          const sourceMove = sourcePhase.moves[moveIndex];
-          if (sourceMove === undefined) {
-            throw new Error(`missing source move ${String(moveIndex + 1)}`);
-          }
-          expect(move).toEqual({
-            id: sourceMove.id,
-            telegraphMs: sourceMove.telegraphMs,
-            activeMs: sourceMove.activeMs,
-            parryWindowMs: sourceMove.parryWindowMs,
-            // The source's 7–13 display points map to one unparried hit each.
-            damage: 1,
-          });
-          mappedMoveIds.push(move.id);
-        });
+      sourceBoss.phases.forEach((sourcePhase, phaseIndex) => {
+        const mappedPhase = expectDefined(
+          mappedBoss.phases[phaseIndex],
+          `mapped phase ${sourcePhase.id}`,
+        );
+        expect(mappedPhase.id).toBe(sourcePhase.id);
+        expect(mappedPhase.moves.map((move) => move.id)).toEqual(
+          sourcePhase.moves.map((move) => move.id),
+        );
       });
     });
+  });
 
-    const sourceMoveIds = BOSSES.flatMap((boss) =>
-      boss.phases.flatMap((phase) => phase.moves.map((move) => move.id)),
+  it('passes timing and damage through unchanged and leaves BOSSES untouched', () => {
+    const before = structuredClone(BOSSES);
+    const chart = toBossChart();
+    const sourceMoves = BOSSES.flatMap((boss) =>
+      boss.phases.flatMap((phase) => phase.moves),
     );
-    expect(mappedMoveIds).toEqual(sourceMoveIds);
-    expect(new Set(mappedMoveIds).size).toBe(mappedMoveIds.length);
+    const mappedMoves = chart.bosses.flatMap((boss) =>
+      boss.phases.flatMap((phase) => phase.moves),
+    );
+
+    expect(mappedMoves.map((move) => move.id)).toEqual(
+      sourceMoves.map((move) => move.id),
+    );
+    mappedMoves.forEach((mapped, index) => {
+      const source = expectDefined(
+        sourceMoves[index],
+        `source move ${String(index)}`,
+      );
+      expect(mapped.telegraphMs).toBe(source.telegraphMs);
+      // Identity conversion documented in the adapter: the source post-wind-up
+      // active time becomes the engine's full centred normal band unchanged.
+      expect(mapped.activeMs).toBe(source.activeMs);
+      expect(mapped.parryWindowMs).toBe(source.parryWindowMs);
+      expect(mapped.damage).toBe(source.damage);
+    });
+
+    const damages = mappedMoves.map((move) => move.damage);
+    expect(Math.min(...damages)).toBe(7);
+    expect(Math.max(...damages)).toBe(13);
+    expect(structuredClone(BOSSES)).toEqual(before);
   });
 
-  it('reuses the kill-gate recovery and lets the first move own the opening tell', () => {
-    expect(REAL_CHART_RECOVERY_MS).toBe(600);
-    expect(REAL_CHART_RECOVERY_MS).toBe(DEFAULT_BOSS_CHART.recoveryMs);
-    expect(REAL_BOSS_CHART.recoveryMs).toBe(REAL_CHART_RECOVERY_MS);
-    expect(REAL_BOSS_CHART.firstTelegraphMs).toBeUndefined();
-    expect(toBossChart()).toEqual(REAL_BOSS_CHART);
-  });
-
-  it('adapts a supplied real table instead of hard-coding the campaign', () => {
-    const firstBossOnly = toBossChart(BOSSES.slice(0, 1));
-
-    expect(firstBossOnly.recoveryMs).toBe(REAL_CHART_RECOVERY_MS);
-    expect(firstBossOnly.bosses).toHaveLength(1);
-    expect(firstBossOnly.bosses[0]?.name).toBe('boss-1');
-    expect(firstBossOnly.bosses[0]?.phases).toHaveLength(2);
-  });
-
-  it('costs one hit per unparried real move and loses on the third', () => {
-    const landings = realMissLandings();
-    expect(new Set(landings).size).toBe(MAX_HITS);
+  it('spends one hit per unparried real move and loses on the third', () => {
+    // The first real move's display damage is already above the whole budget,
+    // so the budget can only stay intact if damage is not used as a hit cost.
+    expect(firstPhaseMove(0).damage).toBeGreaterThan(MAX_HITS);
 
     const engine = new ZhenShaEngine(REAL_BOSS_CHART);
-    advance(engine, landings[0]! + 1);
-    expect(engine.snapshot()).toMatchObject({ status: 'playing', hits: 1 });
+    const first = advanceUntil(engine, (snapshot) => snapshot.hits >= 1);
+    expect(first.hits).toBe(1);
+    expect(first.status).toBe('playing');
+    expect(first.lastJudgement).toBe('miss');
 
-    advance(engine, landings[1]! + 1 - engine.snapshot().step);
-    expect(engine.snapshot()).toMatchObject({ status: 'playing', hits: 2 });
+    const second = advanceUntil(engine, (snapshot) => snapshot.hits >= 2);
+    expect(second.hits).toBe(2);
+    expect(second.status).toBe('playing');
 
-    advance(engine, landings[2]! + 1 - engine.snapshot().step);
-    expect(engine.snapshot()).toMatchObject({
-      status: 'lost',
-      boss: { name: 'boss-1', phase: 1, guard: 'up' },
-      hits: MAX_HITS,
-      momentum: 0,
-      breakTicksLeft: 0,
-      lastJudgement: 'miss',
-    });
-    expect(engine.drainEvents().map((event) => event.type).at(-1)).toBe('lose');
+    const third = advanceUntil(engine, (snapshot) => snapshot.status === 'lost');
+    expect(third.hits).toBe(MAX_HITS);
+    expect(third.lastJudgement).toBe('miss');
+
+    const hitEvents = engine
+      .drainEvents()
+      .filter((event) => event.type === 'hit');
+    expect(hitEvents).toHaveLength(MAX_HITS);
   });
 
-  it('keeps damage a display value: 13 still costs one hit per unparried move', () => {
-    const landings = realMissLandings();
-    const engine = new ZhenShaEngine(HEAVY_REAL_CHART);
-
-    advance(engine, landings[0]! + 1);
-    expect(engine.snapshot()).toMatchObject({ status: 'playing', hits: 1 });
-    advance(engine, landings[1]! + 1 - engine.snapshot().step);
-    expect(engine.snapshot()).toMatchObject({ status: 'playing', hits: 2 });
-    advance(engine, landings[2]! + 1 - engine.snapshot().step);
-    expect(engine.snapshot()).toMatchObject({
-      status: 'lost',
-      hits: MAX_HITS,
-    });
-    expect(engine.drainEvents().map((event) => event.type)).toEqual([
-      'hit',
-      'hit',
-      'hit',
-      'lose',
-    ]);
-  });
-
-  it('advances the real chart from 1-1 to 1-2 with a fresh phase', () => {
+  it('breaks the first guard with three perfect parries and a staff strike enters phase two', () => {
+    const impacts = firstPhaseImpacts(MOMENTUM_FOR_BREAK);
     const engine = new ZhenShaEngine(REAL_BOSS_CHART);
-    const impacts = [162, 378, 630];
-    for (const impact of impacts) {
+
+    impacts.forEach((impact, index) => {
       engine.input('block', impact);
-    }
-    engine.input('charge', 635);
-    engine.input('strike', 640);
-
-    advance(engine, 641);
-    expect(engine.snapshot()).toMatchObject({
-      status: 'playing',
-      boss: { name: 'boss-1', phase: 2, guard: 'up' },
-      charging: false,
-      momentum: 0,
-      breakTicksLeft: 0,
+      const parried = advanceTo(engine, impact + 1);
+      expect(parried.perfects).toBe(index + 1);
+      expect(parried.momentum).toBe(index + 1);
+      expect(parried.attack).toBeNull();
     });
 
-    const cleared = engine.snapshot();
-    expect(cleared.perfects).toBe(MOMENTUM_FOR_BREAK);
-    expect(cleared.score).toBe(3 * SCORE_PERFECT + SCORE_FINISHER);
-    expect(cleared.lastJudgement).toBeNull();
-    expect(cleared.attack).toBeNull();
-    expect(cleared.elapsedMs).toBe(cleared.step * FIXED_STEP_MS);
+    const lastImpact = expectDefined(impacts.at(-1), 'last impact');
+    const phaseTwoTelegraph = toTicks(
+      expectDefined(
+        BOSSES[0]?.phases[1]?.moves[0],
+        'BOSSES[0].phases[1].moves[0]',
+      ).telegraphMs,
+    );
 
-    // Phase 2 restarts at its own first move (950 ms tell), not phase 1's list.
-    advance(engine, 712 - engine.snapshot().step + 1);
-    expect(engine.snapshot().step).toBe(713);
-    expect(engine.snapshot().attack).toMatchObject({
-      impactStep: 712 + durationTicks(950),
-      phase: 'telegraph',
-    });
+    engine.input('charge', lastImpact + 1);
+    engine.input('strike', lastImpact + 2);
+    const advanced = advanceTo(engine, lastImpact + 4);
+
+    expect(advanced.status).toBe('playing');
+    expect(advanced.boss.name).toBe('boss-1');
+    expect(advanced.boss.phase).toBe(2);
+    expect(advanced.momentum).toBe(0);
+    expect(advanced.hits).toBe(0);
+    expect(advanced.attack?.phase).toBe('telegraph');
+    expect(advanced.attack?.impactStep).toBe(lastImpact + 3 + phaseTwoTelegraph);
   });
 });
