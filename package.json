@@ -53,7 +53,6 @@
     "score": "node scripts/score.mjs",
     "lint": "oxlint --deny-warnings src tests scripts && node scripts/check-boundaries.mjs",
     "check:budget": "node scripts/check-budget.mjs",
-    "check:budget-docs": "node scripts/check-budget-docs.mjs",
     "verify:screenshots:webkit": "node scripts/verify-screenshot-artifacts.mjs",
     "verify:screenshots:sha256": "node scripts/verify-screenshot-sha256.mjs",
     "verify:screenshots:repro": "node scripts/verify-screenshot-repro.mjs",
