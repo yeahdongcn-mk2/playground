@@ -99,6 +99,9 @@ describe('current game copy', () => {
     const title = extract(INDEX, /<title>([^<]+)<\/title>/, '<title>');
     expect(title).toContain(`${countLabel}游戏`);
     expect(title).toContain('共享游戏框架');
+    // The browser-tab copy names the two most recent games.
+    expect(title).toContain('扫雷');
+    expect(title).toContain('镇煞');
 
     const description = extract(
       INDEX,
@@ -109,6 +112,10 @@ describe('current game copy', () => {
       expect(description).toContain(gameTitle);
     }
     expect(description).toContain('空白画布');
+    expect(description).toContain('扫雷');
+    expect(description).toContain('镇煞');
+    // The retired four-game copy must not come back in the static document.
+    expect(INDEX).not.toMatch(/四款游戏|贪食蛇、俄罗斯方块、2048、打砖块与空白画布/);
   });
 
   it('keeps the app shell footer and document title on the six games', () => {
@@ -121,10 +128,10 @@ describe('current game copy', () => {
   it('keeps the hub eyebrow and lede on the current six-game story', () => {
     const eyebrow = extract(HUB, /<p class="eyebrow">([\s\S]*?)<\/p>/, 'hub eyebrow');
     expect(eyebrow).not.toContain('ISSUE #11');
-    expect(eyebrow).toContain(`${countLabel}游戏`);
+    expect(eyebrow).toContain(`${countLabel}可玩游戏`);
 
     const lede = extract(HUB, /<p class="lede">([\s\S]*?)<\/p>/, 'hub lede');
-    expect(lede).toContain(`${countLabel}游戏`);
+    expect(lede).toContain(`${countLabel}可玩游戏`);
     for (const title of shippedTitles) {
       expect(lede).toContain(title);
     }

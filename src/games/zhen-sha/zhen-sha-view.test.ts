@@ -15,15 +15,8 @@ import {
   TELEGRAPH_TICKS,
 } from './engine';
 import { zhenShaGame } from './index';
-import {
-  STAFF_ARC_CONTROL,
-  STAFF_ARC_END,
-  STAFF_ARC_END_LIFT_RATIO,
-  STAFF_ARC_LIFT,
-  mountZhenSha,
-  staffArcClipPaths,
-  staffArcLift,
-} from './zhen-sha-view';
+import { mountZhenSha } from './zhen-sha-view';
+import type { ZhenShaDebugApi, ZhenShaDebugWindow } from './debug';
 
 class MemoryStore implements KeyValueStore {
   private readonly values = new Map<string, string>();
@@ -56,6 +49,8 @@ interface QuadraticCurveCall {
 interface FakeContext {
   readonly calls: string[];
   readonly quadraticCurves: QuadraticCurveCall[];
+  /** `strokeStyle` captured at each `stroke()` call, in call order. */
+  readonly strokeStyles: string[];
   fillStyle: string;
   strokeStyle: string;
   lineWidth: number;
@@ -78,14 +73,16 @@ interface FakeContext {
 function createFakeContext(): FakeContext {
   const calls: string[] = [];
   const quadraticCurves: QuadraticCurveCall[] = [];
+  const strokeStyles: string[] = [];
   const record =
     (name: string) =>
     (): void => {
       calls.push(name);
     };
-  return {
+  const context: FakeContext = {
     calls,
     quadraticCurves,
+    strokeStyles,
     fillStyle: '#000000',
     strokeStyle: '#000000',
     lineWidth: 1,
@@ -97,7 +94,10 @@ function createFakeContext(): FakeContext {
     beginPath: record('beginPath'),
     arc: record('arc'),
     fill: record('fill'),
-    stroke: record('stroke'),
+    stroke: () => {
+      calls.push('stroke');
+      strokeStyles.push(context.strokeStyle);
+    },
     closePath: record('closePath'),
     moveTo: record('moveTo'),
     lineTo: record('lineTo'),
@@ -106,6 +106,7 @@ function createFakeContext(): FakeContext {
       quadraticCurves.push({ controlX, controlY, x, y });
     },
   };
+  return context;
 }
 
 let activeContext: FakeContext;
@@ -329,6 +330,28 @@ function text(testId: string): string {
   return required<HTMLElement>(mounted.root, `[data-testid="${testId}"]`).textContent?.trim() ?? '';
 }
 
+function debugApi(): ZhenShaDebugApi | undefined {
+  return (window as unknown as ZhenShaDebugWindow).__playground;
+}
+
+function unmountView(view: MountedView): void {
+  view.handle.destroy();
+  view.root.remove();
+  if (mounted === view) {
+    mounted = null;
+  }
+}
+
+/**
+ * Flash strokes are the only ones drawn in this gold, so their presence proves
+ * a flash effect survived the step and reached the canvas.
+ */
+function goldFlashStrokes(context: FakeContext, from = 0): string[] {
+  return context.strokeStyles
+    .slice(from)
+    .filter((style) => style.startsWith('rgba(255, 233, 168,'));
+}
+
 function pointerEvent(type: string): PointerEvent {
   return new window.PointerEvent(type, {
     bubbles: true,
@@ -361,7 +384,7 @@ function momentum(): HTMLElement {
 /** The most recent quadraticCurveTo call belonging to the staff arc. */
 function latestStaffArc(context: FakeContext): QuadraticCurveCall {
   const call = context.quadraticCurves.findLast(
-    (curve) => curve.controlX === STAFF_ARC_CONTROL[0] && curve.x === STAFF_ARC_END[0],
+    (curve) => curve.controlX === 178 && curve.x === 318,
   );
   if (call === undefined) {
     throw new Error('the staff arc was not stroked on the canvas');
@@ -384,6 +407,7 @@ afterEach(() => {
   mounted?.handle.destroy();
   mounted?.root.remove();
   mounted = null;
+  delete (window as unknown as ZhenShaDebugWindow).__playground;
   vi.restoreAllMocks();
   window.location.hash = '';
   restoreProperty(window, 'requestAnimationFrame', ORIGINAL_REQUEST_ANIMATION_FRAME);
@@ -420,46 +444,37 @@ describe('zhen-sha view', () => {
     expect(view.context.calls).toContain('quadraticCurveTo');
   });
 
-  it('moves the CSS gold edge and the canvas arc with the same lift while charging', () => {
+  it('lifts the CSS gold edge and the canvas arc by the same amount while charging', () => {
     const view = mountView();
     primeLoop();
 
-    const glow = required<HTMLElement>(view.root, '.zhen-sha-arc-glow');
-    const edge = required<HTMLElement>(view.root, '.zhen-sha-arc-edge');
-    const resting = staffArcClipPaths(0);
+    // The CSS gold edge is a class toggle; the polygon geometry lives in
+    // zhen-sha.css and is locked by marks.test.ts. These literals are the
+    // staff arc's anchors in the 360x560 logical canvas.
+    const [controlY, endY, lift, endLiftRatio] = [420, 456, 34, 0.4];
+    expect(view.stage.classList.contains('is-arc-lifted')).toBe(false);
     const restingArc = latestStaffArc(view.context);
-
-    expect(glow.style.getPropertyValue('--zhen-arc-glow-clip')).toBe(resting.glow);
-    expect(edge.style.getPropertyValue('--zhen-arc-edge-clip')).toBe(resting.edge);
-    expect(restingArc.controlY).toBe(STAFF_ARC_CONTROL[1]);
-    expect(restingArc.y).toBe(STAFF_ARC_END[1]);
+    expect(restingArc.controlY).toBe(controlY);
+    expect(restingArc.y).toBe(endY);
 
     view.stage.dispatchEvent(pointerEvent('pointerdown'));
     advanceMs(250);
 
-    const lift = staffArcLift(true, 0, false);
-    expect(lift).toBe(STAFF_ARC_LIFT);
-    const raised = staffArcClipPaths(lift);
-    expect(raised.edge).not.toBe(resting.edge);
-    expect(glow.style.getPropertyValue('--zhen-arc-glow-clip')).toBe(raised.glow);
-    expect(edge.style.getPropertyValue('--zhen-arc-edge-clip')).toBe(raised.edge);
+    expect(view.stage.classList.contains('is-arc-lifted')).toBe(true);
 
     // The recorded quadraticCurveTo arguments prove the canvas applies the
     // lift to both anchors; removing `- lift` or `- lift * ratio` from
     // drawStaff fails here instead of only changing pixels.
     const chargingArc = latestStaffArc(view.context);
-    expect(chargingArc.controlY).toBe(STAFF_ARC_CONTROL[1] - lift);
-    expect(chargingArc.y).toBe(STAFF_ARC_END[1] - lift * STAFF_ARC_END_LIFT_RATIO);
+    expect(chargingArc.controlY).toBe(controlY - lift);
+    expect(chargingArc.y).toBe(endY - lift * endLiftRatio);
 
-    // Release and let the swing flash expire: both the edge and the canvas arc
-    // settle back onto the resting curve instead of drifting away permanently.
     view.stage.dispatchEvent(pointerEvent('pointerup'));
     advanceMs(1000);
-    expect(edge.style.getPropertyValue('--zhen-arc-edge-clip')).toBe(resting.edge);
-    expect(glow.style.getPropertyValue('--zhen-arc-glow-clip')).toBe(resting.glow);
+    expect(view.stage.classList.contains('is-arc-lifted')).toBe(false);
     const settledArc = latestStaffArc(view.context);
-    expect(settledArc.controlY).toBe(STAFF_ARC_CONTROL[1]);
-    expect(settledArc.y).toBe(STAFF_ARC_END[1]);
+    expect(settledArc.controlY).toBe(controlY);
+    expect(settledArc.y).toBe(endY);
   });
 
   it('refuses to render when the mount signal is already aborted', () => {
@@ -731,6 +746,173 @@ describe('zhen-sha view', () => {
     } finally {
       restoreProperty(document, 'hidden', originalHidden);
     }
+  });
+});
+
+describe('zhen-sha debug seam', () => {
+  it('stays off on a normal entry and leaves the wall-clock loop running', () => {
+    window.location.hash = '#/games/zhen-sha';
+    mountView();
+    primeLoop();
+
+    expect(debugApi()).toBeUndefined();
+    expect(pendingFrames.size).toBe(1);
+  });
+
+  it('does not start rAF and replays the same seed + inputs deterministically', () => {
+    window.location.hash =
+      '#/games/zhen-sha?debug=1&seed=7&inputs=block@180,block@360,block@540,charge@541,strike@542';
+    const first = mountView();
+    const api = debugApi();
+    expect(api?.gameId).toBe('zhen-sha');
+    expect(pendingFrames.size).toBe(0);
+
+    api!.step(543);
+    const replay = api!.getState();
+    expect(replay).toMatchObject({
+      seed: 7,
+      status: 'won',
+      perfects: 3,
+      score: 1900,
+    });
+    expect(text('status')).toBe('胜利');
+    expect(text('perfects')).toBe('3');
+    expect(text('score')).toBe('1900');
+    expect(required<HTMLElement>(first.root, '[data-testid="overlay"]').hidden).toBe(false);
+
+    // Restart re-arms the URL schedule, so the same run can be replayed again.
+    api!.restart();
+    expect(api!.getState()).toMatchObject({ status: 'playing', perfects: 0, score: 0 });
+    api!.step(543);
+    expect(api!.getState()).toEqual(replay);
+
+    unmountView(first);
+    const second = mountView();
+    const callsBefore = second.context.calls.length;
+    const strokesBefore = second.context.strokeStyles.length;
+    debugApi()!.step(543);
+    expect(debugApi()!.getState()).toEqual(replay);
+    // The step must render synchronously, and the winning flash raised on the
+    // last tick must still be drawn instead of being aged out by all 543 ticks.
+    expect(second.context.calls.length).toBeGreaterThan(callsBefore);
+    expect(goldFlashStrokes(second.context, strokesBefore).length).toBeGreaterThan(0);
+  });
+
+  it('ages the flash from its event tick instead of the whole step span', () => {
+    window.location.hash = '#/games/zhen-sha?debug=1&inputs=block@180';
+    const view = mountView();
+    const api = debugApi()!;
+
+    // One call spans 181 ticks but the perfect parry lands on the last one, so
+    // its flash must be almost full rather than already expired.
+    api.step(181);
+    expect(api.getState()).toMatchObject({ status: 'playing', perfects: 1 });
+    expect(goldFlashStrokes(view.context).length).toBeGreaterThan(0);
+
+    const strokesBeforeDecay = view.context.strokeStyles.length;
+    api.step(60);
+    expect(goldFlashStrokes(view.context, strokesBeforeDecay)).toHaveLength(0);
+  });
+
+  it('steps 180 ticks then lands three blocks and the 541/542 finisher', () => {
+    window.location.hash = '#/games/zhen-sha?debug=1&seed=9';
+    mountView();
+    const api = debugApi()!;
+
+    api.step(180);
+    api.input('block');
+    api.step(180);
+    api.input('block');
+    api.step(180);
+    api.input('block');
+    api.step(1);
+    expect(api.getState()).toMatchObject({ perfects: 3, score: 900 });
+    expect(api.getState().breakTicksLeft).toBeGreaterThan(0);
+
+    api.input('charge', 541);
+    api.step(1);
+    api.input('strike', 542);
+    api.step(1);
+
+    expect(api.getState()).toMatchObject({
+      seed: 9,
+      status: 'won',
+      perfects: 3,
+      score: 1900,
+      step: 543,
+    });
+  });
+
+  it('edges a held press by fixed steps so tick 27 charges it', () => {
+    window.location.hash = '#/games/zhen-sha?debug=1&inputs=block@180,block@360,block@540';
+    const view = mountView();
+    const api = debugApi()!;
+    api.step(541);
+    expect(api.getState().breakTicksLeft).toBeGreaterThan(0);
+
+    view.stage.dispatchEvent(pointerEvent('pointerdown'));
+    api.step(26);
+    expect(api.getState().charging).toBe(false);
+    api.step(1);
+    expect(api.getState().charging).toBe(true);
+
+    view.stage.dispatchEvent(pointerEvent('pointerup'));
+    api.step(1);
+    expect(api.getState()).toMatchObject({ status: 'won', charging: false, score: 1900 });
+  });
+
+  it('loses after 600 input-free fixed ticks', () => {
+    window.location.hash = '#/games/zhen-sha?debug=1';
+    mountView();
+    const api = debugApi()!;
+
+    api.step(600);
+
+    expect(api.getState()).toMatchObject({ status: 'lost', hits: MAX_HITS, seed: 1 });
+    expect(text('status')).toBe('失败');
+    expect(text('hits')).toBe(`3 / ${MAX_HITS}`);
+  });
+
+  it('removes __playground and the exact listeners on destroy', () => {
+    window.location.hash = '#/games/zhen-sha?debug=1';
+    const log = recordListenerCalls();
+    const view = mountView();
+    expect(debugApi()?.gameId).toBe('zhen-sha');
+
+    const restartButton = required<HTMLButtonElement>(
+      view.root,
+      '[data-testid="restart-button"]',
+    );
+    const overlayRestart = required<HTMLButtonElement>(
+      view.root,
+      '[data-testid="overlay-restart"]',
+    );
+    const expected: readonly (readonly [EventTarget, string])[] = [
+      [view.stage, 'pointerdown'],
+      [view.stage, 'pointerup'],
+      [view.stage, 'pointercancel'],
+      [view.stage, 'lostpointercapture'],
+      [document, 'visibilitychange'],
+      [restartButton, 'click'],
+      [overlayRestart, 'click'],
+    ];
+
+    view.handle.destroy();
+    view.handle.destroy();
+
+    expect(debugApi()).toBeUndefined();
+    expectTrackedListenersRemoved(log, expected);
+  });
+
+  it('removes __playground when the mount signal aborts', () => {
+    window.location.hash = '#/games/zhen-sha?debug=1';
+    const controller = new AbortController();
+    mountView(controller.signal);
+    expect(debugApi()?.gameId).toBe('zhen-sha');
+
+    controller.abort();
+
+    expect(debugApi()).toBeUndefined();
   });
 });
 

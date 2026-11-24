@@ -61,7 +61,7 @@ if (baseUrl === undefined) {
           return minY < 0 ? -1 : (minY + maxY) / 2;
         };
 
-        const raw = edge.style.getPropertyValue('--zhen-arc-edge-clip');
+        const raw = getComputedStyle(edge).clipPath;
         const inner = /^\s*polygon\(\s*([\s\S]*?)\s*\)\s*$/.exec(raw);
         if (inner === null) {
           throw new Error(`bad edge clip-path: ${raw}`);

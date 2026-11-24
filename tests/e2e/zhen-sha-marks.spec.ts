@@ -133,10 +133,13 @@ test.describe('zhen-sha decorative marks', () => {
     await expect(stage).toBeVisible();
     const edge = page.locator('.zhen-sha-arc-edge');
     const readClip = (): Promise<string> =>
-      edge.evaluate((element) => element.style.getPropertyValue('--zhen-arc-edge-clip'));
+      edge.evaluate((element) => getComputedStyle(element).clipPath);
+    const isLifted = (): Promise<boolean> =>
+      stage.evaluate((element) => element.classList.contains('is-arc-lifted'));
 
     const resting = await readClip();
     expect(resting).toMatch(/^polygon\(/);
+    expect(await isLifted()).toBe(false);
 
     // At 320x640 the stage sits below the fold; scroll it fully into view before
     // pressing, otherwise the pointer coordinates fall outside the viewport.
@@ -151,6 +154,7 @@ test.describe('zhen-sha decorative marks', () => {
       await expect
         .poll(readClip, { message: '蓄势后 CSS 金边应随 Canvas 金弧抬起', timeout: 2_000 })
         .not.toBe(resting);
+      expect(await isLifted(), '蓄势时舞台应带 is-arc-lifted').toBe(true);
     } finally {
       await page.mouse.up();
     }
@@ -179,5 +183,6 @@ test.describe('zhen-sha decorative marks', () => {
     await expect
       .poll(readClip, { message: '收棍后 CSS 金边应回到静息弧', timeout: 3_000 })
       .toBe(resting);
+    expect(await isLifted(), '收棍后舞台应移除 is-arc-lifted').toBe(false);
   });
 });

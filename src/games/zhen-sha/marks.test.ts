@@ -2,7 +2,8 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { STAFF_ARC_BAND, staffArcClipPath, staffArcLift } from './zhen-sha-view';
+import type { ZhenShaSnapshot } from './engine';
+import { staffArcLift } from './zhen-sha-view';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const GAME_DIR = join(ROOT, 'src', 'games', 'zhen-sha');
@@ -152,16 +153,59 @@ function parsePolygon(raw: string): PolygonPoint[] {
   });
 }
 
-/** The static polygon fallback of a `clip-path: var(--…, polygon(…))` layer. */
-function clipFallback(selector: string): string {
+/** The plain `polygon(...)` a decorative layer declares for one lift state. */
+function clipPolygon(selector: string): string {
   const raw = declarationValue(ruleBody(selector), 'clip-path');
-  const match = /^var\(\s*(--zhen-arc-(?:glow|edge)-clip)\s*,\s*(polygon\([\s\S]*\))\s*\)$/.exec(
-    raw,
-  );
-  if (match === null) {
-    throw new Error(`${selector} 的 clip-path 必须是由 CSS 变量驱动的 polygon 回退：${raw}`);
+  if (!/^polygon\([\s\S]*\)$/.test(raw)) {
+    throw new Error(`${selector} 的 clip-path 必须是 polygon()：${raw}`);
   }
-  return match[2] ?? '';
+  return raw;
+}
+
+/**
+ * The staff-arc constants mirrored from zhen-sha-view.ts / zhen-sha.css. The
+ * CSS bakes one polygon per lift state from these; recomputing them here keeps
+ * the stylesheet and the canvas stroke on the same curve.
+ */
+const ARC = {
+  start: [42, 486],
+  control: [178, 420],
+  end: [318, 456],
+  endLiftRatio: 0.4,
+  steps: 10,
+  band: { glow: 10.1, edge: 2.5 },
+} as const;
+
+function arcPoint(t: number, lift: number): { x: number; y: number } {
+  const inverse = 1 - t;
+  const [x0, y0] = ARC.start;
+  const [cx, cy] = ARC.control;
+  const [x1, y1] = ARC.end;
+  return {
+    x: inverse * inverse * x0 + 2 * t * inverse * cx + t * t * x1,
+    y:
+      inverse * inverse * y0 +
+      2 * t * inverse * (cy - lift) +
+      t * t * (y1 - lift * ARC.endLiftRatio),
+  };
+}
+
+function percent(value: number, total: number): string {
+  return `${((value / total) * 100).toFixed(2)}%`;
+}
+
+/** The `clip-path` polygon the CSS bakes for one lift and band thickness. */
+function expectedPolygon(lift: number, halfThickness: number): string {
+  const points: string[] = [];
+  for (let index = 0; index <= ARC.steps; index += 1) {
+    const point = arcPoint(index / ARC.steps, lift);
+    points.push(`${percent(point.x, 360)} ${percent(point.y - halfThickness, 560)}`);
+  }
+  for (let index = ARC.steps; index >= 0; index -= 1) {
+    const point = arcPoint(index / ARC.steps, lift);
+    points.push(`${percent(point.x, 360)} ${percent(point.y + halfThickness, 560)}`);
+  }
+  return `polygon(${points.join(', ')})`;
 }
 
 /** A font stack must end at a system generic family, never a fetched webfont. */
@@ -170,9 +214,9 @@ const SYSTEM_GENERIC =
 
 describe('zhen-sha cinnabar seal, wordmark and gold arc edge', () => {
   it('renders a cinnabar seal and the 镇煞 wordmark from system glyphs', () => {
-    expect(VIEW).toMatch(/<span class="zhen-sha-wordmark">镇煞<\/span>/);
-    expect(VIEW).toMatch(/<span class="zhen-sha-seal">镇煞<\/span>/);
-    expect(VIEW).toMatch(/class="zhen-sha-marks" aria-hidden="true"/);
+    expect(VIEW).toMatch(/<span class=zhen-sha-wordmark>镇煞<\/span>/);
+    expect(VIEW).toMatch(/<span class=zhen-sha-seal>镇煞<\/span>/);
+    expect(VIEW).toMatch(/<div class=zhen-sha-marks aria-hidden=true>/);
 
     const seal = ruleBody('.zhen-sha-seal');
     expect(seal).toContain('var(--zhen-cinnabar)');
@@ -235,25 +279,17 @@ describe('zhen-sha cinnabar seal, wordmark and gold arc edge', () => {
     expect(declarationValue(edge, 'background')).toContain('var(--zhen-gold)');
     expect(declarationValue(edge, 'filter')).toContain('drop-shadow');
 
-    // The view writes both CSS variables; the layers resolve them with a static
-    // resting fallback so the gold edge tracks the canvas lift instead of
-    // staying at the resting position while the staff is raised.
-    expect(VIEW).toContain("setProperty('--zhen-arc-glow-clip'");
-    expect(VIEW).toContain("setProperty('--zhen-arc-edge-clip'");
-    expect(VIEW).toContain('staffArcClipPaths(');
-    expect(declarationValue(glow, 'clip-path')).toMatch(/var\(\s*--zhen-arc-glow-clip\s*,/);
-    expect(declarationValue(edge, 'clip-path')).toMatch(/var\(\s*--zhen-arc-edge-clip\s*,/);
-
-    // The static fallback must trace the same curve the canvas strokes, or the
-    // first paint and the hydrated paint would disagree.
+    // The view toggles one class; the resting and lifted polygons live in the
+    // stylesheet so the lazy chunk does not ship the geometry generator.
+    expect(VIEW).toContain("classList.toggle('is-arc-lifted'");
     for (const [selector, band] of [
-      ['.zhen-sha-arc-glow', STAFF_ARC_BAND.glow],
-      ['.zhen-sha-arc-edge', STAFF_ARC_BAND.edge],
+      ['.zhen-sha-arc-glow', ARC.band.glow],
+      ['.zhen-sha-arc-edge', ARC.band.edge],
     ] as const) {
-      const fallback = parsePolygon(clipFallback(selector));
-      const fromCanvas = parsePolygon(staffArcClipPath(0, band));
-      expect(fallback.length).toBe(fromCanvas.length);
-      fallback.forEach((point, index) => {
+      const resting = parsePolygon(clipPolygon(selector));
+      const fromCanvas = parsePolygon(expectedPolygon(0, band));
+      expect(resting.length).toBe(fromCanvas.length);
+      resting.forEach((point, index) => {
         const expected = fromCanvas[index];
         if (expected === undefined) {
           throw new Error(`缺少第 ${index} 个顶点`);
@@ -274,39 +310,56 @@ describe('zhen-sha cinnabar seal, wordmark and gold arc edge', () => {
   });
 
   it('lifts the CSS gold edge with the canvas while charging, breaking or swinging', () => {
-    expect(staffArcLift(false, 0, false)).toBe(0);
-    const lifted = staffArcLift(true, 0, false);
+    expect(staffArcLift({ charging: false, breakTicksLeft: 0 } as ZhenShaSnapshot, null)).toBe(0);
+    const lifted = staffArcLift({ charging: true, breakTicksLeft: 0 } as ZhenShaSnapshot, null);
     expect(lifted).toBeGreaterThan(0);
-    expect(staffArcLift(false, 1, false)).toBe(lifted);
-    expect(staffArcLift(false, 0, true)).toBe(lifted);
+    expect(
+      staffArcLift({ charging: false, breakTicksLeft: 1 } as ZhenShaSnapshot, null),
+    ).toBe(lifted);
+    expect(
+      staffArcLift({ charging: false, breakTicksLeft: 0 } as ZhenShaSnapshot, {
+        type: 'perfect',
+        remainingMs: 0,
+      }),
+    ).toBe(lifted);
 
-    const rest = parsePolygon(staffArcClipPath(0, STAFF_ARC_BAND.glow));
-    const raised = parsePolygon(staffArcClipPath(lifted, STAFF_ARC_BAND.glow));
-    const topCount = rest.length / 2;
-    const endIndex = topCount - 1;
+    // The lifted override must trace the same curve at `lifted`, not a copy of
+    // the resting band: changing either polygon without the geometry fails.
+    for (const [selector, band] of [
+      ['.zhen-sha-arc-glow', ARC.band.glow],
+      ['.zhen-sha-arc-edge', ARC.band.edge],
+    ] as const) {
+      const rest = parsePolygon(clipPolygon(selector));
+      const raised = parsePolygon(
+        clipPolygon(`.zhen-sha-stage.is-arc-lifted ${selector}`),
+      );
+      expect(raised).toEqual(parsePolygon(expectedPolygon(lifted, band)));
 
-    // The pivot end stays put; the free end lifts by the damped end ratio and
-    // the middle of the curve lifts the most.
-    expect(raised[0]?.x).toBeCloseTo(rest[0]?.x ?? Number.NaN, 2);
-    expect(raised[0]?.y).toBeCloseTo(rest[0]?.y ?? Number.NaN, 2);
-    const endDelta = (rest[endIndex]?.y ?? 0) - (raised[endIndex]?.y ?? 0);
-    expect(endDelta).toBeCloseTo(((lifted * 0.4) / 560) * 100, 1);
-    const middleDelta =
-      (rest[Math.floor(endIndex / 2)]?.y ?? 0) - (raised[Math.floor(endIndex / 2)]?.y ?? 0);
-    expect(middleDelta).toBeGreaterThan(endDelta);
+      const topCount = rest.length / 2;
+      const endIndex = topCount - 1;
+      // The pivot end stays put; the free end lifts by the damped end ratio and
+      // the middle of the curve lifts the most.
+      expect(raised[0]?.x).toBeCloseTo(rest[0]?.x ?? Number.NaN, 2);
+      expect(raised[0]?.y).toBeCloseTo(rest[0]?.y ?? Number.NaN, 2);
+      const endDelta = (rest[endIndex]?.y ?? 0) - (raised[endIndex]?.y ?? 0);
+      expect(endDelta).toBeCloseTo(((lifted * ARC.endLiftRatio) / 560) * 100, 1);
+      const middleDelta =
+        (rest[Math.floor(endIndex / 2)]?.y ?? 0) - (raised[Math.floor(endIndex / 2)]?.y ?? 0);
+      expect(middleDelta).toBeGreaterThan(endDelta);
 
-    // Every point of the raised band is at or above the resting band: the gold
-    // edge moves with the arc instead of staying behind.
-    for (let index = 0; index < rest.length; index += 1) {
-      const restPoint = rest[index];
-      const raisedPoint = raised[index];
-      if (restPoint === undefined || raisedPoint === undefined) {
-        throw new Error(`polygon 顶点数量不一致：${index}`);
+      // Every point of the raised band is at or above the resting band: the gold
+      // edge moves with the arc instead of staying behind.
+      for (let index = 0; index < rest.length; index += 1) {
+        const restPoint = rest[index];
+        const raisedPoint = raised[index];
+        if (restPoint === undefined || raisedPoint === undefined) {
+          throw new Error(`polygon 顶点数量不一致：${index}`);
+        }
+        expect(raisedPoint.x).toBeCloseTo(restPoint.x, 2);
+        expect(raisedPoint.y).toBeLessThanOrEqual(restPoint.y + 1e-9);
       }
-      expect(raisedPoint.x).toBeCloseTo(restPoint.x, 2);
-      expect(raisedPoint.y).toBeLessThanOrEqual(restPoint.y + 1e-9);
+      expect(raised).not.toEqual(rest);
     }
-    expect(raised).not.toEqual(rest);
   });
 
   it('stacks canvas, marks, flying-white and overlay on an explicit z-index ladder', () => {

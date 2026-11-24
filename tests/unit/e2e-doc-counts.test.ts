@@ -32,8 +32,8 @@ const E2E_DOC_PATHS = ['README.md', 'docs/framework.md'] as const;
  * the `playwright test --list` output.
  */
 const EXPECTED_E2E_COUNTS = {
-  total: 161,
-  chromium: 93,
+  total: 162,
+  chromium: 94,
   mobile: 36,
   mobileWebkit: 32,
 } as const;
@@ -580,17 +580,16 @@ describe('verifyE2eDocCounts', () => {
 
   it('reports when the Playwright manifest drifts from the locked counts', () => {
     const drifted = {
-      total: EXPECTED_E2E_COUNTS.total - 1,
-      chromium: EXPECTED_E2E_COUNTS.chromium - 1,
-      mobile: EXPECTED_E2E_COUNTS.mobile,
-      mobileWebkit: EXPECTED_E2E_COUNTS.mobileWebkit,
+      ...EXPECTED_E2E_COUNTS,
+      total: EXPECTED_E2E_COUNTS.total + 1,
+      chromium: EXPECTED_E2E_COUNTS.chromium + 1,
     };
     const verification = verifyE2eDocCounts({
       documents: docsWithE2eCounts(drifted),
       reportText: playwrightListJson({
-        chromium: drifted.chromium,
-        mobile: drifted.mobile,
-        'mobile-webkit': drifted.mobileWebkit,
+        chromium: EXPECTED_E2E_COUNTS.chromium + 1,
+        mobile: EXPECTED_E2E_COUNTS.mobile,
+        'mobile-webkit': EXPECTED_E2E_COUNTS.mobileWebkit,
       }),
       expected: EXPECTED_E2E_COUNTS,
     });
@@ -601,7 +600,9 @@ describe('verifyE2eDocCounts', () => {
       kind: 'measured-mismatch',
       field: 'total',
     });
-    expect(verification.problems[0]?.reason).toContain(`实测 ${drifted.total} 条`);
+    expect(verification.problems[0]?.reason).toContain(
+      `实测 ${EXPECTED_E2E_COUNTS.total + 1} 条`,
+    );
     expect(verification.problems[0]?.reason).toContain(
       `锁定的 ${EXPECTED_E2E_COUNTS.total} 条`,
     );
@@ -657,7 +658,7 @@ describe('verifyE2eDocCounts', () => {
 });
 
 describe('committed e2e documentation', () => {
-  it('matches the actual Playwright --list manifest and the locked 161 / 93 / 36 / 32', () => {
+  it('matches the actual Playwright --list manifest and the locked counts', () => {
     const result = spawnSync(
       PLAYWRIGHT_BIN,
       ['test', '--list', '--reporter=json'],

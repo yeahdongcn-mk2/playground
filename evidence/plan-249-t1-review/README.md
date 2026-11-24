@@ -1,8 +1,9 @@
 # 镇煞朱砂印 / 字标 / 金棍弧金边 Before / After（#249 t2 评审修复）
 
 - Before：`3ba9cc1`（PR #411 的 base，main 合入 #410 之后）。
-- After：`f6bc467`（本 PR 修复评审意见后的应用代码提交；本目录的截图与说明随后提交，
-  不改产品代码，所以视觉状态与 `f6bc467` 一致）。
+- After：本 PR rebase 到 `main` `b362762` 后的构建；产品代码提交可用
+  `git log -1 --format=%h -- src/games/zhen-sha` 定位。金边几何改由 CSS 静态 polygon
+  承载（`is-arc-lifted` 切换），渲染结果与此前 `f6bc467` 的截图一致。
 - 来源：Issue #249 第 1 条子任务（t2）的评审修复，PR #411。
 
 ## 场景
@@ -50,8 +51,8 @@ canvas arc lift (resting - charging): 18.29 px
 
 320 下 resting 的差异只在标记层；charging 滚到舞台后差异延伸到金弧区域，正是新增金边。
 `tests/e2e/zhen-sha-marks.spec.ts` 另有门禁：两个视口下印/字标 bounding box 在 stage 内、
-不与 HUD / 手势提示相交、computed `color` / `opacity` 不透明，并且蓄势时
-`--zhen-arc-edge-clip` 会切换成抬起的 polygon、收棍后回到静息 polygon。
+不与 HUD / 手势提示相交、computed `color` / `opacity` 不透明，并且蓄势时舞台带上
+`is-arc-lifted`、computed `clip-path` 切换成抬起的 polygon，收棍后回到静息 polygon 并移除该类。
 
 ## 复现
 

@@ -20,11 +20,13 @@
  * Issue #341 t2 found a second, independent drift source on the hub page: the
  * `99dfef39…` variant differs from the committed `after-hub-webkit.png` by
  * 259936 pixels, but only 2429 of them are the shared header (each channel 1
- * step). The large differences are the hero orb core rendered at the
- * reduced-motion `breathe` animation's scale(0.97) instead of the resting
- * scale(1). `settleHubHeroCompositing` below is the same seam for that
- * element: it finishes the page's reduced-motion animations, checks none is
- * still running, then waits committed frames before the screenshot.
+ * step). The large differences were the hero visual rendered at a
+ * reduced-motion animation's end frame instead of the resting style.
+ * `settleHubHeroCompositing` below is the same seam for the hub's hero element:
+ * it finishes the page's reduced-motion animations, checks none is still
+ * running, then waits committed frames before the screenshot. Issue #252
+ * replaced the orb with the zhen-sha feature card and retargeted
+ * `HUB_HERO_SELECTOR` to it without changing the seam.
  */
 
 /** Shared site header whose WebKit backdrop snapshot can outlive a route switch. */
@@ -181,12 +183,13 @@ export async function settleSharedHeaderCompositing(
 }
 
 /**
- * Hub hero element whose reduced-motion animation leaves a residual composited
- * transform. The orb core is the only element with a large pixel difference in
- * the `99dfef39…` hub drift (Issue #341 t2); the selector also proves the hub
- * page loaded the hero before the capture is allowed to continue.
+ * Hub hero element: the zhen-sha feature card promoted from the grid into the
+ * first screen (Issue #252). The `99dfef39…` hub drift (Issue #341 t2) was
+ * attributed to the retired orb core, so the seam stays on whatever the hero
+ * first-screen visual is now; the selector also proves the hub page rendered
+ * its feature card before the capture is allowed to continue.
  */
-export const HUB_HERO_SELECTOR = '.orb-core';
+export const HUB_HERO_SELECTOR = '[data-testid="game-card-zhen-sha"]';
 
 /** Committed double-rAF waits after the hub hero animations finish. */
 export const HUB_HERO_SETTLE_FRAMES = 2;
@@ -195,12 +198,11 @@ export const HUB_HERO_SETTLE_FRAMES = 2;
  * In-page half of `settleHubHeroCompositing`.
  *
  * The capture context runs with `prefers-reduced-motion: reduce`, so every CSS
- * animation (`breathe` on the orb core, `orbit` on both rings) is a single
- * 0.001 ms iteration. A loaded WebKit can still composite that animation's
- * frame instead of the resting style, which shifts the orb gradient / glow by
- * up to 198 per channel. Finishing every animation and then checking that none
- * is still running removes the residual transform before the committed-frame
- * waits. `pending` lets the host fail instead of capturing an unsettled frame.
+ * animation on the hub is a single 0.001 ms iteration. A loaded WebKit can
+ * still composite an animation's frame instead of the resting style. Finishing
+ * every animation and then checking that none is still running removes the
+ * residual transform before the committed-frame waits. `pending` lets the host
+ * fail instead of capturing an unsettled frame.
  *
  * This runs inside `page.evaluate`, so it only uses browser globals and its
  * serialisable options.
