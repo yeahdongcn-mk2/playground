@@ -518,9 +518,14 @@
   position: absolute;
   inset: 0;
   z-index: 4;
-  display: grid;
-  place-items: center;
-  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 14px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: color-mix(in srgb, var(--zhen-ink) 72%, transparent);
   backdrop-filter: blur(6px);
 }
@@ -534,6 +539,7 @@
   max-width: 280px;
   flex-direction: column;
   gap: 6px;
+  margin-block: auto;
   padding: 22px;
   border: 1px solid color-mix(in srgb, var(--zhen-cinnabar) 52%, transparent);
   border-radius: var(--radius);
@@ -551,6 +557,78 @@
   margin-bottom: 10px;
   color: var(--muted);
   font-size: 0.86rem;
+}
+
+/*
+ * The result is a "battle seal": one 3:4 sheet of paper pressed with the
+ * cinnabar stamp, the duel readout and the deterministic blade trail. It is
+ * drawn once per duel and scaled here; the card can scroll on a short phone.
+ */
+.zhen-sha-settlement {
+  width: 100%;
+  max-width: 340px;
+  gap: 7px;
+  padding: 12px;
+}
+
+.zhen-sha-settlement-canvas {
+  display: block;
+  width: 100%;
+  max-width: 260px;
+  height: auto;
+  margin-inline: auto;
+  border-radius: 10px;
+  background: var(--zhen-paper);
+  box-shadow: 0 18px 44px -28px color-mix(in srgb, var(--zhen-ink) 90%, transparent);
+}
+
+.zhen-sha-settlement-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 8px;
+  width: 100%;
+  margin: 0;
+}
+
+.zhen-sha-settlement-stats div {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid color-mix(in srgb, var(--zhen-ash) 24%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--zhen-ink) 60%, transparent);
+  text-align: left;
+}
+
+.zhen-sha-settlement-stats dt {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.08em;
+}
+
+.zhen-sha-settlement-stats dd {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.84rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.zhen-sha-overlay-actions {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+.zhen-sha-overlay-actions .button {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 10px;
+  font-size: 0.84rem;
 }
 
 .zhen-sha-hints {
@@ -654,6 +732,44 @@
 
   .zhen-sha-stage {
     border-radius: 20px;
+  }
+
+  /* The seal is taller than the stage, so a result takes over the phone
+     viewport instead of hiding its actions behind an inner scrollbar. */
+  .zhen-sha-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    padding: 10px;
+  }
+
+  /* `position: fixed` escapes the stage's overflow clipping, but not its
+     stacking context (`isolation: isolate` above). The shell header is sticky
+     at z-index 20 in the root context, so while the result is open its whole
+     ancestor level must outrank the header or the header paints over it. */
+  .zhen-sha-game[data-status="won"] .zhen-sha-stage,
+  .zhen-sha-game[data-status="lost"] .zhen-sha-stage {
+    z-index: 30;
+  }
+
+  .zhen-sha-settlement {
+    gap: 5px;
+    padding: 10px;
+  }
+
+  /* Three actions share one row so the whole result still fits the 320x640
+     first screen; tighten the label spacing instead of adding a second row. */
+  .zhen-sha-overlay-actions {
+    gap: 6px;
+  }
+
+  .zhen-sha-overlay-actions .button {
+    padding: 8px 6px;
+    font-size: 0.78rem;
+  }
+
+  .zhen-sha-settlement-canvas {
+    border-radius: 8px;
   }
 
   .zhen-sha-hints li {
