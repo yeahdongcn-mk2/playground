@@ -6,7 +6,7 @@
 
 | 项 | Before | After |
 | --- | --- | --- |
-| 产品代码 | `9147cdc`（rebase 前的最新 `main`：结算模块与 `?debug=1` 已在 main，view 仍是纯文字 overlay） | 本分支 rebase 后的产品提交（含结算页与保存战绩符；截图取自该树，其后追加本证据目录） |
+| 产品代码 | `9147cdc`（rebase 前的最新 `main`：结算模块与 `?debug=1` 已在 main，view 仍是纯文字 overlay） | `435e9e6`（rebase 后的产品提交，含结算页与保存战绩符；截图取自该树，其后追加本证据目录更新） |
 | 场景 | 固定输入序列的胜利：三次完美格挡 + 破防后蓄势棍击 | 同一场景、同一输入序列 |
 | 结果数值 | 完美 3 / 得分 1900 | 完美 3 / 用时 4.8s / 刀光 6 道 / 首领 黑煞·第 1 阶段 / 得分 1900 |
 | 视口 | 1440×1000 与 320×640 | 同左 |
@@ -57,7 +57,7 @@ git worktree add --detach /tmp/zhen-251-before 9147cdc
 (cd /tmp/zhen-251-before && npm ci && npm run build)
 (cd /tmp/zhen-251-before && npx vite preview --host 127.0.0.1 --port 4190 --strictPort) &
 
-# 2) After：本分支（产品提交见 PR head）
+# 2) After：本分支（产品提交 435e9e6）
 npm ci
 npm run build
 npx vite preview --host 127.0.0.1 --port 4191 --strictPort &
