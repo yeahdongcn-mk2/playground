@@ -44,6 +44,10 @@ interface ZhenShaDebugWindow {
   };
 }
 
+interface ClickCounterWindow {
+  __githubLinkClicks?: number;
+}
+
 /** Mount the game, then advance the fixed-step replay until it settles. */
 async function openSettlement(page: Page): Promise<void> {
   await page.goto(WIN_REPLAY_URL);
@@ -142,10 +146,32 @@ test('traps focus in the settlement dialog and restores the page shell on restar
   await expect(page).toHaveURL(/#\/games\/zhen-sha\?debug=1/);
   await expect(overlay).toBeVisible();
 
-  // The GitHub link opens a new page, so a click must not produce a popup.
-  const popup = page.waitForEvent('popup', { timeout: 500 }).catch(() => null);
+  // Inert blocks activation as well as focus: the GitHub link must receive no
+  // click event and must not open its new page. Pointer input dispatches the
+  // click synchronously, so a broken inert reaches the counter at once; a
+  // fixed popup timeout could instead pass after a late popup.
+  await page.evaluate(() => {
+    const link = document.querySelector('header.site-header .site-nav a.icon-button');
+    const state = window as unknown as ClickCounterWindow;
+    state.__githubLinkClicks = 0;
+    document.addEventListener(
+      'click',
+      (event) => {
+        if (link !== null && event.composedPath().includes(link)) {
+          state.__githubLinkClicks = (state.__githubLinkClicks ?? 0) + 1;
+        }
+      },
+      true,
+    );
+  });
+  const popups: Page[] = [];
+  page.context().on('page', (popup) => popups.push(popup));
   await clickCenter(page, githubLink);
-  expect(await popup, 'inert header links must not open a new page').toBeNull();
+  const linkClicks = await page.evaluate(
+    () => (window as unknown as ClickCounterWindow).__githubLinkClicks ?? 0,
+  );
+  expect(linkClicks, 'inert header links must not receive click events').toBe(0);
+  expect(popups, 'inert header links must not open a new page').toHaveLength(0);
   await expect(page).toHaveURL(/#\/games\/zhen-sha\?debug=1/);
   await expect(overlay).toBeVisible();
 
