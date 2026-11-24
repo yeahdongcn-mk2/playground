@@ -228,7 +228,8 @@ pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和
 | `npm run preview` | 本地预览生产构建 |
 | `npm run typecheck` | 只做 TypeScript 类型检查 |
 | `npm run test:unit` | Vitest 单元测试 |
-| `npm run verify:doc-counts` | 校验三份文档记录的单测计数与 Vitest 实测 `numTotalTests` 一致 |
+| `npm run docs:counts:write` | 单测计数唯一入口：默认跑一次 `npm run test:unit` 并读取 Vitest JSON 报告，或用 `--report <vitest.json>` 复用已有报告；把实测 `numTotalTests` 写入 `README.md`、`docs/framework.md`、`docs/snake-design.md` 三处计数与 `docs/score-baseline.json` 的 `unitTests`，只改数字、其余字节不动，重复跑无 diff；子任务不再修改这些计数 |
+| `npm run verify:doc-counts` | 校验三份文档记录的单测计数与 Vitest 实测 `numTotalTests` 一致；基线 `docs/score-baseline.json` 的 `unitTests` 由 `npm run score` 复核 |
 | `npm run score` | 运行 score 时先执行 `npm run build`（`check:budget` 读取 `dist/`，因此干净检出上无需手动预构建），再汇总六条校验并与 `docs/score-baseline.json` 对比：默认打印「指标 / 当前值 / 基线值 / 差值」表格，并在末尾输出一行 `SCORE_JSON <json>`；任一指标退化时退出 1，指标变好只报差值、不自动更新基线；`npm run score -- --update` 用当前值重建基线（快照不完整时拒绝写入并退出 2） |
 | `npm run test:e2e` | 先构建，再用 `vite preview` 跑全部 Playwright 项目（Chromium 桌面 / Pixel 7 + `mobile-webkit`） |
 | `npm run test:e2e:webkit` | 先构建，再只跑 `mobile-webkit` 项目（iPhone SE (3rd gen)）：framework 手机端、扫雷 WebKit 冒烟、触屏手势 / 触屏难度表单、贪食蛇 / 俄罗斯方块 / 2048 / 打砖块的手机端用例，2048 READY 两跑字节守卫，以及 320×640 / 360×640 / 375×667 / 412×839 窄屏契约 |
@@ -408,7 +409,7 @@ npm run score        # 通过（打印「指标 / 当前值 / 基线值 / 差值
 npm run test:e2e     # 168 passed（桌面 100 + 手机 36 + WebKit 32）
 ```
 
-CI 的 `verify` job 会在 `Bundle budget` 之后、`End-to-end tests` 之前运行 `npm run score`（见上文「CI 检查顺序」）。该步骤只与 `docs/score-baseline.json` 对比：不会运行 `npm run score -- --update`，因此 CI 不会改写基线；基线退化或损坏时 job 直接失败，新基线仍由人显式运行 `--update` 后提交。score 内部的 `verify:doc-counts` 默认会再跑一次单测（见 [docs/framework.md](docs/framework.md) 第 13 节），这是它现有的采集语义。
+CI 的 `verify` job 会在 `Bundle budget` 之后、`End-to-end tests` 之前运行 `npm run score`（见上文「CI 检查顺序」）。该步骤只与 `docs/score-baseline.json` 对比：不会运行 `npm run score -- --update`，因此 `verify` job 不会提交或更新基线（`Generate doc test counts` 只改写工作区的 `unitTests`，不提交）；基线退化或损坏时 job 直接失败。单测计数由 `npm run docs:counts:write` 生成，合入 main 后 `doc-counts-sync` 只提交 `README.md`、`docs/framework.md`、`docs/snake-design.md`、`docs/score-baseline.json` 四个计数文件（含基线）。score 内部的 `verify:doc-counts` 默认会再跑一次单测（见 [docs/framework.md](docs/framework.md) 第 13 节），这是它现有的采集语义。
 
 截图证据的夜间复现由 [.github/workflows/capture-repro.yml](.github/workflows/capture-repro.yml) 按清单集合（`docs/screenshots/capture-sha256-manifest*.json`）的 `command` 连续两跑并逐份校验环境指纹；当前 3 份清单 / 16 个 capture 派生 7 个 target / 14 次捕获，Chromium 桌面 + 手机空白图共用同一条 `screenshots` 命令但分别匹配 desktop / mobile 清单。独立的并发负载闸门由 [.github/workflows/capture-repro-load.yml](.github/workflows/capture-repro-load.yml) 对三个受影响的 WebKit target 重复至少 4 跑并注入宿主 CPU 负载。失败信息与重拍步骤见 [docs/screenshots/README.md](docs/screenshots/README.md) 的「夜间固定容器两跑复现与排障」与「并发负载截图复现」；两个 workflow 都不提交、不改清单。
 
@@ -436,7 +437,7 @@ CI 的 passed / flaky / failed 口径、PR 稳定性门禁范围、每日 `flake
 12. `Check target e2e flakes`
 13. `WebKit narrow screenshot smoke test`
 
-检查开始前先 checkout、固化容器内 `safe.directory`、`npm ci` 并安装 `pre-commit==4.7.0`。`Score baseline` 只对比 `docs/score-baseline.json`，不传 `--update`；基线退化（含基线损坏）会让 job 直接失败。`flake-watch` 是独立的每日巡检（30 分钟预算），不在 PR 关键路径上。
+检查开始前先 checkout、固化容器内 `safe.directory`、`npm ci` 并安装 `pre-commit==4.7.0`。`Unit tests` 之后先运行 `Generate doc test counts`：PR 只生成不提交，只把实测计数写进工作区，供 `Verify doc test counts` 与 `Score baseline` 使用；合入 main 后 `doc-counts-sync` 重跑生成与校验，只提交 `README.md`、`docs/framework.md`、`docs/snake-design.md`、`docs/score-baseline.json` 四个计数文件。`Score baseline` 只对比 `docs/score-baseline.json`，不传 `--update`；`verify` job 不会提交或更新基线（`Generate doc test counts` 只改写工作区的 `unitTests`，不提交），基线退化（含基线损坏）会让 job 直接失败。`flake-watch` 是独立的每日巡检（30 分钟预算），不在 PR 关键路径上。
 
 ### 浏览器覆盖范围
 
