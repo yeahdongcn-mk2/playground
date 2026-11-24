@@ -9,8 +9,8 @@
  * (opening `activeMs / 2` before the impact tick and closing `activeMs / 2`
  * after it), `parryWindowMs` for the perfect band and `recoveryMs` for the rest
  * between exchanges. `damage` takes no part in judgement: it is a display /
- * design point value that the engine only checks is positive, while the hit
- * budget stays one point per unparried move (#449 settled that meaning).
+ * design point value that the engine only checks that it is positive, while the
+ * hit budget stays one point per unparried move (#449 settled that meaning).
  *
  * Relationship to `bosses.ts`: #246 already ships `BOSSES` with its own
  * `BossMove` / `BossPhase` / `BossChart` types — there a boss carries `id`,
