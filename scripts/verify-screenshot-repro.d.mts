@@ -2,7 +2,10 @@ import type { ReproResult } from './lib/screenshot-repro.mjs';
 
 export interface VerifyReproOptions {
   help: boolean;
-  manifest: string;
+  /** One explicit manifest; null discovers the manifest set. */
+  manifest: string | null;
+  /** Directory the manifest set is discovered in. */
+  manifestDir: string;
   dir: string;
   logDir: string;
   targets: string[];
@@ -20,7 +23,8 @@ export interface ReproMainDependencies {
   env?: NodeJS.ProcessEnv;
   logger?: VerifyReproLogger;
   runRepro?: (options: {
-    manifestPath: string;
+    manifestPath: string | null;
+    manifestDir: string;
     dir: string;
     logDir: string;
     targets: string[];

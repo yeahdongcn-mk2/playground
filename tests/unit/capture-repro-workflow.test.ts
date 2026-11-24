@@ -4,12 +4,13 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import {
-  deriveReproPlans,
+  deriveReproPlansFromManifests,
   REPRO_RUN_COUNT,
 } from '../../scripts/lib/screenshot-repro.mjs';
 import {
+  DEFAULT_MANIFEST_DIR,
   DEFAULT_MANIFEST_PATH,
-  parseSha256Manifest,
+  loadSha256Manifests,
 } from '../../scripts/lib/screenshot-sha256.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -18,7 +19,10 @@ const WORKFLOW_SOURCE = readFileSync(WORKFLOW_PATH, 'utf8');
 const PACKAGE_PATH = join(ROOT, 'package.json');
 const SCREENSHOTS_README_PATH = join(ROOT, 'docs', 'screenshots', 'README.md');
 const README_PATH = join(ROOT, 'README.md');
-const MANIFEST_PATH = join(ROOT, DEFAULT_MANIFEST_PATH);
+const MANIFEST_DIR = join(ROOT, DEFAULT_MANIFEST_DIR);
+
+/** Every manifest the repro entry discovers: the WebKit one plus target splits. */
+const MANIFESTS = loadSha256Manifests({ dir: MANIFEST_DIR });
 
 interface WorkflowStep {
   name?: string;
@@ -202,8 +206,9 @@ describe('capture-repro workflow', () => {
     const capturesWord = match[1] ?? '';
     const targetsWord = match[2] ?? '';
 
-    const manifest = parseSha256Manifest(readFileSync(MANIFEST_PATH, 'utf8'));
-    const targetCount = deriveReproPlans(manifest).length;
+    // The repro entry derives its plans from the whole discovered manifest set,
+    // so the job note must count those commands, not the single WebKit file.
+    const targetCount = deriveReproPlansFromManifests(MANIFESTS).length;
 
     // Every manifest target is captured once per run, so the job note counts
     // capture invocations (targets x default runs), not manifested PNGs.
@@ -234,33 +239,45 @@ describe('capture-repro workflow', () => {
       .toBeDefined();
   });
 
-  it('derives targets from the manifest instead of hardcoding them', () => {
+  it('derives targets from the manifest set instead of hardcoding them', () => {
     // A target list in the workflow would let the nightly job miss newly
     // manifested evidence; scripts/lib/screenshot-repro.mjs derives the
-    // unique commands from docs/screenshots/capture-sha256-manifest.json.
+    // unique commands from every discovered capture-sha256-manifest*.json.
     expect(WORKFLOW_SOURCE).not.toMatch(/screenshots:(?:webkit|2048|breakout|snake|minesweeper)\b/);
     expect(WORKFLOW_SOURCE).not.toMatch(/screenshots:container\s+--\s+screenshots/);
     expect(DEFAULT_MANIFEST_PATH).toBe('docs/screenshots/capture-sha256-manifest.json');
+    expect(MANIFESTS.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('pins the manifest source and the two-run order in the repro library', () => {
-    const manifest = parseSha256Manifest(readFileSync(MANIFEST_PATH, 'utf8'));
-    const plans = deriveReproPlans(manifest);
+  it('aggregates the pinning contract across every discovered manifest', () => {
+    const plans = deriveReproPlansFromManifests(MANIFESTS);
+    const manifestPaths = new Set(MANIFESTS.map(({ path }) => path));
 
     const expectedTargets = [
       ...new Set(
-        manifest.captures.map((capture) => {
-          const match = /^npm run screenshots:container -- (\S+)$/.exec(capture.command);
-          if (!match?.[1]) {
-            throw new Error(`unexpected manifest command: ${capture.command}`);
-          }
-          return match[1];
-        }),
+        MANIFESTS.flatMap(({ manifest }) =>
+          manifest.captures.map((capture) => {
+            const match = /^npm run screenshots:container -- (\S+)$/.exec(
+              capture.command,
+            );
+            if (!match?.[1]) {
+              throw new Error(`unexpected manifest command: ${capture.command}`);
+            }
+            return match[1];
+          }),
+        ),
       ),
     ];
     expect(plans.map((plan) => plan.target)).toEqual(expectedTargets);
-    expect(plans.flatMap((plan) => plan.captures)).toHaveLength(manifest.captures.length);
+    const captures = plans.flatMap((plan) => plan.captures);
+    expect(captures).toHaveLength(
+      MANIFESTS.reduce((total, { manifest }) => total + manifest.captures.length, 0),
+    );
     expect(plans.every((plan) => plan.captures.length > 0)).toBe(true);
+    // Every capture stays attributed to the manifest that records its bytes.
+    expect(captures.every((capture) => manifestPaths.has(capture.manifestPath))).toBe(
+      true,
+    );
   });
 
   it('never commits, restores or rewrites the manifest', () => {

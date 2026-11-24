@@ -10,37 +10,43 @@ import {
 import { dirname, resolve } from 'node:path';
 import { CAPTURE_REPO_ROOT } from './capture-env.mjs';
 import {
-  DEFAULT_MANIFEST_PATH,
+  DEFAULT_MANIFEST_DIR,
   DEFAULT_SCREENSHOT_DIR,
+  loadSha256Manifests,
   manifestEnvironmentMismatches,
   parseSha256Manifest,
 } from './screenshot-sha256.mjs';
 
 /**
  * Nightly two-run reproducibility check for the fixed-container screenshot
- * evidence (Issue #199).
+ * evidence (Issues #199 and #439).
  *
- * The manifest is the source of truth: every `captures[].command` names the
- * `npm run screenshots:container -- <target>` invocation that produced that
- * evidence. The repro entry derives the unique targets from those commands and
- * runs them in the fixed container: by default every target twice, or the
- * `--target` subset for `--runs <N>` repetitions (Issue #328). Each run keeps
- * one capture log and a copy of every manifested PNG, then hashes every
- * manifested file right after the run, and finally checks every run against the
- * manifest and the other runs:
+ * The sha256 manifests are the source of truth: every `captures[].command`
+ * names the `npm run screenshots:container -- <target>` invocation that
+ * produced that evidence. One capture command can be recorded by several
+ * manifests (the Chromium `screenshots` command writes both the desktop and
+ * mobile blank evidence), so the repro entry aggregates by command across the
+ * whole manifest set: one container invocation per command and run covers
+ * every file those manifests record. The repro entry derives the unique
+ * targets from those commands and runs them in the fixed container: by default
+ * every target twice, or the `--target` subset for `--runs <N>` repetitions
+ * (Issue #328). Each run keeps one capture log and a copy of every manifested
+ * PNG, then hashes every manifested file right after the run, and finally
+ * checks every run against its owning manifest and the other runs:
  *
  *   run 1 sha256 == ... == run N sha256 == manifest sha256
  *
- * A run log also has to pass `verify-screenshot-sha256.mjs --log`, so the
- * environment fingerprint printed by the capture runtime is checked the same
- * way a human re-capture would check it.
+ * A run log also has to pass `verify-screenshot-sha256.mjs --log` once per
+ * manifest that owns a file captured by that command, so the environment
+ * fingerprint printed by the capture runtime is checked the same way a human
+ * re-capture would check it.
  *
- * The entry never commits and never accepts a new hash by editing the
- * manifest: it only runs the existing capture scripts (which write their
- * normal evidence paths), and a mismatch is reported (with expected / actual
- * sha256, both logs, the environment fingerprint and the re-capture steps)
- * instead of being accepted. The scheduled workflow uploads the logs and
- * asserts the manifest is still byte-identical.
+ * The entry never commits and never accepts a new hash by editing a manifest:
+ * it only runs the existing capture scripts (which write their normal evidence
+ * paths), and a mismatch is reported (with expected / actual sha256, both
+ * logs, the environment fingerprint and the re-capture steps) instead of being
+ * accepted. The scheduled workflow uploads the logs and asserts the manifests
+ * are still byte-identical.
  */
 
 /** Directory that receives one log per run, next to the container logs. */
@@ -59,7 +65,7 @@ export const LOAD_KILL_GRACE_MS = 5000;
 const LOAD_WORKER_SOURCE = 'let value = 0; for (;;) { value = Math.sqrt(value + 1); }';
 
 const CAPTURE_COMMAND_PREFIX = 'npm run screenshots:container -- ';
-const CAPTURE_TARGET_PATTERN = /^screenshots(?::[A-Za-z0-9._-]+)+$/;
+const CAPTURE_TARGET_PATTERN = /^screenshots(?::[A-Za-z0-9._-]+)*$/;
 
 /** Raised when the manifest / CLI cannot drive a repro. */
 export class ScreenshotReproError extends Error {
@@ -90,7 +96,8 @@ export function parseCaptureTarget(command) {
   if (target === '' || /\s/.test(target) || !CAPTURE_TARGET_PATTERN.test(target)) {
     throw new ScreenshotReproError(
       `cannot derive a repro target from ${JSON.stringify(command)}: ` +
-        `${JSON.stringify(target)} is not a screenshots npm script (e.g. screenshots:webkit).`,
+        `${JSON.stringify(target)} is not a screenshots npm script ` +
+        '(e.g. screenshots or screenshots:webkit).',
     );
   }
   return target;
@@ -102,7 +109,7 @@ export function validateCaptureTarget(target) {
   if (value === '' || /\s/.test(value) || !CAPTURE_TARGET_PATTERN.test(value)) {
     throw new ScreenshotReproError(
       `invalid repro target ${JSON.stringify(target)}: expected a screenshots npm ` +
-        `script such as screenshots:webkit.`,
+        `script such as screenshots or screenshots:webkit.`,
     );
   }
   return value;
@@ -185,6 +192,11 @@ export function selectReproPlans(plans, targets = []) {
  * Several manifest entries share one command (the 2048 playing / gameover
  * evidence), so they are grouped instead of capturing that target twice per
  * run. The manifest order is kept so the workflow output is stable.
+ *
+ * This single-manifest form stays the contract the WebKit concurrent-load gate
+ * (`repro-load-inputs.mjs`) derives its supported targets from. The repro entry
+ * uses {@link deriveReproPlansFromManifests} so one command can own files from
+ * more than one manifest.
  */
 export function deriveReproPlans(manifest) {
   const plans = new Map();
@@ -196,6 +208,60 @@ export function deriveReproPlans(manifest) {
       plans.set(target, plan);
     }
     plan.captures.push(capture);
+  }
+  return [...plans.values()];
+}
+
+/**
+ * Aggregate every loaded manifest's captures by capture command.
+ *
+ * A command is the unit the repro entry executes, and several manifests can
+ * record the same command: the Chromium `screenshots` capture writes the
+ * desktop and mobile blank evidence, which live in two target-split manifests.
+ * Grouping across the whole set therefore runs that command once per run while
+ * covering both files, and every capture keeps the manifest that owns it so the
+ * per-run log can be verified against the right environment.
+ *
+ * Manifest order is preserved for a stable report, then capture order inside
+ * each manifest. Callers load the set with `loadSha256Manifests`, which already
+ * sorts the files and rejects a file recorded by two manifests.
+ *
+ * @param {Array<{
+ *   path: string,
+ *   manifest: import('./screenshot-sha256.mjs').ScreenshotSha256Manifest,
+ * }>} manifests
+ * @returns {Array<{
+ *   target: string,
+ *   captures: Array<{
+ *     file: string,
+ *     sha256: string,
+ *     manifestPath: string,
+ *     command: string,
+ *   }>,
+ * }>}
+ */
+export function deriveReproPlansFromManifests(manifests) {
+  if (!Array.isArray(manifests)) {
+    throw new ScreenshotReproError(
+      'deriveReproPlansFromManifests needs the loaded sha256 manifest set.',
+    );
+  }
+  const plans = new Map();
+  for (const { path, manifest } of manifests) {
+    for (const capture of manifest.captures) {
+      const target = parseCaptureTarget(capture.command);
+      let plan = plans.get(target);
+      if (plan === undefined) {
+        plan = { target, captures: [] };
+        plans.set(target, plan);
+      }
+      plan.captures.push({
+        file: capture.file,
+        sha256: capture.sha256,
+        manifestPath: path,
+        command: capture.command,
+      });
+    }
   }
   return [...plans.values()];
 }
@@ -242,6 +308,41 @@ function readOptionalText(path, readText) {
     return readText(path);
   } catch {
     return '';
+  }
+}
+
+/**
+ * Load the manifest set the repro runs against.
+ *
+ * An explicit `manifestPath` keeps the single-manifest behaviour (including
+ * `--manifest`); otherwise every `capture-sha256-manifest*.json` below
+ * `manifestDir` is discovered and validated by `loadSha256Manifests`, which
+ * also rejects a file recorded by two manifests. Discovery is fail-closed: a
+ * missing or empty manifest set cannot be "verified" by running nothing.
+ */
+function loadReproManifests({ manifestPath, manifestDir, readText }) {
+  try {
+    if (manifestPath !== null) {
+      return [
+        {
+          path: manifestPath,
+          manifest: parseSha256Manifest(readText(manifestPath), { source: manifestPath }),
+        },
+      ];
+    }
+    const manifests = loadSha256Manifests({ dir: manifestDir, readFile: readText });
+    if (manifests.length === 0) {
+      throw new ScreenshotReproError(
+        `no capture-sha256-manifest*.json found in ${manifestDir}.`,
+      );
+    }
+    return manifests;
+  } catch (error) {
+    if (error instanceof ScreenshotReproError) throw error;
+    throw new ScreenshotReproError(
+      `cannot read the sha256 manifest${manifestPath === null ? ' set' : ''}: ` +
+        errorMessage(error),
+    );
   }
 }
 
@@ -641,6 +742,7 @@ function formatFailureReport(result) {
     for (const difference of result.differences) {
       lines.push(`  ${difference.file}`);
       lines.push(`    target: ${difference.target}`);
+      lines.push(`    manifest: ${difference.manifestPath}`);
       lines.push(`    expected sha256: ${difference.expected}`);
       for (const entry of difference.runHashes) {
         lines.push(`    run ${entry.run} sha256: ${entry.sha256 ?? 'unavailable'}`);
@@ -681,7 +783,8 @@ function formatFailureReport(result) {
     lines.push('', 'Log verification failures:');
     for (const failure of result.verifyFailures) {
       lines.push(
-        `  ${failure.target} run ${failure.run}: exit ${failure.exitCode} (log: ${failure.logPath})`,
+        `  ${failure.target} run ${failure.run}: exit ${failure.exitCode} ` +
+          `(manifest: ${failure.manifestPath}, log: ${failure.logPath})`,
       );
       if (failure.output.trim() !== '') {
         lines.push(indent(failure.output));
@@ -733,22 +836,25 @@ function formatFailureReport(result) {
     }
   }
   lines.push(
-    '  3. Verify both fresh capture logs: node scripts/verify-screenshot-sha256.mjs --log <log>',
+    '  3. Verify each fresh capture log against the manifest that owns the file: ' +
+      'node scripts/verify-screenshot-sha256.mjs --manifest <owner> --log <log>',
   );
   lines.push(
-    '  4. If the new bytes are intended, update docs/screenshots/capture-sha256-manifest.json ' +
-      '(sha256 + provenance) and docs/screenshots/README.md in the same explicit ' +
-      'evidence-refresh change; this workflow never edits either file.',
+    '  4. If the new bytes are intended, update the owning manifest(s) ' +
+      `(${result.manifestPaths.join(', ')}) with sha256 + provenance and ` +
+      'docs/screenshots/README.md in the same explicit evidence-refresh change; ' +
+      'this workflow never edits either file.',
   );
 
   return lines.join('\n');
 }
 
 function formatSuccessReport(result) {
+  const manifestLabel = result.manifestPaths.length === 1 ? 'manifest' : 'manifests';
   const lines = [
     `OK: screenshot repro passed: ${result.plans.length} target(s) x ${result.runsPerTarget} runs, ` +
       `${result.verifiedFiles} file(s) matched the manifest and each other.`,
-    `  manifest: ${result.manifestPath}`,
+    `  ${manifestLabel}: ${result.manifestPaths.join(', ')}`,
     `  screenshots: ${result.dir}`,
     `  log directory: ${result.logDir}`,
     `  per-run PNG copies: ${result.logDir}/<target>-run<N>-png/`,
@@ -792,7 +898,15 @@ function formatSuccessReport(result) {
 
 /**
  * Run the selected manifest targets `runs` times and report whether every run
- * matches the manifest and the other runs.
+ * matches its owning manifest and the other runs.
+ *
+ * By default every `capture-sha256-manifest*.json` below `manifestDir` is
+ * discovered and aggregated by capture command, so a command recorded by two
+ * target-split manifests (the Chromium desktop/mobile blank evidence) runs
+ * once per repetition and each file is checked against the manifest that owns
+ * it. Passing `manifestPath` keeps the single-manifest behaviour (the
+ * `--manifest` CLI option), including for callers that already resolve one
+ * file.
  *
  * `runCapture`, `verifyLog`, `spawn`, `spawnSync`, `hashFile`, `readText`,
  * `copyFile`, `mkdir`, `removeFile`, `spawnLoadWorker` and `killGraceMs` are
@@ -809,7 +923,8 @@ function formatSuccessReport(result) {
  * @returns {Promise<{
  *   ok: boolean,
  *   report: string,
- *   manifestPath: string,
+ *   manifestPaths: string[],
+ *   manifestPath: string | null,
  *   dir: string,
  *   logDir: string,
  *   runsPerTarget: number,
@@ -821,7 +936,15 @@ function formatSuccessReport(result) {
  *     active: number,
  *     failures: Array<{ index: number, phase: 'start' | 'stop' | 'runtime', message: string }>,
  *   },
- *   plans: Array<{ target: string, captures: Array<{ file: string, sha256: string }> }>,
+ *   plans: Array<{
+ *     target: string,
+ *     captures: Array<{
+ *       file: string,
+ *       sha256: string,
+ *       manifestPath: string,
+ *       command: string,
+ *     }>,
+ *   }>,
  *   runs: Array<{
  *     target: string,
  *     run: number,
@@ -838,6 +961,7 @@ function formatSuccessReport(result) {
  *   differences: Array<{
  *     file: string,
  *     target: string,
+ *     manifestPath: string,
  *     expected: string,
  *     runHashes: Array<{
  *       run: number,
@@ -854,6 +978,7 @@ function formatSuccessReport(result) {
  *   verifyFailures: Array<{
  *     target: string,
  *     run: number,
+ *     manifestPath: string,
  *     exitCode: number,
  *     logPath: string,
  *     output: string,
@@ -878,7 +1003,8 @@ function formatSuccessReport(result) {
  */
 export async function runScreenshotRepro({
   repoRoot = CAPTURE_REPO_ROOT,
-  manifestPath = resolve(repoRoot, DEFAULT_MANIFEST_PATH),
+  manifestPath = null,
+  manifestDir = resolve(repoRoot, DEFAULT_MANIFEST_DIR),
   dir = resolve(repoRoot, DEFAULT_SCREENSHOT_DIR),
   logDir = resolve(repoRoot, DEFAULT_REPRO_LOG_DIR),
   targets = [],
@@ -899,22 +1025,24 @@ export async function runScreenshotRepro({
   runCapture = (options) => spawnContainerCapture({ ...options, spawn: spawnChild }),
   verifyLog = (options) => spawnSha256Verifier({ ...options, spawnSync: spawnSyncVerifier }),
 } = {}) {
-  let manifest;
-  try {
-    manifest = parseSha256Manifest(readText(manifestPath), { source: manifestPath });
-  } catch (error) {
-    throw new ScreenshotReproError(`cannot read the sha256 manifest: ${errorMessage(error)}`);
-  }
+  const manifests = loadReproManifests({ manifestPath, manifestDir, readText });
+  const manifestPaths = manifests.map((entry) => entry.path);
 
-  const environmentProblems = manifestEnvironmentMismatches(manifest);
+  const environmentProblems = [];
+  for (const { path, manifest } of manifests) {
+    for (const problem of manifestEnvironmentMismatches(manifest)) {
+      environmentProblems.push(manifests.length === 1 ? problem : `${path}: ${problem}`);
+    }
+  }
   if (environmentProblems.length > 0) {
     throw new ScreenshotReproError(
-      `the sha256 manifest does not match the fixed capture environment:\n` +
+      `the sha256 manifest${manifests.length === 1 ? '' : ' set'} does not match ` +
+        `the fixed capture environment:\n` +
         environmentProblems.map((problem) => `  - ${problem}`).join('\n'),
     );
   }
 
-  const plans = selectReproPlans(deriveReproPlans(manifest), targets);
+  const plans = selectReproPlans(deriveReproPlansFromManifests(manifests), targets);
   const runsPerTarget = normalizeRunCount(requestedRuns);
   mkdir(logDir, { recursive: true });
 
@@ -1041,21 +1169,36 @@ export async function runScreenshotRepro({
           );
         }
 
-        let verified = { code: 0, stdout: '', stderr: '' };
-        try {
-          verified = await verifyLog({ logPath, dir, manifestPath, repoRoot });
-        } catch (error) {
-          verified = { code: 1, stdout: '', stderr: errorMessage(error) };
-        }
-        const output = `${verified.stdout ?? ''}\n${verified.stderr ?? ''}`;
-        if (verified.code !== 0) {
-          verifyFailures.push({
-            target: plan.target,
-            run,
-            exitCode: verified.code,
-            logPath,
-            output,
-          });
+        // Verify the run log against every manifest that owns one of this
+        // command's files. A command can be recorded by several manifests (the
+        // Chromium `screenshots` command writes desktop and mobile blank
+        // evidence), and each manifest records its own environment fingerprint.
+        const ownerManifests = [
+          ...new Set(plan.captures.map((capture) => capture.manifestPath)),
+        ];
+        for (const ownerManifestPath of ownerManifests) {
+          let verified = { code: 0, stdout: '', stderr: '' };
+          try {
+            verified = await verifyLog({
+              logPath,
+              dir,
+              manifestPath: ownerManifestPath,
+              repoRoot,
+            });
+          } catch (error) {
+            verified = { code: 1, stdout: '', stderr: errorMessage(error) };
+          }
+          const output = `${verified.stdout ?? ''}\n${verified.stderr ?? ''}`;
+          if (verified.code !== 0) {
+            verifyFailures.push({
+              target: plan.target,
+              run,
+              manifestPath: ownerManifestPath,
+              exitCode: verified.code,
+              logPath,
+              output,
+            });
+          }
         }
 
         runs.push({
@@ -1098,6 +1241,7 @@ export async function runScreenshotRepro({
         differences.push({
           file: capture.file,
           target: plan.target,
+          manifestPath: capture.manifestPath,
           expected: capture.sha256,
           runHashes,
           run1: runHashes[0]?.sha256 ?? null,
@@ -1136,7 +1280,8 @@ export async function runScreenshotRepro({
       loadState.failures.length === 0 &&
       loadState.active === 0,
     report: '',
-    manifestPath,
+    manifestPaths,
+    manifestPath: manifestPaths.length === 1 ? manifestPaths[0] : null,
     dir,
     logDir,
     runsPerTarget,
