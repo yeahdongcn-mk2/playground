@@ -39,8 +39,16 @@ function createServices(reduceMotion = false): GameServices {
   return { storage, audio: new AudioService(storage), reduceMotion };
 }
 
+interface QuadraticCurveCall {
+  readonly controlX: number;
+  readonly controlY: number;
+  readonly x: number;
+  readonly y: number;
+}
+
 interface FakeContext {
   readonly calls: string[];
+  readonly quadraticCurves: QuadraticCurveCall[];
   /** `strokeStyle` captured at each `stroke()` call, in call order. */
   readonly strokeStyles: string[];
   fillStyle: string;
@@ -58,12 +66,13 @@ interface FakeContext {
   closePath: () => void;
   moveTo: () => void;
   lineTo: () => void;
-  quadraticCurveTo: () => void;
+  quadraticCurveTo: (controlX: number, controlY: number, x: number, y: number) => void;
 }
 
 /** Minimal 2D context stub: records every call so the test can prove drawing ran. */
 function createFakeContext(): FakeContext {
   const calls: string[] = [];
+  const quadraticCurves: QuadraticCurveCall[] = [];
   const strokeStyles: string[] = [];
   const record =
     (name: string) =>
@@ -72,6 +81,7 @@ function createFakeContext(): FakeContext {
     };
   const context: FakeContext = {
     calls,
+    quadraticCurves,
     strokeStyles,
     fillStyle: '#000000',
     strokeStyle: '#000000',
@@ -91,7 +101,10 @@ function createFakeContext(): FakeContext {
     closePath: record('closePath'),
     moveTo: record('moveTo'),
     lineTo: record('lineTo'),
-    quadraticCurveTo: record('quadraticCurveTo'),
+    quadraticCurveTo: (controlX, controlY, x, y) => {
+      calls.push('quadraticCurveTo');
+      quadraticCurves.push({ controlX, controlY, x, y });
+    },
   };
   return context;
 }
@@ -368,6 +381,17 @@ function momentum(): HTMLElement {
   return required<HTMLElement>(mounted.root, '[data-testid="momentum"]');
 }
 
+/** The most recent quadraticCurveTo call belonging to the staff arc. */
+function latestStaffArc(context: FakeContext): QuadraticCurveCall {
+  const call = context.quadraticCurves.findLast(
+    (curve) => curve.controlX === 178 && curve.x === 318,
+  );
+  if (call === undefined) {
+    throw new Error('the staff arc was not stroked on the canvas');
+  }
+  return call;
+}
+
 beforeEach(() => {
   activeContext = createFakeContext();
   Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
@@ -418,6 +442,39 @@ describe('zhen-sha view', () => {
     expect(view.canvas.height).toBe(560);
     expect(view.context.calls).toContain('clearRect');
     expect(view.context.calls).toContain('quadraticCurveTo');
+  });
+
+  it('lifts the CSS gold edge and the canvas arc by the same amount while charging', () => {
+    const view = mountView();
+    primeLoop();
+
+    // The CSS gold edge is a class toggle; the polygon geometry lives in
+    // zhen-sha.css and is locked by marks.test.ts. These literals are the
+    // staff arc's anchors in the 360x560 logical canvas.
+    const [controlY, endY, lift, endLiftRatio] = [420, 456, 34, 0.4];
+    expect(view.stage.classList.contains('is-arc-lifted')).toBe(false);
+    const restingArc = latestStaffArc(view.context);
+    expect(restingArc.controlY).toBe(controlY);
+    expect(restingArc.y).toBe(endY);
+
+    view.stage.dispatchEvent(pointerEvent('pointerdown'));
+    advanceMs(250);
+
+    expect(view.stage.classList.contains('is-arc-lifted')).toBe(true);
+
+    // The recorded quadraticCurveTo arguments prove the canvas applies the
+    // lift to both anchors; removing `- lift` or `- lift * ratio` from
+    // drawStaff fails here instead of only changing pixels.
+    const chargingArc = latestStaffArc(view.context);
+    expect(chargingArc.controlY).toBe(controlY - lift);
+    expect(chargingArc.y).toBe(endY - lift * endLiftRatio);
+
+    view.stage.dispatchEvent(pointerEvent('pointerup'));
+    advanceMs(1000);
+    expect(view.stage.classList.contains('is-arc-lifted')).toBe(false);
+    const settledArc = latestStaffArc(view.context);
+    expect(settledArc.controlY).toBe(controlY);
+    expect(settledArc.y).toBe(endY);
   });
 
   it('refuses to render when the mount signal is already aborted', () => {
