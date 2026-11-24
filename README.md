@@ -405,7 +405,7 @@ npm run check:budget # 通过，实际输出：
 # Zhen Sha view JS: zhen-sha-view-BTO-PZ2R.js 9.05 KB gzip (per-game budget 35 KB)
 # Budget check OK: shell is engine-free and within the 2D download budget.
 npm run score        # 通过（打印「指标 / 当前值 / 基线值 / 差值」表与末行 SCORE_JSON；退化退出 1，变好只报差值）
-npm run test:e2e     # 168 passed（桌面 100 + 手机 36 + WebKit 32）
+npm run test:e2e     # 169 passed（桌面 100 + 手机 36 + WebKit 33）
 ```
 
 CI 的 `verify` job 会在 `Bundle budget` 之后、`End-to-end tests` 之前运行 `npm run score`（见上文「CI 检查顺序」）。该步骤只与 `docs/score-baseline.json` 对比：不会运行 `npm run score -- --update`，因此 CI 不会改写基线；基线退化或损坏时 job 直接失败，新基线仍由人显式运行 `--update` 后提交。score 内部的 `verify:doc-counts` 默认会再跑一次单测（见 [docs/framework.md](docs/framework.md) 第 13 节），这是它现有的采集语义。
@@ -453,6 +453,7 @@ CI 的 passed / flaky / failed 口径、PR 稳定性门禁范围、每日 `flake
   - `tests/e2e/tetris.mobile.webkit.spec.ts`：俄罗斯方块手机端的触屏按钮移动 / 旋转 / 暂停 / 硬降、堆顶结束与重开，复用 `tests/e2e/tetris-mobile-cases.ts`。
   - `tests/e2e/2048.mobile.webkit.spec.ts`：2048 手机端从 READY 遮罩滑动开始、合并计分与无横向溢出，复用 `tests/e2e/2048-mobile-cases.ts`；触摸滑动由跨引擎指针事件 helper 注入。
   - `tests/e2e/breakout.mobile.webkit.spec.ts`：打砖块手机端拖动挡板到右半场与无横向溢出，复用 `tests/e2e/breakout-mobile-cases.ts`；触摸拖动由同一个跨引擎指针事件 helper 注入。
+  - `tests/e2e/zhen-sha.webkit.spec.ts`：镇煞用固定输入序列进入结算后点击「保存战绩符」，由 WebKit 完成下载，断言文件名、非空 PNG、IHDR 1080×1440，并确认 object URL 最终被释放。
 - Chromium 8 视口与 WebKit 4 视口矩阵的归属保持不变；截图脚本也提供 WebKit 模式，命令与引擎 / 视口 / 主题记录见 [docs/screenshots/README.md](docs/screenshots/README.md)，Chromium 模式无回归。
 
 ```bash
