@@ -551,12 +551,12 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
   - 在 seam 之后额外等待 1 s 的 2 次样本为 `0ea38c8d…`（CANONICAL）/ `672285de…`；等待 3 s 的 2 次样本均为 `d8a808b0…`（`test-results/experiment2-load.log` 的 E3 段：`E3-wait-1000-browser-1` / `E3-wait-1000-browser-2` / `E3-wait-3000-browser-1` / `E3-wait-3000-browser-2`）。变体是已完成并缓存的合成结果，不是等待不够。
   - 这些日志是 `test-results/` 下的本地产物，未入库；`672285de…` 与 `d8a808b0…` 的像素差与上文 #374 / #341 t3 记录一致。
 - 处理：#374 t1 的验收原文允许两条路——让 ready 可靠收敛，或按 #318 口径移出“重跑必须等于清单”的集合。既然 20 页预算在复审的负载下已经实测失败，继续加大预算仍是概率性规避，本次选择第二条：
-  - `docs/screenshots/capture-sha256-manifest.json` 不再收录 `after-2048-ready-webkit.png`；`verify:screenshots:sha256` 与夜间 `verify:screenshots:repro` 只对 14 张可稳定复现的证据做逐字节校验。
+  - `docs/screenshots/capture-sha256-manifest.json` 不再收录 `after-2048-ready-webkit.png`；当时 `verify:screenshots:sha256` 与夜间 `verify:screenshots:repro` 只对 14 张可稳定复现的证据做逐字节校验（当时清单只有 WebKit 14 张；#439 t5 新增 Chromium 桌面 / 手机空白图后为 3 份清单 / 16 个 capture，默认校验覆盖全部 16 张）。
   - `scripts/capture-2048-screenshots.mjs` 的 ready 路径保留一次性预热页、`settleWebkitReadyPaint` 滚动往返、`repaintWebkitReadyOverlay` overlay 重绘与 `{ stable: true }` 连续两帧门禁，单页写入，不再进入 `captureManifestedScreenshot` 的 fresh-page 清单重采样。
   - ready 仍属于固定 `webkit` 环境：写盘前调用 `checkReadyCaptureEnvironment`，以已收录的 `after-2048-playing-webkit.png` 条目做 `checkOnly` 环境比较；宿主运行或镜像 / EGL / 字体 / DPR 不一致时在写 ready 前失败，不会用宿主渲染覆盖已提交 PNG；`requireRecorded` 让清单缺失或 playing 条目不存在时也直接失败，而不是退化成无护栏写入。
-  - playing / gameover 的共享 header 接缝、fresh-page 清单重采样与 `--allow-new-bytes` 出口保持不变；已提交 PNG 与清单中另外 14 张记录不变。
+  - playing / gameover 的共享 header 接缝、fresh-page 清单重采样与 `--allow-new-bytes` 出口保持不变；已提交 PNG 与当时清单中另外 14 张记录不变。
 - 单测：`tests/unit/capture-2048-determinism.test.ts` 钉住 ready 为清单外单页捕获（预热页 `try/finally`、两条接缝顺序、playing 条目环境校验、`{ stable: true }`、ready 页 `try/finally`），并断言清单不含该文件、重采样只覆盖 playing / gameover 两张；删除预热页、任一接缝、环境校验或两帧门禁，或把 ready 重新接回清单重采样，都会让用例失败。
-- 验收：见下一条“验收记录”。该口径不把 ready 的负载变体当成可复现证据，也不通过放宽其他图片的校验来换取绿色：`verify:screenshots:sha256` 仍逐张校验 14 张清单记录，`verify:screenshots:repro` 仍对 2048 playing / gameover 与扫雷四态做 4 跑逐字节比较。
+- 验收：见下一条“验收记录”。该口径不把 ready 的负载变体当成可复现证据，也不通过放宽其他图片的校验来换取绿色：当时 `verify:screenshots:sha256` 仍逐张校验 14 张清单记录，`verify:screenshots:repro` 仍对 2048 playing / gameover 与扫雷四态做 4 跑逐字节比较。
 - 验收记录（2026-11-20，固定镜像 `mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f`，宿主 12 个 `yes`，load average 13.92 → 23.08）：`PREVIEW_PORT=4520 npm run verify:screenshots:repro -- --target screenshots:2048:webkit --runs 4` 退出 0；playing 4/4 = `4173dce8…`、gameover 4/4 = `bf7548b7…`，4 跑日志均通过 `--log` 校验。ready 不在比较集合内，并如预期被重写（该次 repro 的 run1 后为 `d8a808b0…`，4 跑结束后为 `672285de…`）。随后在同一负载下单独跑 `PREVIEW_PORT=4530 npm run screenshots:container -- screenshots:2048:webkit` 四次、每次跑后立即取 sha256，得到：
 
   | 跑次 | 开始时 1 分钟 load | ready | playing | gameover |
@@ -566,7 +566,7 @@ node scripts/verify-screenshot-artifacts.mjs --manifest docs/screenshots/ci-webk
   | 3 | 21.89 | `0ea38c8d…` | `4173dce8…` | `bf7548b7…` |
   | 4 | 23.69 | `672285de…` | `4173dce8…` | `bf7548b7…` |
 
-  同一组负载下 ready 在 4 次捕获里选中了 3 种字节，且 run3 仍能取到规范 `0ea38c8d…`；playing / gameover 则 4/4 命中清单。这直接说明 ready 的“单次帧内稳定”与“跨次可复现”是两件事，也解释了为什么 20 页预算是概率性的。验收后已把工作区的 ready PNG 恢复到已提交的 `0ea38c8d…`，没有把负载变体提交。`npm run verify:screenshots:sha256` 在同一工作区退出 0，校验 14 张清单记录。合入 #379 后同一条 repro 入口也支持 `--load 12`；本次用 `PREVIEW_PORT=4521 npm run verify:screenshots:repro -- --target screenshots:2048:webkit --runs 1 --load 12` 确认负载注入可用（退出 0，12/12 worker 正常启停），4 跑验收仍用宿主机 12 个 `yes`。日志 `test-results/repro-2048-load.log`、`test-results/repro-load12.log`、`test-results/ready-variants.log` 与 `test-results/screenshot-repro/screenshots-2048-webkit-run{1..4}.log`（本地产物，未入库）。
+  同一组负载下 ready 在 4 次捕获里选中了 3 种字节，且 run3 仍能取到规范 `0ea38c8d…`；playing / gameover 则 4/4 命中清单。这直接说明 ready 的“单次帧内稳定”与“跨次可复现”是两件事，也解释了为什么 20 页预算是概率性的。验收后已把工作区的 ready PNG 恢复到已提交的 `0ea38c8d…`，没有把负载变体提交。当时 `npm run verify:screenshots:sha256` 在同一工作区退出 0，校验 14 张清单记录。合入 #379 后同一条 repro 入口也支持 `--load 12`；本次用 `PREVIEW_PORT=4521 npm run verify:screenshots:repro -- --target screenshots:2048:webkit --runs 1 --load 12` 确认负载注入可用（退出 0，12/12 worker 正常启停），4 跑验收仍用宿主机 12 个 `yes`。日志 `test-results/repro-2048-load.log`、`test-results/repro-load12.log`、`test-results/ready-variants.log` 与 `test-results/screenshot-repro/screenshots-2048-webkit-run{1..4}.log`（本地产物，未入库）。
 - 证据限制：负载验收只覆盖 Linux WebKit 软件栅格与固定字体 / 镜像；真机 iOS Safari 的合成行为不在本证据内。`screenshots:2048:webkit` 在负载下会把 ready 重写成当时的 1-LSB 变体（这是清单外视觉证据，不参与验收）；CI 只在工作区写该文件，不提交，也不检查它的 git 状态；人工重拍后如需提交，应先确认它代表当前 UI，而不是把负载变体当成规范字节。
 
 ## t7：扫雷触屏与手机布局（Issue #33 / 子任务 2）

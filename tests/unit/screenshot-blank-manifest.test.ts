@@ -174,8 +174,19 @@ describe('Chromium blank-canvas sha256 manifests (Issue #439)', () => {
   });
 
   it('derives seven nightly manifest targets from the sixteen captures', () => {
-    // The workflow job comment is the human-facing capture-count contract; the
-    // repro entry derives the same target count from the manifests at runtime.
+    const commands = MANIFESTS.flatMap(({ manifest }) =>
+      manifest.captures.map((capture) => capture.command),
+    );
+    const targets = new Set(commands);
+
+    // The manifests are the source of truth: 16 captures map onto 7 distinct
+    // capture commands, each of which the nightly repro runs twice.
+    expect(commands).toHaveLength(16);
+    expect(targets.size).toBe(7);
+    expect(targets.has(CHROMIUM_COMMAND)).toBe(true);
+
+    // The workflow job comment and README carry the human-facing copy of the
+    // same manifest-derived contract.
     expect(WORKFLOW).toContain(
       'Fourteen captures (seven manifest targets x two runs)',
     );
