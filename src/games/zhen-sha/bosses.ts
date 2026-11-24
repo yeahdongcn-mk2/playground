@@ -21,18 +21,11 @@ export interface BossMove {
   readonly id: string;
   /** Wind-up before the move becomes active, in milliseconds. */
   readonly telegraphMs: number;
-  /**
-   * Active time in milliseconds after the wind-up. `boss-chart-adapter.ts`
-   * reads it as the full width of the normal parry band, centred on the impact
-   * tick; rules code consumes the adapter, not this table.
-   */
+  /** Time the move stays active after its wind-up, in milliseconds. */
   readonly activeMs: number;
-  /**
-   * Perfect parry band in milliseconds. The adapter maps it to the full width
-   * of the perfect band, nested inside the normal band.
-   */
+  /** Parry band inside the active time, in milliseconds. */
   readonly parryWindowMs: number;
-  /** Fictional damage points; the adapter normalizes every move to one hit. */
+  /** Damage dealt when the move lands unparried. */
   readonly damage: number;
 }
 

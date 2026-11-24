@@ -5,16 +5,16 @@
  * A chart is data only: no DOM, renderer, audio, timer or wall clock, and no
  * import from the engine or the view. Once the engine is wired to a chart, it
  * reads that chart to decide how long a move winds up, when its parry bands are
- * open, how hard it hits and how long the duel rests between exchanges. The
- * engine consumes a chart through its constructor.
+ * open, how hard it hits and how long the duel rests between exchanges. Today
+ * the engine still reads its own timing constants directly.
  *
  * Relationship to `bosses.ts`: #246 already ships `BOSSES` with its own
  * `BossMove` / `BossPhase` / `BossChart` types — there a boss carries `id`,
- * `damage` is 7–13 points and `activeMs` is post-wind-up active time. This
- * module is the contract the engine consumes; `boss-chart-adapter.ts` maps
- * `BOSSES` into it and reconciles the units (including `activeMs`) in one
- * place instead of leaving two live contracts, so later cards read the
- * adapter rather than the historical field wording above.
+ * `damage` is 7–13 points and `activeMs` is post-wind-up active time. In both
+ * contracts `damage` is a display / design point value for one unparried move,
+ * not a hit count: the engine always spends exactly one of its `MAX_HITS` per
+ * unparried move, whatever `damage` says. This module deliberately does not
+ * change `bosses.ts`.
  *
  * `bosses` and `phases` are arrays, not fixed-size tuples. Real charts have
  * three bosses with two phases each and 6–10 moves per phase, but the default
@@ -26,7 +26,7 @@
 /**
  * One boss move as timing and damage data.
  *
- * All times are milliseconds of game time; the engine card converts them to
+ * All times are milliseconds of game time; the engine converts them to
  * integer ticks (120 per second). The default chart's values are exact
  * multiples of 1000/120 ms; non-aligned real values (for example #246's 320 ms)
  * need one explicit rounding rule before they drive judgement. The impact tick
@@ -52,11 +52,11 @@ export interface BossMoveChart {
    */
   readonly parryWindowMs: number;
   /**
-   * Unparried hits this move costs the player, up to the remaining budget:
-   * the engine adds this value to `hits` and caps the total at `MAX_HITS`.
-   * The default chart and `boss-chart-adapter.ts` both use 1, so an unparried
-   * move costs one hit; the adapter normalizes `bosses.ts`'s 7–13 fictional
-   * damage points to it.
+   * Display / design point value for one unparried move. It describes the
+   * fiction and never contributes to the hit budget: every unparried move
+   * spends exactly one of the engine's `MAX_HITS`, regardless of this number.
+   * #246's `bosses.ts` stores 7–13 points for its own data; the value is not a
+   * hit count in either contract.
    */
   readonly damage: number;
 }
@@ -93,16 +93,16 @@ export interface BossChart {
 }
 
 /**
- * Default chart an argument-free engine uses.
+ * Default chart an argument-free engine should use once it is wired to charts.
  *
  * It reproduces the original kill gate tick for tick: one 黑煞 phase whose
  * single move repeats after a 900 ms wind-up, an opening attack warmed up for
  * 1500 ms, a 600 ms recovery, a 300 ms normal parry band and a nested 100 ms
  * perfect band. At 120 Hz those convert to 108, 180, 72, 36 and 12 ticks,
  * i.e. the engine's TELEGRAPH_TICKS, FIRST_TELEGRAPH_TICKS, RECOVERY_TICKS,
- * 2 × NORMAL_BAND_HALF_TICKS and 2 × PERFECT_BAND_HALF_TICKS. The engine now
- * consumes this chart through its constructor; the default chart keeps the
- * original kill-gate schedule tick for tick.
+ * 2 × NORMAL_BAND_HALF_TICKS and 2 × PERFECT_BAND_HALF_TICKS. Until the wiring
+ * lands, the engine still reads those constants directly; this constant is the
+ * contract that wiring must preserve.
  */
 export const DEFAULT_BOSS_CHART: BossChart = {
   firstTelegraphMs: 1500,

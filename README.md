@@ -32,14 +32,14 @@
 
 ## 快速开始
 
-要求 Node.js `^22.12.0 || ^24.0.0 || >=26.0.0`（Vite 8 的要求）与 npm 10+。
+要求 Node.js `^22.22.2 || ^24.15.0 || >=26.0.0`（受 jsdom 30 的 Node engines 约束）与 npm 10+。
 
 ```bash
 npm install
 npm run dev
 ```
 
-打开 <http://localhost:5173>，点击「开始贪食蛇」直接开玩；也可以在大厅选择「俄罗斯方块」「2048」「打砖块」「扫雷」，或点「进入空白画布」查看框架示例。
+打开 <http://localhost:5173>，点击「开始《镇煞》」直接开玩；也可以在大厅选择「贪食蛇」「俄罗斯方块」「2048」「打砖块」「扫雷」，或点「进入空白画布」查看框架示例。
 
 ### 本地 pre-commit
 
@@ -391,21 +391,21 @@ games/<game>/scene → 对应引擎（动态 import）
 
 ## 验证
 
-当前提交已在本地验证：
+当前提交已在本地通过：
 
 ```bash
 npm run typecheck    # 通过
 npm run lint         # 通过（oxlint 覆盖 src、tests 与 scripts；error 与 warning 都会失败，warning 经 --deny-warnings 升级；另跑 scripts/check-boundaries.mjs，失败返回非 0）
-npm run test:unit    # 1696 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
+npm run test:unit    # 1764 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
 npm run build        # 通过
 npm run check:budget # 通过，实际输出：
-# Entry JS: 33.45 KB (11.16 KB gzip)
-# All JS chunks: 411.45 KB gzip (2D game budget 450 KB)
-# CSS: 14.78 KB gzip
-# Zhen Sha view JS: zhen-sha-view-sf7Tvqgu.js 6.09 KB gzip (per-game budget 35 KB)
+# Entry JS: 35.66 KB (11.60 KB gzip)
+# All JS chunks: 412.49 KB gzip (2D game budget 450 KB)
+# CSS: 14.00 KB gzip
+# Zhen Sha view JS: zhen-sha-view-ChDyielE.js 6.69 KB gzip (per-game budget 35 KB)
 # Budget check OK: shell is engine-free and within the 2D download budget.
-npm run score        # 与基线逐项比较（3 项指标 + 6 条校验）；打印「指标 / 当前值 / 基线值 / 差值」表与末行 SCORE_JSON；体积基线变更由人运行 --update 后提交（退化退出 1，变好只报差值）
-npm run test:e2e     # 158 passed（桌面 90 + 手机 36 + WebKit 32）
+npm run score        # 通过（打印「指标 / 当前值 / 基线值 / 差值」表与末行 SCORE_JSON；退化退出 1，变好只报差值）
+npm run test:e2e     # 159 passed（桌面 91 + 手机 36 + WebKit 32）
 ```
 
 CI 的 `verify` job 会在 `Bundle budget` 之后、`End-to-end tests` 之前运行 `npm run score`（见上文「CI 检查顺序」）。该步骤只与 `docs/score-baseline.json` 对比：不会运行 `npm run score -- --update`，因此 CI 不会改写基线；基线退化或损坏时 job 直接失败，新基线仍由人显式运行 `--update` 后提交。score 内部的 `verify:doc-counts` 默认会再跑一次单测（见 [docs/framework.md](docs/framework.md) 第 13 节），这是它现有的采集语义。

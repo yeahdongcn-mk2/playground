@@ -11,7 +11,7 @@
  * ordered list of phases and each phase cycles its ordered moves. One perfect
  * parry per move fills one momentum pip; three perfects break the guard, and a
  * charged staff strike clears the phase and advances to the next phase or the
- * next boss. Three unparried hits end the duel. The default chart reproduces
+ * next boss. Three unparried moves end the duel. The default chart reproduces
  * the original single-boss kill gate tick for tick.
  */
 
@@ -50,7 +50,7 @@ export const MOMENTUM_PER_PERFECT = 1;
 /** Momentum required to break the boss's guard. */
 export const MOMENTUM_FOR_BREAK = 3;
 
-/** Unparried hits tolerated before the duel is lost. */
+/** Unparried moves tolerated before the duel is lost. */
 export const MAX_HITS = 3;
 
 /** Score for a perfect parry. */
@@ -123,8 +123,6 @@ export interface ZhenShaAttackSnapshot {
 
 export interface ZhenShaBossSnapshot {
   readonly name: string;
-  /** 1-based boss index; with `phase` it forms labels such as `1-1`…`3-2`. */
-  readonly bossIndex: number;
   /** 1-based index of the current phase inside the current boss. */
   readonly phase: number;
   readonly guard: 'up' | 'broken';
@@ -143,7 +141,7 @@ export interface ZhenShaSnapshot {
   readonly momentum: number;
   /** Perfect parries landed this duel. */
   readonly perfects: number;
-  /** Unparried damage taken this duel, capped at `MAX_HITS`. */
+  /** Unparried killing moves taken this duel. */
   readonly hits: number;
   readonly score: number;
   /** Ticks until the break expires (exclusive), or 0 while the guard is up. */
@@ -152,16 +150,14 @@ export interface ZhenShaSnapshot {
 }
 
 /**
- * One move converted to integer ticks, with its damage kept as a hit cost.
- * Band half-widths are derived from the full-width chart durations with
- * `floor(fullTicks / 2)`, so the two outside ticks of an odd-width band stay
- * inside it.
+ * One move converted to integer ticks. Band half-widths are derived from the
+ * full-width chart durations with `floor(fullTicks / 2)`, so the two outside
+ * ticks of an odd-width band stay inside it.
  */
 interface TimedMove {
   readonly telegraphTicks: number;
   readonly normalHalfTicks: number;
   readonly perfectHalfTicks: number;
-  readonly damage: number;
 }
 
 interface TimedPhase {
@@ -180,7 +176,7 @@ interface TimedChart {
 }
 
 function durationToTicks(ms: number, label: string): number {
-  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) {
+  if (!Number.isFinite(ms) || ms <= 0) {
     throw new RangeError(`${label} must be a positive number of milliseconds`);
   }
   return Math.max(1, Math.round((ms * TICKS_PER_SECOND) / 1000));
@@ -227,9 +223,8 @@ function normalizeChart(chart: BossChart): TimedChart {
             const label = `BossChart boss ${bossIndex + 1} phase ${
               phaseIndex + 1
             } move ${moveIndex + 1}`;
-            const damage = move.damage;
-            if (!Number.isInteger(damage) || damage < 1) {
-              throw new RangeError(`${label} damage must be a positive integer`);
+            if (!Number.isFinite(move.damage) || move.damage <= 0) {
+              throw new RangeError(`${label} damage must be positive`);
             }
             const telegraphTicks = durationToTicks(
               move.telegraphMs,
@@ -248,7 +243,7 @@ function normalizeChart(chart: BossChart): TimedChart {
                 `${label} parryWindowMs must not be wider than activeMs`,
               );
             }
-            return { telegraphTicks, normalHalfTicks, perfectHalfTicks, damage };
+            return { telegraphTicks, normalHalfTicks, perfectHalfTicks };
           }),
         };
       }),
@@ -264,11 +259,7 @@ function normalizeChart(chart: BossChart): TimedChart {
 
   let recoveryTicks = 0;
   if (chart.recoveryMs !== undefined) {
-    if (
-      typeof chart.recoveryMs !== 'number' ||
-      !Number.isFinite(chart.recoveryMs) ||
-      chart.recoveryMs < 0
-    ) {
+    if (!Number.isFinite(chart.recoveryMs) || chart.recoveryMs < 0) {
       throw new RangeError(
         'BossChart recoveryMs must be a non-negative number of milliseconds',
       );
@@ -309,10 +300,9 @@ interface PendingInput {
  * landing, so a panic tap cannot be re-rolled by tapping again. A hold
  * (`charge`) followed by a release (`strike`) inside the break clears the
  * phase: the next phase or boss begins, and only clearing the last phase of
- * the last boss wins. Three unparried hits end the duel the other way; each
- * landed move adds the chart's `damage` (capped at `MAX_HITS`), which is 1 in
- * both the default chart and the real-chart adapter, so three unparried moves
- * still lose.
+ * the last boss wins. Three unparried moves end the duel the other way; the
+ * chart's damage values describe the fiction, while the budget counts one hit
+ * per unparried move.
  */
 export class ZhenShaEngine {
   private readonly chart: TimedChart;
@@ -341,8 +331,7 @@ export class ZhenShaEngine {
 
   /**
    * Build an engine for `chart`, defaulting to the kill-gate chart. The chart
-   * is validated and converted to ticks once; only integer timing and damage
-   * are kept.
+   * is validated and converted to ticks once; only the integer timing is kept.
    */
   constructor(chart: BossChart = DEFAULT_BOSS_CHART) {
     this.chart = normalizeChart(chart);
@@ -447,7 +436,7 @@ export class ZhenShaEngine {
       tick >= attack.impactStep + attack.move.normalHalfTicks
     ) {
       this.attack = null;
-      this.hits = Math.min(MAX_HITS, this.hits + attack.move.damage);
+      this.hits += 1;
       this.lastJudgement = 'miss';
       this.pushEvent('hit');
       this.advanceMove();
@@ -496,7 +485,6 @@ export class ZhenShaEngine {
       status: this.status,
       boss: {
         name: this.currentBoss().name,
-        bossIndex: this.bossIndex + 1,
         phase: this.phaseIndex + 1,
         guard: guardBroken ? 'broken' : 'up',
       },

@@ -121,11 +121,13 @@ const DETERMINISTIC = [
 ];
 const HUB = 'after-hub-webkit.png';
 const HUB_SHA256 =
-  '6c2856e33a5619dc2eff5833c059608c74f03492192029515edf345b165581f4';
+  'cb44465556dab743c8df792aa1ea088843ac084ac07e8f644fc9c551ce33e745';
+const HUB_CAPTURE_COMMIT =
+  '9e22c8eafb1c1d1653ce11960c2ff073c4b95537';
 const SNAKE = 'after-snake-webkit.png';
 const SNAKE_SHA256 =
   'd8e262f366b11436d5a1dc309f01ee86a473b23f74684fd92e03392fc28450ba';
-const HUB_SNAKE_CAPTURE_COMMIT =
+const SNAKE_CAPTURE_COMMIT =
   'c6a8c6c0b6cb70aac968f12d834d00f1073ade61';
 const MINESWEEPER_SCORES = 'after-minesweeper-scores-webkit.png';
 const MINESWEEPER_SCORES_SHA256 =
@@ -334,7 +336,7 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(WEBKIT_HISTORICAL).toContain(HUB_SHA256);
     expect(WEBKIT_HISTORICAL).toContain(SNAKE);
     expect(WEBKIT_HISTORICAL).toContain(SNAKE_SHA256);
-    expect(WEBKIT_HISTORICAL).toContain(HUB_SNAKE_CAPTURE_COMMIT);
+    expect(WEBKIT_HISTORICAL).toContain(SNAKE_CAPTURE_COMMIT);
     expect(WEBKIT_HISTORICAL).toContain('连续两跑 sha256 相同');
     expect(WEBKIT_HISTORICAL).toContain('#318 t3');
     expect(WEBKIT_HISTORICAL).toContain('740211');
@@ -369,21 +371,25 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
       }>;
     };
     const expected = [
-      [HUB, HUB_SHA256, 'npm run screenshots:container -- screenshots:webkit'],
+      [
+        HUB,
+        HUB_SHA256,
+        'npm run screenshots:container -- screenshots:webkit',
+        HUB_CAPTURE_COMMIT,
+      ],
       [
         SNAKE,
         SNAKE_SHA256,
         'npm run screenshots:container -- screenshots:snake:webkit',
+        SNAKE_CAPTURE_COMMIT,
       ],
     ] as const;
-    for (const [file, sha256, command] of expected) {
+    for (const [file, sha256, command, captureCommit] of expected) {
       const capture = manifest.captures.find((entry) => entry.file === file);
       expect(capture, `missing manifest entry for ${file}`).toBeDefined();
       expect(capture?.sha256).toBe(sha256);
       expect(capture?.command).toBe(command);
-      expect(capture?.provenance.captureCommit).toBe(
-        HUB_SNAKE_CAPTURE_COMMIT,
-      );
+      expect(capture?.provenance.captureCommit).toBe(captureCommit);
     }
   });
 
@@ -441,7 +447,7 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
     expect(capture, `missing manifest entry for ${SNAKE}`).toBeDefined();
     expect(capture?.sha256).toBe(committedSha256);
     expect(capture?.command).toBe(SNAKE_CONTAINER_COMMAND);
-    expect(capture?.provenance.captureCommit).toBe(HUB_SNAKE_CAPTURE_COMMIT);
+    expect(capture?.provenance.captureCommit).toBe(SNAKE_CAPTURE_COMMIT);
 
     const manifestRow = SCREENSHOTS_README.split('\n').find(
       (line) =>
@@ -454,7 +460,7 @@ describe('WebKit historical evidence docs (Issue #137)', () => {
       'missing docs/screenshots/README.md manifest row for the snake PNG',
     ).toBeDefined();
     expect(manifestRow).toContain(`\`${SNAKE_CONTAINER_COMMAND}\``);
-    expect(manifestRow).toContain(`\`${HUB_SNAKE_CAPTURE_COMMIT}\``);
+    expect(manifestRow).toContain(`\`${SNAKE_CAPTURE_COMMIT}\``);
 
     // The root README command line documents the same command and seams.
     const commandRow = ROOT_README.split('\n').find((line) =>

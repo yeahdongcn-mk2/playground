@@ -38,24 +38,29 @@ const FEATURES = [
   },
 ] as const;
 
+/** The featured game promoted from the grid into the hero visual. */
+const FEATURE_GAME_ID = 'zhen-sha';
+
 export function renderHub(
   games: readonly GameModule[],
   playHistory: PlayHistoryReader,
   now = Date.now(),
 ): string {
+  const featureGame = games.find((game) => game.meta.id === FEATURE_GAME_ID);
+  const gridGames = games.filter((game) => game.meta.id !== FEATURE_GAME_ID);
   return `
     <section class="hub">
       <section class="hero" aria-labelledby="hero-title">
         <div class="hero-copy">
-          <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> SHARED GAME SHELL · 六款游戏已上线</p>
+          <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> SHARED GAME SHELL · 六款可玩游戏已上线</p>
           <h1 id="hero-title">一块画布，<br /><span>无限种玩法。</span></h1>
           <p class="lede">
             用 Vite 8 + TypeScript 7 + Phaser 4 搭起的共享游戏底座：
-            页面壳、按需引擎、输入、资源与自适应渲染已经接通，贪食蛇、俄罗斯方块、2048、打砖块、扫雷与镇煞六款游戏都已跑通。
+            页面壳、按需引擎、输入、资源与自适应渲染已经接通，贪食蛇、俄罗斯方块、2048、打砖块、扫雷与《镇煞》六款可玩游戏都已跑通。
           </p>
           <div class="hero-actions">
-            <a class="button button--primary" href="${gameHref('snake')}" data-testid="enter-snake">
-              开始贪食蛇 <span aria-hidden="true">→</span>
+            <a class="button button--primary" href="${gameHref(FEATURE_GAME_ID)}" data-testid="enter-zhen-sha">
+              开始《镇煞》 <span aria-hidden="true">→</span>
             </a>
             <a class="button button--ghost" href="${gameHref('blank')}" data-testid="enter-blank">
               进入空白画布
@@ -71,14 +76,11 @@ export function renderHub(
             <div><dt>首屏</dt><dd>按需加载</dd></div>
           </dl>
         </div>
-        <div class="hero-visual" aria-hidden="true">
-          <div class="orb-stage">
-            <span class="orb-ring orb-ring--outer"></span>
-            <span class="orb-ring orb-ring--inner"></span>
-            <span class="orb-core"></span>
-            <span class="orb-caption">BLANK / CANVAS</span>
-          </div>
-        </div>
+        ${
+          featureGame === undefined
+            ? ''
+            : renderFeaturedCard(featureGame, playHistory, now)
+        }
       </section>
 
       <section class="section" id="games" aria-labelledby="games-title">
@@ -90,7 +92,7 @@ export function renderHub(
           <p>每个游戏一个动态 import；引擎随游戏 chunk 加载，大厅首屏不为未启动的游戏买单。</p>
         </div>
         <div class="game-grid">
-          ${games.map((game) => renderGameCard(game, playHistory, now)).join('')}
+          ${gridGames.map((game) => renderGameCard(game, playHistory, now)).join('')}
           <article class="game-card game-card--placeholder" aria-label="更多游戏即将加入">
             <div class="game-card-art game-card-art--placeholder" aria-hidden="true">
               <span class="placeholder-grid"></span>
@@ -168,15 +170,51 @@ function renderGameCard(game: GameModule, playHistory: PlayHistoryReader, now: n
         <span class="game-card-engine">${escapeHtml(engineLabel(meta.engine))}</span>
         ${renderCardArt(art)}
       </div>
-      <div class="game-card-body">
+      ${renderCardBody(meta, playHistory, now)}
+    </a>
+  `;
+}
+
+/**
+ * The hero feature card is the same interactive game-card as the grid, but its
+ * art is inline SVG drawn here (not in app.css) because it now lives above the
+ * grid. The decorative art layer keeps `aria-hidden`, while the card link and
+ * its body stay in the accessibility tree.
+ */
+function renderFeaturedCard(
+  game: GameModule,
+  playHistory: PlayHistoryReader,
+  now: number,
+): string {
+  const meta = game.meta;
+  const art = cardArtFor(meta.id);
+  return `
+        <div class="hero-visual">
+          <a class="game-card game-card--feature" href="${gameHref(meta.id)}"
+            data-testid="game-card-${escapeHtml(meta.id)}"
+            style="--game-accent: ${escapeHtml(meta.accent)}">
+            <div class="game-card-art game-card-art--${art}" aria-hidden="true">
+              <span class="game-card-engine">${escapeHtml(engineLabel(meta.engine))}</span>
+              ${renderCardArt(art)}
+            </div>
+            ${renderCardBody(meta, playHistory, now)}
+          </a>
+        </div>
+  `;
+}
+
+function renderCardBody(
+  meta: GameModule['meta'],
+  playHistory: PlayHistoryReader,
+  now: number,
+): string {
+  return `<div class="game-card-body">
         <p class="game-card-genre">${escapeHtml(meta.genre)} · ${escapeHtml(meta.controls.join(' · '))}</p>
         <h3>${escapeHtml(meta.title)} <span>${escapeHtml(meta.englishTitle)}</span></h3>
         <p>${escapeHtml(meta.description)}</p>
         ${renderLastPlayed(meta.id, playHistory.lastPlayed(meta.id), now)}
         <p class="game-card-cta">打开 <span aria-hidden="true">→</span></p>
-      </div>
-    </a>
-  `;
+      </div>`;
 }
 
 function renderLastPlayed(gameId: string, lastPlayed: number | null, now: number): string {
@@ -202,11 +240,11 @@ function renderLastPlayed(gameId: string, lastPlayed: number | null, now: number
         </p>`;
 }
 
-type CardArt = 'snake' | 'tetris' | '2048' | 'breakout' | 'minesweeper' | 'default';
+type CardArt = 'snake' | 'tetris' | '2048' | 'breakout' | 'minesweeper' | 'zhen-sha' | 'default';
 
-// zhen-sha 的专属卡面完全由 src/styles/app.css 按
-// `.game-card[href="#/games/zhen-sha"]` 绘制（data URI 水墨圆环 + 金色棍弧），
-// 入口 JS 不再内联 SVG：这里保留默认卡面标记，只由 CSS 覆盖可见内容。
+// 镇煞的专属卡面由这里的 renderCardArt 内联 SVG 绘制（水墨圆环 + 金色棍弧），
+// app.css 只用 `.game-card-art--zhen-sha` 负责背景、尺寸与描边。它不再放在大厅
+// 网格里：renderHub 会把它提升到 hero 视觉区，网格只渲染其余游戏。
 function cardArtFor(gameId: string): CardArt {
   if (gameId === 'snake') {
     return 'snake';
@@ -222,6 +260,9 @@ function cardArtFor(gameId: string): CardArt {
   }
   if (gameId === 'minesweeper') {
     return 'minesweeper';
+  }
+  if (gameId === 'zhen-sha') {
+    return 'zhen-sha';
   }
   return 'default';
 }
@@ -369,6 +410,43 @@ function renderCardArt(art: CardArt): string {
         <g stroke="#fb7185" stroke-width="1.4" stroke-linecap="round">
           <path d="M98 70.5 V72M98 84 V85.5M90.5 78 H92M104 78 H105.5" />
         </g>
+      </svg>
+      <span class="mini-grid"></span>
+    `;
+  }
+  if (art === 'zhen-sha') {
+    return `
+      <svg class="zhen-sha-card-art" viewBox="0 0 220 132" aria-hidden="true">
+        <defs>
+          <radialGradient id="zhen-sha-ink" cx="50%" cy="50%" r="50%">
+            <stop offset="0" stop-color="#f6c453" stop-opacity="0.36" />
+            <stop offset="0.55" stop-color="#b98a2b" stop-opacity="0.14" />
+            <stop offset="1" stop-color="#08070a" stop-opacity="0" />
+          </radialGradient>
+          <linearGradient id="zhen-sha-staff" x1="0" y1="1" x2="1" y2="0">
+            <stop offset="0" stop-color="#8a5a12" />
+            <stop offset="0.5" stop-color="#f6c453" />
+            <stop offset="1" stop-color="#fff4c9" />
+          </linearGradient>
+        </defs>
+        <circle cx="110" cy="66" r="56" fill="url(#zhen-sha-ink)" />
+        <circle cx="110" cy="66" r="41" fill="#08070a" fill-opacity="0.72" />
+        <circle cx="110" cy="66" r="41" fill="none" stroke="#f6c453" stroke-opacity="0.5"
+          stroke-width="1.4" />
+        <circle cx="110" cy="66" r="33" fill="none" stroke="#f6c453" stroke-opacity="0.22"
+          stroke-width="1" stroke-dasharray="3 7" />
+        <g fill="#08070a" fill-opacity="0.8">
+          <ellipse cx="70" cy="40" rx="8" ry="4.4" transform="rotate(-24 70 40)" />
+          <ellipse cx="152" cy="94" rx="9" ry="4.2" transform="rotate(-18 152 94)" />
+          <circle cx="164" cy="30" r="2.6" />
+          <circle cx="54" cy="94" r="2" />
+        </g>
+        <path d="M50 102 C84 88 130 74 168 32" fill="none" stroke="url(#zhen-sha-staff)"
+          stroke-width="6" stroke-linecap="round" />
+        <path d="M50 102 C84 88 130 74 168 32" fill="none" stroke="#fff6d6" stroke-width="1.5"
+          stroke-linecap="round" stroke-opacity="0.85" />
+        <circle cx="168" cy="32" r="5.5" fill="#f6c453" />
+        <circle cx="168" cy="32" r="2.2" fill="#fff6d6" />
       </svg>
       <span class="mini-grid"></span>
     `;

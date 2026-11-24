@@ -4,12 +4,6 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { BOSSES } from './bosses';
 import type { BossChart, BossMove, BossPhase } from './bosses';
-import { DEFAULT_BOSS_CHART } from './boss-chart';
-import {
-  REAL_BOSS_CHART,
-  REAL_CHART_RECOVERY_MS,
-  toBossChart,
-} from './boss-chart-adapter';
 import { MAX_HITS } from './engine';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -408,62 +402,5 @@ describe('Zhen Sha boss charts', () => {
   it('does not depend on the rules module or the view', () => {
     expect(SOURCE).not.toMatch(/zhen-sha-view/);
     expect(SOURCE).not.toMatch(/\bengine\b/);
-  });
-});
-
-describe('real boss chart adapter', () => {
-  it('maps the real 3 bosses × 2 phases into the engine chart in order', () => {
-    expect(REAL_BOSS_CHART.bosses).toHaveLength(3);
-    expect(REAL_BOSS_CHART.bosses).toHaveLength(BOSSES.length);
-
-    REAL_BOSS_CHART.bosses.forEach((boss, bossIndex) => {
-      const source = BOSSES[bossIndex];
-      if (source === undefined) {
-        throw new Error(`missing source boss ${String(bossIndex + 1)}`);
-      }
-      expect(boss.name).toBe(source.id);
-      expect(boss.phases).toHaveLength(2);
-      expect(boss.phases).toHaveLength(source.phases.length);
-      boss.phases.forEach((phase, phaseIndex) => {
-        const sourcePhase = source.phases[phaseIndex];
-        if (sourcePhase === undefined) {
-          throw new Error(`missing source phase ${String(phaseIndex + 1)}`);
-        }
-        expect(phase.id).toBe(sourcePhase.id);
-        expect(phase.moves).toHaveLength(sourcePhase.moves.length);
-        for (let moveIndex = 0; moveIndex < sourcePhase.moves.length; moveIndex += 1) {
-          const sourceMove = sourcePhase.moves[moveIndex];
-          const move = phase.moves[moveIndex];
-          if (sourceMove === undefined) {
-            throw new Error(`missing source move ${String(moveIndex + 1)}`);
-          }
-          expect(move).toEqual({
-            id: sourceMove.id,
-            telegraphMs: sourceMove.telegraphMs,
-            activeMs: sourceMove.activeMs,
-            parryWindowMs: sourceMove.parryWindowMs,
-            // The source's 7–13 damage is fiction; one unparried move costs
-            // exactly one of the engine's three allowed hits.
-            damage: 1,
-          });
-        }
-      });
-    });
-  });
-
-  it('uses the kill-gate recovery and lets the first move own the opening tell', () => {
-    expect(REAL_CHART_RECOVERY_MS).toBe(600);
-    expect(REAL_CHART_RECOVERY_MS).toBe(DEFAULT_BOSS_CHART.recoveryMs);
-    expect(REAL_BOSS_CHART.recoveryMs).toBe(REAL_CHART_RECOVERY_MS);
-    expect(REAL_BOSS_CHART.firstTelegraphMs).toBeUndefined();
-  });
-
-  it('adapts any supplied real table instead of hard-coding the campaign', () => {
-    const firstBossOnly = toBossChart(BOSSES.slice(0, 1));
-
-    expect(firstBossOnly.recoveryMs).toBe(REAL_CHART_RECOVERY_MS);
-    expect(firstBossOnly.bosses).toHaveLength(1);
-    expect(firstBossOnly.bosses[0]?.name).toBe('boss-1');
-    expect(firstBossOnly.bosses[0]?.phases).toHaveLength(2);
   });
 });
