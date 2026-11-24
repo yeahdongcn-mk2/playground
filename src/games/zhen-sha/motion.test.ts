@@ -453,6 +453,32 @@ describe('zhen-sha procedural motion layer', () => {
     expect(declarationValue(edge, 'pointer-events')).toBe('none');
   });
 
+  it('keeps the four static paper layers from main under the two motion layers', () => {
+    // Rebasing #412 onto main (#406 4+1 palette, #411 marks) must not replace
+    // the paper base: the first four background layers are main's two wash
+    // blooms and two fibre gradients, and only layers five / six are the
+    // motion additions of this PR. Dropping a base layer would still leave
+    // six layers if another one were duplicated, so pin the shapes and sizes.
+    const paper = ruleBody('.zhen-sha-stage::before');
+    const layers = topLevelItems(declarationValue(paper, 'background-image'));
+    const sizes = topLevelItems(declarationValue(paper, 'background-size'));
+    expect(layers).toHaveLength(6);
+    expect(sizes).toHaveLength(6);
+
+    expect(layers[0]).toMatch(/^radial-gradient\(/);
+    expect(layers[1]).toMatch(/^radial-gradient\(/);
+    expect(layers[2]).toMatch(/^repeating-linear-gradient\(\s*108deg/);
+    expect(layers[3]).toMatch(/^repeating-linear-gradient\(\s*21deg/);
+    expect(sizes.slice(0, 4)).toEqual(['auto', 'auto', 'auto', 'auto']);
+
+    // The two motion layers keep their own paint geometry: the oversized mist
+    // wash (so no paper edge shows while it drifts) and the 6px scanline tile.
+    expect(layers[4]).toMatch(/^radial-gradient\(/);
+    expect(layers[5]).toMatch(/^repeating-linear-gradient\(/);
+    expect(sizes[4]).toBe('165% 150%');
+    expect(sizes[5]).toBe('100% 6px');
+  });
+
   it('stops the mist, jitter and scanlines under reduced motion', () => {
     // Exactly one media block may request `prefers-reduced-motion: reduce`.
     // The semantic match keeps a second reduce block out while accepting the

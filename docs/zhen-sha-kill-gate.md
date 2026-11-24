@@ -9,7 +9,9 @@
 
 - 生产文件数 / 生产行数只统计 `src/games/zhen-sha/` 下**参与构建**的 `.ts` 与 `.css`，排除 `*.test.ts`、`*.test.css` 与 `*.d.ts`（测试与类型声明不参与构建）。
 - `src/games/registry.ts` 的入口单独列出，不混入原型的生产文件数 / 行数。
+- 只被 `*.test.ts` 引用、不进入构建产物的文件不计入生产规模（例如 `boss-chart-adapter.ts` 仅被 `engine.test.ts` / `boss-chart-adapter.test.ts` 引用）。
 - 行数按文件的换行符个数计数，与 `wc -l` 一致；最后一行没有换行符时不计入。
+- 「kill gate 原型生产规模（实测）」是冻结快照：本表冻结于 43c9ab1，当前生产规模由独立滚动快照校验跟踪；引擎 PR 不再回写本表。
 - 完整特性规模是估算，不是实测；依据 #246、#247、#248、#249 的范围与现有五款游戏的规模，误差约 ±10%。
 
 ### kill gate 原型生产规模（实测）
@@ -17,16 +19,15 @@
 | 生产文件 | 行数 |
 | --- | ---: |
 | `engine.ts` | 457 |
-| `bosses.ts` | 144 |
 | `index.ts` | 29 |
 | `zhen-sha-view.ts` | 676 |
-| `zhen-sha.css` | 472 |
-| **合计** | **1,778** |
+| `zhen-sha.css` | 254 |
+| **合计** | **1,416** |
 
-- 生产文件数：5
-- 生产行数：1,778
-- `src/games/registry.ts` 入口：数组条目 `zhenShaGame,` 1 行（配套 `import { zhenShaGame } from './zhen-sha';` 另 1 行，合计 2 行改动），不计入上面的 5 个文件。
-- `engine.test.ts`、`bosses.test.ts`、`zhen-sha-view.test.ts`、`style.test.ts`、`motion.test.ts`、`kill-gate-doc.test.ts` 与 e2e 都不计入生产规模。
+- 生产文件数：4
+- 生产行数：1,416
+- `src/games/registry.ts` 入口：数组条目 `zhenShaGame,` 1 行（配套 `import { zhenShaGame } from './zhen-sha';` 另 1 行，合计 2 行改动），不计入上面的 4 个文件。
+- `engine.test.ts`、`zhen-sha-view.test.ts`、`kill-gate-doc.test.ts` 与 e2e 都不计入生产规模。
 
 ### 完整特性规模估算
 
@@ -43,7 +44,21 @@
 | `zhen-sha.css` | 340 | 320×640 / 桌面布局、朱印、飞白与 reduced-motion |
 | **合计** | **2,154** | 7 个生产文件 |
 
-完整特性估算：7 个生产文件、约 2,154 行（±10%，不含测试 / e2e / 截图 / 文档）。该表是完整特性估算，不随原型进度重算：原型现已实现 reduced-motion 与动效层，但 `zhen-sha.css` 仍按最终拆分后的 340 行估算。
+完整特性估算：7 个生产文件、约 2,154 行（±10%，不含测试 / e2e / 截图 / 文档）。
+
+### 基线后进展
+
+基线 `43c9ab1` 之后生产代码继续演进；以下数字只说明当前状态，不回写上面的历史实测表，也不改变 #250 的完整特性估算口径：
+
+- `settlement.ts`：512 行，由 #251（结算战绩符）的 #422 / #427 新增，不属于 #250 的完整特性估算。
+- `engine.ts`：457 → 678 行，由 #448 / #452 的引擎增量与 #420 的谱面消费新增。
+- `debug.ts`：140 行，由 #443 新增，经 `zhen-sha-view.ts` 静态引用进入生产构建。
+- `bosses.ts`：148 行，由 #405 / #408 新增的 boss 数据与差异。
+- `boss-chart.ts`：134 行，由 #407 拆出。其中 `boss-chart.ts:39-97` 的 59 行接口声明若保留独立文件，应从 `bosses.ts` 的 300 行估算中移出，不能重复计入：完整特性为 8 个生产文件、约 2,229 行（2,154 + 134 − 59）；2,288 行（直接相加）只作为未扣除类型时的保守上限。两种算法都超过本文 2,200 行上沿，需按结论中的 L 条件重新复核。
+- `boss-chart-adapter.ts`：90 行，由 #449 t2（#454）落地，#431 t2 收敛时保留。它是 `bosses.ts` 与引擎 `BossChart` 契约之间唯一的单位换算层：`telegraphMs` / `parryWindowMs` 原样传递，`activeMs` 作为完整普通判定带宽度，`bosses.ts` 的 7–13 展示点数原样传递（引擎每次未弹反固定只记 1 hit，damage 不参与中招预算）；源表没有 `recoveryMs` / `firstTelegraphMs`，引擎按 0 ms 恢复、第一招自己的 telegraph 开场。真实 3×2 引擎集成用例由 #431 t2 补在 `engine.test.ts`，覆盖 1-1 → 3-2、逐招判定窗与阶段推进。该文件只被 `engine.test.ts` / `boss-chart-adapter.test.ts` 引用，按本文「仅测试引用，不计」口径不计入当前生产规模。
+- `zhen-sha-view.ts`：676 → 790 行，由 #443 的固定步长调试接缝与 #249 t2 的朱砂印 / 字标 / 金边状态切换新增。
+- `zhen-sha.css`：254 → 684 行，由 #406 的 4+1 色板与黑宣纸 / 飞白边缘、#249 t2 的朱砂印 / 字标与金边 `clip-path` 多边形，以及 #412 的循环墨雾 / 边缘抖动 / 扫描线动画新增（金边几何烘进 CSS，不占 JS 体积）。
+- 当前生产规模（实测于本 PR HEAD，合并 `main` `68f376c` 后）：8 个文件 / 3,115 行（`engine.ts` 678 + `index.ts` 29 + `settlement.ts` 512 + `debug.ts` 140 + `bosses.ts` 148 + `boss-chart.ts` 134 + `zhen-sha-view.ts` 790 + `zhen-sha.css` 684），已超出 M 区间 2,200 行上沿 915 行。当前生产规模由独立滚动快照校验跟踪，超限重估由跟进单 [#417](https://github.com/yeahdongcn-mk2/playground/issues/417) 跟踪。
 
 ### 新概念（2 个）
 
@@ -62,8 +77,8 @@
 - 视图与手势：`zhen-sha-view.test.ts`（jsdom）覆盖轻点 / 长按 / 松手到引擎输入的映射、HUD 随快照更新、结算与重开、pointer capture 丢失、destroy / abort 的监听与 rAF 清理、页面隐藏暂停、音效事件映射。
 - 入口与路由：懒加载入口不把 view / engine 拉进 shell 包；`#/games/zhen-sha` 可从大厅进入；320×640 首屏三手势提示由 `tests/e2e/zhen-sha.spec.ts` 断言。
 - 构建与预算：`npm run typecheck`、`npm run lint`、`npm run test:unit`、`npm run build`、`npm run check:budget` 可重复执行。
-- 风格层可自动化的部分：核心色数量、无外部图片 / 字体 / URL、黑宣纸 / 飞白规则由 `style.test.ts` 守护；`prefers-reduced-motion` 下关闭循环墨雾 / 抖动 / 扫描线、保留静态纸底与金色对比由 `motion.test.ts` 守护。
-- 本评估文档自身由 `kill-gate-doc.test.ts` 校验：文件数 / 行数必须与生产文件一致，结论、#261、试玩状态与「未新增系统」陈述必须存在。
+- 风格层可自动化的部分：核心色数量、无外部图片 / 字体 / URL 与黑宣纸 / 飞白规则由 `style.test.ts` 守护；循环墨雾 / 边缘抖动 / 扫描线及其 `prefers-reduced-motion` 关闭逻辑由 `motion.test.ts` 守护，静态纸底与金色对比在 reduced-motion 下保留。
+- 本评估文档自身由 `kill-gate-doc.test.ts` 校验：本表冻结于 43c9ab1，当前生产规模由独立滚动快照校验跟踪；文档逐文件表、生产文件数 / 生产行数与结论段原型数字必须与冻结常量一致，结论、#261、试玩状态与「未新增系统」陈述必须存在。
 
 ### 不可自动验收面
 
@@ -81,11 +96,11 @@
 
 对照 #250 的 S/M/L 尺子（M 的复核区间：7–9 个文件、1,400–2,200 行、2 个新概念）：
 
-- 文件数：原型 5 个；完整特性估算 7 个，落在 M 区间下沿。
-- 行数：原型 1,778 行；完整特性估算约 2,154 行，落在 M 区间内。
+- 文件数：原型 4 个；完整特性估算 7 个，落在 M 区间下沿。
+- 行数：原型 1,416 行；完整特性估算约 2,154 行，落在 M 区间内。
 - 新概念：2 个，符合 M。
 
-**结论：M。** 后续卡可按 M 规模继续。行数已接近 2,200 行上沿：实现中若超过 2,200 行，或出现第三个新概念，必须回到本文按 L 复核。
+**结论：M。** 后续卡可按 M 规模继续。M 的判定依据是完整特性估算约 2,154 行，仍在 2,200 行上沿内；原型实测表冻结于 `43c9ab1`，基线后的规模变化见「基线后进展」。实现中若完整特性估算超过 2,200 行，或出现第三个新概念，必须回到本文按 L 复核。
 
 程序化水墨的敏感度：本评估把它归入第 2 个「程序化水墨 Canvas 表现与手势输入」概念，所以概念数为 2。若评审要求把「程序化水墨」单列为第三个新概念，则概念数为 3，本评估必须按 L 复核；届时停止后续卡，只保留 kill gate 记录。
 
