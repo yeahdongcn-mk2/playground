@@ -197,8 +197,13 @@ interface Flash {
 }
 
 /** Debug state plus the settlement of the same duel, read through the seam. */
-interface ZhenShaDebugStateWithSettlement extends ZhenShaDebugState {
+export interface ZhenShaDebugStateWithSettlement extends ZhenShaDebugState {
   readonly settlement: ZhenShaSettlement | null;
+}
+
+/** The shared seam, narrowed so `getState()` exposes this view's settlement. */
+export interface ZhenShaDebugApiWithSettlement extends ZhenShaDebugApi {
+  readonly getState: () => ZhenShaDebugStateWithSettlement;
 }
 
 /** Mount the minimal playable Zhen Sha duel: canvas scene plus pointer gestures. */
@@ -322,7 +327,9 @@ export function mountZhenSha(
         setText(overlayTitle, '被黑煞击倒');
       }
       if (previousStatus === 'playing') {
-        overlayRestart.focus({ preventScroll: true });
+        // Let the browser reveal the focused action on viewports shorter than
+        // 320x640; the overlay itself scrolls, so the seal stays reachable.
+        overlayRestart.focus();
       }
     }
 
@@ -339,12 +346,13 @@ export function mountZhenSha(
 
   /** Paint the battle seal once and bump the observable stamp counter. */
   function stampSeal(model: ZhenShaSettlement): void {
-    if (settlementContext !== null) {
-      drawSettlement(settlementContext, model, {
-        width: SETTLEMENT_WIDTH,
-        height: SETTLEMENT_HEIGHT,
-      });
+    if (settlementContext === null) {
+      return;
     }
+    drawSettlement(settlementContext, model, {
+      width: SETTLEMENT_WIDTH,
+      height: SETTLEMENT_HEIGHT,
+    });
     settlementCanvas.dataset.stamps = String(
       Number(settlementCanvas.dataset.stamps ?? '0') + 1,
     );
@@ -658,7 +666,7 @@ export function mountZhenSha(
   };
 
   if (debugOptions.enabled) {
-    const api: ZhenShaDebugApi = {
+    const api: ZhenShaDebugApiWithSettlement = {
       gameId: 'zhen-sha',
       getState: (): ZhenShaDebugStateWithSettlement => ({
         ...engine.snapshot(),

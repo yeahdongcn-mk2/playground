@@ -1,34 +1,19 @@
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
-import type { ZhenShaSnapshot } from '../../src/games/zhen-sha/engine';
-import type { ZhenShaSettlement } from '../../src/games/zhen-sha/settlement';
+import type {
+  ZhenShaDebugApiWithSettlement,
+  ZhenShaDebugStateWithSettlement,
+} from '../../src/games/zhen-sha/zhen-sha-view';
 import { expect, test } from './fixtures';
 
 test.use({ viewport: { width: 320, height: 640 } });
-
-interface ZhenShaDebugState extends ZhenShaSnapshot {
-  settlement: ZhenShaSettlement | null;
-}
-
-interface ZhenShaDebugApi {
-  readonly gameId: 'zhen-sha';
-  readonly getState: () => ZhenShaDebugState;
-  readonly input: (action: 'block' | 'charge' | 'strike') => void;
-  readonly step: (ticks?: number) => void;
-  readonly restart: () => void;
-  readonly destroy: () => void;
-}
-
-interface DebugWindow {
-  __playground?: ZhenShaDebugApi;
-}
 
 async function openDebugGame(page: Page): Promise<void> {
   await page.goto('/#/games/zhen-sha?debug=1');
   await expect(page.getByTestId('zhen-sha-game')).toBeVisible();
   await expect
     .poll(() =>
-      page.evaluate(() => (window as unknown as DebugWindow).__playground?.gameId ?? null),
+      page.evaluate(() => (window as unknown as { __playground?: ZhenShaDebugApiWithSettlement }).__playground?.gameId ?? null),
     )
     .toBe('zhen-sha');
 }
@@ -64,9 +49,9 @@ async function installNetworkProbe(page: Page): Promise<void> {
   });
 }
 
-async function readState(page: Page): Promise<ZhenShaDebugState> {
+async function readState(page: Page): Promise<ZhenShaDebugStateWithSettlement> {
   return page.evaluate(() => {
-    const api = (window as unknown as DebugWindow).__playground;
+    const api = (window as unknown as { __playground?: ZhenShaDebugApiWithSettlement }).__playground;
     if (api?.gameId !== 'zhen-sha') {
       throw new Error('Playwright zhen-sha debug API is not available');
     }
@@ -77,9 +62,9 @@ async function readState(page: Page): Promise<ZhenShaDebugState> {
 /** Fixed input sequence: three perfect parries at ticks 180 / 360 / 540, then
  * charge + strike inside the break. Every tap lands exactly on its impact tick,
  * so the snapshot depends only on the tick schedule, never on frame pacing. */
-async function playFixedWin(page: Page): Promise<ZhenShaDebugState> {
+async function playFixedWin(page: Page): Promise<ZhenShaDebugStateWithSettlement> {
   return page.evaluate(() => {
-    const api = (window as unknown as DebugWindow).__playground;
+    const api = (window as unknown as { __playground?: ZhenShaDebugApiWithSettlement }).__playground;
     if (api?.gameId !== 'zhen-sha') {
       throw new Error('Playwright zhen-sha debug API is not available');
     }
@@ -101,9 +86,9 @@ async function playFixedWin(page: Page): Promise<ZhenShaDebugState> {
 }
 
 /** Fixed loss: never tap. The third unparried move ends the duel at tick 595. */
-async function playFixedLoss(page: Page): Promise<ZhenShaDebugState> {
+async function playFixedLoss(page: Page): Promise<ZhenShaDebugStateWithSettlement> {
   return page.evaluate(() => {
-    const api = (window as unknown as DebugWindow).__playground;
+    const api = (window as unknown as { __playground?: ZhenShaDebugApiWithSettlement }).__playground;
     if (api?.gameId !== 'zhen-sha') {
       throw new Error('Playwright zhen-sha debug API is not available');
     }
@@ -233,7 +218,7 @@ test('settles a fixed win into the battle seal and restarts from boss 1 phase 1'
 
   // Later renders keep the very same settlement object and stamp count.
   const stable = await page.evaluate(() => {
-    const api = (window as unknown as DebugWindow).__playground;
+    const api = (window as unknown as { __playground?: ZhenShaDebugApiWithSettlement }).__playground;
     if (api?.gameId !== 'zhen-sha') {
       throw new Error('Playwright zhen-sha debug API is not available');
     }
@@ -356,7 +341,7 @@ test('returns from the settlement to the lobby and re-enters with a fresh duel',
   await expect(page.getByTestId('overlay')).toBeHidden();
   // The normal entry never installs the debug seam.
   expect(
-    await page.evaluate(() => (window as unknown as DebugWindow).__playground),
+    await page.evaluate(() => (window as unknown as { __playground?: ZhenShaDebugApiWithSettlement }).__playground),
   ).toBeUndefined();
 });
 

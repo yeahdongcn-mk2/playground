@@ -15,17 +15,16 @@ import {
   TELEGRAPH_TICKS,
 } from './engine';
 import { zhenShaGame } from './index';
-import { mountZhenSha } from './zhen-sha-view';
-import type {
-  ZhenShaDebugApi,
-  ZhenShaDebugState,
-  ZhenShaDebugWindow,
-} from './debug';
+import {
+  mountZhenSha,
+  type ZhenShaDebugApiWithSettlement,
+  type ZhenShaDebugStateWithSettlement,
+} from './zhen-sha-view';
+import type { ZhenShaDebugWindow } from './debug';
 import {
   formatSettlementElapsed,
   SETTLEMENT_HEIGHT,
   SETTLEMENT_WIDTH,
-  type ZhenShaSettlement,
 } from './settlement';
 
 class MemoryStore implements KeyValueStore {
@@ -371,17 +370,10 @@ function text(testId: string): string {
   return required<HTMLElement>(mounted.root, `[data-testid="${testId}"]`).textContent?.trim() ?? '';
 }
 
-/** Debug state plus the settlement this view adds to the shared debug seam. */
-interface TestDebugState extends ZhenShaDebugState {
-  readonly settlement: ZhenShaSettlement | null;
-}
-
-interface TestDebugApi extends ZhenShaDebugApi {
-  readonly getState: () => TestDebugState;
-}
-
-function debugApi(): TestDebugApi | undefined {
-  return (window as unknown as ZhenShaDebugWindow).__playground as TestDebugApi | undefined;
+function debugApi(): ZhenShaDebugApiWithSettlement | undefined {
+  return (window as unknown as ZhenShaDebugWindow).__playground as
+    | ZhenShaDebugApiWithSettlement
+    | undefined;
 }
 
 /** Mount with the `?debug=1` hash route, which pauses the frame loop. */
@@ -397,7 +389,7 @@ function mountDebugView(signal: AbortSignal = new AbortController().signal): Mou
  */
 const WIN_EVENT_STEPS = [180, 360, 540, 540, 542, 542] as const;
 
-function playWin(api: TestDebugApi): TestDebugState {
+function playWin(api: ZhenShaDebugApiWithSettlement): ZhenShaDebugStateWithSettlement {
   api.step(FIRST_TELEGRAPH_TICKS);
   api.input('block');
   api.step(1);
