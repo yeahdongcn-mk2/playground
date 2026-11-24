@@ -833,6 +833,10 @@ describe('zhen-sha view', () => {
       view.root,
       '[data-testid="overlay-restart"]',
     );
+    const saveSeal = required<HTMLButtonElement>(
+      view.root,
+      '[data-testid="overlay-save-seal"]',
+    );
     const expected: readonly (readonly [EventTarget, string])[] = [
       [view.stage, 'pointerdown'],
       [view.stage, 'pointerup'],
@@ -841,6 +845,7 @@ describe('zhen-sha view', () => {
       [document, 'visibilitychange'],
       [restartButton, 'click'],
       [overlayRestart, 'click'],
+      [saveSeal, 'click'],
     ];
     for (const [target, type] of expected) {
       expect(
@@ -1127,6 +1132,10 @@ describe('zhen-sha settlement', () => {
       save.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       save.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       await vi.waitFor(() => expect(save.getAttribute('aria-disabled')).toBe('true'));
+      // A second click while the first export is paused must not start another
+      // export; without the guard two canvases/toBlob calls would appear here.
+      expect(harness.canvases).toHaveLength(1);
+      expect(harness.toBlob).toHaveBeenCalledTimes(1);
       releaseBlob(new Blob(['seal'], { type: 'image/png' }));
       await vi.waitFor(() => expect(harness.anchors).toHaveLength(1));
       expect(harness.createObjectURL).toHaveBeenCalledTimes(1);
@@ -1408,6 +1417,10 @@ describe('zhen-sha debug seam', () => {
       view.root,
       '[data-testid="overlay-restart"]',
     );
+    const saveSeal = required<HTMLButtonElement>(
+      view.root,
+      '[data-testid="overlay-save-seal"]',
+    );
     const expected: readonly (readonly [EventTarget, string])[] = [
       [view.stage, 'pointerdown'],
       [view.stage, 'pointerup'],
@@ -1416,6 +1429,7 @@ describe('zhen-sha debug seam', () => {
       [document, 'visibilitychange'],
       [restartButton, 'click'],
       [overlayRestart, 'click'],
+      [saveSeal, 'click'],
     ];
 
     view.handle.destroy();
