@@ -2063,7 +2063,7 @@ describe('verify-screenshot-repro CLI', () => {
     expect(readFileSync(summaryPath, 'utf8')).toContain('OK: screenshot repro passed');
   });
 
-  it('forwards --target / --runs / --load and live progress to the repro runner', async () => {
+  it('forwards --target / --runs / --load / --manifest-dir and live progress to the repro runner', async () => {
     const setup = fixture();
     const calls: Array<{
       targets?: string[];
@@ -2076,7 +2076,18 @@ describe('verify-screenshot-repro CLI', () => {
     const log = logger();
 
     const code = await main(
-      ['--target', 'screenshots:webkit', '--runs', '4', '--load', '2'],
+      [
+        '--target',
+        'screenshots:webkit',
+        '--runs',
+        '4',
+        '--load',
+        '2',
+        '--manifest',
+        'm.json',
+        '--manifest-dir',
+        'manifests',
+      ],
       {
         env: {},
         logger: log,
@@ -2106,8 +2117,8 @@ describe('verify-screenshot-repro CLI', () => {
         runs: 4,
         load: 2,
         repoRoot: setup.root,
-        manifestPath: null,
-        manifestDir: resolve(setup.root, 'docs', 'screenshots'),
+        manifestPath: resolve(setup.root, 'm.json'),
+        manifestDir: resolve(setup.root, 'manifests'),
       },
     ]);
     expect(log.lines.join('\n')).toContain(
@@ -2166,6 +2177,55 @@ describe('verify-screenshot-repro CLI', () => {
     expect(code).toBe(2);
     expect(log.lines.join('\n')).toContain('screenshot repro could not run');
     expect(log.lines.join('\n')).toContain('duplicate capture file');
+  });
+
+  it('fails closed with exit 2 when one manifest of the set has a stale environment', async () => {
+    const setup = targetManifestFixture();
+    // Two manifests: the webkit target this run selects and a desktop manifest
+    // the --target subset never selects. Set-level environment validation runs
+    // before selection, so the stale desktop record must still fail the run.
+    rmSync(setup.mobileManifestPath);
+    const desktopManifest = JSON.parse(
+      readFileSync(setup.desktopManifestPath, 'utf8'),
+    ) as ScreenshotSha256Manifest;
+    desktopManifest.environment.source = 'host';
+    writeFileSync(
+      setup.desktopManifestPath,
+      `${JSON.stringify(desktopManifest, null, 2)}\n`,
+    );
+
+    const log = logger();
+    const code = await main(['--target', 'screenshots:webkit'], {
+      env: { GITHUB_STEP_SUMMARY: '' },
+      logger: log,
+      repoRoot: setup.root,
+      appendFile: appendFileSync,
+      // If the set-level check regressed, fail fast instead of attempting a
+      // real container capture from the unit-test process.
+      runRepro: (options) =>
+        runScreenshotRepro({
+          ...options,
+          runCapture: async () => {
+            throw new Error('capture must not run for an invalid manifest set');
+          },
+          verifyLog: async () => {
+            throw new Error('log verification must not run for an invalid manifest set');
+          },
+        }),
+    });
+
+    expect(code).toBe(2);
+    const output = log.lines.join('\n');
+    expect(output).toContain('screenshot repro could not run');
+    expect(output).toContain('does not match the fixed capture environment');
+    // More than one manifest means the failing message names the offending
+    // file, so the reader knows which manifest has to be re-recorded.
+    expect(output).toContain(
+      `${setup.desktopManifestPath}: environment.source is "host"`,
+    );
+    // The selected manifest itself is valid: checking only the selected plans
+    // would have started the capture above instead of failing closed.
+    expect(output).not.toContain(setup.webkitManifestPath);
   });
 
   it('fails closed with exit 2 when no manifest is discovered', async () => {
