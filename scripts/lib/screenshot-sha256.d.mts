@@ -42,6 +42,31 @@ export interface ScreenshotSha256Manifest {
   captures: ScreenshotSha256Capture[];
 }
 
+/** One discovered manifest and the path it was loaded from. */
+export interface ScreenshotSha256ManifestFile {
+  path: string;
+  manifest: ScreenshotSha256Manifest;
+}
+
+/** A screenshot file together with the manifest that owns it. */
+export interface ScreenshotSha256ManifestCaptureMatch {
+  path: string;
+  manifest: ScreenshotSha256Manifest;
+  capture: ScreenshotSha256Capture;
+}
+
+export interface DiscoverSha256ManifestPathsOptions {
+  /** Directory to scan (default `DEFAULT_MANIFEST_DIR`). */
+  dir?: string;
+  /** Injectable directory reader; a missing directory yields no paths. */
+  readDir?: (dir: string) => readonly string[];
+}
+
+export interface LoadSha256ManifestsOptions extends DiscoverSha256ManifestPathsOptions {
+  /** Injectable manifest reader (default `readFileSync`). */
+  readFile?: (path: string) => string | Buffer;
+}
+
 export interface CaptureEnvironmentFingerprintRecord {
   source: CaptureSource;
   target: string;
@@ -146,6 +171,8 @@ export interface VerifyScreenshotSha256Options {
 
 export const DEFAULT_SCREENSHOT_DIR: string;
 export const DEFAULT_MANIFEST_PATH: string;
+export const DEFAULT_MANIFEST_DIR: string;
+export const MANIFEST_FILE_PATTERN: RegExp;
 export const SHA256_PATTERN: RegExp;
 export const IMAGE_DIGEST_PATTERN: RegExp;
 export const CAPTURE_COMMIT_PATTERN: RegExp;
@@ -176,6 +203,16 @@ export function findSha256ManifestCapture(
   manifest: ScreenshotSha256Manifest | null | undefined,
   file: string,
 ): ScreenshotSha256Capture | null;
+export function discoverSha256ManifestPaths(
+  options?: DiscoverSha256ManifestPathsOptions,
+): string[];
+export function loadSha256Manifests(
+  options?: LoadSha256ManifestsOptions,
+): ScreenshotSha256ManifestFile[];
+export function findSha256ManifestCaptureInSet(
+  manifests: readonly ScreenshotSha256ManifestFile[] | null | undefined,
+  file: string,
+): ScreenshotSha256ManifestCaptureMatch | null;
 export function imageReference(image: ScreenshotSha256Image): string;
 export function expectedRecaptureCommand(file: string): string;
 export function parseImageReference(value: string): ScreenshotSha256Image | null;

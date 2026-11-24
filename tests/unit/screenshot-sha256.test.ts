@@ -1000,6 +1000,12 @@ describe('capture sha256 manifest', () => {
     expect(expectedRecaptureCommand('after-blank-webkit.png')).toBe(
       'npm run screenshots:container -- screenshots:webkit',
     );
+    expect(expectedRecaptureCommand('after-blank-desktop.png')).toBe(
+      'npm run screenshots:container -- screenshots',
+    );
+    expect(expectedRecaptureCommand('after-blank-mobile.png')).toBe(
+      'npm run screenshots:container -- screenshots',
+    );
     expect(expectedRecaptureCommand('after-2048-playing-webkit.png')).toBe(
       'npm run screenshots:container -- screenshots:2048:webkit',
     );
