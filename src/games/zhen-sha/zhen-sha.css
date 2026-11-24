@@ -514,6 +514,76 @@
   );
 }
 
+/*
+ * First-visit hint: one short line plus a ring, overlaid on the stage so it
+ * never intercepts the tap/hold gestures underneath. The ring pulses only when
+ * animation is allowed; with reduce motion it becomes a static gold contour
+ * that still marks the timing without moving.
+ */
+.zhen-sha-tutorial {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding-bottom: 18%;
+  pointer-events: none;
+  text-align: center;
+}
+
+.zhen-sha-tutorial[hidden] {
+  display: none;
+}
+
+.zhen-sha-tutorial-ring {
+  width: 88px;
+  height: 88px;
+  border: 2px solid color-mix(in srgb, var(--zhen-gold) 72%, transparent);
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--zhen-gold) 18%, transparent),
+    0 0 26px color-mix(in srgb, var(--zhen-gold) 42%, transparent);
+}
+
+/*
+ * Reduce motion keeps a static gold contour. The pulse is applied by
+ * zhen-sha-view.ts as an inline animation; keep the keyframes name below in
+ * sync with TUTORIAL_PULSE_ANIMATION. motion.test.ts reserves every stylesheet
+ * animation declaration outside the prefers-reduced-motion override for the
+ * two stage pseudo-elements; the hint picks its branch from `reduceMotion`.
+ */
+.zhen-sha-tutorial[data-motion="static"] .zhen-sha-tutorial-ring {
+  border-color: var(--zhen-gold);
+  background: color-mix(in srgb, var(--zhen-gold) 16%, transparent);
+  box-shadow: none;
+}
+
+.zhen-sha-tutorial-copy {
+  padding: 5px 12px;
+  border: 1px solid color-mix(in srgb, var(--zhen-gold) 40%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--zhen-ink) 78%, transparent);
+  color: var(--zhen-gold);
+  font-size: 0.86rem;
+  letter-spacing: 0.18em;
+}
+
+@keyframes zhen-sha-tutorial-pulse {
+  0%,
+  100% {
+    transform: scale(0.84);
+    opacity: 0.6;
+  }
+
+  50% {
+    transform: scale(1.06);
+    opacity: 1;
+  }
+}
+
 .zhen-sha-overlay {
   position: absolute;
   inset: 0;
@@ -670,7 +740,8 @@
  * Reduced motion (issue #249 t2): stop the mist drift, the jitter and the
  * scanline crawl, and make the scanline ink transparent. The static paper
  * wash, ink contrast, gold highlights and the pressed/judgement styling stay
- * exactly as they are.
+ * exactly as they are; the first-visit hint switches to its static branch via
+ * `data-motion="static"`, so it needs no selector in this block.
  */
 @media (prefers-reduced-motion: reduce) {
   .zhen-sha-stage {

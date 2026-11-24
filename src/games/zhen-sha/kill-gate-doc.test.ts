@@ -9,7 +9,7 @@ const DOC = readFileSync(join(ROOT, 'docs', 'zhen-sha-kill-gate.md'), 'utf8');
 /**
  * Production size frozen at baseline 43c9ab1, as `{ name, lines }`.
  * The historical assessment must not follow the current working tree; the
- * rolling snapshot owns the current production size instead.
+ * rolling section of the document records the current size manually.
  */
 const BASELINE_FILES = [
   { name: 'engine.ts', lines: 457 },
@@ -199,10 +199,12 @@ describe('zhen-sha kill gate engineering assessment', () => {
     expect(DOC).toContain('### 可自动验收面');
     expect(DOC).toContain('### 不可自动验收面');
     expect(DOC).toContain('3 人盲测试玩');
-    // #249 requires reduced motion; the motion layer is now implemented and
-    // guarded by motion.test.ts, so the document must say so.
+    // #249 requires reduced motion; the motion layer is implemented and guarded
+    // by motion.test.ts, and the first-visit tutorial adds the static hint
+    // branch guarded by zhen-sha-view.test.ts.
     expect(DOC).toContain('prefers-reduced-motion');
     expect(DOC).toContain('motion.test.ts');
+    expect(DOC).toContain('data-motion="static"');
     expect(DOC).not.toContain('仍未实现、未测');
   });
 

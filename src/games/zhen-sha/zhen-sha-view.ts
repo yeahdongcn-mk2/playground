@@ -12,7 +12,15 @@ import {
   type ZhenShaEventType,
   type ZhenShaSnapshot,
   type ZhenShaStatus,
+  type ZhenShaTimingOverride,
 } from './engine';
+import {
+  markTutorialDone,
+  readTutorialState,
+  TUTORIAL_DONE_STATE,
+  TUTORIAL_HINT_TEXT,
+  type TutorialState,
+} from './tutorial';
 import {
   debugQueryFromHash,
   MAX_DEBUG_STEP_TICKS,
@@ -31,6 +39,8 @@ const CANVAS_HEIGHT = 560;
 const FLASH_MS = 420;
 const RESULT_FLASH_MS = 900;
 const TAU = Math.PI * 2;
+/** Hint ring pulse; keep in sync with the @keyframes name in zhen-sha.css. */
+const TUTORIAL_PULSE_ANIMATION = 'zhen-sha-tutorial-pulse 1100ms ease-in-out infinite';
 
 const STATUS_LABELS: Readonly<Record<ZhenShaStatus, string>> = {
   playing: '进行中',
@@ -85,6 +95,11 @@ aria-label="势 0 / 3">
 <div class="zhen-sha-stage" data-testid="zhen-sha-stage">
 <canvas class="zhen-sha-canvas" data-testid="zhen-sha-canvas"
 role="img" aria-label="黑宣纸上的黑煞首领与金棍"></canvas>
+<div class="zhen-sha-tutorial" data-testid="tutorial-hint"
+data-motion="animated" hidden>
+<span class="zhen-sha-tutorial-ring" data-testid="tutorial-ring" aria-hidden="true"></span>
+<span class="zhen-sha-tutorial-copy" data-testid="tutorial-copy">${TUTORIAL_HINT_TEXT}</span>
+</div>
 <div class=zhen-sha-marks aria-hidden=true><span class=zhen-sha-wordmark>镇煞</span><span class=zhen-sha-seal>镇煞</span><span class=zhen-sha-arc-glow></span><span class=zhen-sha-arc-edge></span></div>
 <div class="zhen-sha-overlay" data-testid="overlay" role="group"
 aria-labelledby="zhen-sha-overlay-title" hidden>
@@ -127,7 +142,7 @@ data-testid="overlay-restart">再来一局</button>
 data-testid="restart-button">重开</button>
 </div>
 </div>
-<p class="zhen-sha-note">
+<p class="zhen-sha-note" data-testid="sidebar-note">
 首领只有一招：长枪突刺。看准枪尖亮起的时机轻点，三次完美便破防。
 </p>
 <p class="sr-only" data-testid="announcer" aria-live="polite"></p>
@@ -166,6 +181,11 @@ function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
+/** Only a pending tutorial overrides the chart's opening; done keeps it. */
+function tutorialTiming(state: TutorialState): ZhenShaTimingOverride {
+  return state.pending ? { firstTelegraphTicks: state.firstTelegraphTicks } : {};
+}
+
 interface Flash {
   readonly type: ZhenShaEventType;
   remainingMs: number;
@@ -186,6 +206,10 @@ export function mountZhenSha(
   const gameRoot = query<HTMLElement>(root, '[data-testid="zhen-sha-game"]');
   const stage = query<HTMLElement>(root, '[data-testid="zhen-sha-stage"]');
   const canvas = query<HTMLCanvasElement>(root, '[data-testid="zhen-sha-canvas"]');
+  const tutorialHint = query<HTMLElement>(root, '[data-testid="tutorial-hint"]');
+  const tutorialRing = query<HTMLElement>(root, '[data-testid="tutorial-ring"]');
+  const gestureNote = query<HTMLElement>(root, '[data-testid="gesture-note"]');
+  const sidebarNote = query<HTMLElement>(root, '[data-testid="sidebar-note"]');
   const overlay = query<HTMLElement>(root, '[data-testid="overlay"]');
   const overlayKicker = query<HTMLElement>(root, '[data-testid="overlay-kicker"]');
   const overlayTitle = query<HTMLElement>(root, '[data-testid="overlay-title"]');
@@ -205,9 +229,23 @@ export function mountZhenSha(
   canvas.height = CANVAS_HEIGHT;
   const context = canvas.getContext('2d');
 
-  const engine = new ZhenShaEngine();
   const debugOptions = currentDebugOptions();
+  // The debug seam promises `seed + inputs` fully describes a run. Absolute
+  // tick inputs must therefore not shift with first-visit storage: debug runs
+  // use the returning-player state, which also keeps their restarts stable.
+  let tutorial = debugOptions.enabled
+    ? TUTORIAL_DONE_STATE
+    : readTutorialState(services.storage);
+  const engine = new ZhenShaEngine(undefined, tutorialTiming(tutorial));
   const audio = services.audio;
+  tutorialHint.dataset.motion = services.reduceMotion ? 'static' : 'animated';
+  // The pulse is applied from the view, not declared in the stylesheet:
+  // motion.test.ts reserves every CSS animation outside the reduced-motion
+  // override for the two stage pseudo-elements, and the hint already decides
+  // its branch from `services.reduceMotion` here.
+  if (!services.reduceMotion) {
+    tutorialRing.style.setProperty('animation', TUTORIAL_PULSE_ANIMATION);
+  }
 
   function scheduleDebugInputs(): void {
     if (!debugOptions.enabled) {
@@ -281,6 +319,13 @@ export function mountZhenSha(
         setText(announcer, '新的一局开始');
       }
     }
+
+    // The first-visit hint replaces the long gesture/sidebar copy while the
+    // duel is live; a result overlay always wins, so the hint never covers it.
+    const showTutorial = tutorial.pending && state.status === 'playing';
+    tutorialHint.hidden = !showTutorial;
+    gestureNote.hidden = showTutorial;
+    sidebarNote.hidden = showTutorial;
   }
 
   function render(): void {
@@ -349,6 +394,11 @@ export function mountZhenSha(
 
   function handleEvents(events: readonly ZhenShaEvent[]): void {
     for (const event of events) {
+      // The first perfect parry is the tutorial's whole goal: hide the hint in
+      // this same frame and persist the finished state for later visits.
+      if (event.type === 'perfect' && tutorial.pending) {
+        tutorial = markTutorialDone(services.storage);
+      }
       flash = {
         type: event.type,
         remainingMs: isResultFlash(event.type) ? RESULT_FLASH_MS : FLASH_MS,
@@ -427,7 +477,13 @@ export function mountZhenSha(
   function restart(): void {
     audio.unlock();
     audio.play('reset');
-    engine.restart();
+    // Re-read storage so clearing the key while the view is mounted restores
+    // the first-visit hint and the stretched opening on the next duel. Debug
+    // runs stay on the returning-player state so their replay is stable.
+    tutorial = debugOptions.enabled
+      ? TUTORIAL_DONE_STATE
+      : readTutorialState(services.storage);
+    engine.restart(tutorialTiming(tutorial));
     scheduleDebugInputs();
     resetPointer();
     flash = null;

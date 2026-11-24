@@ -274,6 +274,29 @@ function normalizeChart(chart: BossChart): TimedChart {
   return { bosses, recoveryTicks, firstTelegraphTicks };
 }
 
+/**
+ * Per-duel timing that a caller (for example the first-visit tutorial) can
+ * layer over the chart without mutating it. Omitted fields keep the chart's
+ * own timing, so an argument-free engine is unchanged.
+ */
+export interface ZhenShaTimingOverride {
+  /** Opening wind-up in ticks; omitted keeps the chart's opening. */
+  readonly firstTelegraphTicks?: number;
+}
+
+/** Normalise an injected opening wind-up, falling back to the chart's own. */
+function resolveFirstTelegraph(
+  override: number | undefined,
+  fallback: number,
+): number {
+  if (override === undefined) {
+    return fallback;
+  }
+  // A tick count below 1 (including a fractional 0.5 that would floor to 0)
+  // cannot schedule an attack, so it falls back instead of clamping to zero.
+  return Number.isFinite(override) && override >= 1 ? Math.floor(override) : fallback;
+}
+
 interface AttackState {
   readonly impactStep: number;
   readonly move: TimedMove;
@@ -332,17 +355,23 @@ export class ZhenShaEngine {
   /**
    * Build an engine for `chart`, defaulting to the kill-gate chart. The chart
    * is validated and converted to ticks once; only the integer timing is kept.
+   * `timing` can override the chart's opening wind-up for one duel, which is
+   * how the first-visit tutorial stretches only the first attack.
    */
-  constructor(chart: BossChart = DEFAULT_BOSS_CHART) {
+  constructor(
+    chart: BossChart = DEFAULT_BOSS_CHART,
+    timing: ZhenShaTimingOverride = {},
+  ) {
     this.chart = normalizeChart(chart);
-    this.restart();
+    this.restart(timing);
   }
 
   /**
    * Reset every counter, the stage and the attack schedule, keeping the chart
-   * this engine was built with.
+   * this engine was built with. `timing` re-applies the caller's opening
+   * override on every restart; omitting it restores the chart's own opening.
    */
-  restart(): void {
+  restart(timing: ZhenShaTimingOverride = {}): void {
     this.bossIndex = 0;
     this.phaseIndex = 0;
     this.moveIndex = 0;
@@ -350,7 +379,12 @@ export class ZhenShaEngine {
     this.accumulatorMs = 0;
     this.status = 'playing';
     this.nextAttackAtStep = 0;
-    this.spawnAttack(this.chart.firstTelegraphTicks);
+    this.spawnAttack(
+      resolveFirstTelegraph(
+        timing.firstTelegraphTicks,
+        this.chart.firstTelegraphTicks,
+      ),
+    );
     this.charging = false;
     this.momentum = 0;
     this.perfects = 0;

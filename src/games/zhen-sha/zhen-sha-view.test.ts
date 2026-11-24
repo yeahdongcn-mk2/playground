@@ -17,6 +17,12 @@ import {
 import { zhenShaGame } from './index';
 import { mountZhenSha } from './zhen-sha-view';
 import type { ZhenShaDebugApi, ZhenShaDebugWindow } from './debug';
+import {
+  TUTORIAL_DONE,
+  TUTORIAL_FIRST_TELEGRAPH_TICKS,
+  TUTORIAL_HINT_TEXT,
+  TUTORIAL_STORAGE_KEY,
+} from './tutorial';
 
 class MemoryStore implements KeyValueStore {
   private readonly values = new Map<string, string>();
@@ -34,9 +40,21 @@ class MemoryStore implements KeyValueStore {
   }
 }
 
-function createServices(reduceMotion = false): GameServices {
-  const storage = new StorageService(new MemoryStore());
-  return { storage, audio: new AudioService(storage), reduceMotion };
+interface TestServices extends GameServices {
+  readonly store: MemoryStore;
+}
+
+/**
+ * Existing view tests run as a returning player (`tutorialDone`), so they keep
+ * the original 180-tick opening. First-visit tests pass `false`.
+ */
+function createServices(reduceMotion = false, tutorialDone = true): TestServices {
+  const store = new MemoryStore();
+  const storage = new StorageService(store);
+  if (tutorialDone) {
+    storage.set(TUTORIAL_STORAGE_KEY, TUTORIAL_DONE);
+  }
+  return { storage, audio: new AudioService(storage), reduceMotion, store };
 }
 
 interface QuadraticCurveCall {
@@ -305,13 +323,16 @@ function required<T extends Element>(root: ParentNode, selector: string): T {
   return element;
 }
 
-function mountView(signal: AbortSignal = new AbortController().signal): MountedView {
+function mountView(
+  signal: AbortSignal = new AbortController().signal,
+  services: GameServices = createServices(),
+): MountedView {
   if (!activeContext) {
     throw new Error('the canvas stub was not installed');
   }
   const root = document.createElement('div');
   document.body.append(root);
-  const handle = mountZhenSha(root, createServices(), signal);
+  const handle = mountZhenSha(root, services, signal);
   const view: MountedView = {
     root,
     stage: required<HTMLElement>(root, '[data-testid="zhen-sha-stage"]'),
@@ -798,6 +819,30 @@ describe('zhen-sha debug seam', () => {
     expect(goldFlashStrokes(second.context, strokesBefore).length).toBeGreaterThan(0);
   });
 
+  it('ignores a pending first-visit tutorial so debug replays stay state-independent', () => {
+    window.location.hash =
+      '#/games/zhen-sha?debug=1&seed=7&inputs=block@180,block@360,block@540,charge@541,strike@542';
+    const services = createServices(false, false);
+    const view = mountView(undefined, services);
+    expect(required<HTMLElement>(view.root, '[data-testid="tutorial-hint"]').hidden).toBe(
+      true,
+    );
+
+    const api = debugApi()!;
+    api.step(543);
+    const replay = api.getState();
+    expect(replay).toMatchObject({ status: 'won', perfects: 3, score: 1900 });
+    // A debug perfect must never mark a real first visitor's tutorial done.
+    expect(services.store.getItem('playground:v1:zhen-sha.tutorial')).toBeNull();
+
+    // Restart must keep the same opening even if the debug run had persisted
+    // something, so the URL schedule stays a complete description of the run.
+    api.restart();
+    api.step(543);
+    expect(api.getState()).toEqual(replay);
+    expect(services.store.getItem('playground:v1:zhen-sha.tutorial')).toBeNull();
+  });
+
   it('ages the flash from its event tick instead of the whole step span', () => {
     window.location.hash = '#/games/zhen-sha?debug=1&inputs=block@180';
     const view = mountView();
@@ -913,6 +958,267 @@ describe('zhen-sha debug seam', () => {
     controller.abort();
 
     expect(debugApi()).toBeUndefined();
+  });
+});
+
+describe('first-visit tutorial', () => {
+  function mountFirstVisit(reduceMotion = false): {
+    view: MountedView;
+    services: TestServices;
+  } {
+    const services = createServices(reduceMotion, false);
+    const view = mountView(undefined, services);
+    return { view, services };
+  }
+
+  function hint(root: ParentNode): HTMLElement {
+    return required<HTMLElement>(root, '[data-testid="tutorial-hint"]');
+  }
+
+  function note(root: ParentNode, testId: string): HTMLElement {
+    return required<HTMLElement>(root, `[data-testid="${testId}"]`);
+  }
+
+  /** Destroy the current view and mount a fresh one over the same storage. */
+  function remount(services: GameServices): MountedView {
+    mounted?.handle.destroy();
+    mounted?.root.remove();
+    mounted = null;
+    const view = mountView(undefined, services);
+    primeLoop();
+    return view;
+  }
+
+  it('shows a short hint, hides the long notes and stretches the opening wind-up', () => {
+    const { view } = mountFirstVisit();
+    primeLoop();
+
+    const tutorial = hint(view.root);
+    expect(tutorial.hidden).toBe(false);
+    expect(tutorial.dataset.motion).toBe('animated');
+    const copy =
+      required<HTMLElement>(view.root, '[data-testid="tutorial-copy"]').textContent?.trim() ?? '';
+    expect(copy).toBe(TUTORIAL_HINT_TEXT);
+    expect((copy.match(/[\u4e00-\u9fff]/g) ?? []).length).toBeLessThanOrEqual(6);
+    expect(note(view.root, 'gesture-note').hidden).toBe(true);
+    expect(note(view.root, 'sidebar-note').hidden).toBe(true);
+
+    // The opening impact sits at the stretched wind-up (>= 1.5x baseline). At
+    // the ordinary 180-tick impact a tap would be 90 ticks late and miss.
+    advanceTicks(TUTORIAL_FIRST_TELEGRAPH_TICKS);
+    tap();
+    advanceTicks(1);
+    expect(text('judgement')).toBe('完美格挡');
+  });
+
+  it('pulses the hint ring only when reduce motion is off', () => {
+    const animated = mountFirstVisit();
+    const animatedRing = required<HTMLElement>(
+      animated.view.root,
+      '[data-testid="tutorial-ring"]',
+    );
+    expect(animatedRing.style.getPropertyValue('animation')).toBe(
+      'zhen-sha-tutorial-pulse 1100ms ease-in-out infinite',
+    );
+    unmountView(animated.view);
+
+    const reduced = mountFirstVisit(true);
+    const reducedRing = required<HTMLElement>(
+      reduced.view.root,
+      '[data-testid="tutorial-ring"]',
+    );
+    expect(reducedRing.style.getPropertyValue('animation')).toBe('');
+  });
+
+  it('hides the hint immediately and persists done on the first perfect parry', () => {
+    const { view, services } = mountFirstVisit();
+    primeLoop();
+    const tutorial = hint(view.root);
+
+    advanceTicks(TUTORIAL_FIRST_TELEGRAPH_TICKS);
+    tap();
+    advanceTicks(1);
+
+    expect(text('judgement')).toBe('完美格挡');
+    expect(tutorial.hidden).toBe(true);
+    expect(services.store.getItem('playground:v1:zhen-sha.tutorial')).toBe(TUTORIAL_DONE);
+    expect(services.storage.getString(TUTORIAL_STORAGE_KEY, '')).toBe(TUTORIAL_DONE);
+    // The long notes come back once the tutorial is over.
+    expect(note(view.root, 'gesture-note').hidden).toBe(false);
+    expect(note(view.root, 'sidebar-note').hidden).toBe(false);
+  });
+
+  it('keeps the tutorial pending after a normal parry', () => {
+    const { view, services } = mountFirstVisit();
+    primeLoop();
+    const tutorial = hint(view.root);
+
+    // Tap 10 ticks before impact: inside the normal band, outside perfect.
+    advanceTicks(TUTORIAL_FIRST_TELEGRAPH_TICKS - 10);
+    tap();
+    advanceTicks(2);
+
+    expect(text('judgement')).toBe('普通格挡');
+    expect(text('perfects')).toBe('0');
+    expect(momentum().dataset.filled).toBe('0');
+    // Only a perfect parry finishes the first-visit tutorial.
+    expect(tutorial.hidden).toBe(false);
+    expect(note(view.root, 'gesture-note').hidden).toBe(true);
+    expect(services.store.getItem('playground:v1:zhen-sha.tutorial')).toBeNull();
+    expect(services.storage.getString(TUTORIAL_STORAGE_KEY, '')).toBe('');
+
+    // The next killing move is still perfect, and that perfect ends it.
+    advanceTicks(TELEGRAPH_TICKS + RECOVERY_TICKS - 2);
+    tap();
+    advanceTicks(2);
+
+    expect(text('judgement')).toBe('完美格挡');
+    expect(tutorial.hidden).toBe(true);
+    expect(services.store.getItem('playground:v1:zhen-sha.tutorial')).toBe(TUTORIAL_DONE);
+  });
+
+  it('re-reads a cleared tutorial key on restart while still mounted', () => {
+    const { view, services } = mountFirstVisit();
+    primeLoop();
+    const tutorial = hint(view.root);
+
+    advanceTicks(TUTORIAL_FIRST_TELEGRAPH_TICKS);
+    tap();
+    advanceTicks(2);
+    expect(tutorial.hidden).toBe(true);
+    expect(services.storage.getString(TUTORIAL_STORAGE_KEY, '')).toBe(TUTORIAL_DONE);
+
+    // Clearing the key while mounted must not require a remount: the restart
+    // entry itself re-reads storage.
+    services.storage.remove(TUTORIAL_STORAGE_KEY);
+    required<HTMLButtonElement>(view.root, '[data-testid="restart-button"]').click();
+    primeLoop();
+
+    expect(tutorial.hidden).toBe(false);
+    expect(note(view.root, 'gesture-note').hidden).toBe(true);
+    expect(note(view.root, 'sidebar-note').hidden).toBe(true);
+
+    // The re-read state also restores the stretched opening: the original
+    // 180-tick impact is a whiff, and the 270-tick impact is perfect.
+    advanceTicks(FIRST_TELEGRAPH_TICKS);
+    tap();
+    advanceTicks(2);
+    expect(text('judgement')).toBe('落空');
+
+    required<HTMLButtonElement>(view.root, '[data-testid="restart-button"]').click();
+    primeLoop();
+    advanceTicks(TUTORIAL_FIRST_TELEGRAPH_TICKS);
+    tap();
+    advanceTicks(1);
+
+    expect(text('judgement')).toBe('完美格挡');
+    expect(tutorial.hidden).toBe(true);
+    expect(services.store.getItem('playground:v1:zhen-sha.tutorial')).toBe(TUTORIAL_DONE);
+  });
+
+  it('stays hidden across both restart entries and a remount', () => {
+    const { view, services } = mountFirstVisit();
+    primeLoop();
+    const tutorial = hint(view.root);
+
+    advanceTicks(TUTORIAL_FIRST_TELEGRAPH_TICKS);
+    tap();
+    advanceTicks(2);
+    expect(tutorial.hidden).toBe(true);
+
+    // The restart button starts a normal duel: a tap on the original 180-tick
+    // impact is perfect again, so the opening stretch is gone.
+    required<HTMLButtonElement>(view.root, '[data-testid="restart-button"]').click();
+    primeLoop();
+    advanceTicks(FIRST_TELEGRAPH_TICKS);
+    tap();
+    advanceTicks(2);
+    expect(text('judgement')).toBe('完美格挡');
+    expect(tutorial.hidden).toBe(true);
+
+    // Lose, then use the settlement overlay's restart entry.
+    advanceTicks(800);
+    expect(text('status')).toBe('失败');
+    const overlay = required<HTMLElement>(view.root, '[data-testid="overlay"]');
+    expect(overlay.hidden).toBe(false);
+    required<HTMLButtonElement>(view.root, '[data-testid="overlay-restart"]').click();
+    expect(tutorial.hidden).toBe(true);
+
+    // A fresh mount over the same storage is still quiet.
+    const remounted = remount(services);
+    expect(hint(remounted.root).hidden).toBe(true);
+    expect(note(remounted.root, 'gesture-note').hidden).toBe(false);
+  });
+
+  it('shows the tutorial again after the done key is cleared', () => {
+    const { view, services } = mountFirstVisit();
+    primeLoop();
+    advanceTicks(TUTORIAL_FIRST_TELEGRAPH_TICKS);
+    tap();
+    advanceTicks(2);
+    expect(hint(view.root).hidden).toBe(true);
+
+    services.storage.remove(TUTORIAL_STORAGE_KEY);
+    expect(services.store.getItem('playground:v1:zhen-sha.tutorial')).toBeNull();
+
+    const remounted = remount(services);
+    const tutorial = hint(remounted.root);
+    expect(tutorial.hidden).toBe(false);
+    expect(note(remounted.root, 'gesture-note').hidden).toBe(true);
+
+    // The cleared state also restores the stretched opening wind-up.
+    advanceTicks(TUTORIAL_FIRST_TELEGRAPH_TICKS);
+    tap();
+    advanceTicks(1);
+    expect(text('judgement')).toBe('完美格挡');
+  });
+
+  it('uses the static hint branch when reduce motion is requested', () => {
+    const { view } = mountFirstVisit(true);
+    primeLoop();
+
+    const tutorial = hint(view.root);
+    expect(tutorial.hidden).toBe(false);
+    expect(tutorial.dataset.motion).toBe('static');
+
+    // The static contour still marks the timing: the perfect tap works.
+    advanceTicks(TUTORIAL_FIRST_TELEGRAPH_TICKS);
+    tap();
+    advanceTicks(1);
+    expect(text('judgement')).toBe('完美格挡');
+  });
+
+  it('keeps gestures and settlement working while the hint is visible', () => {
+    const { view } = mountFirstVisit();
+    primeLoop();
+    const tutorial = hint(view.root);
+    expect(tutorial.hidden).toBe(false);
+
+    // An early tap is still judged (a whiff) and leaves the hint in place.
+    tap();
+    advanceTicks(2);
+    expect(text('judgement')).toBe('落空');
+    expect(tutorial.hidden).toBe(false);
+
+    // A long press charges and the release strikes without the hint layer
+    // intercepting the pointer events.
+    view.stage.dispatchEvent(pointerEvent('pointerdown'));
+    expect(view.stage.classList.contains('is-pressed')).toBe(true);
+    advanceMs(250);
+    view.stage.dispatchEvent(pointerEvent('pointerup'));
+    expect(view.stage.classList.contains('is-pressed')).toBe(false);
+    expect(tutorial.hidden).toBe(false);
+
+    // Three unparried moves still settle the duel while the tutorial is
+    // pending; the defeat overlay wins over the hint.
+    advanceTicks(800);
+    expect(text('status')).toBe('失败');
+    expect(tutorial.hidden).toBe(true);
+    expect(required<HTMLElement>(view.root, '[data-testid="overlay"]').hidden).toBe(false);
+
+    // Restarting keeps the still-pending tutorial visible.
+    required<HTMLButtonElement>(view.root, '[data-testid="overlay-restart"]').click();
+    expect(tutorial.hidden).toBe(false);
   });
 });
 

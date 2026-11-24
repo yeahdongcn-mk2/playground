@@ -6,6 +6,7 @@ import {
   type BossMoveChart,
 } from './boss-chart';
 import { REAL_BOSS_CHART } from './boss-chart-adapter';
+import { TUTORIAL_FIRST_TELEGRAPH_TICKS } from './tutorial';
 import {
   BREAK_TICKS,
   FIXED_STEP_MS,
@@ -181,6 +182,78 @@ describe('ZhenShaEngine setup', () => {
     engine.update(10_000);
 
     expect(engine.snapshot().step).toBe(30);
+  });
+});
+
+describe('first-visit tutorial wind-up', () => {
+  it('keeps the default opening wind-up at the original baseline', () => {
+    const engine = new ZhenShaEngine();
+    expect(engine.snapshot().attack).toMatchObject({
+      impactStep: FIRST_TELEGRAPH_TICKS,
+      ticksUntilImpact: FIRST_TELEGRAPH_TICKS,
+    });
+  });
+
+  it('stretches only the opening attack when the tutorial timing is injected', () => {
+    const engine = new ZhenShaEngine(DEFAULT_BOSS_CHART, {
+      firstTelegraphTicks: TUTORIAL_FIRST_TELEGRAPH_TICKS,
+    });
+    expect(TUTORIAL_FIRST_TELEGRAPH_TICKS).toBeGreaterThanOrEqual(
+      FIRST_TELEGRAPH_TICKS * 1.5,
+    );
+    expect(engine.snapshot().attack).toMatchObject({
+      impactStep: TUTORIAL_FIRST_TELEGRAPH_TICKS,
+      ticksUntilImpact: TUTORIAL_FIRST_TELEGRAPH_TICKS,
+    });
+
+    engine.input('block', TUTORIAL_FIRST_TELEGRAPH_TICKS);
+    advance(engine, TUTORIAL_FIRST_TELEGRAPH_TICKS + 1);
+    expect(engine.snapshot().perfects).toBe(1);
+
+    // Later moves keep the chart's ordinary 108-tick telegraph: the next
+    // impact is the opening wind-up plus recovery plus that telegraph.
+    const nextImpact =
+      TUTORIAL_FIRST_TELEGRAPH_TICKS + RECOVERY_TICKS + TELEGRAPH_TICKS;
+    advance(engine, nextImpact - engine.snapshot().step);
+    expect(engine.snapshot().attack).toMatchObject({
+      impactStep: nextImpact,
+      phase: 'active',
+    });
+  });
+
+  it('re-applies the injected opening only when restart asks for it', () => {
+    const engine = new ZhenShaEngine(DEFAULT_BOSS_CHART, {
+      firstTelegraphTicks: TUTORIAL_FIRST_TELEGRAPH_TICKS,
+    });
+
+    engine.restart();
+    expect(engine.snapshot().attack).toMatchObject({
+      impactStep: FIRST_TELEGRAPH_TICKS,
+    });
+
+    engine.restart({ firstTelegraphTicks: TUTORIAL_FIRST_TELEGRAPH_TICKS });
+    expect(engine.snapshot().attack).toMatchObject({
+      impactStep: TUTORIAL_FIRST_TELEGRAPH_TICKS,
+    });
+  });
+
+  it('falls back to the chart opening for an invalid injected value', () => {
+    const engine = new ZhenShaEngine(DEFAULT_BOSS_CHART, {
+      firstTelegraphTicks: TUTORIAL_FIRST_TELEGRAPH_TICKS,
+    });
+
+    for (const invalid of [0, 0.5, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      engine.restart({ firstTelegraphTicks: invalid });
+      expect(engine.snapshot().attack).toMatchObject({
+        impactStep: FIRST_TELEGRAPH_TICKS,
+      });
+    }
+
+    // A positive fractional value is valid; it floors to whole ticks.
+    engine.restart({ firstTelegraphTicks: TUTORIAL_FIRST_TELEGRAPH_TICKS + 0.9 });
+    expect(engine.snapshot().attack).toMatchObject({
+      impactStep: TUTORIAL_FIRST_TELEGRAPH_TICKS,
+    });
   });
 });
 
