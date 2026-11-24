@@ -1,22 +1,15 @@
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
-import type {
-  ZhenShaDebugApiWithSettlement,
-  ZhenShaDebugStateWithSettlement,
-} from '../../src/games/zhen-sha/zhen-sha-view';
 import { expect, test } from './fixtures';
+import {
+  openDebugGame,
+  playFixedWin,
+  readState,
+  type ZhenShaDebugApiWithSettlement,
+  type ZhenShaDebugStateWithSettlement,
+} from './zhen-sha-helpers';
 
 test.use({ viewport: { width: 320, height: 640 } });
-
-async function openDebugGame(page: Page): Promise<void> {
-  await page.goto('/#/games/zhen-sha?debug=1');
-  await expect(page.getByTestId('zhen-sha-game')).toBeVisible();
-  await expect
-    .poll(() =>
-      page.evaluate(() => (window as unknown as { __playground?: ZhenShaDebugApiWithSettlement }).__playground?.gameId ?? null),
-    )
-    .toBe('zhen-sha');
-}
 
 /**
  * Count every window.fetch / XMLHttpRequest call. Installed before navigation so
@@ -46,42 +39,6 @@ async function installNetworkProbe(page: Page): Promise<void> {
       probe.__networkCalls = (probe.__networkCalls ?? 0) + 1;
       originalOpen.apply(this, args);
     };
-  });
-}
-
-async function readState(page: Page): Promise<ZhenShaDebugStateWithSettlement> {
-  return page.evaluate(() => {
-    const api = (window as unknown as { __playground?: ZhenShaDebugApiWithSettlement }).__playground;
-    if (api?.gameId !== 'zhen-sha') {
-      throw new Error('Playwright zhen-sha debug API is not available');
-    }
-    return api.getState();
-  });
-}
-
-/** Fixed input sequence: three perfect parries at ticks 180 / 360 / 540, then
- * charge + strike inside the break. Every tap lands exactly on its impact tick,
- * so the snapshot depends only on the tick schedule, never on frame pacing. */
-async function playFixedWin(page: Page): Promise<ZhenShaDebugStateWithSettlement> {
-  return page.evaluate(() => {
-    const api = (window as unknown as { __playground?: ZhenShaDebugApiWithSettlement }).__playground;
-    if (api?.gameId !== 'zhen-sha') {
-      throw new Error('Playwright zhen-sha debug API is not available');
-    }
-    api.step(180);
-    api.input('block');
-    api.step(1);
-    api.step(179);
-    api.input('block');
-    api.step(1);
-    api.step(179);
-    api.input('block');
-    api.step(1);
-    api.input('charge');
-    api.step(1);
-    api.input('strike');
-    api.step(1);
-    return api.getState();
   });
 }
 

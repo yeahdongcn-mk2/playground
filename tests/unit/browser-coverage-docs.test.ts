@@ -249,6 +249,7 @@ describe('browser coverage documentation', () => {
       'minesweeper.webkit.spec.ts',
       'snake.mobile.webkit.spec.ts',
       'tetris.mobile.webkit.spec.ts',
+      'zhen-sha.webkit.spec.ts',
     ]);
 
     // Every WebKit entry runs on mobile-webkit, while the Chromium mobile /
@@ -713,9 +714,9 @@ describe('browser coverage documentation', () => {
     // The WebKit project now runs framework, the minesweeper touch gestures
     // (including the real tap pointerdown / click shape and the two long-press
     // flag cases), the touch difficulty form, the snake / tetris phone cases,
-    // the 2048 / breakout phone cases and the 2048 READY two-run byte guard on
-    // top of the contract / smoke cases.
-    expect(webkit).toBe(32);
+    // the 2048 / breakout phone cases, the 2048 READY two-run byte guard and
+    // the zhen-sha battle seal download on top of the contract / smoke cases.
+    expect(webkit).toBe(33);
   });
 
   it('keeps the README unit-test line to one total and a qualitative summary', () => {
