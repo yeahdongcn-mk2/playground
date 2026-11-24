@@ -29,8 +29,11 @@ async function revokedObjectUrlCount(page: Page): Promise<number> {
 /**
  * Non-Chromium coverage for the battle seal download (issue #428). This spec is
  * collected by the existing `mobile-webkit` project via `*.webkit.spec.ts`; it
- * runs the same fixed input sequence as the Chromium case and proves the
- * deferred object URL release is late enough for WebKit to read the blob.
+ * runs the same fixed input sequence as the Chromium case and proves WebKit can
+ * complete the save: the downloaded file is a valid 1080x1440 PNG and the
+ * object URL is released afterwards. This download event only shows that the
+ * save completed, not when the revoke was scheduled, so the deferred-release
+ * contract itself is pinned by `src/games/zhen-sha/settlement.test.ts`.
  */
 test('saves the battle seal as a 1080x1440 PNG on WebKit', async ({
   page,
@@ -63,7 +66,8 @@ test('saves the battle seal as a 1080x1440 PNG on WebKit', async ({
   expect(png.readUInt32BE(16)).toBe(1080);
   expect(png.readUInt32BE(20)).toBe(1440);
 
-  // The deferred revoke must still run, so the object URL is not leaked.
+  // The object URL must still be released, so WebKit does not leak it; the
+  // release-after-export contract is covered by settlement.test.ts.
   await expect
     .poll(() => revokedObjectUrlCount(page), {
       message: 'the download object URL should be revoked after saving',
