@@ -25,7 +25,11 @@ export interface BossMove {
   readonly activeMs: number;
   /** Parry band inside the active time, in milliseconds. */
   readonly parryWindowMs: number;
-  /** Damage dealt when the move lands unparried. */
+  /**
+   * Fictional damage points shown when the move lands unparried. Display /
+   * design data only: it never changes the three-hit budget, which spends one
+   * hit per unparried move regardless of this number.
+   */
   readonly damage: number;
 }
 

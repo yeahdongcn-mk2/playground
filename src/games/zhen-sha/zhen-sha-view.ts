@@ -2,17 +2,26 @@ import type { SoundEvent } from '../../core/audio';
 import { query, setText } from '../../core/dom';
 import type { GameHandle, GameServices } from '../../core/game';
 import {
+  FIXED_STEP_MS,
   MAX_HITS,
   MOMENTUM_FOR_BREAK,
   TELEGRAPH_TICKS,
   TICKS_PER_SECOND,
   ZhenShaEngine,
-  type ZhenShaAction,
   type ZhenShaEvent,
   type ZhenShaEventType,
   type ZhenShaSnapshot,
   type ZhenShaStatus,
 } from './engine';
+import {
+  debugQueryFromHash,
+  MAX_DEBUG_STEP_TICKS,
+  parseDebugQuery,
+  type ZhenShaDebugApi,
+  type ZhenShaDebugOptions,
+  type ZhenShaDebugState,
+  type ZhenShaDebugWindow,
+} from './debug';
 import {
   SETTLEMENT_HEIGHT,
   SETTLEMENT_WIDTH,
@@ -26,8 +35,6 @@ import './zhen-sha.css';
 
 /** Hold this long without lifting to turn the tap into a charged strike. */
 const HOLD_TO_CHARGE_MS = 220;
-/** Upper bound for one debug step call, so a typo cannot hang the tab. */
-const MAX_DEBUG_STEPS = 10_000;
 /** Logical canvas size; CSS scales it down to the available 320px-wide stage. */
 const CANVAS_WIDTH = 360;
 const CANVAS_HEIGHT = 560;
@@ -55,112 +62,129 @@ const SOUND_BY_EVENT: Readonly<Record<ZhenShaEventType, SoundEvent | null>> = {
   lose: 'mine',
 };
 
-const VIEW_HTML = `
-  <section class="zhen-sha-game" data-testid="zhen-sha-game" data-status="playing">
-    <div class="game-heading">
-      <a class="back-link" href="#/">
-        <span aria-hidden="true">←</span> 返回大厅
-      </a>
-      <div class="game-heading-copy">
-        <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> DOM · 动作 · 弹反</p>
-        <h1>镇煞 <span>Zhen Sha</span></h1>
-      </div>
-      <dl class="zhen-sha-hud" aria-label="游戏数据">
-        <div class="zhen-sha-stat">
-          <dt>势</dt>
-          <dd class="zhen-sha-momentum" data-testid="momentum" data-filled="0"
-            aria-label="势 0 / 3">
-            <span class="zhen-sha-pip" aria-hidden="true"></span>
-            <span class="zhen-sha-pip" aria-hidden="true"></span>
-            <span class="zhen-sha-pip" aria-hidden="true"></span>
-          </dd>
-        </div>
-        <div class="zhen-sha-stat">
-          <dt>完美</dt>
-          <dd data-testid="perfects">0</dd>
-        </div>
-        <div class="zhen-sha-stat">
-          <dt>中招</dt>
-          <dd data-testid="hits">0 / ${MAX_HITS}</dd>
-        </div>
-      </dl>
-    </div>
-
-    <div class="zhen-sha-layout">
-      <div class="zhen-sha-main">
-        <div class="zhen-sha-stage" data-testid="zhen-sha-stage">
-          <canvas class="zhen-sha-canvas" data-testid="zhen-sha-canvas"
-            role="img" aria-label="黑宣纸上的黑煞首领与金棍"></canvas>
-          <div class="zhen-sha-overlay" data-testid="overlay" role="group"
-            aria-labelledby="zhen-sha-overlay-title" hidden>
-            <div class="zhen-sha-overlay-card zhen-sha-settlement" data-testid="settlement">
-              <p class="panel-kicker" data-testid="overlay-kicker">RESULT</p>
-              <h2 id="zhen-sha-overlay-title" data-testid="overlay-title">对决结束</h2>
-              <canvas class="zhen-sha-settlement-canvas" data-testid="settlement-canvas"
-                data-stamps="0"
-                width="${SETTLEMENT_WIDTH}" height="${SETTLEMENT_HEIGHT}" role="img"
-                aria-label="战绩符：朱印、完美数、用时、首领阶段与弹回刀光"></canvas>
-              <dl class="zhen-sha-settlement-stats">
-                <div><dt>完美</dt><dd data-testid="settlement-perfects">0</dd></div>
-                <div><dt>用时</dt><dd data-testid="settlement-elapsed">0.0s</dd></div>
-                <div><dt>刀光</dt><dd data-testid="settlement-slashes">0 道</dd></div>
-                <div><dt>首领</dt><dd data-testid="settlement-boss">—</dd></div>
-              </dl>
-              <div class="zhen-sha-overlay-actions">
-                <button class="button button--primary" type="button" data-action="restart"
-                  data-testid="overlay-restart">再来一局</button>
-                <button class="button button--ghost" type="button" data-action="save-seal"
-                  data-testid="overlay-save-seal">保存战绩符</button>
-                <a class="button button--ghost" href="#/" data-testid="overlay-lobby">返回大厅</a>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <ul class="zhen-sha-hints" data-testid="gesture-hints" aria-label="三种手势">
-          <li><span>轻点</span>格挡</li>
-          <li><span>长按</span>蓄势</li>
-          <li><span>松手</span>棍击</li>
-        </ul>
-        <p class="zhen-sha-gesture-note" data-testid="gesture-note">
-          杀招出手前一瞬轻点才是完美格挡。完美三次破防，破防后按住蓄势、松手终结。
-        </p>
-      </div>
-
-      <aside class="zhen-sha-panel" aria-label="操作与状态">
-        <div class="panel-card">
-          <p class="panel-kicker">CONTROLS</p>
-          <h2>三种手势</h2>
-          <dl class="control-list">
-            <div><dt>轻点</dt><dd>格挡杀招</dd></div>
-            <div><dt>长按</dt><dd>蓄起金棍</dd></div>
-            <div><dt>松手</dt><dd>一棍击出</dd></div>
-          </dl>
-        </div>
-
-        <div class="panel-card">
-          <p class="panel-kicker">STATUS</p>
-          <h2>本局</h2>
-          <p class="zhen-sha-row"><span>判定</span><strong data-testid="judgement">等待出手</strong></p>
-          <p class="zhen-sha-row"><span>得分</span><strong data-testid="score">0</strong></p>
-          <p class="zhen-sha-row"><span>状态</span><strong data-testid="status">进行中</strong></p>
-          <div class="panel-actions">
-            <button class="button button--ghost" type="button" data-action="restart"
-              data-testid="restart-button">重开</button>
-          </div>
-        </div>
-
-        <p class="zhen-sha-note">
-          首领只有一招：长枪突刺。看准枪尖亮起的时机轻点，三次完美便破防。
-        </p>
-        <p class="sr-only" data-testid="announcer" aria-live="polite"></p>
-      </aside>
-    </div>
-  </section>
-`;
+const VIEW_HTML = `<section class="zhen-sha-game" data-testid="zhen-sha-game" data-status="playing">
+<div class="game-heading">
+<a class="back-link" href="#/">
+<span aria-hidden="true">←</span> 返回大厅
+</a>
+<div class="game-heading-copy">
+<p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> DOM · 动作 · 弹反</p>
+<h1>镇煞 <span>Zhen Sha</span></h1>
+</div>
+<dl class="zhen-sha-hud" aria-label="游戏数据">
+<div class="zhen-sha-stat">
+<dt>势</dt>
+<dd class="zhen-sha-momentum" data-testid="momentum" data-filled="0"
+aria-label="势 0 / 3">
+<span class="zhen-sha-pip" aria-hidden="true"></span>
+<span class="zhen-sha-pip" aria-hidden="true"></span>
+<span class="zhen-sha-pip" aria-hidden="true"></span>
+</dd>
+</div>
+<div class="zhen-sha-stat">
+<dt>完美</dt>
+<dd data-testid="perfects">0</dd>
+</div>
+<div class="zhen-sha-stat">
+<dt>中招</dt>
+<dd data-testid="hits">0 / ${MAX_HITS}</dd>
+</div>
+</dl>
+</div>
+<div class="zhen-sha-layout">
+<div class="zhen-sha-main">
+<div class="zhen-sha-stage" data-testid="zhen-sha-stage">
+<canvas class="zhen-sha-canvas" data-testid="zhen-sha-canvas"
+role="img" aria-label="黑宣纸上的黑煞首领与金棍"></canvas>
+<div class=zhen-sha-marks aria-hidden=true><span class=zhen-sha-wordmark>镇煞</span><span class=zhen-sha-seal>镇煞</span><span class=zhen-sha-arc-glow></span><span class=zhen-sha-arc-edge></span></div>
+<div class="zhen-sha-overlay" data-testid="overlay" role="group"
+aria-labelledby="zhen-sha-overlay-title" hidden>
+<div class="zhen-sha-overlay-card zhen-sha-settlement" data-testid="settlement">
+<p class="panel-kicker" data-testid="overlay-kicker">RESULT</p>
+<h2 id="zhen-sha-overlay-title" data-testid="overlay-title">对决结束</h2>
+<canvas class="zhen-sha-settlement-canvas" data-testid="settlement-canvas"
+data-stamps="0"
+width="${SETTLEMENT_WIDTH}" height="${SETTLEMENT_HEIGHT}" role="img"
+aria-label="战绩符：朱印、完美数、用时、首领阶段与弹回刀光"></canvas>
+<dl class="zhen-sha-settlement-stats">
+<div><dt>完美</dt><dd data-testid="settlement-perfects">0</dd></div>
+<div><dt>用时</dt><dd data-testid="settlement-elapsed">0.0s</dd></div>
+<div><dt>刀光</dt><dd data-testid="settlement-slashes">0 道</dd></div>
+<div><dt>首领</dt><dd data-testid="settlement-boss">—</dd></div>
+</dl>
+<div class="zhen-sha-overlay-actions">
+<button class="button button--primary" type="button" data-action="restart"
+data-testid="overlay-restart">再来一局</button>
+<button class="button button--ghost" type="button" data-action="save-seal"
+data-testid="overlay-save-seal">保存战绩符</button>
+<a class="button button--ghost" href="#/" data-testid="overlay-lobby">返回大厅</a>
+</div>
+</div>
+</div>
+</div>
+<ul class="zhen-sha-hints" data-testid="gesture-hints" aria-label="三种手势">
+<li><span>轻点</span>格挡</li>
+<li><span>长按</span>蓄势</li>
+<li><span>松手</span>棍击</li>
+</ul>
+<p class="zhen-sha-gesture-note" data-testid="gesture-note">
+杀招出手前一瞬轻点才是完美格挡。完美三次破防，破防后按住蓄势、松手终结。
+</p>
+</div>
+<aside class="zhen-sha-panel" aria-label="操作与状态">
+<div class="panel-card">
+<p class="panel-kicker">CONTROLS</p>
+<h2>三种手势</h2>
+<dl class="control-list">
+<div><dt>轻点</dt><dd>格挡杀招</dd></div>
+<div><dt>长按</dt><dd>蓄起金棍</dd></div>
+<div><dt>松手</dt><dd>一棍击出</dd></div>
+</dl>
+</div>
+<div class="panel-card">
+<p class="panel-kicker">STATUS</p>
+<h2>本局</h2>
+<p class="zhen-sha-row"><span>判定</span><strong data-testid="judgement">等待出手</strong></p>
+<p class="zhen-sha-row"><span>得分</span><strong data-testid="score">0</strong></p>
+<p class="zhen-sha-row"><span>状态</span><strong data-testid="status">进行中</strong></p>
+<div class="panel-actions">
+<button class="button button--ghost" type="button" data-action="restart"
+data-testid="restart-button">重开</button>
+</div>
+</div>
+<p class="zhen-sha-note">
+首领只有一招：长枪突刺。看准枪尖亮起的时机轻点，三次完美便破防。
+</p>
+<p class="sr-only" data-testid="announcer" aria-live="polite"></p>
+</aside>
+</div>
+</section>`;
 
 function abortError(): DOMException {
   return new DOMException('Game mount aborted', 'AbortError');
+}
+
+/**
+ * Debug seam: only an explicit `?debug=1` after the hash route enables it.
+ * The dev server does not turn it on implicitly, so a normal entry never
+ * installs `window.__playground` and never loses its live frame loop.
+ */
+function currentDebugOptions(): ZhenShaDebugOptions {
+  return parseDebugQuery(
+    debugQueryFromHash(window.location.hash, window.location.search),
+  );
+}
+
+function debugWindow(): ZhenShaDebugWindow {
+  return window as unknown as ZhenShaDebugWindow;
+}
+
+function removeDebugApi(owner: () => void): void {
+  const win = debugWindow();
+  const api = win.__playground;
+  if (api !== undefined && api.gameId === 'zhen-sha' && api.destroy === owner) {
+    delete win.__playground;
+  }
 }
 
 function clamp01(value: number): number {
@@ -172,44 +196,9 @@ interface Flash {
   remainingMs: number;
 }
 
-/** Snapshot plus the settlement of the same duel, read through the test seam. */
-type ZhenShaDebugState = ZhenShaSnapshot & {
-  settlement: ZhenShaSettlement | null;
-};
-
-interface ZhenShaDebugApi {
-  readonly gameId: 'zhen-sha';
-  readonly getState: () => ZhenShaDebugState;
-  /** Queue one logical action at the current tick, like a pointer gesture. */
-  readonly input: (action: ZhenShaAction) => void;
-  /** Advance exactly `ticks` fixed steps (default 1) without wall-clock time. */
-  readonly step: (ticks?: number) => void;
-  readonly restart: () => void;
-  readonly destroy: () => void;
-}
-
-/**
- * Test seam. `window.__playground` is shared with the other games, so use one
- * local cast instead of merging a conflicting global declaration.
- */
-interface ZhenShaDebugWindow {
-  __playground?: ZhenShaDebugApi;
-}
-
-function debugWindow(): ZhenShaDebugWindow {
-  return window as unknown as ZhenShaDebugWindow;
-}
-
-/**
- * Test seam: only a `?debug=1` hash route installs it, so the normal entry
- * never exposes engine control or the settlement model. Unlike the Phaser
- * games this is not enabled for every dev-server visit: the parry timing is
- * tick-exact and a stray auto-started loop would make a fixed input sequence
- * non-reproducible.
- */
-function debugEnabled(): boolean {
-  const query = window.location.hash.split('?')[1];
-  return query ? new URLSearchParams(query).get('debug') === '1' : false;
+/** Debug state plus the settlement of the same duel, read through the seam. */
+interface ZhenShaDebugStateWithSettlement extends ZhenShaDebugState {
+  readonly settlement: ZhenShaSettlement | null;
 }
 
 /** Mount the minimal playable Zhen Sha duel: canvas scene plus pointer gestures. */
@@ -258,8 +247,21 @@ export function mountZhenSha(
   const settlementContext = settlementCanvas.getContext('2d');
 
   const engine = new ZhenShaEngine();
+  const debugOptions = currentDebugOptions();
   const audio = services.audio;
-  const debug = debugEnabled();
+
+  function scheduleDebugInputs(): void {
+    if (!debugOptions.enabled) {
+      return;
+    }
+    for (const input of debugOptions.inputs) {
+      engine.input(input.action, input.tick);
+    }
+  }
+
+  // Pre-schedule the URL's absolute-tick replay before the first snapshot, so
+  // `step(n)` alone reproduces the whole run.
+  scheduleDebugInputs();
 
   let lastStatus: ZhenShaStatus = engine.currentStatus;
   let pointerDown = false;
@@ -296,6 +298,8 @@ export function mountZhenSha(
     for (const [index, pip] of pips.entries()) {
       pip.classList.toggle('is-filled', index < state.momentum);
     }
+    // Decorative CSS gold edge: one class, one clip-path per lift state.
+    stage.classList.toggle('is-arc-lifted', staffArcLift(state, flash) > 0);
 
     const previousStatus = lastStatus;
     lastStatus = state.status;
@@ -358,7 +362,7 @@ export function mountZhenSha(
    * Save this duel's battle seal as a 1080x1440 PNG. The settlement module
    * draws a detached canvas and downloads it through a blob URL and synthetic
    * `<a download>`, so the whole path works offline and needs no fetch/XHR.
-   * The object URL is released by the download helper before it resolves.
+   * The download helper schedules the object URL release itself.
    */
   async function saveSeal(): Promise<void> {
     if (!running || settlement === null || savingSeal) {
@@ -414,7 +418,7 @@ export function mountZhenSha(
 
     const events = engine.drainEvents();
     if (events.length > 0) {
-      absorbEvents(events);
+      handleEvents(events);
     }
     if (flash !== null) {
       flash.remainingMs -= delta;
@@ -435,9 +439,9 @@ export function mountZhenSha(
   }
 
   function startLoop(): void {
-    // In debug mode the caller owns time through `step(ticks)`; an auto-started
-    // loop would advance ticks behind a fixed input sequence.
-    if (!running || debug) {
+    // The debug seam owns time: `step(n)` advances exact fixed ticks, so the
+    // wall-clock frame loop must not run behind the test's back.
+    if (!running || debugOptions.enabled) {
       return;
     }
     lastFrameMs = null;
@@ -453,7 +457,7 @@ export function mountZhenSha(
   }
 
   /** Play the cues, flash the scene and keep every event for the settlement. */
-  function absorbEvents(events: readonly ZhenShaEvent[]): void {
+  function handleEvents(events: readonly ZhenShaEvent[]): void {
     for (const event of events) {
       duelEvents.push(event);
       flash = {
@@ -535,6 +539,7 @@ export function mountZhenSha(
     audio.unlock();
     audio.play('reset');
     engine.restart();
+    scheduleDebugInputs();
     resetPointer();
     flash = null;
     duelEvents = [];
@@ -550,6 +555,52 @@ export function mountZhenSha(
     render();
   }
 
+  /**
+   * Test seam: advance exactly `ticks` fixed steps, mirroring one live frame's
+   * bookkeeping (held-press ageing, event drain, flash decay) without any
+   * wall-clock dependency. The held gesture uses `FIXED_STEP_MS`, so a 220 ms
+   * long press becomes `charge` on tick 27 of a fixed-step run too.
+   */
+  function stepTicks(ticks: number): void {
+    if (!running || !debugOptions.enabled || !Number.isFinite(ticks)) {
+      return;
+    }
+    const count = Math.min(MAX_DEBUG_STEP_TICKS, Math.max(0, Math.floor(ticks)));
+    const startStep = engine.state.step;
+    for (let index = 0; index < count; index += 1) {
+      if (pointerDown && !charged) {
+        holdMs += FIXED_STEP_MS;
+        if (holdMs >= HOLD_TO_CHARGE_MS) {
+          charged = true;
+          engine.input('charge');
+        }
+      }
+      engine.step();
+      if (engine.currentStatus !== 'playing') {
+        break;
+      }
+    }
+    const finalStep = engine.state.step;
+
+    const events = engine.drainEvents();
+    if (events.length > 0) {
+      handleEvents(events);
+    }
+    if (flash !== null) {
+      // Age the flash from the tick that raised it. One `step(n)` call can
+      // cross its event by hundreds of ticks; charging that whole span against
+      // a flash that only appeared on the last tick would hide it entirely.
+      const lastEvent = events.at(-1);
+      const elapsedTicks =
+        lastEvent === undefined ? finalStep - startStep : finalStep - lastEvent.step;
+      flash.remainingMs -= elapsedTicks * FIXED_STEP_MS;
+      if (flash.remainingMs <= 0) {
+        flash = null;
+      }
+    }
+    render();
+  }
+
   function onVisibilityChange(): void {
     if (document.hidden) {
       resetPointer();
@@ -560,11 +611,7 @@ export function mountZhenSha(
   }
 
   function onAbort(): void {
-    running = false;
-    resetPointer();
-    stopLoop();
-    removeDebugSeam();
-    detachListeners();
+    destroy();
   }
 
   /** Keep the click handler a plain callback; the export promise owns errors. */
@@ -597,62 +644,37 @@ export function mountZhenSha(
   render();
   startLoop();
 
-  /** Debug seam installed by this mount, so destroy never deletes another's. */
-  let installedDebugApi: ZhenShaDebugApi | null = null;
-  function removeDebugSeam(): void {
-    if (installedDebugApi !== null && debugWindow().__playground === installedDebugApi) {
-      delete debugWindow().__playground;
-    }
-    installedDebugApi = null;
-  }
-
   let destroyed = false;
-  const destroy = (): void => {
+  const destroy: () => void = () => {
     if (destroyed) {
       return;
     }
     destroyed = true;
     running = false;
+    resetPointer();
     stopLoop();
-    removeDebugSeam();
     detachListeners();
+    removeDebugApi(destroy);
   };
 
-  if (debug) {
+  if (debugOptions.enabled) {
     const api: ZhenShaDebugApi = {
       gameId: 'zhen-sha',
-      getState: () => ({ ...engine.snapshot(), settlement }),
-      input: (action) => {
-        if (destroyed) {
+      getState: (): ZhenShaDebugStateWithSettlement => ({
+        ...engine.snapshot(),
+        seed: debugOptions.seed,
+        settlement,
+      }),
+      input: (action, atStep) => {
+        if (!running) {
           return;
         }
-        engine.input(action);
-        render();
+        engine.input(action, atStep);
       },
-      step: (ticks = 1) => {
-        if (destroyed) {
-          return;
-        }
-        if (!Number.isInteger(ticks) || ticks < 0 || ticks > MAX_DEBUG_STEPS) {
-          throw new RangeError(`Invalid Zhen Sha debug step count: ${String(ticks)}`);
-        }
-        for (let index = 0; index < ticks; index += 1) {
-          engine.step();
-        }
-        const events = engine.drainEvents();
-        if (events.length > 0) {
-          absorbEvents(events);
-        }
-        render();
-      },
-      restart: () => {
-        if (!destroyed) {
-          restart();
-        }
-      },
+      step: stepTicks,
+      restart,
       destroy,
     };
-    installedDebugApi = api;
     debugWindow().__playground = api;
   }
 
@@ -811,18 +833,27 @@ function drawBoss(ctx: CanvasRenderingContext2D, state: ZhenShaSnapshot): void {
   }
 }
 
+/**
+ * Vertical lift of the staff arc in logical canvas pixels. `drawStaff()` and
+ * the decorative CSS gold edge both read this, so the two stay aligned while
+ * charging, breaking or swinging (issue #249 t2 review). The CSS keeps one
+ * clip-path polygon per lift state.
+ */
+export function staffArcLift(state: ZhenShaSnapshot, flash: Flash | null): number {
+  const swinging =
+    flash?.type === 'perfect' ||
+    flash?.type === 'strike' ||
+    flash?.type === 'finisher' ||
+    flash?.type === 'win';
+  return state.charging || state.breakTicksLeft > 0 || swinging ? 34 : 0;
+}
+
 function drawStaff(
   ctx: CanvasRenderingContext2D,
   state: ZhenShaSnapshot,
   flash: Flash | null,
 ): void {
-  const swinging =
-    flash !== null &&
-    (flash.type === 'perfect' ||
-      flash.type === 'strike' ||
-      flash.type === 'finisher' ||
-      flash.type === 'win');
-  const lift = state.charging || state.breakTicksLeft > 0 || swinging ? 34 : 0;
+  const lift = staffArcLift(state, flash);
 
   const arc = (): void => {
     ctx.beginPath();

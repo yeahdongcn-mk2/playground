@@ -57,11 +57,11 @@
     },
     {
       "file": "after-hub-webkit.png",
-      "sha256": "6c2856e33a5619dc2eff5833c059608c74f03492192029515edf345b165581f4",
+      "sha256": "cb44465556dab743c8df792aa1ea088843ac084ac07e8f644fc9c551ce33e745",
       "command": "npm run screenshots:container -- screenshots:webkit",
       "provenance": {
         "container": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
-        "captureCommit": "c6a8c6c0b6cb70aac968f12d834d00f1073ade61"
+        "captureCommit": "9e22c8eafb1c1d1653ce11960c2ff073c4b95537"
       }
     },
     {

@@ -6,7 +6,7 @@
 
 | 项 | Before | After |
 | --- | --- | --- |
-| 产品代码 | `5cb5b79`（t1 已合并，结算模块存在但 view 仍是纯文字 overlay） | `82fe37a`（本分支 t2 最终产品提交，含保存战绩符接入；截图取自该树，其后追加本证据目录） |
+| 产品代码 | `9147cdc`（rebase 前的最新 `main`：结算模块与 `?debug=1` 已在 main，view 仍是纯文字 overlay） | 本分支 rebase 后的产品提交（含结算页与保存战绩符；截图取自该树，其后追加本证据目录） |
 | 场景 | 固定输入序列的胜利：三次完美格挡 + 破防后蓄势棍击 | 同一场景、同一输入序列 |
 | 结果数值 | 完美 3 / 得分 1900 | 完美 3 / 用时 4.8s / 刀光 6 道 / 首领 黑煞·第 1 阶段 / 得分 1900 |
 | 视口 | 1440×1000 与 320×640 | 同左 |
@@ -25,11 +25,11 @@ Before 的纯文字 overlay 只显示胜负标题、完美数与得分；After �
 
 | 文件 | 说明 | CSS 视口 / PNG 尺寸 | sha256 |
 | --- | --- | --- | --- |
-| `plan-251-t1-before-1440x1000.png` | Before，桌面，纯文字结算 | 1440×1000 / 1440×1000 | `1bde6e458a470bf82d1493d26e6f1b8d62b60290a1538845693639c9ae256cd8` |
-| `plan-251-t1-after-1440x1000.png` | After，桌面，战绩符结算 | 1440×1000 / 1440×1000 | `e3821f2acc9716d4ba8d7a4c1cbeb3ec672846ab9b8840d6d6e3c1ebb1688500` |
-| `plan-251-t1-before-320x640.png` | Before，窄屏，纯文字结算 | 320×640 / 320×640 | `77f634b25a88e49b001d3d621b5cb3b02b71977d38fcd73174341fd3504b2488` |
-| `plan-251-t1-after-320x640.png` | After，窄屏，整屏战绩符结算（页头已完全被覆盖） | 320×640 / 320×640 | `f11c23cdcf1c92e6a8e699333525a19f1d820da19ea66d205c5e91a6a48f9605` |
-| `plan-251-t1-after-seal-1080x1440.png` | After 点击「保存战绩符」实际下载的 PNG（采集时文件名 `zhen-sha-seal-1795320621298.png`） | — / 1080×1440 | `9d3fd57fcefb083001328d7241f6046c68243e02d38c7a5eb336b0425b6f34b1` |
+| `plan-251-t1-before-1440x1000.png` | Before，桌面，纯文字结算 | 1440×1000 / 1440×1000 | `35f79029556d78c825a13b2b347ea42d3d83b286a9ba79c724b0f8c3b1ac1985` |
+| `plan-251-t1-after-1440x1000.png` | After，桌面，战绩符结算 | 1440×1000 / 1440×1000 | `b0915414d64f3eafe90d9eb7a8a7bfbd49356be0739aa50bc4c534873917cf94` |
+| `plan-251-t1-before-320x640.png` | Before，窄屏，纯文字结算 | 320×640 / 320×640 | `53d4ab3b3b83a2234772cff51a7d8813c496362c0055bba4e5981d392b4575e0` |
+| `plan-251-t1-after-320x640.png` | After，窄屏，整屏战绩符结算（页头已完全被覆盖） | 320×640 / 320×640 | `9d84385856d055a48f350b8138413b8adad60e0fe01ac1d6c4c72f038e2ef33e` |
+| `plan-251-t1-after-seal-1080x1440.png` | After 点击「保存战绩符」实际下载的 PNG（采集时文件名 `zhen-sha-seal-1795527253250.png`） | — / 1080×1440 | `9d3fd57fcefb083001328d7241f6046c68243e02d38c7a5eb336b0425b6f34b1` |
 
 采集时记录的关键几何 / 溢出数据：
 
@@ -52,12 +52,12 @@ Before 窄屏截图的 `scrollY=265` 是 baseline 自身布局造成的：结算
 ## 复现
 
 ```bash
-# 1) Before：t1 合并后的基线
-git worktree add --detach /tmp/zhen-251-before 5cb5b79
+# 1) Before：rebase 前的最新 main 基线
+git worktree add --detach /tmp/zhen-251-before 9147cdc
 (cd /tmp/zhen-251-before && npm ci && npm run build)
 (cd /tmp/zhen-251-before && npx vite preview --host 127.0.0.1 --port 4190 --strictPort) &
 
-# 2) After：本分支（产品提交 82fe37a）
+# 2) After：本分支（产品提交见 PR head）
 npm ci
 npm run build
 npx vite preview --host 127.0.0.1 --port 4191 --strictPort &

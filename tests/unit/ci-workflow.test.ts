@@ -26,8 +26,13 @@ const README_PATH = join(ROOT, 'README.md');
 const TECH_STACK_DECISION_PATH = join(ROOT, 'docs', 'tech-stack-decision.md');
 
 /**
- * Ordered `verify` checks. The README documents them as the human-facing
- * contract; ci.yml must run the same named steps in the same order.
+ * Ordered gating `verify` checks. The README documents these as the
+ * human-facing gate contract; ci.yml must run them in the same order.
+ *
+ * `Generate doc test counts` is intentionally absent: it is a working-tree
+ * preparation step, not a gate. README.md is one of the generated count files
+ * that Issue #426 keeps out of task diffs, so this list stays limited to the
+ * checks that gate the job.
  */
 const VERIFY_CHECK_ORDER = [
   'Run pre-commit checks',
@@ -166,8 +171,11 @@ const SCREENSHOT_SHA256_COMMAND = 'npm run verify:screenshots:sha256';
 const UNIT_TEST_REPORT = '"$RUNNER_TEMP/vitest-report.json"';
 const UNIT_TEST_COMMAND = `npm run test:unit -- --reporter=default --reporter=json --outputFile=${UNIT_TEST_REPORT}`;
 const DOC_COUNTS_COMMAND = `npm run verify:doc-counts -- --report ${UNIT_TEST_REPORT}`;
+const DOC_COUNTS_GENERATE_COMMAND = `npm run docs:counts:write -- --report ${UNIT_TEST_REPORT}`;
 const isUnitTests = (step: WorkflowStep): boolean =>
   (step.run ?? '').trim() === UNIT_TEST_COMMAND;
+const isDocCountsGenerate = (step: WorkflowStep): boolean =>
+  (step.run ?? '').trim() === DOC_COUNTS_GENERATE_COMMAND;
 const isBuild = (step: WorkflowStep): boolean => (step.run ?? '').trim() === 'npm run build';
 const BUDGET_COMMAND = 'npm run check:budget';
 const isBudget = (step: WorkflowStep): boolean => (step.run ?? '').trim() === BUDGET_COMMAND;
@@ -378,12 +386,36 @@ describe('CI workflow', () => {
     expect(e2eIndex).toBeGreaterThanOrEqual(0);
     expect(scoreIndex).toBeLessThan(e2eIndex);
 
-    // The baseline is only ever updated locally by a person, never by CI.
+    // CI never updates the score baseline through `npm run score -- --update`.
+    // The Generate step may rewrite only the baseline's `unitTests` field from
+    // the measured report, and doc-counts-sync commits that regeneration after
+    // the change lands on main. Keep the two commands distinct.
     for (const command of steps.flatMap(commandsOf)) {
       expect(command, 'the verify job must not update the score baseline').not.toMatch(
         /\bnpm run score\b[^\n]*--update/,
       );
     }
+    const generate = requireStep(isDocCountsGenerate, 'a doc test count generation step');
+    expect((generate.run ?? '').trim()).toBe(DOC_COUNTS_GENERATE_COMMAND);
+    expect((generate.run ?? '').trim()).not.toContain('--update');
+  });
+
+  it('generates the doc test counts before the verify guard, without --update', () => {
+    const step = requireStep(isDocCountsGenerate, 'a doc test count generation step');
+    expect(step.name).toBe('Generate doc test counts');
+    expect((step.run ?? '').trim()).toBe(DOC_COUNTS_GENERATE_COMMAND);
+    expect(step['continue-on-error']).toBeUndefined();
+    expect((step.run ?? '').trim()).not.toContain('--update');
+
+    // The report comes from the Unit tests step above, so generation must not
+    // run the suite again. Its output is what the verify guard below checks.
+    const unitTestsIndex = stepIndex(isUnitTests);
+    const generateIndex = stepIndex(isDocCountsGenerate);
+    const verifyIndex = stepIndex(isDocCounts);
+    expect(unitTestsIndex).toBeGreaterThanOrEqual(0);
+    expect(generateIndex).toBeGreaterThan(unitTestsIndex);
+    expect(verifyIndex).toBeGreaterThan(generateIndex);
+    expect(verify?.['timeout-minutes']).toBe(20);
   });
 
   it('runs the doc test count check after the unit tests and before the build', () => {
@@ -615,7 +647,7 @@ describe('CI workflow', () => {
     expect(typecheckIndex).toBeGreaterThan(runIndex);
   });
 
-  it('documents the verify check order in README exactly as the workflow runs it', () => {
+  it('documents the gating verify check order in README as the workflow runs it', () => {
     // The README list is the human-facing contract for the verify order.
     expect(readmeCiCheckOrder()).toEqual(VERIFY_CHECK_ORDER);
 

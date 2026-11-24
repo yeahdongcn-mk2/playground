@@ -335,8 +335,10 @@ export async function exportSettlementPng(
 
 /**
  * Export the settlement and trigger a browser download through a synthetic
- * `<a download>`. The temporary object URL is released before the promise
- * resolves, so a failed click leaves nothing behind.
+ * `<a download>`. The temporary object URL is released on the next macrotask,
+ * after Firefox/WebKit have had a chance to read the blob; scheduling that
+ * release in `finally` still means a failed click leaves nothing behind and
+ * the URL is released exactly once.
  */
 export async function downloadSettlementPng(
   settlement: ZhenShaSettlement,
@@ -353,7 +355,11 @@ export async function downloadSettlementPng(
     anchor.click();
   } finally {
     anchor.remove();
-    URL.revokeObjectURL(url);
+    // Defer until the current task ends: Firefox and WebKit may begin reading
+    // the blob only after the synthetic click returns, so revoking inline can
+    // cancel the download or leave an empty file. `finally` keeps the release
+    // scheduled when `click()` throws, so the URL is never leaked.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 }
 
