@@ -103,11 +103,27 @@ describe('doc test count documentation', () => {
     for (const path of COUNT_PATHS) {
       expect(ciSection, `README 的 CI 段缺少计数文件 ${path}`).toContain(path);
     }
-    // CI compares the baseline but never commits or updates it; only the
-    // working-tree unitTests may be rewritten by the Generate step.
+    // The verify job compares the baseline but never commits or updates it;
+    // only the working-tree unitTests may be rewritten by the Generate step.
+    // The subject must stay narrow: main's doc-counts-sync does commit the four
+    // count files, including docs/score-baseline.json.
     expect(ciSection).toContain('`--update`');
-    expect(ciSection).toContain('CI 不会提交或更新基线');
+    expect(ciSection).toContain('`verify` job 不会提交或更新基线');
     expect(ciSection).toContain('`Generate doc test counts` 只改写工作区的 `unitTests`');
+    expect(ciSection).not.toContain('CI 不会提交或更新基线');
+  });
+
+  it('keeps the README verification paragraph narrow about who skips the commit', () => {
+    const verification = section(README, '## 验证', '\n## ');
+
+    expect(verification).toContain('`verify` job 不会提交或更新基线');
+    expect(verification).toContain('`doc-counts-sync` 只提交');
+    for (const path of COUNT_PATHS) {
+      expect(verification, `README 的「验证」段缺少计数文件 ${path}`).toContain(path);
+    }
+    // The same paragraph says the main sync workflow commits those files, so it
+    // cannot also claim that "CI" never commits them.
+    expect(verification).not.toContain('CI 不会提交或更新基线');
   });
 
   it('drops the stale manual baseline wording from the README', () => {
