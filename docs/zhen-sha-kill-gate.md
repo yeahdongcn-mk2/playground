@@ -9,6 +9,7 @@
 
 - 生产文件数 / 生产行数只统计 `src/games/zhen-sha/` 下**参与构建**的 `.ts` 与 `.css`，排除 `*.test.ts`、`*.test.css` 与 `*.d.ts`（测试与类型声明不参与构建）。
 - `src/games/registry.ts` 的入口单独列出，不混入原型的生产文件数 / 行数。
+- 只被 `*.test.ts` 引用、不进入构建产物的文件不计入生产规模（例如 `boss-chart-adapter.ts` 仅被 `engine.test.ts` / `boss-chart-adapter.test.ts` 引用）。
 - 行数按文件的换行符个数计数，与 `wc -l` 一致；最后一行没有换行符时不计入。
 - 「kill gate 原型生产规模（实测）」是冻结快照：本表冻结于 43c9ab1，当前生产规模由独立滚动快照校验跟踪；引擎 PR 不再回写本表。
 - 完整特性规模是估算，不是实测；依据 #246、#247、#248、#249 的范围与现有五款游戏的规模，误差约 ±10%。
@@ -50,11 +51,14 @@
 基线 `43c9ab1` 之后生产代码继续演进；以下数字只说明当前状态，不回写上面的历史实测表，也不改变 #250 的完整特性估算口径：
 
 - `settlement.ts`：512 行，由 #251（结算战绩符）的 #422 / #427 新增，不属于 #250 的完整特性估算。
-- `bosses.ts`：144 行，由 #405 / #408 新增的 boss 数据与差异。
-- `boss-chart.ts`：128 行，由 #407 拆出。其中 `boss-chart.ts:35-92` 的 58 行接口声明若保留独立文件，应从 `bosses.ts` 的 300 行估算中移出，不能重复计入：完整特性为 8 个生产文件、约 2,224 行（2,154 + 128 − 58）；2,282 行（直接相加）只作为未扣除类型时的保守上限。两种算法都超过本文 2,200 行上沿，需按结论中的 L 条件重新复核。
-- `boss-chart-adapter.ts`：90 行，由 #449 t2（#454）落地，#431 t2 收敛时保留。它是 `bosses.ts` 与引擎 `BossChart` 契约之间唯一的单位换算层：`telegraphMs` / `parryWindowMs` 原样传递，`activeMs` 作为完整普通判定带宽度，`bosses.ts` 的 7–13 展示点数原样传递（引擎每次未弹反固定只记 1 hit，damage 不参与中招预算）；源表没有 `recoveryMs` / `firstTelegraphMs`，引擎按 0 ms 恢复、第一招自己的 telegraph 开场。真实 3×2 引擎集成用例由 #431 t2 补在 `engine.test.ts`，覆盖 1-1 → 3-2、逐招判定窗与阶段推进。
-- `zhen-sha.css`：254 → 371 行，由 #406 的 4+1 色板与黑宣纸 / 飞白边缘新增。
-- 当前生产规模（实测于 `627a9c4`）：7 个文件 / 2,317 行，已超出 M 区间 2,200 行上沿 117 行。当前生产规模由独立滚动快照校验跟踪，超限重估由跟进单 [#417](https://github.com/yeahdongcn-mk2/playground/issues/417) 跟踪。
+- `engine.ts`：457 → 678 行，由 #448 / #452 的引擎增量与 #420 的谱面消费新增。
+- `debug.ts`：140 行，由 #443 新增，经 `zhen-sha-view.ts` 静态引用进入生产构建。
+- `bosses.ts`：148 行，由 #405 / #408 新增的 boss 数据与差异。
+- `boss-chart.ts`：134 行，由 #407 拆出。其中 `boss-chart.ts:39-97` 的 59 行接口声明若保留独立文件，应从 `bosses.ts` 的 300 行估算中移出，不能重复计入：完整特性为 8 个生产文件、约 2,229 行（2,154 + 134 − 59）；2,288 行（直接相加）只作为未扣除类型时的保守上限。两种算法都超过本文 2,200 行上沿，需按结论中的 L 条件重新复核。
+- `boss-chart-adapter.ts`：90 行，由 #449 t2（#454）落地，#431 t2 收敛时保留。它是 `bosses.ts` 与引擎 `BossChart` 契约之间唯一的单位换算层：`telegraphMs` / `parryWindowMs` 原样传递，`activeMs` 作为完整普通判定带宽度，`bosses.ts` 的 7–13 展示点数原样传递（引擎每次未弹反固定只记 1 hit，damage 不参与中招预算）；源表没有 `recoveryMs` / `firstTelegraphMs`，引擎按 0 ms 恢复、第一招自己的 telegraph 开场。真实 3×2 引擎集成用例由 #431 t2 补在 `engine.test.ts`，覆盖 1-1 → 3-2、逐招判定窗与阶段推进。该文件只被 `engine.test.ts` / `boss-chart-adapter.test.ts` 引用，按本文「仅测试引用，不计」口径不计入当前生产规模。
+- `zhen-sha-view.ts`：676 → 790 行，由 #443 的固定步长调试接缝与 #249 t2 的朱砂印 / 字标 / 金边状态切换新增。
+- `zhen-sha.css`：254 → 583 行，由 #406 的 4+1 色板与黑宣纸 / 飞白边缘、#249 t2 的朱砂印 / 字标与金边 `clip-path` 多边形新增（金边几何烘进 CSS，不占 JS 体积）。
+- 当前生产规模（实测于本 PR HEAD，合并 `main` `dc0a723` 后）：8 个文件 / 3,014 行（`engine.ts` 678 + `index.ts` 29 + `settlement.ts` 512 + `debug.ts` 140 + `bosses.ts` 148 + `boss-chart.ts` 134 + `zhen-sha-view.ts` 790 + `zhen-sha.css` 583），已超出 M 区间 2,200 行上沿 814 行。当前生产规模由独立滚动快照校验跟踪，超限重估由跟进单 [#417](https://github.com/yeahdongcn-mk2/playground/issues/417) 跟踪。
 
 ### 新概念（2 个）
 

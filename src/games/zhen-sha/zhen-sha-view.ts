@@ -51,95 +51,89 @@ const SOUND_BY_EVENT: Readonly<Record<ZhenShaEventType, SoundEvent | null>> = {
   lose: 'mine',
 };
 
-const VIEW_HTML = `
-  <section class="zhen-sha-game" data-testid="zhen-sha-game" data-status="playing">
-    <div class="game-heading">
-      <a class="back-link" href="#/">
-        <span aria-hidden="true">←</span> 返回大厅
-      </a>
-      <div class="game-heading-copy">
-        <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> DOM · 动作 · 弹反</p>
-        <h1>镇煞 <span>Zhen Sha</span></h1>
-      </div>
-      <dl class="zhen-sha-hud" aria-label="游戏数据">
-        <div class="zhen-sha-stat">
-          <dt>势</dt>
-          <dd class="zhen-sha-momentum" data-testid="momentum" data-filled="0"
-            aria-label="势 0 / 3">
-            <span class="zhen-sha-pip" aria-hidden="true"></span>
-            <span class="zhen-sha-pip" aria-hidden="true"></span>
-            <span class="zhen-sha-pip" aria-hidden="true"></span>
-          </dd>
-        </div>
-        <div class="zhen-sha-stat">
-          <dt>完美</dt>
-          <dd data-testid="perfects">0</dd>
-        </div>
-        <div class="zhen-sha-stat">
-          <dt>中招</dt>
-          <dd data-testid="hits">0 / ${MAX_HITS}</dd>
-        </div>
-      </dl>
-    </div>
-
-    <div class="zhen-sha-layout">
-      <div class="zhen-sha-main">
-        <div class="zhen-sha-stage" data-testid="zhen-sha-stage">
-          <canvas class="zhen-sha-canvas" data-testid="zhen-sha-canvas"
-            role="img" aria-label="黑宣纸上的黑煞首领与金棍"></canvas>
-          <div class="zhen-sha-overlay" data-testid="overlay" role="group"
-            aria-labelledby="zhen-sha-overlay-title" hidden>
-            <div class="zhen-sha-overlay-card">
-              <p class="panel-kicker" data-testid="overlay-kicker">RESULT</p>
-              <h2 id="zhen-sha-overlay-title" data-testid="overlay-title">对决结束</h2>
-              <p class="zhen-sha-overlay-body" data-testid="overlay-body">再来一局。</p>
-              <button class="button button--primary" type="button" data-action="restart"
-                data-testid="overlay-restart">再来一局</button>
-            </div>
-          </div>
-        </div>
-
-        <ul class="zhen-sha-hints" data-testid="gesture-hints" aria-label="三种手势">
-          <li><span>轻点</span>格挡</li>
-          <li><span>长按</span>蓄势</li>
-          <li><span>松手</span>棍击</li>
-        </ul>
-        <p class="zhen-sha-gesture-note" data-testid="gesture-note">
-          杀招出手前一瞬轻点才是完美格挡。完美三次破防，破防后按住蓄势、松手终结。
-        </p>
-      </div>
-
-      <aside class="zhen-sha-panel" aria-label="操作与状态">
-        <div class="panel-card">
-          <p class="panel-kicker">CONTROLS</p>
-          <h2>三种手势</h2>
-          <dl class="control-list">
-            <div><dt>轻点</dt><dd>格挡杀招</dd></div>
-            <div><dt>长按</dt><dd>蓄起金棍</dd></div>
-            <div><dt>松手</dt><dd>一棍击出</dd></div>
-          </dl>
-        </div>
-
-        <div class="panel-card">
-          <p class="panel-kicker">STATUS</p>
-          <h2>本局</h2>
-          <p class="zhen-sha-row"><span>判定</span><strong data-testid="judgement">等待出手</strong></p>
-          <p class="zhen-sha-row"><span>得分</span><strong data-testid="score">0</strong></p>
-          <p class="zhen-sha-row"><span>状态</span><strong data-testid="status">进行中</strong></p>
-          <div class="panel-actions">
-            <button class="button button--ghost" type="button" data-action="restart"
-              data-testid="restart-button">重开</button>
-          </div>
-        </div>
-
-        <p class="zhen-sha-note">
-          首领只有一招：长枪突刺。看准枪尖亮起的时机轻点，三次完美便破防。
-        </p>
-        <p class="sr-only" data-testid="announcer" aria-live="polite"></p>
-      </aside>
-    </div>
-  </section>
-`;
+const VIEW_HTML = `<section class="zhen-sha-game" data-testid="zhen-sha-game" data-status="playing">
+<div class="game-heading">
+<a class="back-link" href="#/">
+<span aria-hidden="true">←</span> 返回大厅
+</a>
+<div class="game-heading-copy">
+<p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> DOM · 动作 · 弹反</p>
+<h1>镇煞 <span>Zhen Sha</span></h1>
+</div>
+<dl class="zhen-sha-hud" aria-label="游戏数据">
+<div class="zhen-sha-stat">
+<dt>势</dt>
+<dd class="zhen-sha-momentum" data-testid="momentum" data-filled="0"
+aria-label="势 0 / 3">
+<span class="zhen-sha-pip" aria-hidden="true"></span>
+<span class="zhen-sha-pip" aria-hidden="true"></span>
+<span class="zhen-sha-pip" aria-hidden="true"></span>
+</dd>
+</div>
+<div class="zhen-sha-stat">
+<dt>完美</dt>
+<dd data-testid="perfects">0</dd>
+</div>
+<div class="zhen-sha-stat">
+<dt>中招</dt>
+<dd data-testid="hits">0 / ${MAX_HITS}</dd>
+</div>
+</dl>
+</div>
+<div class="zhen-sha-layout">
+<div class="zhen-sha-main">
+<div class="zhen-sha-stage" data-testid="zhen-sha-stage">
+<canvas class="zhen-sha-canvas" data-testid="zhen-sha-canvas"
+role="img" aria-label="黑宣纸上的黑煞首领与金棍"></canvas>
+<div class=zhen-sha-marks aria-hidden=true><span class=zhen-sha-wordmark>镇煞</span><span class=zhen-sha-seal>镇煞</span><span class=zhen-sha-arc-glow></span><span class=zhen-sha-arc-edge></span></div>
+<div class="zhen-sha-overlay" data-testid="overlay" role="group"
+aria-labelledby="zhen-sha-overlay-title" hidden>
+<div class="zhen-sha-overlay-card">
+<p class="panel-kicker" data-testid="overlay-kicker">RESULT</p>
+<h2 id="zhen-sha-overlay-title" data-testid="overlay-title">对决结束</h2>
+<p class="zhen-sha-overlay-body" data-testid="overlay-body">再来一局。</p>
+<button class="button button--primary" type="button" data-action="restart"
+data-testid="overlay-restart">再来一局</button>
+</div>
+</div>
+</div>
+<ul class="zhen-sha-hints" data-testid="gesture-hints" aria-label="三种手势">
+<li><span>轻点</span>格挡</li>
+<li><span>长按</span>蓄势</li>
+<li><span>松手</span>棍击</li>
+</ul>
+<p class="zhen-sha-gesture-note" data-testid="gesture-note">
+杀招出手前一瞬轻点才是完美格挡。完美三次破防，破防后按住蓄势、松手终结。
+</p>
+</div>
+<aside class="zhen-sha-panel" aria-label="操作与状态">
+<div class="panel-card">
+<p class="panel-kicker">CONTROLS</p>
+<h2>三种手势</h2>
+<dl class="control-list">
+<div><dt>轻点</dt><dd>格挡杀招</dd></div>
+<div><dt>长按</dt><dd>蓄起金棍</dd></div>
+<div><dt>松手</dt><dd>一棍击出</dd></div>
+</dl>
+</div>
+<div class="panel-card">
+<p class="panel-kicker">STATUS</p>
+<h2>本局</h2>
+<p class="zhen-sha-row"><span>判定</span><strong data-testid="judgement">等待出手</strong></p>
+<p class="zhen-sha-row"><span>得分</span><strong data-testid="score">0</strong></p>
+<p class="zhen-sha-row"><span>状态</span><strong data-testid="status">进行中</strong></p>
+<div class="panel-actions">
+<button class="button button--ghost" type="button" data-action="restart"
+data-testid="restart-button">重开</button>
+</div>
+</div>
+<p class="zhen-sha-note">
+首领只有一招：长枪突刺。看准枪尖亮起的时机轻点，三次完美便破防。
+</p>
+<p class="sr-only" data-testid="announcer" aria-live="polite"></p>
+</aside>
+</div>
+</section>`;
 
 function abortError(): DOMException {
   return new DOMException('Game mount aborted', 'AbortError');
@@ -255,6 +249,8 @@ export function mountZhenSha(
     for (const [index, pip] of pips.entries()) {
       pip.classList.toggle('is-filled', index < state.momentum);
     }
+    // Decorative CSS gold edge: one class, one clip-path per lift state.
+    stage.classList.toggle('is-arc-lifted', staffArcLift(state, flash) > 0);
 
     const previousStatus = lastStatus;
     lastStatus = state.status;
@@ -707,18 +703,27 @@ function drawBoss(ctx: CanvasRenderingContext2D, state: ZhenShaSnapshot): void {
   }
 }
 
+/**
+ * Vertical lift of the staff arc in logical canvas pixels. `drawStaff()` and
+ * the decorative CSS gold edge both read this, so the two stay aligned while
+ * charging, breaking or swinging (issue #249 t2 review). The CSS keeps one
+ * clip-path polygon per lift state.
+ */
+export function staffArcLift(state: ZhenShaSnapshot, flash: Flash | null): number {
+  const swinging =
+    flash?.type === 'perfect' ||
+    flash?.type === 'strike' ||
+    flash?.type === 'finisher' ||
+    flash?.type === 'win';
+  return state.charging || state.breakTicksLeft > 0 || swinging ? 34 : 0;
+}
+
 function drawStaff(
   ctx: CanvasRenderingContext2D,
   state: ZhenShaSnapshot,
   flash: Flash | null,
 ): void {
-  const swinging =
-    flash !== null &&
-    (flash.type === 'perfect' ||
-      flash.type === 'strike' ||
-      flash.type === 'finisher' ||
-      flash.type === 'win');
-  const lift = state.charging || state.breakTicksLeft > 0 || swinging ? 34 : 0;
+  const lift = staffArcLift(state, flash);
 
   const arc = (): void => {
     ctx.beginPath();
