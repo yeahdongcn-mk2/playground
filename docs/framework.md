@@ -289,7 +289,7 @@ npm run test:e2e     # 先 build，再用 vite preview 跑 Chromium 桌面 / Pix
 npm run test:e2e:webkit # 先 build，只跑 mobile-webkit（iPhone SE (3rd gen)）
 ```
 
-当前提交本地通过：`typecheck`、`lint`、`build`、`check:budget` 通过；`npm run test:unit` 1680 passed；`npm run test:e2e` 158 passed（桌面 90 + 手机 36 + WebKit 32）。
+当前提交本地通过：`typecheck`、`lint`、`build`、`check:budget` 通过；`npm run test:unit` 1692 passed；`npm run test:e2e` 159 passed（桌面 91 + 手机 36 + WebKit 32）。
 
 - 单测只覆盖引擎无关逻辑；不要在 Node 里启动 Phaser。
 - 端到端使用 `data-testid`，覆盖进入 / 返回、最近游玩时间、键盘 / 鼠标 / 触屏、修饰键、重置、容器级缩放、未知路由、快速切换的晚到 mount、休眠时销毁和监听器清理；贪食蛇、俄罗斯方块、2048、打砖块与扫雷另有完整玩法用例（暂停 / 重开、计分 / 结束、窗口失焦暂停与恢复、手机端触屏按钮或拖动、像素绘制与监听器清理，扫雷另有左右键、固定雷盘、难度预设与自定义切换、非法自定义错误、格子可见文本、焦点迁移、畸形调试雷盘回退、胜利 / 踩雷与计时器 / 调试接缝清理）。
@@ -342,12 +342,12 @@ npm run build
 npm run preview
 ```
 
-Node.js `^22.12.0 || ^24.0.0 || >=26.0.0`（Vite 8 的要求）。CI（`.github/workflows/ci.yml`）按 `npm ci` → `pre-commit` → `typecheck` → `lint` → `test:unit` → `verify:doc-counts` → `verify:screenshots:doc-dims` → `verify:screenshots:sha256` → `build` → `check:budget` → `score` → `test:e2e` → `check-e2e-flakes` → WebKit 窄屏截图的顺序执行；独立的计数检查复用 Unit tests 产出的 Vitest JSON 报告，不重跑单测，而 `score` 内部的 `verify:doc-counts` 未传 `--report`，会按 score 现有的采集语义再跑一次单测；`score` 步骤只与 `docs/score-baseline.json` 对比，不传 `--update`，基线退化直接让 job 失败，新基线仍由人在本地显式提交；`verify` 直接运行在固定 tag + digest 的官方 Playwright 镜像里（内置 Chromium / WebKit 与系统依赖），不再在运行时安装浏览器。
+Node.js `^22.22.2 || ^24.15.0 || >=26.0.0`（受 jsdom 30 的 Node engines 约束）。CI（`.github/workflows/ci.yml`）按 `npm ci` → `pre-commit` → `typecheck` → `lint` → `test:unit` → `verify:doc-counts` → `verify:screenshots:doc-dims` → `verify:screenshots:sha256` → `build` → `check:budget` → `score` → `test:e2e` → `check-e2e-flakes` → WebKit 窄屏截图的顺序执行；独立的计数检查复用 Unit tests 产出的 Vitest JSON 报告，不重跑单测，而 `score` 内部的 `verify:doc-counts` 未传 `--report`，会按 score 现有的采集语义再跑一次单测；`score` 步骤只与 `docs/score-baseline.json` 对比，不传 `--update`，基线退化直接让 job 失败，新基线仍由人在本地显式提交；`verify` 直接运行在固定 tag + digest 的官方 Playwright 镜像里（内置 Chromium / WebKit 与系统依赖），不再在运行时安装浏览器。
 
 ## 14. 性能与已知限制
 
 - 大厅首屏不包含 Phaser；Phaser 只在进入使用 Phaser 的 2D 游戏时加载（本地构建 chunk 约 1.3 MB / 357 KB gzip），扫雷等 DOM 游戏不加载它。
-- 入口 JS 约 11.16 KB gzip；`check:budget` 断言入口不含引擎标记（Phaser.Game/Scene/AUTO、THREE.）且 ≤50 KB gzip，全部 JS chunk 合计 ≤450 KB gzip（当前约 411.40 KB gzip），并匹配 `dist/assets/zhen-sha-view-*.js` 要求合计 ≤35 KB gzip（当前约 6.05 KB gzip）：0 个匹配视为失败并提示先 `npm run build`，多个匹配按合计而不是只取第一个；所有 gzip 数字统一由 `node:zlib` 的 `gzipSync` 默认级别测得，Vite build 输出的 gzip 列不是门禁输入。
+- 入口 JS 约 11.61 KB gzip；`check:budget` 断言入口不含引擎标记（Phaser.Game/Scene/AUTO、THREE.）且 ≤50 KB gzip，全部 JS chunk 合计 ≤450 KB gzip（当前约 411.66 KB gzip），并匹配 `dist/assets/zhen-sha-view-*.js` 要求合计 ≤35 KB gzip（当前约 5.86 KB gzip）：0 个匹配视为失败并提示先 `npm run build`，多个匹配按合计而不是只取第一个；所有 gzip 数字统一由 `node:zlib` 的 `gzipSync` 默认级别测得，Vite build 输出的 gzip 列不是门禁输入。
 - 3D 尚未实现，Three.js 只在文档与目录层面预留。
 - 空白示例只演示框架能力；`src/games/snake/`、`src/games/tetris/`、`src/games/2048/`、`src/games/breakout/`、`src/games/minesweeper/` 与 `src/games/zhen-sha/`（镇煞）是完整玩法参考（规则引擎、渲染器、响应式视图、测试）。扫雷与镇煞是 2 款纯 DOM 参考，其余四款使用 Phaser 场景。
 - 打砖块固定 480×720 逻辑球场与 10 列砖块，没有道具、多球或在线排行榜；难度曲线由砖块行数与球速控制。

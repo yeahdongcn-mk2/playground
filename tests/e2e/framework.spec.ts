@@ -21,6 +21,37 @@ test.describe('hub and routing', () => {
     await expect(page.getByRole('heading', { name: '共享框架做了什么' })).toBeVisible();
     await expect(page.locator('main')).toHaveCount(1);
 
+    // The hero promotes zhen-sha as its only primary call to action.
+    const heroCta = page.locator('.hero [data-testid="enter-zhen-sha"]');
+    await expect(heroCta).toBeVisible();
+    await expect(heroCta).toHaveAttribute('href', '#/games/zhen-sha');
+    const heroPrimary = page.locator('.hero .button--primary');
+    await expect(heroPrimary).toHaveCount(1);
+    await expect(heroPrimary).toHaveAttribute('data-testid', 'enter-zhen-sha');
+
+    // The featured card replaces the zhen-sha grid card and must sit fully
+    // inside the desktop project's first screen (1440x1000) exactly once.
+    const featureCard = page.getByTestId('game-card-zhen-sha');
+    await expect(featureCard).toHaveCount(1);
+    await expect(featureCard).toBeVisible();
+    await expect(featureCard).toHaveClass(/game-card--feature/);
+    await expect(page.locator('.hero [data-testid="game-card-zhen-sha"]')).toHaveCount(1);
+    const viewport = page.viewportSize();
+    expect(viewport, 'the chromium project should set a viewport').not.toBeNull();
+    const featureBox = await featureCard.boundingBox();
+    expect(featureBox, 'the featured zhen-sha card should render a box').not.toBeNull();
+    expect(featureBox!.x).toBeGreaterThanOrEqual(0);
+    expect(featureBox!.y).toBeGreaterThanOrEqual(0);
+    expect(featureBox!.x + featureBox!.width).toBeLessThanOrEqual(viewport!.width);
+    expect(featureBox!.y + featureBox!.height).toBeLessThanOrEqual(viewport!.height);
+
+    // Every other game keeps exactly one lobby-grid entry with a working link.
+    for (const id of ['snake', 'tetris', '2048', 'breakout', 'minesweeper', 'blank']) {
+      const gridCard = page.locator(`.game-grid [data-testid="game-card-${id}"]`);
+      await expect(gridCard).toHaveCount(1);
+      await expect(gridCard).toHaveAttribute('href', `#/games/${id}`);
+    }
+
     await page.getByTestId('enter-blank').click();
     await expect(page).toHaveURL(/#\/games\/blank$/);
     await expect(page.getByTestId('blank-game')).toBeVisible();
