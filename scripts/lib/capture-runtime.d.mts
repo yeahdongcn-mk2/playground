@@ -164,21 +164,40 @@ export interface CaptureScreenshotOptions {
   capturedBytes?: Buffer | Uint8Array;
   /**
    * Validate the manifested environment, then return without capturing or
-   * writing (default false). An unrecorded file returns immediately unless
-   * `requireRecorded` is set.
+   * writing (default false). A file no manifest records returns immediately
+   * unless `requireRecorded` is set.
    */
   checkOnly?: boolean;
   /**
-   * With `checkOnly`, fail when the file is not tracked by the manifest
-   * (default false). Callers that borrow a sibling's entry to guard an
-   * unrecorded image use this to fail closed when the entry disappears.
+   * With `checkOnly`, fail when no manifest records the file (default false).
+   * Callers that borrow a sibling's entry to guard an unrecorded image use
+   * this to fail closed when the entry disappears.
    */
   requireRecorded?: boolean;
   /** Override the target of the context that produced the page (tests / edge cases). */
   target?: CaptureTarget;
-  /** Parsed manifest; defaults to reading `manifestPath` from disk. */
+  /**
+   * Parsed single manifest that bypasses set discovery (tests / compatibility).
+   * Precedence is `manifest` > `manifestPath` > the discovered set; `null`
+   * keeps the pre-guard behaviour, and omitting it resolves the owning
+   * manifest from the discovered set. When it and `manifestPath` are both
+   * present, the latter only labels messages and the caller is responsible for
+   * it describing this manifest.
+   */
   manifest?: ScreenshotSha256Manifest | null;
+  /**
+   * Read exactly this manifest instead of the discovered set (tests /
+   * compatibility). A missing file means the name is unrecorded.
+   */
   manifestPath?: string;
+  /**
+   * Directory the write-time guard discovers sha256 manifests in
+   * (`capture-sha256-manifest*.json`). The default is resolved against the
+   * repository root; an explicit value is used as given (a relative value
+   * resolves against the working directory). A missing directory means every
+   * name is unrecorded.
+   */
+  manifestDir?: string;
   readFile?: (path: string, encoding: 'utf8') => string;
   /** Replaceable atomic rename (unit tests inject a failure). */
   fileOperations?: CaptureAtomicWriteOperations;
@@ -199,15 +218,32 @@ export function captureScreenshot(
 ): Promise<void>;
 
 export interface ExpectedCaptureSha256Options {
-  /** Parsed manifest; defaults to reading `manifestPath` from disk. */
+  /**
+   * Parsed single manifest that bypasses set discovery (tests / compatibility).
+   * Precedence is `manifest` > `manifestPath` > the discovered set; `null`
+   * records no evidence, so the lookup returns null. Omit it to resolve the
+   * owning manifest from the discovered set.
+   */
   manifest?: ScreenshotSha256Manifest | null;
+  /**
+   * Read exactly this manifest instead of the discovered set (tests /
+   * compatibility). A missing file means the name is unrecorded.
+   */
   manifestPath?: string;
+  /**
+   * Directory the sha256 manifests are discovered in
+   * (`capture-sha256-manifest*.json`). The default is resolved against the
+   * repository root; an explicit value is used as given (a relative value
+   * resolves against the working directory).
+   */
+  manifestDir?: string;
   readFile?: (path: string, encoding: 'utf8') => string;
 }
 
 /**
- * The sha256 recorded for `name` in the screenshot manifest, or null when the
- * file is unrecorded (for example a trimmed checkout).
+ * The sha256 recorded for `name` in its owning screenshot manifest, or null
+ * when no manifest in the set records the file (for example a trimmed
+ * checkout).
  */
 export function expectedCaptureSha256(
   name: string,

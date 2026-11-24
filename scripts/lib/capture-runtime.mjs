@@ -7,7 +7,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, relative, resolve, sep } from 'node:path';
 import { chromium, devices, webkit } from '@playwright/test';
 import {
   CAPTURE_CONTAINER_FLAG,
@@ -18,10 +18,13 @@ import {
   normalizeCaptureTargets,
 } from './capture-env.mjs';
 import {
+  DEFAULT_MANIFEST_DIR,
   DEFAULT_MANIFEST_PATH,
   compareCaptureEnvironmentFingerprint,
   findSha256ManifestCapture,
+  findSha256ManifestCaptureInSet,
   formatManifestCaptureEnvironment,
+  loadSha256Manifests,
   parseSha256Manifest,
 } from './screenshot-sha256.mjs';
 import {
@@ -574,18 +577,29 @@ export async function captureStableBytes(
  * pass the same options as `page.screenshot`, so the Chromium bytes stay
  * unchanged.
  *
- * A file recorded in `docs/screenshots/capture-sha256-manifest.json` is guarded
- * before any byte is written (Issue #199): the environment fingerprint of the
- * context that produced it must match the manifest environment, otherwise a
- * host run or a different image / font / EGL stack fails instead of silently
- * replacing the fixed-environment evidence. A matching environment writes the
- * PNG atomically (temporary file + rename) and, when the new sha256 differs
- * from the manifest, prints the manifest / docs checklist while leaving the
- * manifest untouched so `npm run verify:screenshots:sha256` keeps failing.
- * Files the manifest does not record keep the previous single-shot
+ * A file recorded in one of the sha256 manifests under
+ * `docs/screenshots` is guarded before any byte is written (Issue #199 /
+ * #439): the environment fingerprint of the context that produced it must
+ * match the environment of the manifest that owns the file, otherwise a host
+ * run or a different image / target / font / EGL stack fails instead of
+ * silently replacing the fixed-environment evidence. A matching environment
+ * writes the PNG atomically (temporary file + rename) and, when the new sha256
+ * differs from the owning manifest, prints the manifest / docs checklist while
+ * leaving the manifest untouched so `npm run verify:screenshots:sha256` keeps
+ * failing. Files no manifest records keep the previous single-shot
  * `page.screenshot` write path when neither `stable` nor `stableFrames > 1`
  * is set; either opt-in uses the same stable buffer + atomic write as a
  * manifested file.
+ *
+ * The guard reads the manifest set discovered by `loadSha256Manifests`
+ * (default `DEFAULT_MANIFEST_DIR`) so a target-split manifest drives its own
+ * captures: `after-blank-desktop.png` compares against the desktop manifest,
+ * `after-blank-mobile.png` against the mobile one, and the WebKit manifest
+ * keeps its existing entries. A missing manifest directory means no file is
+ * recorded, while an unreadable / invalid manifest or a file recorded by two
+ * manifests fails closed before the screenshot. The `manifest` and
+ * `manifestPath` options keep the single-manifest entry point used by tests
+ * and callers that guard one fixture.
  *
  * `stable: true` (Issue #199) replaces the single screenshot with
  * {@link captureStableBytes}: two consecutive byte-identical screenshots after
@@ -638,8 +652,13 @@ export async function captureScreenshot(
     // instead of silently skipping the environment check.
     requireRecorded = false,
     target,
+    // A parsed single manifest bypasses set discovery; `null` keeps the
+    // pre-guard behaviour for tests and trimmed callers.
     manifest,
-    manifestPath = resolve(CAPTURE_REPO_ROOT, DEFAULT_MANIFEST_PATH),
+    // Read exactly this manifest instead of discovering the set.
+    manifestPath,
+    // Directory the manifest set is discovered in.
+    manifestDir = resolve(CAPTURE_REPO_ROOT, DEFAULT_MANIFEST_DIR),
     readFile = readFileSync,
     fileOperations = {},
     env,
@@ -649,9 +668,14 @@ export async function captureScreenshot(
   },
 ) {
   const path = `${outputDir}/${name}`;
-  const parsedManifest = loadSha256Manifest({ manifest, manifestPath, readFile });
-  const capture =
-    parsedManifest === null ? null : findSha256ManifestCapture(parsedManifest, name);
+  const guard = resolveManifestCapture({
+    name,
+    manifest,
+    manifestPath,
+    manifestDir,
+    readFile,
+  });
+  const capture = guard.capture;
 
   if (capture === null) {
     // Unrecorded evidence: keep the existing path byte-for-byte unless the
@@ -660,7 +684,7 @@ export async function captureScreenshot(
     if (checkOnly) {
       if (requireRecorded) {
         throw new Error(
-          `Refusing to check ${name}: it is not tracked by ${manifestLabelFor({ manifest, manifestPath })}, ` +
+          `Refusing to check ${name}: it is not tracked by ${guard.manifestLabel}, ` +
             'and this capture requires a manifested environment baseline (requireRecorded).',
         );
       }
@@ -693,15 +717,15 @@ export async function captureScreenshot(
     fingerprint ?? fingerprintForTarget(captureTarget, { env, run });
   const comparison = compareCaptureEnvironmentFingerprint(
     actualFingerprint,
-    parsedManifest.environment,
+    guard.manifest.environment,
   );
   if (comparison.problems.length > 0) {
     throw new Error(
       manifestedEnvironmentErrorMessage({
         name,
         path,
-        manifestLabel: manifestLabelFor({ manifest, manifestPath }),
-        environment: parsedManifest.environment,
+        manifestLabel: guard.manifestLabel,
+        environment: guard.manifest.environment,
         capture,
         comparison,
         fingerprint: actualFingerprint,
@@ -736,7 +760,8 @@ export async function captureScreenshot(
       manifestHashDriftChecklist({
         file: name,
         path,
-        manifest: parsedManifest,
+        manifest: guard.manifest,
+        manifestLabel: guard.manifestLabel,
         capture,
         actualSha256,
       }),
@@ -747,8 +772,8 @@ export async function captureScreenshot(
 }
 
 /**
- * The sha256 the manifest records for `name`, or null when the file is not in
- * the manifest (for example a trimmed checkout).
+ * The sha256 the owning manifest records for `name`, or null when no manifest
+ * in the set records the file (for example a trimmed checkout).
  *
  * Capture scripts that can land on a load-dependent but stable raster variant
  * use this as the expected value: a fresh page is sampled until it reproduces
@@ -759,13 +784,15 @@ export function expectedCaptureSha256(
   name,
   {
     manifest,
-    manifestPath = resolve(CAPTURE_REPO_ROOT, DEFAULT_MANIFEST_PATH),
+    manifestPath,
+    manifestDir = resolve(CAPTURE_REPO_ROOT, DEFAULT_MANIFEST_DIR),
     readFile = readFileSync,
   } = {},
 ) {
-  const parsedManifest = loadSha256Manifest({ manifest, manifestPath, readFile });
-  if (parsedManifest === null) return null;
-  return findSha256ManifestCapture(parsedManifest, name)?.sha256 ?? null;
+  return (
+    resolveManifestCapture({ name, manifest, manifestPath, manifestDir, readFile })
+      .capture?.sha256 ?? null
+  );
 }
 
 /** Fresh pages the manifest-resample capture may sample before failing. */
@@ -888,18 +915,16 @@ export async function captureManifestedScreenshot({
 }
 
 /**
- * Read and validate the sha256 manifest that drives the write-time guard.
+ * Read and validate the single manifest selected by `manifestPath`.
  *
- * A missing manifest (for example a trimmed checkout) means no file is
- * recorded, so unrecorded evidence keeps its normal write path. Any other read
- * or parse failure is fail-closed: writing a screenshot the manifest cannot
- * describe would silently bypass the guard.
+ * This is the compatibility entry point used by tests and callers that guard
+ * one fixture; a normal capture resolves its owning manifest from the set.
+ * A missing file (for example a trimmed checkout) means no file is recorded,
+ * so unrecorded evidence keeps its normal write path. Any other read or parse
+ * failure is fail-closed: writing a screenshot the manifest cannot describe
+ * would silently bypass the guard.
  */
-function loadSha256Manifest({ manifest, manifestPath, readFile }) {
-  if (manifest !== undefined) {
-    return manifest === null ? null : manifest;
-  }
-
+function loadSha256Manifest({ manifestPath, readFile }) {
   let text;
   try {
     text = readFile(manifestPath, 'utf8');
@@ -925,6 +950,85 @@ function loadSha256Manifest({ manifest, manifestPath, readFile }) {
         `${detail}. Fix the manifest instead of writing evidence it cannot describe.`,
     );
   }
+}
+
+/**
+ * Load the manifest set the write-time guard resolves a file in.
+ *
+ * `loadSha256Manifests` already treats a missing directory as an empty set and
+ * rejects a malformed manifest or a file recorded by two manifests. Any
+ * failure is fail-closed here too: a capture that cannot resolve its owning
+ * manifest must not write a PNG the manifest set cannot describe. Validation
+ * is all-or-nothing, so one unreadable or invalid target manifest blocks every
+ * guarded capture until it is fixed. The manifest reader keeps the
+ * single-manifest entry's `(path, 'utf8')` shape so tests can inject one reader
+ * for both entry points.
+ */
+function loadSha256ManifestSet({ dir, readFile }) {
+  try {
+    return loadSha256Manifests({
+      dir,
+      readFile: (path) => readFile(path, 'utf8'),
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Cannot load the screenshot sha256 manifest set in ${dir}: ${detail}. ` +
+        'Fix the manifest set or capture through a clean checkout.',
+    );
+  }
+}
+
+/**
+ * Resolve the manifest that owns `name` and its capture entry.
+ *
+ * Precedence keeps the two compatibility entry points working exactly as
+ * before: an injected `manifest` (parsed or `null`) wins, then an explicit
+ * `manifestPath`, and only a call that passes neither discovers the set below
+ * `manifestDir`. A set that records no matching file returns a `null` capture,
+ * so an unrecorded image keeps its pre-guard write path.
+ */
+function resolveManifestCapture({ name, manifest, manifestPath, manifestDir, readFile }) {
+  if (manifest !== undefined) {
+    return {
+      capture: manifest === null ? null : findSha256ManifestCapture(manifest, name),
+      manifest,
+      // The injected manifest has no path of its own; a caller that also names
+      // its source path gets that path in messages and checklists.
+      manifestLabel:
+        manifestPath === undefined ? DEFAULT_MANIFEST_PATH : manifestLabelFor(manifestPath),
+    };
+  }
+  if (manifestPath !== undefined) {
+    const parsedManifest = loadSha256Manifest({ manifestPath, readFile });
+    return {
+      capture:
+        parsedManifest === null ? null : findSha256ManifestCapture(parsedManifest, name),
+      manifest: parsedManifest,
+      manifestLabel: manifestLabelFor(manifestPath),
+    };
+  }
+
+  const manifests = loadSha256ManifestSet({ dir: manifestDir, readFile });
+  const found = findSha256ManifestCaptureInSet(manifests, name);
+  return {
+    capture: found?.capture ?? null,
+    manifest: found?.manifest ?? null,
+    manifestLabel:
+      found === null
+        ? `the manifest set in ${manifestDisplayPath(manifestDir)}`
+        : manifestDisplayPath(found.path),
+  };
+}
+
+/** Report a discovered manifest as a repository-relative path when possible. */
+function manifestDisplayPath(path) {
+  const absolute = resolve(path);
+  const root = resolve(CAPTURE_REPO_ROOT);
+  const prefix = `${root}${sep}`;
+  return absolute.startsWith(prefix)
+    ? relative(root, absolute).split(sep).join('/')
+    : path;
 }
 
 /**
@@ -961,10 +1065,8 @@ function fingerprintForTarget(target, { env, run }) {
   return captureEnvironmentFingerprint({ target, env: env ?? process.env, run });
 }
 
-function manifestLabelFor({ manifest, manifestPath }) {
-  if (manifest !== undefined) {
-    return DEFAULT_MANIFEST_PATH;
-  }
+/** Display an explicit manifest path, keeping the repo default relative. */
+function manifestLabelFor(manifestPath) {
   return resolve(manifestPath) === resolve(CAPTURE_REPO_ROOT, DEFAULT_MANIFEST_PATH)
     ? DEFAULT_MANIFEST_PATH
     : manifestPath;
@@ -992,23 +1094,31 @@ function manifestedEnvironmentErrorMessage({
 }
 
 /** The checklist printed when a fixed-environment capture changes a hash. */
-function manifestHashDriftChecklist({ file, path, manifest, capture, actualSha256 }) {
+function manifestHashDriftChecklist({
+  file,
+  path,
+  manifest,
+  manifestLabel,
+  capture,
+  actualSha256,
+}) {
   const index = manifest.captures.indexOf(capture);
   const command = capture.command;
   return [
     `Wrote ${path} inside the fixed capture environment, but its sha256 differs from ` +
-      `${DEFAULT_MANIFEST_PATH}:`,
+      `${manifestLabel}:`,
     `  manifest sha256: ${capture.sha256}`,
     `  captured sha256: ${actualSha256}`,
     'The PNG was written, but the recorded evidence is stale until the following are updated ' +
       'in the same change:',
-    `- ${DEFAULT_MANIFEST_PATH}: captures[${index}].sha256 -> ${actualSha256}`,
-    `- ${DEFAULT_MANIFEST_PATH}: captures[${index}].provenance.captureCommit -> ` +
+    `- ${manifestLabel}: captures[${index}].sha256 -> ${actualSha256}`,
+    `- ${manifestLabel}: captures[${index}].provenance.captureCommit -> ` +
       'the commit that produced the new PNG',
     `- docs/screenshots/README.md: the sha256 / capture commit / size row for ${file}`,
     `- docs/screenshots/README.md: the provenance note / table for ${file}`,
-    `Until those are updated, npm run verify:screenshots:sha256 keeps failing on the stale ` +
-      `sha256 for ${file}. Re-capture with: ${command}`,
+    `Until those are updated, the recorded evidence for ${file} is stale; ` +
+      `check the owning manifest with npm run verify:screenshots:sha256 -- --manifest ` +
+      `${manifestLabel}. Re-capture with: ${command}`,
   ].join('\n');
 }
 
