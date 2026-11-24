@@ -231,7 +231,7 @@ pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和
 | `npm run verify:doc-counts` | 校验三份文档记录的单测计数与 Vitest 实测 `numTotalTests` 一致 |
 | `npm run score` | 运行 score 时先执行 `npm run build`（`check:budget` 读取 `dist/`，因此干净检出上无需手动预构建），再汇总六条校验并与 `docs/score-baseline.json` 对比：默认打印「指标 / 当前值 / 基线值 / 差值」表格，并在末尾输出一行 `SCORE_JSON <json>`；任一指标退化时退出 1，指标变好只报差值、不自动更新基线；`npm run score -- --update` 用当前值重建基线（快照不完整时拒绝写入并退出 2） |
 | `npm run test:e2e` | 先构建，再用 `vite preview` 跑全部 Playwright 项目（Chromium 桌面 / Pixel 7 + `mobile-webkit`） |
-| `npm run test:e2e:webkit` | 先构建，再只跑 `mobile-webkit` 项目（iPhone SE (3rd gen)）：framework 手机端、扫雷 WebKit 冒烟、触屏手势 / 触屏难度表单、贪食蛇 / 俄罗斯方块 / 2048 / 打砖块的手机端用例，2048 READY 两跑字节守卫，以及 320×640 / 360×640 / 375×667 / 412×839 窄屏契约 |
+| `npm run test:e2e:webkit` | 先构建，再只跑 `mobile-webkit` 项目（iPhone SE (3rd gen)）：framework 手机端、扫雷 WebKit 冒烟、触屏手势 / 触屏难度表单、贪食蛇 / 俄罗斯方块 / 2048 / 打砖块的手机端用例，镇煞战绩符 WebKit 下载，2048 READY 两跑字节守卫，以及 320×640 / 360×640 / 375×667 / 412×839 窄屏契约 |
 | `npm run lint` | oxlint（覆盖 `src`、`tests` 与 `scripts`；error 与 warning 都会失败，warning 经 `--deny-warnings` 升级）+ `scripts/check-boundaries.mjs` 模块依赖方向检查（失败同样返回非 0） |
 | `npm run check:budget` | 检查体积门禁：入口不含引擎标记（Phaser.Game/Scene/AUTO、THREE.）且 ≤50 KB gzip，`dist/assets` 全部 JS chunk 合计 ≤450 KB gzip，`dist/assets/zhen-sha-view-*.js` 合计 ≤35 KB gzip。0 个匹配视为失败并提示先 `npm run build`，多个匹配按合计判定；所有 gzip 数字由 `node:zlib` 的 `gzipSync` 默认级别测得，Vite build 打印的 gzip 不是门禁输入 |
 | `npm run screenshots` | 构建后生成 `docs/screenshots/` 中的界面截图 |
