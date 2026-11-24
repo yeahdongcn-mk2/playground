@@ -493,17 +493,19 @@ describe('zhen-sha settlement PNG download', () => {
   };
 
   beforeEach(() => {
+    vi.useFakeTimers();
     objectUrls.createObjectURL = vi.fn(() => 'blob:zhen-sha-seal');
     objectUrls.revokeObjectURL = vi.fn();
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     delete objectUrls.createObjectURL;
     delete objectUrls.revokeObjectURL;
     vi.restoreAllMocks();
   });
 
-  it('clicks an <a download> named from the caller timestamp and releases the object URL', async () => {
+  it('clicks an <a download> named from the caller timestamp and releases the object URL afterwards', async () => {
     const fixture = createFakeExportCanvas();
     const clickedAnchors: HTMLAnchorElement[] = [];
     const clickSpy = vi
@@ -529,8 +531,10 @@ describe('zhen-sha settlement PNG download', () => {
     expect(anchor.isConnected).toBe(false);
     expect(fixture.toBlobTypes).toEqual(['image/png']);
     expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
-    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1);
-    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:zhen-sha-seal');
+    // The release is deferred past the current task so Firefox/WebKit can read
+    // the blob after the synthetic click; it must not happen before the promise
+    // resolves.
+    expect(URL.revokeObjectURL).not.toHaveBeenCalled();
     const exported = fixture.toBlobResult;
     if (exported === null) {
       throw new Error('假 canvas 没有导出 blob');
@@ -539,5 +543,40 @@ describe('zhen-sha settlement PNG download', () => {
     // The object URL must wrap the very blob the export produced; an empty
     // placeholder blob would still carry the image/png MIME type.
     expect(downloaded).toBe(exported);
+
+    vi.runAllTimers();
+
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1);
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:zhen-sha-seal');
+
+    // Failure path: a throwing click must still remove the anchor and keep the
+    // deferred release scheduled exactly once. Clearing the success-path calls
+    // makes the counters below describe the throwing run alone.
+    vi.mocked(URL.revokeObjectURL).mockClear();
+    const failedAnchors: HTMLAnchorElement[] = [];
+    clickSpy.mockImplementation(function (this: HTMLAnchorElement) {
+      failedAnchors.push(this);
+      throw new Error('click failed');
+    });
+
+    await expect(
+      downloadSettlementPng(EXPECTED, {
+        timestamp: 1_700_000_000_000,
+        createCanvas: useFakeCanvas(fixture),
+      }),
+    ).rejects.toThrow('click failed');
+
+    const [failedAnchor] = failedAnchors;
+    if (failedAnchor === undefined) {
+      throw new Error('失败路径没有点击合成的 <a>');
+    }
+    expect(clickSpy).toHaveBeenCalledTimes(2);
+    expect(failedAnchor.isConnected).toBe(false);
+    // The release is scheduled in `finally`, so it must not run before the
+    // rejected promise settles; after the macrotask it must run exactly once.
+    expect(URL.revokeObjectURL).not.toHaveBeenCalled();
+    vi.runAllTimers();
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1);
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:zhen-sha-seal');
   });
 });
