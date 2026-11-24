@@ -292,7 +292,9 @@ function resolveFirstTelegraph(
   if (override === undefined) {
     return fallback;
   }
-  return Number.isFinite(override) && override > 0 ? Math.floor(override) : fallback;
+  // A tick count below 1 (including a fractional 0.5 that would floor to 0)
+  // cannot schedule an attack, so it falls back instead of clamping to zero.
+  return Number.isFinite(override) && override >= 1 ? Math.floor(override) : fallback;
 }
 
 interface AttackState {

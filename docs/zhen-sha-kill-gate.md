@@ -11,7 +11,7 @@
 - `src/games/registry.ts` 的入口单独列出，不混入原型的生产文件数 / 行数。
 - 只被 `*.test.ts` 引用、不进入构建产物的文件不计入生产规模（例如 `boss-chart-adapter.ts` 仅被 `engine.test.ts` / `boss-chart-adapter.test.ts` 引用）。
 - 行数按文件的换行符个数计数，与 `wc -l` 一致；最后一行没有换行符时不计入。
-- 「kill gate 原型生产规模（实测）」是冻结快照：本表冻结于 43c9ab1，当前生产规模由独立滚动快照校验跟踪；引擎 PR 不再回写本表。
+- 「kill gate 原型生产规模（实测）」是冻结快照：本表冻结于 43c9ab1，引擎 PR 不再回写本表；当前生产规模见下方滚动说明（人工按当前工作树实测，暂无自动校验）。
 - 完整特性规模是估算，不是实测；依据 #246、#247、#248、#249 的范围与现有五款游戏的规模，误差约 ±10%。
 
 ### kill gate 原型生产规模（实测）
@@ -51,15 +51,15 @@
 基线 `43c9ab1` 之后生产代码继续演进；以下数字只说明当前状态，不回写上面的历史实测表，也不改变 #250 的完整特性估算口径：
 
 - `settlement.ts`：518 行，由 #251（结算战绩符）的 #422 / #427 新增，不属于 #250 的完整特性估算。
-- `tutorial.ts`：54 行，由 #245 t1（首启教学状态与 ≤6 字提示）新增；纯状态读取 / 持久化与首招延长参数，属于 #245 的完整特性，不计入 #250 的完整特性估算。
-- `engine.ts`：457 → 710 行，由 #448 / #452 的引擎增量、#420 的谱面消费，以及 #245 t1 的首招 telegraph 覆盖参数新增。
+- `tutorial.ts`：64 行，由 #245 t1（首启教学状态与 ≤6 字提示）新增；纯状态读取 / 持久化与首招延长参数，属于 #245 的完整特性，不计入 #250 的完整特性估算。
+- `engine.ts`：457 → 712 行，由 #448 / #452 的引擎增量、#420 的谱面消费，以及 #245 t1 的首招 telegraph 覆盖参数新增。
 - `debug.ts`：140 行，由 #443 新增，经 `zhen-sha-view.ts` 静态引用进入生产构建。
 - `bosses.ts`：148 行，由 #405 / #408 新增的 boss 数据与差异。
 - `boss-chart.ts`：134 行，由 #407 拆出。其中 `boss-chart.ts:39-97` 的 59 行接口声明若保留独立文件，应从 `bosses.ts` 的 300 行估算中移出，不能重复计入：完整特性为 8 个生产文件、约 2,229 行（2,154 + 134 − 59）；2,288 行（直接相加）只作为未扣除类型时的保守上限。两种算法都超过本文 2,200 行上沿，需按结论中的 L 条件重新复核。
 - `boss-chart-adapter.ts`：90 行，由 #449 t2（#454）落地，#431 t2 收敛时保留。它是 `bosses.ts` 与引擎 `BossChart` 契约之间唯一的单位换算层：`telegraphMs` / `parryWindowMs` 原样传递，`activeMs` 作为完整普通判定带宽度，`bosses.ts` 的 7–13 展示点数原样传递（引擎每次未弹反固定只记 1 hit，damage 不参与中招预算）；源表没有 `recoveryMs` / `firstTelegraphMs`，引擎按 0 ms 恢复、第一招自己的 telegraph 开场。真实 3×2 引擎集成用例由 #431 t2 补在 `engine.test.ts`，覆盖 1-1 → 3-2、逐招判定窗与阶段推进。该文件只被 `engine.test.ts` / `boss-chart-adapter.test.ts` 引用，按本文「仅测试引用，不计」口径不计入当前生产规模。
-- `zhen-sha-view.ts`：676 → 827 行，由 #443 的固定步长调试接缝、#249 t2 的朱砂印 / 字标 / 金边状态切换，以及 #245 t1 的首启提示显隐与首次完美后持久化隐藏新增。
-- `zhen-sha.css`：254 → 759 行，由 #406 的 4+1 色板与黑宣纸 / 飞白边缘、#249 t2 的朱砂印 / 字标与金边 `clip-path` 多边形、#412 的循环墨雾 / 边缘抖动 / 扫描线动画，以及 #245 t1 的教学提示环 / 静态 reduced-motion 轮廓新增（金边几何烘进 CSS，不占 JS 体积）。
-- 当前生产规模（实测于本 PR HEAD，合并 `main` `9147cdc` 后）：9 个文件 / 3,319 行（`engine.ts` 710 + `index.ts` 29 + `settlement.ts` 518 + `debug.ts` 140 + `bosses.ts` 148 + `boss-chart.ts` 134 + `tutorial.ts` 54 + `zhen-sha-view.ts` 827 + `zhen-sha.css` 759），已超出 M 区间 2,200 行上沿 1,119 行。当前生产规模由独立滚动快照校验跟踪，超限重估由跟进单 [#417](https://github.com/yeahdongcn-mk2/playground/issues/417) 跟踪。
+- `zhen-sha-view.ts`：676 → 836 行，由 #443 的固定步长调试接缝、#249 t2 的朱砂印 / 字标 / 金边状态切换，以及 #245 t1 的首启提示显隐与首次完美后持久化隐藏新增。
+- `zhen-sha.css`：254 → 753 行，由 #406 的 4+1 色板与黑宣纸 / 飞白边缘、#249 t2 的朱砂印 / 字标与金边 `clip-path` 多边形、#412 的循环墨雾 / 边缘抖动 / 扫描线动画，以及 #245 t1 的教学提示环 / 静态 reduced-motion 轮廓新增（金边几何烘进 CSS，不占 JS 体积）。
+- 当前生产规模（实测于本 PR HEAD，合并 `main` `9147cdc` 后）：9 个文件 / 3,334 行（`engine.ts` 712 + `index.ts` 29 + `settlement.ts` 518 + `debug.ts` 140 + `bosses.ts` 148 + `boss-chart.ts` 134 + `tutorial.ts` 64 + `zhen-sha-view.ts` 836 + `zhen-sha.css` 753），已超出 M 区间 2,200 行上沿 1,134 行。当前生产规模为人工实测（暂无自动滚动校验），超限重估由跟进单 [#417](https://github.com/yeahdongcn-mk2/playground/issues/417) 跟踪。
 
 ### 新概念（2 个）
 
@@ -79,7 +79,7 @@
 - 入口与路由：懒加载入口不把 view / engine 拉进 shell 包；`#/games/zhen-sha` 可从大厅进入；320×640 首屏三手势提示由 `tests/e2e/zhen-sha.spec.ts` 断言。
 - 构建与预算：`npm run typecheck`、`npm run lint`、`npm run test:unit`、`npm run build`、`npm run check:budget` 可重复执行。
 - 风格层可自动化的部分：核心色数量、无外部图片 / 字体 / URL 与黑宣纸 / 飞白规则由 `style.test.ts` 守护；循环墨雾 / 边缘抖动 / 扫描线及其 `prefers-reduced-motion` 关闭逻辑由 `motion.test.ts` 守护，静态纸底与金色对比在 reduced-motion 下保留；首启提示的 `prefers-reduced-motion` 走 `data-motion="static"` 的静态金色轮廓（`zhen-sha-view.test.ts` / `style.test.ts`）。
-- 本评估文档自身由 `kill-gate-doc.test.ts` 校验：本表冻结于 43c9ab1，当前生产规模由独立滚动快照校验跟踪；文档逐文件表、生产文件数 / 生产行数与结论段原型数字必须与冻结常量一致，结论、#261、试玩状态与「未新增系统」陈述必须存在。
+- 本评估文档自身由 `kill-gate-doc.test.ts` 校验：本表冻结于 43c9ab1，当前生产规模在滚动说明中人工保持；文档逐文件表、生产文件数 / 生产行数与结论段原型数字必须与冻结常量一致，结论、#261、试玩状态与「未新增系统」陈述必须存在。
 
 ### 不可自动验收面
 

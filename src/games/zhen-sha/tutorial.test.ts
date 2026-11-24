@@ -78,7 +78,10 @@ describe('zhen-sha first-visit tutorial state', () => {
     const { storage, store } = createStorage();
     expect(store.getItem('playground:v1:zhen-sha.tutorial')).toBeNull();
 
-    markTutorialDone(storage);
+    expect(markTutorialDone(storage)).toEqual({
+      pending: false,
+      firstTelegraphTicks: FIRST_TELEGRAPH_TICKS,
+    });
     expect(store.getItem('playground:v1:zhen-sha.tutorial')).toBe(TUTORIAL_DONE);
     expect(readTutorialState(storage).pending).toBe(false);
 

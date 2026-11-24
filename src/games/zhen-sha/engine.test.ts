@@ -242,12 +242,18 @@ describe('first-visit tutorial wind-up', () => {
       firstTelegraphTicks: TUTORIAL_FIRST_TELEGRAPH_TICKS,
     });
 
-    for (const invalid of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    for (const invalid of [0, 0.5, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
       engine.restart({ firstTelegraphTicks: invalid });
       expect(engine.snapshot().attack).toMatchObject({
         impactStep: FIRST_TELEGRAPH_TICKS,
       });
     }
+
+    // A positive fractional value is valid; it floors to whole ticks.
+    engine.restart({ firstTelegraphTicks: TUTORIAL_FIRST_TELEGRAPH_TICKS + 0.9 });
+    expect(engine.snapshot().attack).toMatchObject({
+      impactStep: TUTORIAL_FIRST_TELEGRAPH_TICKS,
+    });
   });
 });
 

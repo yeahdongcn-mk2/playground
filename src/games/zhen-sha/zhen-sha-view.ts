@@ -3,7 +3,6 @@ import { query, setText } from '../../core/dom';
 import type { GameHandle, GameServices } from '../../core/game';
 import {
   FIXED_STEP_MS,
-  FIRST_TELEGRAPH_TICKS,
   MAX_HITS,
   MOMENTUM_FOR_BREAK,
   TELEGRAPH_TICKS,
@@ -13,11 +12,14 @@ import {
   type ZhenShaEventType,
   type ZhenShaSnapshot,
   type ZhenShaStatus,
+  type ZhenShaTimingOverride,
 } from './engine';
 import {
   markTutorialDone,
   readTutorialState,
+  TUTORIAL_DONE_STATE,
   TUTORIAL_HINT_TEXT,
+  type TutorialState,
 } from './tutorial';
 import {
   debugQueryFromHash,
@@ -177,6 +179,11 @@ function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
+/** Only a pending tutorial overrides the chart's opening; done keeps it. */
+function tutorialTiming(state: TutorialState): ZhenShaTimingOverride {
+  return state.pending ? { firstTelegraphTicks: state.firstTelegraphTicks } : {};
+}
+
 interface Flash {
   readonly type: ZhenShaEventType;
   remainingMs: number;
@@ -219,11 +226,14 @@ export function mountZhenSha(
   canvas.height = CANVAS_HEIGHT;
   const context = canvas.getContext('2d');
 
-  let tutorial = readTutorialState(services.storage);
-  const engine = new ZhenShaEngine(undefined, {
-    firstTelegraphTicks: tutorial.firstTelegraphTicks,
-  });
   const debugOptions = currentDebugOptions();
+  // The debug seam promises `seed + inputs` fully describes a run. Absolute
+  // tick inputs must therefore not shift with first-visit storage: debug runs
+  // use the returning-player state, which also keeps their restarts stable.
+  let tutorial = debugOptions.enabled
+    ? TUTORIAL_DONE_STATE
+    : readTutorialState(services.storage);
+  const engine = new ZhenShaEngine(undefined, tutorialTiming(tutorial));
   const audio = services.audio;
   tutorialHint.dataset.motion = services.reduceMotion ? 'static' : 'animated';
 
@@ -377,11 +387,7 @@ export function mountZhenSha(
       // The first perfect parry is the tutorial's whole goal: hide the hint in
       // this same frame and persist the finished state for later visits.
       if (event.type === 'perfect' && tutorial.pending) {
-        tutorial = {
-          pending: false,
-          firstTelegraphTicks: FIRST_TELEGRAPH_TICKS,
-        };
-        markTutorialDone(services.storage);
+        tutorial = markTutorialDone(services.storage);
       }
       flash = {
         type: event.type,
@@ -462,9 +468,12 @@ export function mountZhenSha(
     audio.unlock();
     audio.play('reset');
     // Re-read storage so clearing the key while the view is mounted restores
-    // the first-visit hint and the stretched opening on the next duel.
-    tutorial = readTutorialState(services.storage);
-    engine.restart({ firstTelegraphTicks: tutorial.firstTelegraphTicks });
+    // the first-visit hint and the stretched opening on the next duel. Debug
+    // runs stay on the returning-player state so their replay is stable.
+    tutorial = debugOptions.enabled
+      ? TUTORIAL_DONE_STATE
+      : readTutorialState(services.storage);
+    engine.restart(tutorialTiming(tutorial));
     scheduleDebugInputs();
     resetPointer();
     flash = null;

@@ -819,6 +819,26 @@ describe('zhen-sha debug seam', () => {
     expect(goldFlashStrokes(second.context, strokesBefore).length).toBeGreaterThan(0);
   });
 
+  it('ignores a pending first-visit tutorial so debug replays stay state-independent', () => {
+    window.location.hash =
+      '#/games/zhen-sha?debug=1&seed=7&inputs=block@180,block@360,block@540,charge@541,strike@542';
+    const view = mountView(undefined, createServices(false, false));
+    expect(required<HTMLElement>(view.root, '[data-testid="tutorial-hint"]').hidden).toBe(
+      true,
+    );
+
+    const api = debugApi()!;
+    api.step(543);
+    const replay = api.getState();
+    expect(replay).toMatchObject({ status: 'won', perfects: 3, score: 1900 });
+
+    // Restart must keep the same opening even if the debug run had persisted
+    // something, so the URL schedule stays a complete description of the run.
+    api.restart();
+    api.step(543);
+    expect(api.getState()).toEqual(replay);
+  });
+
   it('ages the flash from its event tick instead of the whole step span', () => {
     window.location.hash = '#/games/zhen-sha?debug=1&inputs=block@180';
     const view = mountView();

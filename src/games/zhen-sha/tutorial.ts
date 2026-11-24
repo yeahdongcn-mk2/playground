@@ -39,6 +39,12 @@ export interface TutorialState {
   readonly firstTelegraphTicks: number;
 }
 
+/** Finished state, also used by deterministic debug runs that skip the tutorial. */
+export const TUTORIAL_DONE_STATE: TutorialState = Object.freeze({
+  pending: false,
+  firstTelegraphTicks: FIRST_TELEGRAPH_TICKS,
+});
+
 /** Read the first-visit state and the opening wind-up it implies. */
 export function readTutorialState(storage: StorageService): TutorialState {
   const done = storage.getString(TUTORIAL_STORAGE_KEY, '') === TUTORIAL_DONE;
@@ -48,7 +54,11 @@ export function readTutorialState(storage: StorageService): TutorialState {
   };
 }
 
-/** Persist the end of the tutorial; later mounts and restarts stay quiet. */
-export function markTutorialDone(storage: StorageService): void {
+/**
+ * Persist the end of the tutorial and return the finished state, so callers
+ * do not have to rebuild the pending/opening pair themselves.
+ */
+export function markTutorialDone(storage: StorageService): TutorialState {
   storage.set(TUTORIAL_STORAGE_KEY, TUTORIAL_DONE);
+  return TUTORIAL_DONE_STATE;
 }
