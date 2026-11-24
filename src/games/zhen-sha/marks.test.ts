@@ -310,18 +310,19 @@ describe('zhen-sha cinnabar seal, wordmark and gold arc edge', () => {
   });
 
   it('lifts the CSS gold edge with the canvas while charging, breaking or swinging', () => {
-    expect(staffArcLift({ charging: false, breakTicksLeft: 0 } as ZhenShaSnapshot, null)).toBe(0);
-    const lifted = staffArcLift({ charging: true, breakTicksLeft: 0 } as ZhenShaSnapshot, null);
+    const idle = { charging: false, breakTicksLeft: 0 } as ZhenShaSnapshot;
+    expect(staffArcLift(idle, null)).toBe(0);
+    const lifted = staffArcLift({ ...idle, charging: true }, null);
     expect(lifted).toBeGreaterThan(0);
-    expect(
-      staffArcLift({ charging: false, breakTicksLeft: 1 } as ZhenShaSnapshot, null),
-    ).toBe(lifted);
-    expect(
-      staffArcLift({ charging: false, breakTicksLeft: 0 } as ZhenShaSnapshot, {
-        type: 'perfect',
-        remainingMs: 0,
-      }),
-    ).toBe(lifted);
+    expect(staffArcLift({ ...idle, breakTicksLeft: 1 }, null)).toBe(lifted);
+
+    // Every swinging flash lifts; the other flash types leave the edge down.
+    for (const type of ['perfect', 'strike', 'finisher', 'win'] as const) {
+      expect(staffArcLift(idle, { type, remainingMs: 0 }), `flash ${type}`).toBe(lifted);
+    }
+    for (const type of ['normal', 'miss', 'hit', 'break', 'break-end', 'lose'] as const) {
+      expect(staffArcLift(idle, { type, remainingMs: 0 }), `flash ${type}`).toBe(0);
+    }
 
     // The lifted override must trace the same curve at `lifted`, not a copy of
     // the resting band: changing either polygon without the geometry fails.

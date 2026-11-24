@@ -288,9 +288,9 @@
  * two clipped layers just trace the same quadratic curve with a soft gold glow
  * and a thin highlight. Coordinates mirror drawStaff() in zhen-sha-view.ts:
  * (42,486) -> control (178,420) -> (318,456) on a 360x560 canvas. The polygons
- * are baked from STAFF_ARC_* + STAFF_ARC_BAND; the view only toggles
- * `.is-arc-lifted` so the edge follows the charge / break / swing lift without
- * shipping the geometry generator.
+ * are baked from that quadratic plus the glow/edge half-bands below; the view
+ * only toggles `.is-arc-lifted` so the edge follows the charge / break / swing
+ * lift without shipping the geometry generator.
  */
 .zhen-sha-arc-glow,
 .zhen-sha-arc-edge {
@@ -375,7 +375,7 @@
   opacity: 0.58;
 }
 
-/* STAFF_ARC_LIFT (34 logical px) baked from the same quadratic as drawStaff(). */
+/* staffArcLift() (34 logical px) baked from the same quadratic as drawStaff(). */
 .zhen-sha-stage.is-arc-lifted .zhen-sha-arc-glow {
   clip-path: polygon(
     11.67% 84.98%,

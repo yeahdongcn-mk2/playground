@@ -150,16 +150,19 @@ test.describe('zhen-sha decorative marks', () => {
     }
     await page.mouse.move(stageBox.x + stageBox.width / 2, stageBox.y + 40);
     await page.mouse.down();
+    let raised: string;
     try {
       await expect
         .poll(readClip, { message: '蓄势后 CSS 金边应随 Canvas 金弧抬起', timeout: 2_000 })
         .not.toBe(resting);
       expect(await isLifted(), '蓄势时舞台应带 is-arc-lifted').toBe(true);
+      // Read the raised clip while the pointer is still down: right after
+      // pointerup the strike flash is set on the next animation frame, so a
+      // read in that gap could see the resting polygon.
+      raised = await readClip();
     } finally {
       await page.mouse.up();
     }
-
-    const raised = await readClip();
     const restingPoints = parsePolygon(resting);
     const raisedPoints = parsePolygon(raised);
     expect(raisedPoints).toHaveLength(restingPoints.length);
