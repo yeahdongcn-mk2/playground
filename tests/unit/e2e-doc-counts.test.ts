@@ -32,8 +32,8 @@ const E2E_DOC_PATHS = ['README.md', 'docs/framework.md'] as const;
  * the `playwright test --list` output.
  */
 const EXPECTED_E2E_COUNTS = {
-  total: 158,
-  chromium: 90,
+  total: 162,
+  chromium: 94,
   mobile: 36,
   mobileWebkit: 32,
 } as const;
@@ -518,7 +518,7 @@ describe('verifyE2eDocCounts', () => {
     });
 
     expect(verification.problems).toEqual([]);
-    expect(verification.measured.total).toBe(158);
+    expect(verification.measured.total).toBe(EXPECTED_E2E_COUNTS.total);
     expect(verification.documented.map((document) => document.file)).toEqual([
       'README.md',
       'docs/framework.md',
@@ -526,13 +526,13 @@ describe('verifyE2eDocCounts', () => {
   });
 
   it('reports a documented total mismatch with the documented and measured values', () => {
-    const documented = { ...EXPECTED_E2E_COUNTS, total: 157 };
+    const documented = { ...EXPECTED_E2E_COUNTS, total: EXPECTED_E2E_COUNTS.total - 1 };
     const verification = verifyE2eDocCounts({
       documents: docsWithE2eCounts(documented),
       reportText: playwrightListJson({
-        chromium: 90,
-        mobile: 36,
-        'mobile-webkit': 32,
+        chromium: EXPECTED_E2E_COUNTS.chromium,
+        mobile: EXPECTED_E2E_COUNTS.mobile,
+        'mobile-webkit': EXPECTED_E2E_COUNTS.mobileWebkit,
       }),
       expected: EXPECTED_E2E_COUNTS,
     });
@@ -542,21 +542,28 @@ describe('verifyE2eDocCounts', () => {
       kind: 'documented-mismatch',
       file: 'README.md',
       field: 'total',
-      documented: 157,
-      measured: 158,
+      documented: EXPECTED_E2E_COUNTS.total - 1,
+      measured: EXPECTED_E2E_COUNTS.total,
     });
-    expect(verification.problems[0]?.reason).toContain('文档总数写 157 条');
-    expect(verification.problems[0]?.reason).toContain('Playwright 清单实测 158 条');
+    expect(verification.problems[0]?.reason).toContain(
+      `文档总数写 ${EXPECTED_E2E_COUNTS.total - 1} 条`,
+    );
+    expect(verification.problems[0]?.reason).toContain(
+      `Playwright 清单实测 ${EXPECTED_E2E_COUNTS.total} 条`,
+    );
   });
 
   it('reports a documented breakdown mismatch with the documented and measured values', () => {
-    const documented = { ...EXPECTED_E2E_COUNTS, chromium: 89 };
+    const documented = {
+      ...EXPECTED_E2E_COUNTS,
+      chromium: EXPECTED_E2E_COUNTS.chromium - 1,
+    };
     const verification = verifyE2eDocCounts({
       documents: docsWithE2eCounts(documented),
       reportText: playwrightListJson({
-        chromium: 90,
-        mobile: 36,
-        'mobile-webkit': 32,
+        chromium: EXPECTED_E2E_COUNTS.chromium,
+        mobile: EXPECTED_E2E_COUNTS.mobile,
+        'mobile-webkit': EXPECTED_E2E_COUNTS.mobileWebkit,
       }),
       expected: EXPECTED_E2E_COUNTS,
     });
@@ -564,19 +571,25 @@ describe('verifyE2eDocCounts', () => {
     expect(verification.problems).toHaveLength(2);
     expect(verification.problems[0]?.field).toBe('chromium');
     expect(verification.problems[0]?.reason).toContain(
-      '文档桌面（chromium）分项写 89 条',
+      `文档桌面（chromium）分项写 ${EXPECTED_E2E_COUNTS.chromium - 1} 条`,
     );
-    expect(verification.problems[0]?.reason).toContain('实测 90 条');
+    expect(verification.problems[0]?.reason).toContain(
+      `实测 ${EXPECTED_E2E_COUNTS.chromium} 条`,
+    );
   });
 
   it('reports when the Playwright manifest drifts from the locked counts', () => {
-    const drifted = { total: 159, chromium: 91, mobile: 36, mobileWebkit: 32 };
+    const drifted = {
+      ...EXPECTED_E2E_COUNTS,
+      total: EXPECTED_E2E_COUNTS.total + 1,
+      chromium: EXPECTED_E2E_COUNTS.chromium + 1,
+    };
     const verification = verifyE2eDocCounts({
       documents: docsWithE2eCounts(drifted),
       reportText: playwrightListJson({
-        chromium: 91,
-        mobile: 36,
-        'mobile-webkit': 32,
+        chromium: EXPECTED_E2E_COUNTS.chromium + 1,
+        mobile: EXPECTED_E2E_COUNTS.mobile,
+        'mobile-webkit': EXPECTED_E2E_COUNTS.mobileWebkit,
       }),
       expected: EXPECTED_E2E_COUNTS,
     });
@@ -587,8 +600,12 @@ describe('verifyE2eDocCounts', () => {
       kind: 'measured-mismatch',
       field: 'total',
     });
-    expect(verification.problems[0]?.reason).toContain('实测 159 条');
-    expect(verification.problems[0]?.reason).toContain('锁定的 158 条');
+    expect(verification.problems[0]?.reason).toContain(
+      `实测 ${EXPECTED_E2E_COUNTS.total + 1} 条`,
+    );
+    expect(verification.problems[0]?.reason).toContain(
+      `锁定的 ${EXPECTED_E2E_COUNTS.total} 条`,
+    );
     expect(verification.problems[1]?.field).toBe('chromium');
   });
 
@@ -622,9 +639,9 @@ describe('verifyE2eDocCounts', () => {
         { path: 'docs/snake-design.md', text: '运行 `npm run test:e2e` 即可。\n' },
       ],
       reportText: playwrightListJson({
-        chromium: 90,
-        mobile: 36,
-        'mobile-webkit': 32,
+        chromium: EXPECTED_E2E_COUNTS.chromium,
+        mobile: EXPECTED_E2E_COUNTS.mobile,
+        'mobile-webkit': EXPECTED_E2E_COUNTS.mobileWebkit,
       }),
       expected: EXPECTED_E2E_COUNTS,
     });
@@ -634,14 +651,14 @@ describe('verifyE2eDocCounts', () => {
       kind: 'missing-count',
       file: 'docs/snake-design.md',
       line: null,
-      measured: 158,
+      measured: EXPECTED_E2E_COUNTS.total,
     });
     expect(verification.problems[0]?.reason).toContain('同行缺少');
   });
 });
 
 describe('committed e2e documentation', () => {
-  it('matches the actual Playwright --list manifest and the locked 158 / 90 / 36 / 32', () => {
+  it('matches the actual Playwright --list manifest and the locked counts', () => {
     const result = spawnSync(
       PLAYWRIGHT_BIN,
       ['test', '--list', '--reporter=json'],

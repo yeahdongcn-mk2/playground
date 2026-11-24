@@ -9,7 +9,9 @@
  *
  * The renderer authors the whole "battle seal" (战绩符) in a fixed
  * 1080 x 1440 design space and scales it to the caller's canvas, so the in-game
- * preview and the PNG export share one drawing implementation.
+ * preview and the PNG export share one drawing implementation. The export
+ * helpers draw the same settlement on a detached canvas and hand the encoded
+ * PNG to the browser's download path without reading any view state either.
  */
 
 import type { ZhenShaEvent, ZhenShaEventType, ZhenShaSnapshot } from './engine';
@@ -236,6 +238,129 @@ export function drawSettlement(
   drawReadout(context, settlement);
 
   context.restore();
+}
+
+/** Options for {@link exportSettlementPng}. */
+export interface SettlementExportOptions {
+  /**
+   * Creates the offscreen canvas that owns the 1080 x 1440 bitmap. Defaults to
+   * a detached `document.createElement('canvas')`; unit tests inject a fake so
+   * PNG encoding runs without a real Canvas implementation.
+   */
+  readonly createCanvas?: (width: number, height: number) => HTMLCanvasElement;
+}
+
+/** Options for {@link downloadSettlementPng}. */
+export interface SettlementDownloadOptions extends SettlementExportOptions {
+  /**
+   * Caller-supplied timestamp used verbatim in the file name. The module never
+   * reads a wall clock, so the caller owns "now" and tests stay deterministic.
+   */
+  readonly timestamp: number;
+}
+
+/** MIME type of every exported battle seal. */
+const PNG_MIME = 'image/png';
+
+/** Build the download file name for one caller-supplied timestamp. */
+export function settlementPngFilename(timestamp: number): string {
+  return `zhen-sha-seal-${timestamp}.png`;
+}
+
+function defaultCreateCanvas(width: number, height: number): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  return canvas;
+}
+
+/** Draw the settlement on an offscreen canvas sized for PNG export. */
+function renderSettlementCanvas(
+  settlement: ZhenShaSettlement,
+  options: SettlementExportOptions,
+): HTMLCanvasElement {
+  const createCanvas = options.createCanvas ?? defaultCreateCanvas;
+  const canvas = createCanvas(SETTLEMENT_WIDTH, SETTLEMENT_HEIGHT);
+  canvas.width = SETTLEMENT_WIDTH;
+  canvas.height = SETTLEMENT_HEIGHT;
+
+  const context = canvas.getContext('2d');
+  if (context === null) {
+    throw new Error('无法为战绩符创建 1080x1440 的 2D canvas 上下文');
+  }
+  drawSettlement(context, settlement);
+  return canvas;
+}
+
+/** Decode the base64 PNG payload of a `canvas.toDataURL` result into bytes. */
+function dataUrlToBlob(dataUrl: string): Blob {
+  const comma = dataUrl.indexOf(',');
+  const header = comma < 0 ? dataUrl : dataUrl.slice(0, comma);
+  if (comma < 0 || !header.includes(';base64')) {
+    throw new Error('canvas.toDataURL 未返回 base64 编码的 PNG data URL');
+  }
+
+  const binary = atob(dataUrl.slice(comma + 1));
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return new Blob([bytes], { type: PNG_MIME });
+}
+
+/**
+ * Encode the settlement as PNG bytes. `canvas.toBlob` is preferred; when the
+ * canvas has no `toBlob` or returns null, the encoding falls back to
+ * `canvas.toDataURL`, whose base64 payload becomes the blob.
+ */
+export async function exportSettlementPng(
+  settlement: ZhenShaSettlement,
+  options: SettlementExportOptions = {},
+): Promise<Blob> {
+  const canvas = renderSettlementCanvas(settlement, options);
+  if (typeof canvas.toBlob !== 'function') {
+    return dataUrlToBlob(canvas.toDataURL(PNG_MIME));
+  }
+
+  let blob: Blob | null = null;
+  try {
+    blob = await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob(resolve, PNG_MIME);
+    });
+  } catch {
+    blob = null;
+  }
+  return blob ?? dataUrlToBlob(canvas.toDataURL(PNG_MIME));
+}
+
+/**
+ * Export the settlement and trigger a browser download through a synthetic
+ * `<a download>`. The temporary object URL is released on the next macrotask,
+ * after Firefox/WebKit have had a chance to read the blob; scheduling that
+ * release in `finally` still means a failed click leaves nothing behind and
+ * the URL is released exactly once.
+ */
+export async function downloadSettlementPng(
+  settlement: ZhenShaSettlement,
+  options: SettlementDownloadOptions,
+): Promise<void> {
+  const blob = await exportSettlementPng(settlement, options);
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  try {
+    anchor.href = url;
+    anchor.download = settlementPngFilename(options.timestamp);
+    anchor.style.display = 'none';
+    document.body.append(anchor);
+    anchor.click();
+  } finally {
+    anchor.remove();
+    // Defer until the current task ends: Firefox and WebKit may begin reading
+    // the blob only after the synthetic click returns, so revoking inline can
+    // cancel the download or leave an empty file. `finally` keeps the release
+    // scheduled when `click()` throws, so the URL is never leaked.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
 }
 
 function drawPaper(context: CanvasRenderingContext2D): void {

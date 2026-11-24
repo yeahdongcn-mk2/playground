@@ -1,7 +1,7 @@
 # 镇煞首启教学 Before / After 证据（#245 t1）
 
-- baseline（Before）：`origin/main` @ `0253b20`，未加首启教学的当前实现
-- after（After）：`agent/plan-245-t0` @ `7bcaab2`（After 截图对应的实现提交；之后的提交只加测试 / 文档并合并 `origin/main` 的结算模块，不改变首启教学的 UI）
+- baseline（Before）：`origin/main` @ `9147cdc`，未加首启教学的当前实现（已含 #411 印标、#420 谱面与 #412 墨雾动效）
+- after（After）：PR #423 rebase 后的 head（`agent/plan-245-t0`，本分支合并 `origin/main` `9147cdc` 的构建）；截图在 rebase 后的实际构建上重采，两组构建来自同一 `main` 基线
 - 场景：全新浏览器上下文（空 `localStorage`）直接进入 `/#/games/zhen-sha` 首屏；同一 Chromium、DPR 1
 - 视口：1440×1000（桌面）与 390×844（手机）
 - 主题 / 状态：默认深色主题；页面加载后 250 ms 截图，首招 telegraph 仍在进行
