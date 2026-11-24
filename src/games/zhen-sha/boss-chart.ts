@@ -10,11 +10,11 @@
  *
  * Relationship to `bosses.ts`: #246 already ships `BOSSES` with its own
  * `BossMove` / `BossPhase` / `BossChart` types — there a boss carries `id`,
- * `damage` is 7–13 points and `activeMs` is post-wind-up active time. This
- * module is the contract the engine card will consume; that card must map or
- * replace `BOSSES` here and reconcile the units in one place instead of
- * leaving two live contracts. This card deliberately does not change
- * `bosses.ts`.
+ * `damage` is 7–13 points and `activeMs` is post-wind-up active time. In both
+ * contracts `damage` is a display / design point value for one unparried move,
+ * not a hit count: the engine always spends exactly one of its `MAX_HITS` per
+ * unparried move, whatever `damage` says. This module deliberately does not
+ * change `bosses.ts`.
  *
  * `bosses` and `phases` are arrays, not fixed-size tuples. Real charts have
  * three bosses with two phases each and 6–10 moves per phase, but the default
@@ -26,7 +26,7 @@
 /**
  * One boss move as timing and damage data.
  *
- * All times are milliseconds of game time; the engine card converts them to
+ * All times are milliseconds of game time; the engine converts them to
  * integer ticks (120 per second). The default chart's values are exact
  * multiples of 1000/120 ms; non-aligned real values (for example #246's 320 ms)
  * need one explicit rounding rule before they drive judgement. The impact tick
@@ -52,10 +52,11 @@ export interface BossMoveChart {
    */
   readonly parryWindowMs: number;
   /**
-   * Unparried hits this move costs the player. The default chart's 1 is one
-   * hit out of the engine's three-hit budget (`MAX_HITS`). #246's `bosses.ts`
-   * currently stores 7–13 damage points instead; the wiring card must pick one
-   * unit for both contracts rather than mixing them.
+   * Display / design point value for one unparried move. It describes the
+   * fiction and never contributes to the hit budget: every unparried move
+   * spends exactly one of the engine's `MAX_HITS`, regardless of this number.
+   * #246's `bosses.ts` stores 7–13 points for its own data; the value is not a
+   * hit count in either contract.
    */
   readonly damage: number;
 }
