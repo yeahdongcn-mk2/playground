@@ -1,13 +1,13 @@
 # 镇煞朱砂印 / 字标 / 金棍弧金边 Before / After（#249 t2 评审修复）
 
 - Before：`3ba9cc1`（PR #411 的 base，main 合入 #410 之后）。
-- After：本 PR 产品代码 head `8cc3699`（合并 `main` `96f0ebe` 后的构建；其后的
+- After：本 PR 产品代码 head `4e2d2da`（合并 `main` `dc0a723` 后的构建；其后的
   `docs/` 与 `evidence/` 提交不改 UI）。金边几何由 CSS 静态 polygon 承载
-  （`is-arc-lifted` 切换）。`capture-marks.mjs` 已在 `8cc3699` 的构建上重跑，4 张
+  （`is-arc-lifted` 切换）。`capture-marks.mjs` 已在 `4e2d2da` 的构建上重跑，4 张
   After 与旧图逐字节一致（RGBA 无差异），说明 53be067 的 CSS polygon 与
   `f6bc467` 的 JS 几何渲染结果相同。
 - 来源：Issue #249 第 1 条子任务（t2）的评审修复，PR #411；#431 t1 修复轮在
-  `8cc3699` 重新采集证据。
+  `4e2d2da` 重新采集证据。
 
 ## 场景
 
