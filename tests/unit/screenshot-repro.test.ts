@@ -27,6 +27,7 @@ import {
   captureCommandArgs,
   DEFAULT_LOAD_COUNT,
   deriveReproPlans,
+  deriveReproPlansFromManifests,
   loadWorkerArgs,
   MAX_LOAD_COUNT,
   normalizeLoadCount,
@@ -49,6 +50,7 @@ import type {
   ReproSpawn,
   ReproVerification,
 } from '../../scripts/lib/screenshot-repro.mjs';
+import { loadSha256Manifests } from '../../scripts/lib/screenshot-sha256.mjs';
 import type { ScreenshotSha256Manifest } from '../../scripts/lib/screenshot-sha256.mjs';
 import { main, parseArgs } from '../../scripts/verify-screenshot-repro.mjs';
 
@@ -77,6 +79,7 @@ interface CaptureSpec {
 
 const WEBKIT_COMMAND = 'npm run screenshots:container -- screenshots:webkit';
 const GAME_COMMAND = 'npm run screenshots:container -- screenshots:2048:webkit';
+const CHROMIUM_COMMAND = 'npm run screenshots:container -- screenshots';
 
 const CAPTURES: CaptureSpec[] = [
   { file: 'after-blank-webkit.png', command: WEBKIT_COMMAND, content: 'blank-v1' },
@@ -84,13 +87,25 @@ const CAPTURES: CaptureSpec[] = [
   { file: 'after-2048-gameover-webkit.png', command: GAME_COMMAND, content: 'gameover-v1' },
 ];
 
+/**
+ * The Chromium blank evidence: one `screenshots` command writes both files, but
+ * the desktop and mobile environments live in two target-split manifests.
+ */
+const BLANK_CAPTURES: CaptureSpec[] = [
+  { file: 'after-blank-desktop.png', command: CHROMIUM_COMMAND, content: 'blank-desktop-v1' },
+  { file: 'after-blank-mobile.png', command: CHROMIUM_COMMAND, content: 'blank-mobile-v1' },
+];
+
 /** A manifest that passes `manifestEnvironmentMismatches`. */
-function manifestFor(captures: CaptureSpec[]): ScreenshotSha256Manifest {
+function manifestFor(
+  captures: CaptureSpec[],
+  { target = 'webkit', dpr = 2 }: { target?: string; dpr?: number } = {},
+): ScreenshotSha256Manifest {
   return {
     environment: {
       source: 'container',
-      target: 'webkit',
-      dpr: 2,
+      target,
+      dpr,
       platform: CAPTURE_PLATFORM,
       image: {
         repository: PLAYWRIGHT_IMAGE_REPOSITORY,
@@ -150,6 +165,81 @@ function fixture(
     }
   }
   return { root, dir, logDir, manifestPath };
+}
+
+interface MultiManifestFixture {
+  root: string;
+  dir: string;
+  logDir: string;
+  desktopManifestPath: string;
+  mobileManifestPath: string;
+}
+
+/**
+ * The #439 shape: two target-split manifests whose captures share the bare
+ * `screenshots` command, so the repro entry must run that command once.
+ */
+function multiManifestFixture(): MultiManifestFixture {
+  const root = mkdtempSync(join(tmpdir(), 'screenshot-repro-multi-'));
+  tempDirs.push(root);
+  const dir = join(root, 'docs', 'screenshots');
+  const logDir = join(root, 'test-results', 'screenshot-repro');
+  mkdirSync(dir, { recursive: true });
+  const desktopManifestPath = join(dir, 'capture-sha256-manifest-desktop.json');
+  const mobileManifestPath = join(dir, 'capture-sha256-manifest-mobile.json');
+  writeFileSync(
+    desktopManifestPath,
+    `${JSON.stringify(manifestFor([BLANK_CAPTURES[0]!], { target: 'desktop', dpr: 1 }), null, 2)}\n`,
+  );
+  writeFileSync(
+    mobileManifestPath,
+    `${JSON.stringify(manifestFor([BLANK_CAPTURES[1]!], { target: 'mobile', dpr: 2 }), null, 2)}\n`,
+  );
+  return { root, dir, logDir, desktopManifestPath, mobileManifestPath };
+}
+
+interface TargetManifestFixture {
+  root: string;
+  dir: string;
+  logDir: string;
+  webkitManifestPath: string;
+  desktopManifestPath: string;
+  mobileManifestPath: string;
+}
+
+/**
+ * Three target-split manifests with one command each, so a `--target` subset
+ * leaves manifests that the run never covered.
+ */
+function targetManifestFixture(): TargetManifestFixture {
+  const root = mkdtempSync(join(tmpdir(), 'screenshot-repro-targets-'));
+  tempDirs.push(root);
+  const dir = join(root, 'docs', 'screenshots');
+  const logDir = join(root, 'test-results', 'screenshot-repro');
+  mkdirSync(dir, { recursive: true });
+  const webkitManifestPath = join(dir, 'capture-sha256-manifest-webkit.json');
+  const desktopManifestPath = join(dir, 'capture-sha256-manifest-desktop.json');
+  const mobileManifestPath = join(dir, 'capture-sha256-manifest-mobile.json');
+  writeFileSync(
+    webkitManifestPath,
+    `${JSON.stringify(manifestFor([CAPTURES[0]!], { target: 'webkit', dpr: 2 }), null, 2)}\n`,
+  );
+  writeFileSync(
+    desktopManifestPath,
+    `${JSON.stringify(manifestFor([BLANK_CAPTURES[0]!], { target: 'desktop', dpr: 1 }), null, 2)}\n`,
+  );
+  writeFileSync(
+    mobileManifestPath,
+    `${JSON.stringify(manifestFor([BLANK_CAPTURES[1]!], { target: 'mobile', dpr: 2 }), null, 2)}\n`,
+  );
+  return {
+    root,
+    dir,
+    logDir,
+    webkitManifestPath,
+    desktopManifestPath,
+    mobileManifestPath,
+  };
 }
 
 /**
@@ -385,6 +475,7 @@ describe('screenshot repro target derivation', () => {
   it('parses the container capture target out of a manifest command', () => {
     expect(parseCaptureTarget(WEBKIT_COMMAND)).toBe('screenshots:webkit');
     expect(parseCaptureTarget(`  ${GAME_COMMAND}  `)).toBe('screenshots:2048:webkit');
+    expect(parseCaptureTarget(CHROMIUM_COMMAND)).toBe('screenshots');
   });
 
   it('rejects commands that are not a plain screenshots container invocation', () => {
@@ -394,6 +485,8 @@ describe('screenshot repro target derivation', () => {
       'npm run screenshots:container -- screenshots:webkit --allow-historical-overwrite',
       'npm run screenshots:container -- ../../evil',
       'npm run screenshots:container -- screenshots:webkit; rm -rf /',
+      'npm run screenshots:container -- screenshots ; rm -rf /',
+      'npm run screenshots:container -- screenshots:',
     ]) {
       expect(() => parseCaptureTarget(command), command).toThrow(ScreenshotReproError);
     }
@@ -412,12 +505,44 @@ describe('screenshot repro target derivation', () => {
     );
   });
 
+  it('aggregates one capture command across target-split manifests', () => {
+    const setup = multiManifestFixture();
+    const manifests = loadSha256Manifests({ dir: setup.dir });
+    const plans = deriveReproPlansFromManifests(manifests);
+
+    // The bare `screenshots` command is recorded by both manifests, so the two
+    // files stay one plan and therefore one container invocation per run.
+    expect(plans).toHaveLength(1);
+    expect(plans[0]?.target).toBe('screenshots');
+    expect(plans[0]?.captures.map((capture) => capture.file)).toEqual([
+      'after-blank-desktop.png',
+      'after-blank-mobile.png',
+    ]);
+    expect(plans[0]?.captures.map((capture) => capture.manifestPath)).toEqual([
+      setup.desktopManifestPath,
+      setup.mobileManifestPath,
+    ]);
+    expect(plans[0]?.captures.every((capture) => capture.command === CHROMIUM_COMMAND)).toBe(
+      true,
+    );
+    expect(plans[0]?.captures.map((capture) => capture.sha256)).toEqual([
+      sha256('blank-desktop-v1'),
+      sha256('blank-mobile-v1'),
+    ]);
+  });
+
   it('pins the real npm capture argv and the verifier --log argv', () => {
     expect(captureCommandArgs('screenshots:2048:webkit')).toEqual([
       'run',
       'screenshots:container',
       '--',
       'screenshots:2048:webkit',
+    ]);
+    expect(captureCommandArgs('screenshots')).toEqual([
+      'run',
+      'screenshots:container',
+      '--',
+      'screenshots',
     ]);
     expect(
       sha256VerifierArgs({
@@ -456,7 +581,10 @@ describe('screenshot repro target derivation', () => {
     expect(validateCaptureTarget(' screenshots:breakout:webkit ')).toBe(
       'screenshots:breakout:webkit',
     );
-    for (const target of ['', 'breakout:webkit', 'screenshots', 'screenshots:a b', '../x']) {
+    // The unfiltered Chromium capture is a first-class target: its one command
+    // writes both blank files.
+    expect(validateCaptureTarget(' screenshots ')).toBe('screenshots');
+    for (const target of ['', 'breakout:webkit', 'screenshots:a b', 'screenshots:', '../x']) {
       expect(() => validateCaptureTarget(target), target).toThrow(ScreenshotReproError);
     }
   });
@@ -537,6 +665,128 @@ describe('screenshot repro two-run check', () => {
     }
   });
 
+  it('runs a command shared by two manifests once and verifies each file against its owner', async () => {
+    const setup = multiManifestFixture();
+    const order: string[] = [];
+    const verifyCalls: string[] = [];
+
+    const result = await runScreenshotRepro({
+      dir: setup.dir,
+      manifestDir: setup.dir,
+      logDir: setup.logDir,
+      targets: ['screenshots'],
+      runCapture: fakeRunner({ dir: setup.dir, captures: BLANK_CAPTURES, order }),
+      verifyLog: async (options) => {
+        verifyCalls.push(options.manifestPath);
+        return { code: 0, stdout: 'OK: fixture verified', stderr: '' };
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.manifestPaths).toEqual([
+      setup.desktopManifestPath,
+      setup.mobileManifestPath,
+    ]);
+    // One container command per run, covering both desktop and mobile files.
+    expect(order).toEqual(['screenshots:1', 'screenshots:2']);
+    expect(result.plans.map((plan) => plan.target)).toEqual(['screenshots']);
+    expect(result.plans[0]?.captures.map((capture) => capture.file)).toEqual([
+      'after-blank-desktop.png',
+      'after-blank-mobile.png',
+    ]);
+    // Each run's log is checked once per owning manifest, so the desktop and
+    // mobile environment fingerprints are both validated.
+    expect(verifyCalls).toEqual([
+      setup.desktopManifestPath,
+      setup.mobileManifestPath,
+      setup.desktopManifestPath,
+      setup.mobileManifestPath,
+    ]);
+    expect(result.report).toContain('OK: screenshot repro passed');
+    expect(result.report).toContain('2 file(s) matched');
+    expect(result.report).toContain('1 target(s) x 2 runs');
+  });
+
+  it('aggregates a drift in a shared-command plan by owning manifest', async () => {
+    const setup = multiManifestFixture();
+    const order: string[] = [];
+    const result = await runScreenshotRepro({
+      dir: setup.dir,
+      manifestDir: setup.dir,
+      logDir: setup.logDir,
+      runCapture: fakeRunner({
+        dir: setup.dir,
+        captures: BLANK_CAPTURES,
+        order,
+        writes: { 'after-blank-mobile.png': { 2: 'blank-mobile-v2' } },
+      }),
+      verifyLog: verifyOk,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(order).toEqual(['screenshots:1', 'screenshots:2']);
+    expect(result.differences).toHaveLength(1);
+    expect(result.differences[0]).toMatchObject({
+      file: 'after-blank-mobile.png',
+      target: 'screenshots',
+      manifestPath: setup.mobileManifestPath,
+      expected: sha256('blank-mobile-v1'),
+    });
+    const report = result.report;
+    expect(report).toContain('FAIL: screenshot repro failed');
+    expect(report).toContain('after-blank-mobile.png');
+    expect(report).toContain(`manifest: ${setup.mobileManifestPath}`);
+    expect(report).toContain(`run 1 sha256: ${sha256('blank-mobile-v1')}`);
+    expect(report).toContain(`run 2 sha256: ${sha256('blank-mobile-v2')}`);
+    expect(report).toContain(CHROMIUM_COMMAND);
+  });
+
+  it('reports only the manifests covered by a --target subset', async () => {
+    const setup = targetManifestFixture();
+    const result = await runScreenshotRepro({
+      dir: setup.dir,
+      manifestDir: setup.dir,
+      logDir: setup.logDir,
+      targets: ['screenshots:webkit'],
+      runCapture: fakeRunner({ dir: setup.dir, captures: [CAPTURES[0]!] }),
+      verifyLog: verifyOk,
+    });
+
+    expect(result.ok).toBe(true);
+    // The other two manifests are still discovered, but the run never covers
+    // their commands, so naming them would point the reader at untouched files.
+    expect(result.manifestPaths).toEqual([setup.webkitManifestPath]);
+    expect(result.manifestPath).toBe(setup.webkitManifestPath);
+    expect(result.report).toContain(`manifest: ${setup.webkitManifestPath}`);
+    expect(result.report).not.toContain(setup.desktopManifestPath);
+    expect(result.report).not.toContain(setup.mobileManifestPath);
+  });
+
+  it('lists only the covered manifests in the --target recapture step', async () => {
+    const setup = targetManifestFixture();
+    const result = await runScreenshotRepro({
+      dir: setup.dir,
+      manifestDir: setup.dir,
+      logDir: setup.logDir,
+      targets: ['screenshots:webkit'],
+      runCapture: fakeRunner({
+        dir: setup.dir,
+        captures: [CAPTURES[0]!],
+        writes: { 'after-blank-webkit.png': { 2: 'blank-v2' } },
+      }),
+      verifyLog: verifyOk,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.manifestPaths).toEqual([setup.webkitManifestPath]);
+    const report = result.report;
+    expect(report).toContain(
+      `update the owning manifest(s) (${setup.webkitManifestPath}) with sha256`,
+    );
+    expect(report).not.toContain(setup.desktopManifestPath);
+    expect(report).not.toContain(setup.mobileManifestPath);
+  });
+
   it('fails with expected / actual sha256, both logs, fingerprint and recapture steps on drift', async () => {
     const setup = fixture();
     const result = await runScreenshotRepro({
@@ -570,7 +820,7 @@ describe('screenshot repro two-run check', () => {
       'npm run screenshots:container -- screenshots:2048:webkit',
     );
     expect(report).toContain('Recapture steps:');
-    expect(report).toContain('verify-screenshot-sha256.mjs --log');
+    expect(report).toContain('verify-screenshot-sha256.mjs --manifest <owner> --log');
     expect(report).toContain('capture-sha256-manifest.json');
     expect(report).not.toContain('Load:');
   });
@@ -1609,6 +1859,9 @@ describe('verify-screenshot-repro direct entry', () => {
     // Pin the documented --load range, not just the generic usage banner.
     expect(result.stdout).toContain('--load <N>');
     expect(result.stdout).toContain(`0-${MAX_LOAD_COUNT}`);
+    // The default now discovers every manifest; --manifest keeps one file.
+    expect(result.stdout).toContain('--manifest-dir <path>');
+    expect(result.stdout).toContain('overrides discovery');
   });
 
   it('exits 2 for a usage error and for an invalid manifest', () => {
@@ -1684,7 +1937,8 @@ describe('verify-screenshot-repro CLI', () => {
   it('parses options and defaults', () => {
     expect(parseArgs([])).toEqual({
       help: false,
-      manifest: 'docs/screenshots/capture-sha256-manifest.json',
+      manifest: null,
+      manifestDir: 'docs/screenshots',
       dir: 'docs/screenshots',
       logDir: 'test-results/screenshot-repro',
       targets: [],
@@ -1692,10 +1946,20 @@ describe('verify-screenshot-repro CLI', () => {
       load: 0,
     });
     expect(
-      parseArgs(['--manifest', 'm.json', '--dir', 'shots', '--log-dir', 'logs']),
+      parseArgs([
+        '--manifest',
+        'm.json',
+        '--manifest-dir',
+        'manifests',
+        '--dir',
+        'shots',
+        '--log-dir',
+        'logs',
+      ]),
     ).toEqual({
       help: false,
       manifest: 'm.json',
+      manifestDir: 'manifests',
       dir: 'shots',
       logDir: 'logs',
       targets: [],
@@ -1705,6 +1969,7 @@ describe('verify-screenshot-repro CLI', () => {
     expect(parseArgs(['--help']).help).toBe(true);
     expect(() => parseArgs(['--wat'])).toThrow(ScreenshotReproError);
     expect(() => parseArgs(['--dir'])).toThrow(ScreenshotReproError);
+    expect(() => parseArgs(['--manifest-dir'])).toThrow(/needs a value/);
   });
 
   it('parses repeatable --target values, a positive --runs count and --load', () => {
@@ -1714,15 +1979,17 @@ describe('verify-screenshot-repro CLI', () => {
         'screenshots:breakout:webkit',
         '--target',
         'screenshots:webkit',
+        '--target',
+        'screenshots',
         '--runs',
         '4',
       ]),
     ).toMatchObject({
-      targets: ['screenshots:breakout:webkit', 'screenshots:webkit'],
+      targets: ['screenshots:breakout:webkit', 'screenshots:webkit', 'screenshots'],
       runs: 4,
     });
     expect(() => parseArgs(['--target'])).toThrow(/needs a value/);
-    expect(() => parseArgs(['--target', 'screenshots'])).toThrow(
+    expect(() => parseArgs(['--target', 'screenshots:a b'])).toThrow(
       /invalid repro target/,
     );
     expect(() => parseArgs(['--runs'])).toThrow(/needs a value/);
@@ -1796,18 +2063,31 @@ describe('verify-screenshot-repro CLI', () => {
     expect(readFileSync(summaryPath, 'utf8')).toContain('OK: screenshot repro passed');
   });
 
-  it('forwards --target / --runs / --load and live progress to the repro runner', async () => {
+  it('forwards --target / --runs / --load / --manifest-dir and live progress to the repro runner', async () => {
     const setup = fixture();
     const calls: Array<{
       targets?: string[];
       runs?: number;
       load?: number;
       repoRoot?: string;
+      manifestPath?: string | null;
+      manifestDir?: string;
     }> = [];
     const log = logger();
 
     const code = await main(
-      ['--target', 'screenshots:webkit', '--runs', '4', '--load', '2'],
+      [
+        '--target',
+        'screenshots:webkit',
+        '--runs',
+        '4',
+        '--load',
+        '2',
+        '--manifest',
+        'm.json',
+        '--manifest-dir',
+        'manifests',
+      ],
       {
         env: {},
         logger: log,
@@ -1817,6 +2097,8 @@ describe('verify-screenshot-repro CLI', () => {
             runs: options.runs,
             load: options.load,
             repoRoot: options.repoRoot,
+            manifestPath: options.manifestPath,
+            manifestDir: options.manifestDir,
           });
           options.progress?.('  screenshots:webkit run 1: a.png sha256 abc');
           return { ok: true, report: 'OK: forwarded' } as Awaited<
@@ -1835,6 +2117,8 @@ describe('verify-screenshot-repro CLI', () => {
         runs: 4,
         load: 2,
         repoRoot: setup.root,
+        manifestPath: resolve(setup.root, 'm.json'),
+        manifestDir: resolve(setup.root, 'manifests'),
       },
     ]);
     expect(log.lines.join('\n')).toContain(
@@ -1869,6 +2153,103 @@ describe('verify-screenshot-repro CLI', () => {
     expect(readFileSync(summaryPath, 'utf8')).toContain('bad manifest');
   });
 
+  it('returns 2 when the discovered manifest set is invalid', async () => {
+    const setup = multiManifestFixture();
+    // Record the same file in both manifests: the set has two competing
+    // environments for one screenshot, so discovery must fail closed.
+    writeFileSync(
+      setup.mobileManifestPath,
+      `${JSON.stringify(
+        manifestFor([BLANK_CAPTURES[0]!], { target: 'mobile', dpr: 2 }),
+        null,
+        2,
+      )}\n`,
+    );
+
+    const log = logger();
+    const code = await main([], {
+      env: { GITHUB_STEP_SUMMARY: '' },
+      logger: log,
+      repoRoot: setup.root,
+      appendFile: appendFileSync,
+    });
+
+    expect(code).toBe(2);
+    expect(log.lines.join('\n')).toContain('screenshot repro could not run');
+    expect(log.lines.join('\n')).toContain('duplicate capture file');
+  });
+
+  it('fails closed with exit 2 when one manifest of the set has a stale environment', async () => {
+    const setup = targetManifestFixture();
+    // Two manifests: the webkit target this run selects and a desktop manifest
+    // the --target subset never selects. Set-level environment validation runs
+    // before selection, so the stale desktop record must still fail the run.
+    rmSync(setup.mobileManifestPath);
+    const desktopManifest = JSON.parse(
+      readFileSync(setup.desktopManifestPath, 'utf8'),
+    ) as ScreenshotSha256Manifest;
+    desktopManifest.environment.source = 'host';
+    writeFileSync(
+      setup.desktopManifestPath,
+      `${JSON.stringify(desktopManifest, null, 2)}\n`,
+    );
+
+    const log = logger();
+    const code = await main(['--target', 'screenshots:webkit'], {
+      env: { GITHUB_STEP_SUMMARY: '' },
+      logger: log,
+      repoRoot: setup.root,
+      appendFile: appendFileSync,
+      // If the set-level check regressed, fail fast instead of attempting a
+      // real container capture from the unit-test process.
+      runRepro: (options) =>
+        runScreenshotRepro({
+          ...options,
+          runCapture: async () => {
+            throw new Error('capture must not run for an invalid manifest set');
+          },
+          verifyLog: async () => {
+            throw new Error('log verification must not run for an invalid manifest set');
+          },
+        }),
+    });
+
+    expect(code).toBe(2);
+    const output = log.lines.join('\n');
+    expect(output).toContain('screenshot repro could not run');
+    expect(output).toContain('does not match the fixed capture environment');
+    // More than one manifest means the failing message names the offending
+    // file, so the reader knows which manifest has to be re-recorded.
+    expect(output).toContain(
+      `${setup.desktopManifestPath}: environment.source is "host"`,
+    );
+    // The selected manifest itself is valid: checking only the selected plans
+    // would have started the capture above instead of failing closed.
+    expect(output).not.toContain(setup.webkitManifestPath);
+  });
+
+  it('fails closed with exit 2 when no manifest is discovered', async () => {
+    // The default discovery mode is the nightly job's only safety net: an empty
+    // docs/screenshots must never look like "0 targets x 0 files" success. Use
+    // the real runner (no runRepro stub) so this covers the discovery guard.
+    const root = mkdtempSync(join(tmpdir(), 'screenshot-repro-empty-'));
+    tempDirs.push(root);
+    mkdirSync(join(root, 'docs', 'screenshots'), { recursive: true });
+
+    const log = logger();
+    const code = await main([], {
+      env: { GITHUB_STEP_SUMMARY: '' },
+      logger: log,
+      appendFile: appendFileSync,
+      repoRoot: root,
+    });
+
+    expect(code).toBe(2);
+    const output = log.lines.join('\n');
+    expect(output).toContain('screenshot repro could not run');
+    expect(output).toContain('no capture-sha256-manifest*.json');
+  });
+
   it('returns 0 and prints usage for --help', async () => {
     const log = logger();
     const code = await main(['--help'], {
@@ -1883,5 +2264,6 @@ describe('verify-screenshot-repro CLI', () => {
     expect(output).toContain('Usage: node scripts/verify-screenshot-repro.mjs');
     expect(output).toContain('--load <N>');
     expect(output).toContain(`0-${MAX_LOAD_COUNT}`);
+    expect(output).toContain('--manifest-dir <path>');
   });
 });

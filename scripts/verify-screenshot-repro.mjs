@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { CAPTURE_REPO_ROOT } from './lib/capture-env.mjs';
 import {
-  DEFAULT_MANIFEST_PATH,
+  DEFAULT_MANIFEST_DIR,
   DEFAULT_SCREENSHOT_DIR,
 } from './lib/screenshot-sha256.mjs';
 import {
@@ -21,50 +21,63 @@ import {
 
 const USAGE = `Usage: node scripts/verify-screenshot-repro.mjs [options]
 
-Re-run the screenshot targets named by ${DEFAULT_MANIFEST_PATH} in the fixed
-Playwright container. By default every target runs ${REPRO_RUN_COUNT} times;
+Re-run the screenshot capture commands named by every sha256 manifest
+(capture-sha256-manifest*.json under ${DEFAULT_MANIFEST_DIR}) in the fixed
+Playwright container. A command recorded by several manifests, such as the
+Chromium \`screenshots\` command that writes both the desktop and the mobile
+blank evidence, runs once per repetition and each file is verified against the
+manifest that owns it. By default every target runs ${REPRO_RUN_COUNT} times;
 --target selects a subset (repeatable), --runs <N> changes the repetition count
 and --load <N> keeps N CPU-burning worker processes alive for every run, so a
 load-dependent drift can be reproduced on demand. Every run keeps one capture
 log and a copy of each manifested PNG under test-results/screenshot-repro/, so
 drifting runs can be compared after the last run overwrote the shared paths.
 
+--manifest keeps the single-manifest behaviour when one file has to be checked
+in isolation; --manifest-dir changes the directory the manifest set is
+discovered in.
+
 The load workers are stopped and awaited at the end of the repro, including
 after a failed capture or an exception. With --load 0 (the default) the entry
 runs exactly as before and starts no extra process.
 
 Every manifested PNG must have the same sha256 in every run and equal the
-manifest. Each run log is also checked with
-node scripts/verify-screenshot-sha256.mjs --log.
+manifest that owns it. Each run log is also checked with
+node scripts/verify-screenshot-sha256.mjs --manifest <owner> --log.
 
-The entry never commits, pushes or edits the manifest. On a mismatch it prints
-the differing files with expected / per-run actual sha256, the capture log and
-retained PNG paths, the environment fingerprint, the load state and the
-re-capture steps, and appends the same report to $GITHUB_STEP_SUMMARY when set.
+The entry never commits, pushes or edits the manifests. On a mismatch it prints
+the differing files with expected / per-run actual sha256 and owning manifest,
+the capture log and retained PNG paths, the environment fingerprint, the load
+state and the re-capture steps, and appends the same report to
+$GITHUB_STEP_SUMMARY when set.
 
 Options:
-  --manifest <path>  sha256 manifest (default: ${DEFAULT_MANIFEST_PATH})
+  --manifest <path>  verify only this sha256 manifest (overrides discovery)
+  --manifest-dir <path>  directory the manifest set is discovered in
+                     (default: ${DEFAULT_MANIFEST_DIR})
   --dir <path>       screenshot directory (default: ${DEFAULT_SCREENSHOT_DIR})
   --log-dir <path>   logs and per-run PNG copies (default: ${DEFAULT_REPRO_LOG_DIR})
   --target <name>    capture only this manifest target (repeatable;
-                     default: every target the manifest names)
+                     default: every target the manifest set names)
   --runs <N>         runs per target, positive integer (default: ${REPRO_RUN_COUNT})
   --load <N>         CPU burner processes kept alive for every run, integer
                      0-${MAX_LOAD_COUNT}; 0 disables the load (default: ${DEFAULT_LOAD_COUNT})
   -h, --help         show this help
 
-Exit codes: 0 every run matches the manifest, each log verifies and every
-              requested load worker started and stopped,
+Exit codes: 0 every run matches its owning manifest, each log verifies against
+              every owner manifest and every requested load worker started and
+              stopped,
             1 capture, hash, per-run PNG copy, environment or log verification
               failure, or a load worker that failed to start / stop,
-            2 usage, an unreadable / invalid manifest, or a manifest whose
+            2 usage, an unreadable / invalid manifest set, or a manifest whose
               recorded environment does not match the fixed capture one.`;
 
 /** Parse the small CLI option set. Unknown options are usage errors. */
 export function parseArgs(argv) {
   const options = {
     help: false,
-    manifest: DEFAULT_MANIFEST_PATH,
+    manifest: null,
+    manifestDir: DEFAULT_MANIFEST_DIR,
     dir: DEFAULT_SCREENSHOT_DIR,
     logDir: DEFAULT_REPRO_LOG_DIR,
     targets: [],
@@ -74,6 +87,7 @@ export function parseArgs(argv) {
 
   const valued = new Set([
     '--manifest',
+    '--manifest-dir',
     '--dir',
     '--log-dir',
     '--target',
@@ -95,6 +109,8 @@ export function parseArgs(argv) {
     index += 1;
     if (arg === '--manifest') {
       options.manifest = value;
+    } else if (arg === '--manifest-dir') {
+      options.manifestDir = value;
     } else if (arg === '--dir') {
       options.dir = value;
     } else if (arg === '--log-dir') {
@@ -153,7 +169,9 @@ export async function main(
   let result;
   try {
     result = await runRepro({
-      manifestPath: resolve(repoRoot, options.manifest),
+      manifestPath:
+        options.manifest === null ? null : resolve(repoRoot, options.manifest),
+      manifestDir: resolve(repoRoot, options.manifestDir),
       dir: resolve(repoRoot, options.dir),
       logDir: resolve(repoRoot, options.logDir),
       targets: options.targets,

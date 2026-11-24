@@ -3,11 +3,30 @@ import type {
   SpawnOptions,
   spawnSync,
 } from 'node:child_process';
-import type { ScreenshotSha256Capture, ScreenshotSha256Manifest } from './screenshot-sha256.mjs';
+import type {
+  ScreenshotSha256Capture,
+  ScreenshotSha256Manifest,
+  ScreenshotSha256ManifestFile,
+} from './screenshot-sha256.mjs';
 
+/** One capture of a single manifest, the legacy WebKit load-gate plan shape. */
 export interface ReproPlan {
   target: string;
   captures: ScreenshotSha256Capture[];
+}
+
+/** One capture aggregated across the manifest set, with its owning manifest. */
+export interface ReproManifestCapture {
+  file: string;
+  sha256: string;
+  manifestPath: string;
+  command: string;
+}
+
+/** A capture command and every file it owns across the manifest set. */
+export interface ReproManifestPlan {
+  target: string;
+  captures: ReproManifestCapture[];
 }
 
 export interface ReproHashEntry {
@@ -37,6 +56,8 @@ export interface ReproRunHash {
 export interface ReproDifference {
   file: string;
   target: string;
+  /** The manifest that records this file's sha256 and environment. */
+  manifestPath: string;
   expected: string;
   /** Every run's hash and retained copy path, in run order. */
   runHashes: ReproRunHash[];
@@ -58,6 +79,8 @@ export interface ReproCaptureFailure {
 export interface ReproVerifyFailure {
   target: string;
   run: number;
+  /** The owning manifest the run log was verified against. */
+  manifestPath: string;
   exitCode: number;
   logPath: string;
   output: string;
@@ -121,12 +144,15 @@ export interface StartCpuLoadOptions {
 export interface ReproResult {
   ok: boolean;
   report: string;
-  manifestPath: string;
+  /** Every manifest the run covered, in discovery / argument order. */
+  manifestPaths: string[];
+  /** The single manifest path when the set holds exactly one, else null. */
+  manifestPath: string | null;
   dir: string;
   logDir: string;
   runsPerTarget: number;
   load: ReproLoadSummary;
-  plans: ReproPlan[];
+  plans: ReproManifestPlan[];
   runs: ReproRun[];
   differences: ReproDifference[];
   captureFailures: ReproCaptureFailure[];
@@ -183,7 +209,13 @@ export interface SpawnSha256VerifierOptions extends ReproVerifyLogOptions {
 }
 
 export interface RunScreenshotReproOptions {
-  manifestPath?: string;
+  /**
+   * One explicit manifest to run against. `null` (default) discovers every
+   * `capture-sha256-manifest*.json` below `manifestDir`.
+   */
+  manifestPath?: string | null;
+  /** Directory the manifest set is discovered in; defaults to DEFAULT_MANIFEST_DIR. */
+  manifestDir?: string;
   dir?: string;
   logDir?: string;
   repoRoot?: string;
@@ -236,8 +268,14 @@ export function normalizeRunCount(value: number | string): number;
 export function normalizeLoadCount(value: number | string): number;
 export function loadWorkerArgs(): string[];
 export function startCpuLoad(options?: StartCpuLoadOptions): ReproLoadController;
-export function selectReproPlans(plans: ReproPlan[], targets?: string[]): ReproPlan[];
+export function selectReproPlans<T extends { target: string }>(
+  plans: T[],
+  targets?: string[],
+): T[];
 export function deriveReproPlans(manifest: ScreenshotSha256Manifest): ReproPlan[];
+export function deriveReproPlansFromManifests(
+  manifests: ScreenshotSha256ManifestFile[],
+): ReproManifestPlan[];
 export function reproLogPath(logDir: string, target: string, run: number): string;
 export function reproArtifactDir(logDir: string, target: string, run: number): string;
 export function reproArtifactPath(
