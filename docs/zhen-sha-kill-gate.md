@@ -50,7 +50,7 @@
 
 基线 `43c9ab1` 之后生产代码继续演进；以下数字只说明当前状态，不回写上面的历史实测表，也不改变 #250 的完整特性估算口径：
 
-- `settlement.ts`：512 行，由 #251（结算战绩符）的 #422 / #427 新增，不属于 #250 的完整特性估算。
+- `settlement.ts`：518 行，由 #251（结算战绩符）的 #422 / #427 新增，不属于 #250 的完整特性估算。
 - `engine.ts`：457 → 678 行，由 #448 / #452 的引擎增量与 #420 的谱面消费新增。
 - `debug.ts`：140 行，由 #443 新增，经 `zhen-sha-view.ts` 静态引用进入生产构建。
 - `bosses.ts`：148 行，由 #405 / #408 新增的 boss 数据与差异。
@@ -58,7 +58,7 @@
 - `boss-chart-adapter.ts`：90 行，由 #449 t2（#454）落地，#431 t2 收敛时保留。它是 `bosses.ts` 与引擎 `BossChart` 契约之间唯一的单位换算层：`telegraphMs` / `parryWindowMs` 原样传递，`activeMs` 作为完整普通判定带宽度，`bosses.ts` 的 7–13 展示点数原样传递（引擎每次未弹反固定只记 1 hit，damage 不参与中招预算）；源表没有 `recoveryMs` / `firstTelegraphMs`，引擎按 0 ms 恢复、第一招自己的 telegraph 开场。真实 3×2 引擎集成用例由 #431 t2 补在 `engine.test.ts`，覆盖 1-1 → 3-2、逐招判定窗与阶段推进。该文件只被 `engine.test.ts` / `boss-chart-adapter.test.ts` 引用，按本文「仅测试引用，不计」口径不计入当前生产规模。
 - `zhen-sha-view.ts`：676 → 790 行，由 #443 的固定步长调试接缝与 #249 t2 的朱砂印 / 字标 / 金边状态切换新增。
 - `zhen-sha.css`：254 → 583 行，由 #406 的 4+1 色板与黑宣纸 / 飞白边缘、#249 t2 的朱砂印 / 字标与金边 `clip-path` 多边形新增（金边几何烘进 CSS，不占 JS 体积）。
-- 当前生产规模（实测于本 PR HEAD，合并 `main` `dc0a723` 后）：8 个文件 / 3,014 行（`engine.ts` 678 + `index.ts` 29 + `settlement.ts` 512 + `debug.ts` 140 + `bosses.ts` 148 + `boss-chart.ts` 134 + `zhen-sha-view.ts` 790 + `zhen-sha.css` 583），已超出 M 区间 2,200 行上沿 814 行。当前生产规模由独立滚动快照校验跟踪，超限重估由跟进单 [#417](https://github.com/yeahdongcn-mk2/playground/issues/417) 跟踪。
+- 当前生产规模（实测于 #428 t0 分支合并 `main` `68f376c` 后的 HEAD）：8 个文件 / 3,020 行（`engine.ts` 678 + `index.ts` 29 + `settlement.ts` 518 + `debug.ts` 140 + `bosses.ts` 148 + `boss-chart.ts` 134 + `zhen-sha-view.ts` 790 + `zhen-sha.css` 583），已超出 M 区间 2,200 行上沿 820 行。当前生产规模由独立滚动快照校验跟踪，超限重估由跟进单 [#417](https://github.com/yeahdongcn-mk2/playground/issues/417) 跟踪。
 
 ### 新概念（2 个）
 
