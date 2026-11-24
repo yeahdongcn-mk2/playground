@@ -94,9 +94,8 @@ function isFocusable(element: HTMLElement): boolean {
   if (isHiddenByCss(element)) {
     return false;
   }
-  if (element instanceof HTMLInputElement && element.type === 'hidden') {
-    return false;
-  }
+  // Hidden inputs need no explicit branch: the UA `display: none` style is
+  // caught above, and an input the author re-shows through CSS is visible.
   const tabindex = element.getAttribute('tabindex');
   if (tabindex !== null && Number(tabindex) < 0) {
     return false;

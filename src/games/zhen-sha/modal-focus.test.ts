@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createModalFocus,
   type ModalFocusController,
@@ -52,10 +52,14 @@ const THREE_BUTTONS = `
 `;
 
 function pressTab(shiftKey = false): KeyboardEvent {
+  return pressKey('Tab', shiftKey);
+}
+
+function pressKey(key: string, shiftKey = false): KeyboardEvent {
   const focused = document.activeElement;
   const target = focused instanceof HTMLElement ? focused : document.body;
   const event = new KeyboardEvent('keydown', {
-    key: 'Tab',
+    key,
     shiftKey,
     bubbles: true,
     cancelable: true,
@@ -69,6 +73,7 @@ afterEach(() => {
     controller.close();
   }
   document.body.replaceChildren();
+  vi.restoreAllMocks();
 });
 
 describe('createModalFocus', () => {
@@ -168,6 +173,52 @@ describe('createModalFocus', () => {
     expect(document.activeElement).toBe(must('#close'));
   });
 
+  it('模态打开期间只拦截 Tab，其他按键原样放行且不移动焦点', () => {
+    const fixture = mount(THREE_BUTTONS);
+    const controller = makeController({
+      container: fixture.modal,
+      initialFocus: must('#again'),
+    });
+    controller.open();
+
+    for (const key of ['Escape', 'ArrowDown']) {
+      const event = pressKey(key);
+      expect(event.defaultPrevented).toBe(false);
+      expect(document.activeElement).toBe(must('#again'));
+    }
+
+    // 同一时刻的 Tab 仍被拦截并推进焦点，确认上面的放行不是控制器失效。
+    const tab = pressKey('Tab');
+    expect(tab.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(must('#lobby'));
+  });
+
+  it('FOCUSABLE_SELECTOR 覆盖链接、表单控件与正 tabindex 元素', () => {
+    const fixture = mount(`
+      <a id="link" href="#top">链接</a>
+      <input id="text" type="text">
+      <select id="select"><option>选项</option></select>
+      <textarea id="textarea"></textarea>
+      <div id="tabindex" tabindex="1">正 tabindex</div>
+      <button id="button" type="button">按钮</button>
+    `);
+    const controller = makeController({ container: fixture.modal });
+
+    expect(controller.focusables().map((element) => element.id)).toEqual([
+      'link',
+      'text',
+      'select',
+      'textarea',
+      'tabindex',
+      'button',
+    ]);
+
+    controller.open();
+    expect(document.activeElement).toBe(must('#link'));
+    pressTab();
+    expect(document.activeElement).toBe(must('#text'));
+  });
+
   it('跳过 disabled、hidden、aria-hidden 与负 tabindex 的元素', () => {
     const fixture = mount(`
       <button id="again" type="button">再来一局</button>
@@ -251,6 +302,22 @@ describe('createModalFocus', () => {
     controller.close();
     expect(controller.isOpen()).toBe(false);
     expect(document.activeElement).toBe(fixture.opener);
+  });
+
+  it('close() 移除打开时注册的 keydown 监听', () => {
+    const fixture = mount(THREE_BUTTONS);
+    const controller = makeController({
+      container: fixture.modal,
+      initialFocus: must('#again'),
+    });
+    const removeListener = vi.spyOn(document, 'removeEventListener');
+
+    controller.open();
+    expect(removeListener).not.toHaveBeenCalled();
+    controller.close();
+
+    expect(removeListener).toHaveBeenCalledTimes(1);
+    expect(removeListener).toHaveBeenCalledWith('keydown', expect.any(Function));
   });
 
   it('重新打开会记录新的焦点位置', () => {
