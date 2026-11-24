@@ -252,7 +252,7 @@ function readFrameworkBudget(framework) {
  * The `{}` default only turns a missing call argument into a path-named
  * `BudgetDocsError`; both documents are required for a usable result.
  *
- * @param {{ readme: string, framework: string }} input document contents
+ * @param {{ readme: string, framework: string }} [input] document contents
  */
 export function readBudgetDocs({ readme, framework } = {}) {
   return {

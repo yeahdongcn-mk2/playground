@@ -518,3 +518,9 @@ describe('readBudgetDocs malformed documents', () => {
     expect(error.message).toContain('string');
   });
 });
+
+describe('readBudgetDocs missing documents', () => {
+  it('throws with the README path when called without arguments', () => {
+    expectBudgetDocsError(() => readBudgetDocs(), 'README.md');
+  });
+});

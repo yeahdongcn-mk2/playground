@@ -58,9 +58,14 @@ export class BudgetDocsError extends Error {
 /**
  * Parse the README "验证" section and docs/framework.md section 14.
  *
+ * `input` is optional only so a missing call argument raises a path-named
+ * `BudgetDocsError` instead of a `TypeError`; both documents are still
+ * required for a usable result.
+ *
  * Missing, duplicated or unparseable budget lines throw `BudgetDocsError`
  * with the document path instead of silently using a stale value.
  */
+export function readBudgetDocs(): never;
 export function readBudgetDocs(input: BudgetDocsInput): BudgetDocs;
 
 /**
