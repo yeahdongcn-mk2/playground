@@ -1,0 +1,59 @@
+{
+  "environment": {
+    "source": "container",
+    "target": "mobile",
+    "dpr": 2,
+    "platform": "linux/amd64",
+    "image": {
+      "repository": "mcr.microsoft.com/playwright",
+      "tag": "v1.64.1-noble",
+      "digest": "sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f"
+    },
+    "egl": {
+      "EGL_PLATFORM": "surfaceless",
+      "LIBGL_ALWAYS_SOFTWARE": "1",
+      "__EGL_VENDOR_LIBRARY_FILENAMES": "/usr/share/glvnd/egl_vendor.d/50_mesa.json"
+    },
+    "fonts": [
+      {
+        "name": "fonts-freefont-ttf",
+        "version": "20211204+svn4273-2"
+      },
+      {
+        "name": "fonts-ipafont-gothic",
+        "version": "00303-21ubuntu1"
+      },
+      {
+        "name": "fonts-liberation",
+        "version": "1:2.1.5-3"
+      },
+      {
+        "name": "fonts-noto-color-emoji",
+        "version": "2.047-0ubuntu0.24.04.1"
+      },
+      {
+        "name": "fonts-tlwg-loma-otf",
+        "version": "1:0.7.3-1"
+      },
+      {
+        "name": "fonts-unifont",
+        "version": "1:15.1.01-1build1"
+      },
+      {
+        "name": "fonts-wqy-zenhei",
+        "version": "0.9.45-8"
+      }
+    ]
+  },
+  "captures": [
+    {
+      "file": "after-blank-mobile.png",
+      "sha256": "5fde4b2657d17525894dec7aee66c16906b2d91fcbb7f99527a1fdfa8245aa7d",
+      "command": "npm run screenshots:container -- screenshots",
+      "provenance": {
+        "container": "mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f",
+        "captureCommit": "badc5fefa4d3a8a4810e5d944b75121ffb8c3761"
+      }
+    }
+  ]
+}

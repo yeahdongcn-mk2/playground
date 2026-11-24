@@ -1,10 +1,13 @@
 name: Screenshot repro
 
 # Nightly two-run reproducibility check for the fixed-container screenshot
-# evidence (Issue #199). The targets come from
-# docs/screenshots/capture-sha256-manifest.json: every `captures[].command`
+# evidence (Issue #199). The targets come from the discovered manifest set
+# (docs/screenshots/capture-sha256-manifest*.json): every `captures[].command`
 # names the `npm run screenshots:container -- <target>` invocation that
 # produced that evidence, and the repro entry runs each unique target twice.
+# The Chromium desktop and mobile blank evidence share one `screenshots`
+# command but live in their own target-split manifests, so each run's log is
+# verified against every owning manifest and must match both environments.
 #
 # The job deliberately has no `container:` key: the fixed Playwright container
 # is started by scripts/run-container-capture.mjs from the ordinary
@@ -24,7 +27,7 @@ jobs:
   repro:
     name: fixed-container two-run repro
     runs-on: ubuntu-latest
-    # Twelve captures (six manifest targets x two runs) plus the dependency
+    # Fourteen captures (seven manifest targets x two runs) plus the dependency
     # install; the first run also pulls / builds the fixed capture image.
     timeout-minutes: 60
     steps:
