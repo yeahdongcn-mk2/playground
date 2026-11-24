@@ -925,6 +925,39 @@ describe('boss chart contract', () => {
     // Acceptance #4 greps boss-chart.ts verbatim, so comments must not match.
     expect(source).not.toMatch(ACCEPTANCE_PURITY_GREP);
   });
+
+  it('describes an engine that already consumes charts', () => {
+    const source = readFileSync(
+      new URL('./boss-chart.ts', import.meta.url),
+      'utf8',
+    );
+
+    // The engine has scheduled from charts since #448, so the old "not wired
+    // yet" wording must not come back.
+    expect(source).not.toMatch(/Today the engine still reads/);
+    expect(source).not.toMatch(/Until the wiring lands/);
+    expect(source).not.toMatch(/once it is wired to charts/i);
+
+    // Guard the positive claims too: the fields the engine reads, the
+    // argument-free default and damage as a display-only value.
+    for (const expectedText of [
+      'normalizeChart(chart)',
+      'telegraphMs',
+      'activeMs',
+      'parryWindowMs',
+      'recoveryMs',
+      'argument-free engine',
+      '`damage` takes no part in judgement',
+      'only checks is positive',
+      'TELEGRAPH_TICKS',
+      'FIRST_TELEGRAPH_TICKS',
+      'RECOVERY_TICKS',
+      'NORMAL_BAND_HALF_TICKS',
+      'PERFECT_BAND_HALF_TICKS',
+    ]) {
+      expect(source).toContain(expectedText);
+    }
+  });
 });
 
 const STAGE_FIRST_TELEGRAPH_MS = 500;
