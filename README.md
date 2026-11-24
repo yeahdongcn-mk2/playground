@@ -409,7 +409,7 @@ npm run score        # 通过（打印「指标 / 当前值 / 基线值 / 差值
 npm run test:e2e     # 162 passed（桌面 94 + 手机 36 + WebKit 32）
 ```
 
-CI 的 `verify` job 会在 `Bundle budget` 之后、`End-to-end tests` 之前运行 `npm run score`（见上文「CI 检查顺序」）。该步骤只与 `docs/score-baseline.json` 对比：不会运行 `npm run score -- --update`，因此 CI 不会改写基线；基线退化或损坏时 job 直接失败。单测计数由 `npm run docs:counts:write` 生成，合入 main 后 `doc-counts-sync` 只提交四个计数文件。score 内部的 `verify:doc-counts` 默认会再跑一次单测（见 [docs/framework.md](docs/framework.md) 第 13 节），这是它现有的采集语义。
+CI 的 `verify` job 会在 `Bundle budget` 之后、`End-to-end tests` 之前运行 `npm run score`（见上文「CI 检查顺序」）。该步骤只与 `docs/score-baseline.json` 对比：不会运行 `npm run score -- --update`，因此 CI 不会提交或更新基线（`Generate doc test counts` 只改写工作区的 `unitTests`，不提交）；基线退化或损坏时 job 直接失败。单测计数由 `npm run docs:counts:write` 生成，合入 main 后 `doc-counts-sync` 只提交四个计数文件。score 内部的 `verify:doc-counts` 默认会再跑一次单测（见 [docs/framework.md](docs/framework.md) 第 13 节），这是它现有的采集语义。
 
 截图证据的夜间复现由 [.github/workflows/capture-repro.yml](.github/workflows/capture-repro.yml) 按 `docs/screenshots/capture-sha256-manifest.json` 的 `command` 连续两跑并校验环境指纹；独立的并发负载闸门由 [.github/workflows/capture-repro-load.yml](.github/workflows/capture-repro-load.yml) 对三个受影响的 WebKit target 重复至少 4 跑并注入宿主 CPU 负载。失败信息与重拍步骤见 [docs/screenshots/README.md](docs/screenshots/README.md) 的「夜间固定容器两跑复现与排障」与「并发负载截图复现」；两个 workflow 都不提交、不改清单。
 
@@ -437,7 +437,7 @@ CI 的 passed / flaky / failed 口径、PR 稳定性门禁范围、每日 `flake
 12. `Check target e2e flakes`
 13. `WebKit narrow screenshot smoke test`
 
-检查开始前先 checkout、固化容器内 `safe.directory`、`npm ci` 并安装 `pre-commit==4.7.0`。`Unit tests` 之后先运行 `Generate doc test counts`：PR 只生成不提交，只把实测计数写进工作区，供 `Verify doc test counts` 与 `Score baseline` 使用；合入 main 后 `doc-counts-sync` 重跑生成与校验，只提交 `README.md`、`docs/framework.md`、`docs/snake-design.md`、`docs/score-baseline.json` 四个计数文件。`Score baseline` 只对比 `docs/score-baseline.json`，不传 `--update`；CI 不会改写基线，基线退化（含基线损坏）会让 job 直接失败。`flake-watch` 是独立的每日巡检（30 分钟预算），不在 PR 关键路径上。
+检查开始前先 checkout、固化容器内 `safe.directory`、`npm ci` 并安装 `pre-commit==4.7.0`。`Unit tests` 之后先运行 `Generate doc test counts`：PR 只生成不提交，只把实测计数写进工作区，供 `Verify doc test counts` 与 `Score baseline` 使用；合入 main 后 `doc-counts-sync` 重跑生成与校验，只提交 `README.md`、`docs/framework.md`、`docs/snake-design.md`、`docs/score-baseline.json` 四个计数文件。`Score baseline` 只对比 `docs/score-baseline.json`，不传 `--update`；CI 不会提交或更新基线（`Generate doc test counts` 只改写工作区的 `unitTests`，不提交），基线退化（含基线损坏）会让 job 直接失败。`flake-watch` 是独立的每日巡检（30 分钟预算），不在 PR 关键路径上。
 
 ### 浏览器覆盖范围
 

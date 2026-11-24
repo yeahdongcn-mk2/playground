@@ -185,7 +185,7 @@ npm run test:e2e                    # 先 build；webServer 只拉起 preview
 
 单测计数是生成产物：`npm run docs:counts:write` 只把实测 `numTotalTests` 写进 `README.md`、`docs/framework.md`、`docs/snake-design.md` 与 `docs/score-baseline.json` 的 `unitTests`，其余字节不变，重复跑无 diff；PR 只生成不提交，合入 main 后由 `doc-counts-sync` 提交这四个文件，子任务不再修改计数。`verify:doc-counts` 校验三份文档，`score` 继续对比基线且不运行 `--update`。
 
-TypeScript 7 为原生编译器，`tsc --noEmit` 是唯一类型门禁；Vite/Vitest 只转译，不做类型检查。CI 的检查顺序不在本文维护第三份副本：以 [README.md](../README.md) 的「### CI 检查顺序」为单一事实源，该列表与 `.github/workflows/ci.yml` 的 `verify` 步骤逐项对应；`npm ci` 在这个检查序列之前执行，当前 workflow 没有归档构建产物的步骤。
+TypeScript 7 为原生编译器，`tsc --noEmit` 是唯一类型门禁；Vite/Vitest 只转译，不做类型检查。CI 的检查顺序不在本文维护第三份副本：以 [README.md](../README.md) 的「### CI 检查顺序」为单一事实源，该列表与 `.github/workflows/ci.yml` 的 `verify` 门禁步骤逐项对应（`Generate doc test counts` 是工作区准备步骤，不在该列表中）；`npm ci` 在这个检查序列之前执行，当前 workflow 没有归档构建产物的步骤。
 
 ## 8. 风险与复核条件
 

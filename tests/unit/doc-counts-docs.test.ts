@@ -103,9 +103,11 @@ describe('doc test count documentation', () => {
     for (const path of COUNT_PATHS) {
       expect(ciSection, `README 的 CI 段缺少计数文件 ${path}`).toContain(path);
     }
-    // CI compares the baseline but never rewrites it.
+    // CI compares the baseline but never commits or updates it; only the
+    // working-tree unitTests may be rewritten by the Generate step.
     expect(ciSection).toContain('`--update`');
-    expect(ciSection).toContain('CI 不会改写基线');
+    expect(ciSection).toContain('CI 不会提交或更新基线');
+    expect(ciSection).toContain('`Generate doc test counts` 只改写工作区的 `unitTests`');
   });
 
   it('drops the stale manual baseline wording from the README', () => {
@@ -147,6 +149,10 @@ describe('doc test count documentation', () => {
     expect(seven).toContain('生成产物');
     expect(seven).toContain('子任务不再修改计数');
     expect(seven).toContain('`--update`');
+    // The README list is the gate contract, so §7 must not claim it mirrors
+    // every verify step: Generate doc test counts is a preparation step.
+    expect(seven).toContain('门禁步骤');
+    expect(seven).toContain('`Generate doc test counts` 是工作区准备步骤，不在该列表中');
   });
 
   it('does not claim a person commits the generated unit-test baseline', () => {
