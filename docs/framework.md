@@ -340,9 +340,11 @@ npx playwright install chromium webkit  # e2e 需要 Chromium 与 WebKit
 npm run dev        # http://localhost:5173
 npm run build
 npm run preview
+npm run docs:counts:write   # 生成单测计数：默认跑 test:unit，或用 --report 复用已有 Vitest JSON 报告
+npm run verify:doc-counts   # 校验三份文档记录的单测计数（基线 unitTests 由 npm run score 复核）
 ```
 
-Node.js `^22.22.2 || ^24.15.0 || >=26.0.0`（受 jsdom 30 的 Node engines 约束）。CI（`.github/workflows/ci.yml`）按 `npm ci` → `pre-commit` → `typecheck` → `lint` → `test:unit` → `verify:doc-counts` → `verify:screenshots:doc-dims` → `verify:screenshots:sha256` → `build` → `check:budget` → `score` → `test:e2e` → `check-e2e-flakes` → WebKit 窄屏截图的顺序执行；独立的计数检查复用 Unit tests 产出的 Vitest JSON 报告，不重跑单测，而 `score` 内部的 `verify:doc-counts` 未传 `--report`，会按 score 现有的采集语义再跑一次单测；`score` 步骤只与 `docs/score-baseline.json` 对比，不传 `--update`，基线退化直接让 job 失败，新基线仍由人在本地显式提交；`verify` 直接运行在固定 tag + digest 的官方 Playwright 镜像里（内置 Chromium / WebKit 与系统依赖），不再在运行时安装浏览器。
+Node.js `^22.22.2 || ^24.15.0 || >=26.0.0`（受 jsdom 30 的 Node engines 约束）。CI（`.github/workflows/ci.yml`）按 `npm ci` → `pre-commit` → `typecheck` → `lint` → `test:unit` → `Generate doc test counts` → `verify:doc-counts` → `verify:screenshots:doc-dims` → `verify:screenshots:sha256` → `build` → `check:budget` → `score` → `test:e2e` → `check-e2e-flakes` → WebKit 窄屏截图的顺序执行；`Unit tests` 产出的 Vitest JSON 报告同时供 `Generate doc test counts` 与 `verify:doc-counts` 复用，不重跑单测；PR 路径只让生成器写工作区、不提交，合入 main 后 `doc-counts-sync` 重跑生成与校验并只提交 `README.md`、`docs/framework.md`、`docs/snake-design.md`、`docs/score-baseline.json` 四个计数文件。三份文档计数是生成产物，子任务不再修改它们；`score` 内部的 `verify:doc-counts` 未传 `--report`，会按 score 现有的采集语义再跑一次单测，`score` 步骤只与 `docs/score-baseline.json` 对比、不传 `--update`，基线退化直接让 job 失败；`verify` 直接运行在固定 tag + digest 的官方 Playwright 镜像里（内置 Chromium / WebKit 与系统依赖），不再在运行时安装浏览器。
 
 ## 14. 性能与已知限制
 

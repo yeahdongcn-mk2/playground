@@ -173,6 +173,8 @@ npm run dev                         # 开发服务器，默认 http://localhost:
 npm run typecheck                   # tsc --noEmit
 npm run lint                        # oxlint（src / tests / scripts）+ scripts/check-boundaries.mjs 依赖方向检查
 npm run test:unit                   # Vitest 单测（规则/状态机/存储）
+npm run docs:counts:write           # 生成单测计数（默认跑 test:unit；--report 复用 JSON 报告）
+npm run verify:doc-counts           # 校验三份文档计数（基线 unitTests 由 score 复核）
 npm run build                       # typecheck + vite build → dist/
 npm run check:budget                # 入口 chunk 无引擎 + gzip 预算
 npm run preview                     # 本地预览生产构建
@@ -180,6 +182,8 @@ npm run test:e2e                    # 先 build；webServer 只拉起 preview
 ```
 
 上述 npm scripts（含 `lint`、`check:budget`）由 t2 落地时写入 `package.json`；`test:e2e` 前需先 `build`，Playwright `webServer` 只启动 `preview`。端到端最低覆盖：进入/退出、暂停/重开、最高分持久化、快速切换不残留 canvas/RAF、触屏/移动视口、基本可访问性、用可控延迟的假 `GameModule` 覆盖 abort 后晚到 mount；e2e 覆盖 Chromium 桌面、Pixel 7 手机视口与 mobile-webkit（iPhone SE (3rd gen)），Firefox 暂不纳入 v1。
+
+单测计数是生成产物：`npm run docs:counts:write` 只把实测 `numTotalTests` 写进 `README.md`、`docs/framework.md`、`docs/snake-design.md` 与 `docs/score-baseline.json` 的 `unitTests`，其余字节不变，重复跑无 diff；PR 只生成不提交，合入 main 后由 `doc-counts-sync` 提交这四个文件，子任务不再修改计数。`verify:doc-counts` 校验三份文档，`score` 继续对比基线且不运行 `--update`。
 
 TypeScript 7 为原生编译器，`tsc --noEmit` 是唯一类型门禁；Vite/Vitest 只转译，不做类型检查。CI 的检查顺序不在本文维护第三份副本：以 [README.md](../README.md) 的「### CI 检查顺序」为单一事实源，该列表与 `.github/workflows/ci.yml` 的 `verify` 步骤逐项对应；`npm ci` 在这个检查序列之前执行，当前 workflow 没有归档构建产物的步骤。
 
