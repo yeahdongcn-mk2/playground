@@ -1,0 +1,87 @@
+name: Sync doc test counts
+
+# Issue #426: a task that adds tests no longer has to commit the four shared
+# bookkeeping files. PR CI only generates them in the working tree so the
+# count checks pass; this workflow commits the regenerated files after the
+# change lands on main, keeping the committed values correct without putting
+# every PR through the same four-path diff.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+# Serialize runs so a push that lands while this workflow is generating cannot
+# make the bot commit a non-fast-forward child of an older main. The latest
+# push re-runs the generation from its own checkout.
+concurrency:
+  group: doc-counts-sync
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    name: sync doc test counts
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit tests
+        run: npm run test:unit -- --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/vitest-report.json"
+
+      - name: Generate doc test counts
+        run: npm run docs:counts:write -- --report "$RUNNER_TEMP/vitest-report.json"
+
+      # Guard the generated numbers before committing anything. This uses the
+      # same command and failure semantics as the PR check in ci.yml.
+      - name: Verify doc test counts
+        run: npm run verify:doc-counts -- --report "$RUNNER_TEMP/vitest-report.json"
+
+      - name: Commit generated counts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if git diff --quiet; then
+            echo "Doc test counts already up to date; nothing to commit."
+            exit 0
+          fi
+
+          expected="$(printf '%s\n' \
+            README.md \
+            docs/framework.md \
+            docs/snake-design.md \
+            docs/score-baseline.json | sort)"
+          changed="$(git diff --name-only | sort)"
+          # Issue #426's contract: a non-empty diff must be exactly all four
+          # paths. A partial diff means only some committed counts were hand-
+          # edited; fail with a hint instead of committing half of the set.
+          if [ "$changed" != "$expected" ]; then
+            echo "error: generated counts changed unexpected paths:" >&2
+            printf '%s\n' "$changed" >&2
+            echo "expected exactly:" >&2
+            printf '%s\n' "$expected" >&2
+            echo "hint: run 'npm run docs:counts:write' locally and commit all four paths." >&2
+            exit 1
+          fi
+
+          git add -- README.md docs/framework.md docs/snake-design.md docs/score-baseline.json
+
+          if git diff --cached --quiet; then
+            echo "Doc test counts already up to date; nothing to commit."
+            exit 0
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'docs: sync generated unit test counts [skip ci]'
+          git push origin HEAD:main

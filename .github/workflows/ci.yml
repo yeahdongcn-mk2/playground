@@ -91,6 +91,14 @@ jobs:
       - name: Unit tests
         run: npm run test:unit -- --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/vitest-report.json"
 
+      # Issue #426: PRs (and this main run) only need the freshly measured
+      # numbers in the working tree for the checks below, so this step writes
+      # the four bookkeeping files without committing them. The committed
+      # counts stay untouched here; doc-counts-sync commits them after a push
+      # to main.
+      - name: Generate doc test counts
+        run: npm run docs:counts:write -- --report "$RUNNER_TEMP/vitest-report.json"
+
       - name: Verify doc test counts
         run: npm run verify:doc-counts -- --report "$RUNNER_TEMP/vitest-report.json"
 
@@ -107,9 +115,12 @@ jobs:
         run: npm run check:budget
 
       # Score compares the current checks against docs/score-baseline.json.
-      # It must never run with --update here: CI only reports drift, and a
-      # person still commits a new baseline explicitly. No continue-on-error
-      # either, so a regression (or a corrupted baseline) fails the job.
+      # It must never run with --update here: the Generate step above may
+      # rewrite the working-tree unitTests from the measured report, and
+      # doc-counts-sync commits the regenerated baseline after a push to main.
+      # No continue-on-error either, so a regression in the other compared
+      # metrics (or a corrupted baseline) fails the job. The regenerated
+      # unitTests is not a regression gate here.
       - name: Score baseline
         run: npm run score
 
