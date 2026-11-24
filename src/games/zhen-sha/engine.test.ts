@@ -559,6 +559,48 @@ describe('hits, loss and restart', () => {
     expect(types.at(-1)).toBe('lose');
   });
 
+  it('counts one hit per unparried move when the chart damage is 7–13', () => {
+    const damageChart: BossChart = {
+      recoveryMs: 200,
+      bosses: [
+        {
+          name: '伤害 boss',
+          phases: [
+            {
+              id: 'damage-phase',
+              moves: [7, 10, 13].map((damage, index) => ({
+                id: `damage-move-${index + 1}`,
+                telegraphMs: 250,
+                activeMs: 200,
+                parryWindowMs: 100,
+                damage,
+              })),
+            },
+          ],
+        },
+      ],
+    };
+
+    const engine = new ZhenShaEngine(damageChart);
+    const firstLanding = toTicks(250) + Math.floor(toTicks(200) / 2);
+
+    advance(engine, firstLanding + 1);
+    expect(engine.snapshot()).toMatchObject({
+      status: 'playing',
+      hits: 1,
+      lastJudgement: 'miss',
+    });
+
+    advance(engine, 400);
+    const snapshot = engine.snapshot();
+    expect(snapshot.status).toBe('lost');
+    expect(snapshot.hits).toBe(MAX_HITS);
+
+    const types = engine.drainEvents().map((event) => event.type);
+    expect(types.filter((type) => type === 'hit')).toHaveLength(MAX_HITS);
+    expect(types.at(-1)).toBe('lose');
+  });
+
   it('drops a held charge when the duel is lost', () => {
     const engine = new ZhenShaEngine();
     engine.input('charge', 100);
@@ -1722,6 +1764,24 @@ describe('chart validation', () => {
     (_label, move) => {
       expect(() => new ZhenShaEngine(chartWithMove(move))).toThrow(
         /must be a positive number of milliseconds/,
+      );
+    },
+  );
+
+  const INVALID_MOVE_DAMAGE: ReadonlyArray<
+    readonly [label: string, move: Partial<BossMoveChart>]
+  > = [
+    ['damage = 0', { damage: 0 }],
+    ['damage negative', { damage: -1 }],
+    ['damage NaN', { damage: Number.NaN }],
+    ['damage infinite', { damage: Number.POSITIVE_INFINITY }],
+  ];
+
+  it.each(INVALID_MOVE_DAMAGE)(
+    'rejects a move with invalid damage: %s',
+    (_label, move) => {
+      expect(() => new ZhenShaEngine(chartWithMove(move))).toThrow(
+        /damage must be positive/,
       );
     },
   );
