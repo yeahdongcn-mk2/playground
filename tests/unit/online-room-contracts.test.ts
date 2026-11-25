@@ -18,6 +18,7 @@ import {
   type PublicRoomState,
   type RoomCommandResult,
   type RoomConnection,
+  type RoomErrorCode,
   type RoomManager,
   type RoomRecord,
   type RoomSeat,
@@ -30,6 +31,7 @@ import type {
   CreateMessage,
   JoinMessage,
   LeaveMessage,
+  ProtocolErrorCode,
   ReadyMessage,
   RematchMessage,
   StartMessage,
@@ -83,6 +85,42 @@ const CONFIG = {
 } as const satisfies CreateMessage['config'];
 
 const JOINED_AT = 1_700_000_000_000;
+
+interface RoomWireExpectation {
+  readonly code: RoomErrorCode;
+  readonly wireCode: ProtocolErrorCode;
+  readonly message: string;
+}
+
+/**
+ * Independent wire contract for every room failure.
+ *
+ * This table is deliberately hand-written. It must NOT be derived from
+ * `ROOM_ERROR_PROTOCOL_CODE` / the private message table, otherwise a wrong
+ * mapping or default text would keep the tests green.
+ */
+const ROOM_ERROR_WIRE_EXPECTATIONS: readonly RoomWireExpectation[] = [
+  { code: 'room-not-found', wireCode: 'room-not-found', message: 'room not found' },
+  { code: 'room-full', wireCode: 'bad-request', message: 'room is full' },
+  { code: 'not-in-room', wireCode: 'bad-request', message: 'player is not in this room' },
+  { code: 'not-host', wireCode: 'bad-request', message: 'only the room host may do that' },
+  {
+    code: 'not-ready',
+    wireCode: 'bad-request',
+    message: 'both players must be ready first',
+  },
+  {
+    code: 'invalid-state',
+    wireCode: 'bad-request',
+    message: 'event is not valid in the current room state',
+  },
+  {
+    code: 'deadline-passed',
+    wireCode: 'deadline-passed',
+    message: 'the room deadline has passed',
+  },
+  { code: 'bad-request', wireCode: 'bad-request', message: 'bad request' },
+];
 
 function hostSeat(): RoomSeat {
   return {
@@ -442,8 +480,10 @@ describe('online room protocol reuse', () => {
     expect(validateServerMessage(START_MESSAGE).ok).toBe(false);
   });
 
-  it('maps every room failure onto a protocol error the server can send', () => {
-    for (const code of ROOM_ERROR_CODES) {
+  it('pins every room failure to its exact wire code and default message', () => {
+    for (const { code, wireCode, message } of ROOM_ERROR_WIRE_EXPECTATIONS) {
+      expect(ROOM_ERROR_PROTOCOL_CODE[code], code).toBe(wireCode);
+
       const error = roomErrorMessage(code, {
         requestId: 'req_create',
         roomId: 'room_contract_test',
@@ -451,12 +491,19 @@ describe('online room protocol reuse', () => {
       });
 
       expect(error.type).toBe('error');
-      expect(error.code).toBe(ROOM_ERROR_PROTOCOL_CODE[code]);
+      expect(error.code, code).toBe(wireCode);
+      expect(error.message, code).toBe(message);
       expect(error.requestId).toBe('req_create');
       expect(error.roomId).toBe('room_contract_test');
       expect(error.currentSeq).toBe(3);
       expect(validateServerMessage(error).ok, `${code}: ${JSON.stringify(error)}`).toBe(true);
     }
+  });
+
+  it('declares exactly one wire expectation for every defined room error code', () => {
+    const expectedCodes = ROOM_ERROR_WIRE_EXPECTATIONS.map(({ code }) => code);
+    expect(expectedCodes.slice().sort()).toEqual([...ROOM_ERROR_CODES].sort());
+    expect(new Set(expectedCodes).size).toBe(expectedCodes.length);
   });
 
   it('keeps room-not-found and its retry policy stable', () => {
