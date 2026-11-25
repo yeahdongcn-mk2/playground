@@ -24,6 +24,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { createProtocolError } from '../../src/games/minesweeper/online/index';
 import type {
+  ActionMessage,
   CreateMessage,
   ErrorMessage,
   JoinMessage,
@@ -53,6 +54,23 @@ import type {
  * late joiner is not kicked by a separate readiness deadline.
  */
 export const JOIN_TIMEOUT_MS = 120_000;
+
+/**
+ * How long the player whose turn it is may take to submit an action.
+ *
+ * Design 3.4 (`design:room-lifecycle.timers.turn`): the timer starts with the
+ * turn and resets on an accepted action or a turn change; expiring it ends the
+ * match through the `end` event.
+ */
+export const TURN_TIMEOUT_MS = 30_000;
+
+/**
+ * Hard cap on one match, starting at `start` and never reset.
+ *
+ * Design 3.4 (`design:room-lifecycle.timers.match`): expiring it ends the
+ * match through the `end` event even while a turn is still running.
+ */
+export const MATCH_TIMEOUT_MS = 900_000;
 
 /** Seats per room, fixed by design 3.4 (a two-player match). */
 export const ROOM_CAPACITY = 2;
@@ -299,6 +317,23 @@ export interface RoomCommandFailure {
 export type RoomCommandResult = RoomCommandSuccess | RoomCommandFailure;
 
 /**
+ * Result of one authoritative match command.
+ *
+ * A successful action reuses {@link RoomCommandSuccess}: it lists the messages
+ * to deliver, in order, and never binds a new seat. A rejected action carries
+ * the shared #482 `ProtocolErrorCode` itself rather than an internal
+ * {@link RoomErrorCode}; build its `error` with `createProtocolError(code, …)`
+ * so it is exactly the wire DTO the shared server validator accepts.
+ */
+export type MatchCommandResult =
+  | RoomCommandSuccess
+  | {
+      readonly ok: false;
+      readonly code: ProtocolErrorCode;
+      readonly error: ErrorMessage;
+    };
+
+/**
  * A connection as the room manager sees it.
  *
  * The transport owns the socket and the connection→token map. It passes the
@@ -385,7 +420,8 @@ export function broadcastToSeats(
  * {@link RoomCommandFailure} without changing room state.
  *
  * `action` is intentionally absent: authoritative match commands belong to the
- * match layer (#484), not the room lifecycle.
+ * match layer (#484), not the room lifecycle. {@link MatchRoomManager} extends
+ * this contract with that one command.
  */
 export interface RoomManager {
   /** `idle → waiting`: validate the request, assign a room, seat the host. */
@@ -404,4 +440,17 @@ export interface RoomManager {
   dissolve(roomId: RoomId, reason: string): RoomCommandResult;
   /** Expire a lifecycle timer; `join` dissolves here, `turn`/`match` are owned by #485. */
   timeout(roomId: RoomId, timer: TimeoutTimer): RoomCommandResult;
+}
+
+/**
+ * Room manager extended with the authoritative match command.
+ *
+ * This is the seam the match layer implements: `action` applies one reveal or
+ * flag for the current turn and answers with a {@link MatchCommandResult}.
+ * Every lifecycle method keeps its {@link RoomCommandResult} semantics. The
+ * action implementation, turn arbitration and replay ordering land with the
+ * match layer (#484); this contract only fixes the public signature.
+ */
+export interface MatchRoomManager extends RoomManager {
+  action(connection: RoomConnection, message: ActionMessage): MatchCommandResult;
 }

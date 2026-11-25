@@ -8,6 +8,7 @@ import {
   DEFAULT_ROOM_SERVER_PORT,
   issuePlayerToken,
   JOIN_TIMEOUT_MS,
+  MATCH_TIMEOUT_MS,
   publicRoomState,
   ROOM_CAPACITY,
   ROOM_ERROR_CODES,
@@ -15,6 +16,9 @@ import {
   roomErrorMessage,
   roomStateDeliveries,
   seatedCommandSuccess,
+  TURN_TIMEOUT_MS,
+  type MatchCommandResult,
+  type MatchRoomManager,
   type PublicRoomState,
   type RoomCommandResult,
   type RoomConnection,
@@ -24,10 +28,12 @@ import {
   type RoomSeat,
 } from '../../server/room/contracts';
 import {
+  createProtocolError,
   validateClientMessage,
   validateServerMessage,
 } from '../../src/games/minesweeper/online/index';
 import type {
+  ActionMessage,
   CreateMessage,
   JoinMessage,
   LeaveMessage,
@@ -51,7 +57,11 @@ interface LifecycleEvent {
 
 interface LifecycleDesign {
   readonly capacity: number;
-  readonly timers: { readonly join: LifecycleTimer };
+  readonly timers: {
+    readonly join: LifecycleTimer;
+    readonly turn: LifecycleTimer;
+    readonly match: LifecycleTimer;
+  };
   readonly events: readonly LifecycleEvent[];
 }
 
@@ -213,6 +223,19 @@ const REMATCH_MESSAGE: RematchMessage = {
   accept: true,
 };
 
+const ACTION_MESSAGE: ActionMessage = {
+  type: 'action',
+  roomId: 'room_contract_test',
+  matchId: 'match_contract_test',
+  actionId: 'action_1',
+  seq: 5,
+  turnId: 2,
+  kind: 'reveal',
+  row: 3,
+  col: 4,
+  clientTimeMs: JOINED_AT + 10,
+};
+
 const TIMEOUT_MESSAGE: TimeoutMessage = {
   type: 'timeout',
   roomId: 'room_contract_test',
@@ -249,6 +272,17 @@ const ROOM_MANAGER_EVENTS = [
 const MATCH_LAYER_EVENTS = ['action', 'end'] as const;
 const ROOM_MANAGER_EVENT_SET: ReadonlySet<string> = new Set(ROOM_MANAGER_EVENTS);
 
+/**
+ * The extended contract adds exactly one command. The `satisfies` clause proves
+ * `action` is part of `MatchRoomManager`; the conditional type rejects any
+ * additional key beyond the inherited `RoomManager` surface.
+ */
+const MATCH_MANAGER_EVENTS = ['action'] as const satisfies readonly (keyof MatchRoomManager)[];
+
+type MatchManagerAddedKeys = Exclude<keyof MatchRoomManager, keyof RoomManager>;
+type MatchManagerOnlyAddsAction = MatchManagerAddedKeys extends 'action' ? true : false;
+const MATCH_MANAGER_ONLY_ADDS_ACTION: MatchManagerOnlyAddsAction = true;
+
 /** Every lifecycle command answers with the same rejection shape. */
 function stubManager(): RoomManager {
   const reject = (): RoomCommandResult => ({
@@ -268,16 +302,27 @@ function stubManager(): RoomManager {
   };
 }
 
+/** Fake match manager: the lifecycle stub plus the one added command. */
+function stubMatchManager(
+  action: (connection: RoomConnection, message: ActionMessage) => MatchCommandResult,
+): MatchRoomManager {
+  return { ...stubManager(), action };
+}
+
 describe('online room contracts constants', () => {
-  it('pins the join timeout, capacity and default port', () => {
+  it('pins the join, turn and match timeouts, capacity and default port', () => {
     expect(JOIN_TIMEOUT_MS).toBe(120_000);
+    expect(TURN_TIMEOUT_MS).toBe(30_000);
+    expect(MATCH_TIMEOUT_MS).toBe(900_000);
     expect(ROOM_CAPACITY).toBe(2);
     expect(DEFAULT_ROOM_SERVER_PORT).toBe(8787);
   });
 
-  it('matches the capacity and join timer in design:room-lifecycle', () => {
+  it('matches the capacity and every timer in design:room-lifecycle', () => {
     expect(ROOM_CAPACITY).toBe(LIFECYCLE.capacity);
     expect(JOIN_TIMEOUT_MS).toBe(LIFECYCLE.timers.join.defaultMs);
+    expect(TURN_TIMEOUT_MS).toBe(LIFECYCLE.timers.turn.defaultMs);
+    expect(MATCH_TIMEOUT_MS).toBe(LIFECYCLE.timers.match.defaultMs);
   });
 
   it('declares every lifecycle event the room manager owns', () => {
@@ -548,5 +593,77 @@ describe('online room manager contract', () => {
         retryable: false,
       });
     }
+  });
+});
+
+describe('online match manager contract', () => {
+  it('extends the room manager with exactly the action command', () => {
+    const manager = stubMatchManager(() => ({ ok: true, deliveries: [] }));
+    const roomManager: RoomManager = manager;
+
+    expect(roomManager).toBe(manager);
+    expect(MATCH_MANAGER_EVENTS).toEqual(['action']);
+    expect(MATCH_MANAGER_ONLY_ADDS_ACTION).toBe(true);
+    expect(Object.keys(manager).sort()).toEqual(
+      [...ROOM_MANAGER_EVENTS, ...MATCH_MANAGER_EVENTS].sort(),
+    );
+  });
+
+  it('accepts the action message with the #482 client validator', () => {
+    const validation = validateClientMessage(ACTION_MESSAGE);
+    expect(validation.ok, JSON.stringify(validation)).toBe(true);
+  });
+
+  it('passes the connection and action through and returns a deliverable success', () => {
+    const calls: unknown[] = [];
+    const manager = stubMatchManager((connection, message) => {
+      calls.push(connection, message);
+      return { ok: true, deliveries: [] };
+    });
+
+    const result = manager.action(CONNECTION, ACTION_MESSAGE);
+
+    expect(calls).toEqual([CONNECTION, ACTION_MESSAGE]);
+    expect(result.ok).toBe(true);
+    expect(result).toEqual({ ok: true, deliveries: [] });
+    expect(Object.keys(result).sort()).toEqual(['deliveries', 'ok']);
+  });
+
+  it('returns a protocol-coded failure the #482 server validator accepts', () => {
+    const manager = stubMatchManager(() => ({
+      ok: false,
+      code: 'not-your-turn',
+      error: createProtocolError('not-your-turn', {
+        roomId: ACTION_MESSAGE.roomId,
+        currentSeq: ACTION_MESSAGE.seq,
+      }),
+    }));
+
+    const result = manager.action(CONNECTION, ACTION_MESSAGE);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(Object.keys(result).sort()).toEqual(['code', 'error', 'ok']);
+    expect(result.code).toBe('not-your-turn');
+    expect(result.error).toMatchObject({
+      type: 'error',
+      code: 'not-your-turn',
+      roomId: ACTION_MESSAGE.roomId,
+      currentSeq: ACTION_MESSAGE.seq,
+    });
+    expect(result.error.code).toBe(result.code);
+    expect(validateServerMessage(result.error).ok).toBe(true);
+  });
+
+  it('codes action failures with shared protocol codes, not internal room codes', () => {
+    type MatchFailureCode = Extract<MatchCommandResult, { ok: false }>['code'];
+    const protocolCode: MatchFailureCode = 'invalid-action';
+    // @ts-expect-error `room-full` is an internal RoomErrorCode, not a wire protocol code.
+    const roomCode: MatchFailureCode = 'room-full';
+
+    expect(protocolCode).toBe('invalid-action');
+    expect(roomCode).toBe('room-full');
   });
 });
