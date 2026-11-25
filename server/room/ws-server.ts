@@ -288,13 +288,16 @@ class RoomSocketHub {
 
     try {
       const result = this.runCommand(connection, validation.value);
+      // Deliver before releasing a leaving connection's token: the room layer
+      // builds a final `room_closed` for the leaving seat before removing it,
+      // and the socket that carried that token must still receive it.
+      this.applyCommandResult(connection, result);
       if (validation.value.type === 'leave' && result.ok) {
         // The seat is released, so the connection stops owning its token. This
         // is a transport binding change, not a room event: a deliberate leave
         // must not open a reconnect grace window for the token.
         this.unbindToken(connection);
       }
-      this.applyCommandResult(connection, result);
     } catch {
       // A manager failure is a server-side fault, but it must not drop the
       // socket or take the process down. Report it as a rejected request while
