@@ -18,12 +18,20 @@ type Assert<T extends true> = T;
 type IsAssignable<A, B> = A extends B ? true : false;
 
 /**
- * Presence is a connection-layer value. This only type-checks if no
- * `PlayerPresence` value is also a `RoomState`, i.e. adding `online` /
- * `reconnecting` / `offline` to the lifecycle union would break the build.
+ * Presence is a connection-layer value. Checking each literal (rather than
+ * the whole `PlayerPresence` union) means adding even one of `online` /
+ * `reconnecting` / `offline` to the lifecycle union breaks the build instead
+ * of slipping through because the other two are still absent.
  */
+type IsNotRoomState<T extends string> = IsAssignable<T, RoomState> extends true ? false : true;
 type PresenceIsNotRoomState = Assert<
-  IsAssignable<PlayerPresence, RoomState> extends true ? false : true
+  [
+    IsNotRoomState<'online'>,
+    IsNotRoomState<'reconnecting'>,
+    IsNotRoomState<'offline'>,
+  ] extends [true, true, true]
+    ? true
+    : false
 >;
 
 /**
@@ -116,22 +124,17 @@ function createFakeController(): FakeController {
 
 interface FakeRoomManager extends PresenceRoomManager {
   readonly calls: string[];
-  readonly results: RoomCommandResult[];
 }
 
 /** Minimal fake of the room-layer contract; every command succeeds empty-handed. */
 function createFakeRoomManager(): FakeRoomManager {
   const calls: string[] = [];
-  const results: RoomCommandResult[] = [];
   function record(call: string): RoomCommandResult {
-    const result = emptySuccess();
     calls.push(call);
-    results.push(result);
-    return result;
+    return emptySuccess();
   }
   return {
     calls,
-    results,
     setPresence(playerToken, presence) {
       return record(`presence:${playerToken}:${presence}`);
     },
