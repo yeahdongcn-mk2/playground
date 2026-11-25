@@ -9,10 +9,11 @@ import {
   roomErrorMessage,
   roomStateDeliveries,
   seatedCommandSuccess,
+  type MatchCommandResult,
+  type MatchRoomManager,
   type RoomCommandResult,
   type RoomConnection,
   type RoomErrorCode,
-  type RoomManager,
   type RoomRecord,
   type RoomSeat,
 } from '../../server/room/contracts';
@@ -22,17 +23,24 @@ import {
   startRoomServer,
   type RoomServer,
 } from '../../server/room/ws-server';
-import { PROTOCOL_VERSION } from '../../src/games/minesweeper/online/index';
+import {
+  PROTOCOL_VERSION,
+  createProtocolError,
+} from '../../src/games/minesweeper/online/index';
 import type {
+  ActionMessage,
+  ActionResultMessage,
   ClientToServerMessage,
   CreateMessage,
   JoinMessage,
   LeaveMessage,
+  ProtocolErrorCode,
   ReadyMessage,
   RematchMessage,
   RoomClosedMessage,
   RoomStateMessage,
   ServerToClientMessage,
+  SnapshotMessage,
   StartMessage,
   TimeoutMessage,
   TimeoutTimer,
@@ -59,6 +67,20 @@ function commandFailure(code: RoomErrorCode): RoomCommandResult {
   return { ok: false, code, error: roomErrorMessage(code) };
 }
 
+/** Build a match-layer rejection carrying a shared protocol code. */
+function matchFailure(
+  code: ProtocolErrorCode,
+  roomId: string,
+  currentSeq: number,
+  message: string,
+): MatchCommandResult {
+  return {
+    ok: false,
+    code,
+    error: createProtocolError(code, { roomId, currentSeq, message }),
+  };
+}
+
 /**
  * Minimal in-memory manager used to exercise the transport in isolation.
  *
@@ -67,16 +89,20 @@ function commandFailure(code: RoomErrorCode): RoomCommandResult {
  * per-seat `room_state` deliveries built by `contracts.ts`. Lifecycle
  * correctness is covered by the room-manager tests, not here.
  */
-class FakeRoomManager implements RoomManager {
+class FakeRoomManager implements MatchRoomManager {
   readonly calls: string[] = [];
   /** Makes the next `join` throw, exercising the transport's fault boundary. */
   throwOnNextJoin = false;
+  /** Last action that reached the manager, so the transport forward is visible. */
+  lastAction: ActionMessage | null = null;
   private config: CreateMessage['config'] = CONFIG;
   private roomId = '';
   private state: RoomRecord['state'] = 'idle';
   private seq = 0;
   private hostId = '';
   private seats: readonly RoomSeat[] = [];
+  private matchId: string | null = null;
+  private turnPlayerId: string | null = null;
   private readonly joinDeadlineAt = Date.now() + JOIN_TIMEOUT_MS;
 
   get room(): RoomRecord {
@@ -147,6 +173,78 @@ class FakeRoomManager implements RoomManager {
     return { ok: true, deliveries: roomStateDeliveries(this.snapshot()) };
   }
 
+  /**
+   * Put the fake room into a playing match so `action` has a current turn.
+   *
+   * The transport test only needs the command seam; turn arbitration and board
+   * rules are covered by the room lifecycle and match tests.
+   */
+  beginMatch(): void {
+    this.state = 'playing';
+    this.matchId = 'match_fake';
+    this.seq += 1;
+    this.turnPlayerId = this.seats.find((seat) => seat.isHost)?.playerId ?? null;
+  }
+
+  action(connection: RoomConnection, message: ActionMessage): MatchCommandResult {
+    this.calls.push('action');
+    this.lastAction = message;
+    const seat = this.seats.find(
+      (candidate) => candidate.playerToken === connection.playerToken,
+    );
+    if (seat === undefined || this.matchId === null || message.roomId !== this.roomId) {
+      return matchFailure('invalid-action', message.roomId, this.seq, 'no running match');
+    }
+    if (message.matchId !== this.matchId) {
+      return matchFailure('invalid-action', message.roomId, this.seq, 'stale match id');
+    }
+    if (seat.playerId !== this.turnPlayerId) {
+      return matchFailure('not-your-turn', message.roomId, this.seq, 'not this seat\'s turn');
+    }
+
+    this.seq += 1;
+    const actionResult: ActionResultMessage = {
+      type: 'action_result',
+      roomId: this.roomId,
+      matchId: this.matchId,
+      actionId: message.actionId,
+      seq: this.seq,
+      turnId: message.turnId,
+      accepted: true,
+      reason: null,
+      revealedCells: [],
+      flaggedCell: null,
+      turnPlayerId: seat.playerId,
+      deadlineAt: this.joinDeadlineAt,
+    };
+    const snapshot: SnapshotMessage = {
+      type: 'snapshot',
+      roomId: this.roomId,
+      matchId: this.matchId,
+      seq: this.seq,
+      turnPlayerId: seat.playerId,
+      turnId: message.turnId,
+      deadlineAt: this.joinDeadlineAt,
+      matchDeadlineAt: this.joinDeadlineAt,
+      seedHash: 'fake-seed-hash',
+      engineStatus: 'playing',
+      mineCount: this.config.mines,
+      remainingMines: this.config.mines,
+      revealedSafeCount: 1,
+      elapsedMs: 0,
+      board: [],
+    };
+    // Same delivery shape as the real manager: the verdict goes to the actor,
+    // the snapshot is broadcast to every seat.
+    return {
+      ok: true,
+      deliveries: [
+        { playerToken: seat.playerToken, message: actionResult },
+        ...this.seats.map((current) => ({ playerToken: current.playerToken, message: snapshot })),
+      ],
+    };
+  }
+
   leave(connection: RoomConnection, message: LeaveMessage): RoomCommandResult {
     this.calls.push('leave');
     if (message.roomId !== this.roomId) {
@@ -199,8 +297,8 @@ class FakeRoomManager implements RoomManager {
       seq: this.seq,
       hostId: this.hostId,
       seats: this.seats,
-      matchId: null,
-      turnPlayerId: null,
+      matchId: this.matchId,
+      turnPlayerId: this.turnPlayerId,
       joinDeadlineAt: this.joinDeadlineAt,
       deadlineAt: null,
       stateReason: null,
@@ -295,7 +393,27 @@ function readyMessage(roomId: string, ready: boolean): ReadyMessage {
   return { type: 'ready', requestId: 'req-ready', roomId, ready };
 }
 
-async function startTestServer(manager: RoomManager): Promise<RoomServer> {
+/** Wire-valid action echoing the fake room's current seq and match id. */
+function actionMessage(
+  manager: FakeRoomManager,
+  overrides: Partial<ActionMessage> = {},
+): ActionMessage {
+  return {
+    type: 'action',
+    roomId: manager.room.roomId,
+    matchId: manager.room.matchId ?? 'match_missing',
+    actionId: 'action-1',
+    seq: manager.room.seq,
+    turnId: 0,
+    kind: 'reveal',
+    row: 0,
+    col: 0,
+    clientTimeMs: 0,
+    ...overrides,
+  };
+}
+
+async function startTestServer(manager: MatchRoomManager): Promise<RoomServer> {
   const server = await startRoomServer({ manager, host: '127.0.0.1', port: 0 });
   servers.push(server);
   return server;
@@ -459,24 +577,73 @@ describe('room WebSocket/HTTP transport', () => {
       requestId: 'req-unknown',
     });
 
-    client.sendRaw(
-      JSON.stringify({
-        type: 'action',
-        roomId: 'room-remote',
-        matchId: 'match-1',
-        actionId: 'action-1',
-        seq: 0,
-        turnId: 0,
-        kind: 'reveal',
-        row: 0,
-        col: 0,
-        clientTimeMs: 0,
-      }),
-    );
-    const unsettledAction = await client.next();
-    expect(unsettledAction).toMatchObject({ type: 'error', code: 'bad-request' });
+    // A malformed action is still caught by the shared validator, so the
+    // manager never sees it.
+    client.sendRaw(JSON.stringify({ type: 'action', roomId: 'room-remote' }));
+    const malformedAction = await client.next();
+    expect(malformedAction).toMatchObject({
+      type: 'error',
+      code: 'bad-request',
+      requestId: null,
+      roomId: 'room-remote',
+    });
 
     expect(manager.calls).toEqual([]);
+  });
+
+  it('forwards an action and delivers action_result only to the actor with a snapshot to both', async () => {
+    const manager = new FakeRoomManager();
+    const { host, guest, roomId } = await createSeatedRoom(manager);
+    manager.beginMatch();
+    const sent = actionMessage(manager);
+    host.send(sent);
+
+    const hostResult = await host.next();
+    expect(hostResult).toMatchObject({
+      type: 'action_result',
+      roomId,
+      matchId: 'match_fake',
+      actionId: 'action-1',
+      accepted: true,
+    });
+    const hostSnapshot = await host.next();
+    expect(hostSnapshot).toMatchObject({ type: 'snapshot', roomId, matchId: 'match_fake' });
+    const guestSnapshot = await guest.next();
+    expect(guestSnapshot).toMatchObject({ type: 'snapshot', roomId, matchId: 'match_fake' });
+
+    // The transport forwarded the decoded action unchanged, and the guest's
+    // first frame is the room broadcast: the actor-only verdict never reached
+    // the other seat.
+    expect(manager.calls).toEqual(['create', 'join', 'action']);
+    expect(manager.lastAction).toEqual(sent);
+
+    // A bearer token is a seat secret and no match message may carry one.
+    for (const message of [hostResult, hostSnapshot, guestSnapshot]) {
+      for (const seat of manager.room.seats) {
+        expect(JSON.stringify(message)).not.toContain(seat.playerToken);
+      }
+    }
+  });
+
+  it('answers a rejected action with a protocol error and keeps the connection usable', async () => {
+    const manager = new FakeRoomManager();
+    const { host, guest, roomId } = await createSeatedRoom(manager);
+
+    // No match has started, so the manager owns the rejection; the transport
+    // must forward its MatchCommandResult.error instead of a local bad-request.
+    host.send(actionMessage(manager, { matchId: 'match_missing' }));
+    const rejected = await host.next();
+    expect(rejected).toMatchObject({ type: 'error', code: 'invalid-action', roomId });
+    expect(manager.calls).toEqual(['create', 'join', 'action']);
+
+    // The socket survives a rejected action and still serves requests; the
+    // error was not broadcast to the other connection.
+    host.send(readyMessage(roomId, true));
+    const hostState = await nextRoomState(host);
+    const guestState = await nextRoomState(guest);
+    expect(hostState.players).toHaveLength(2);
+    expect(guestState.players).toHaveLength(2);
+    expect(manager.calls).toEqual(['create', 'join', 'action', 'ready']);
   });
 
   it('reports a manager failure without dropping the connection', async () => {

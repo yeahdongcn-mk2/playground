@@ -4,15 +4,20 @@
  * This module owns exactly two things: the small HTTP surface used by health
  * checks and the WebSocket connection that carries the shared protocol from
  * `src/games/minesweeper/online`. It deliberately owns no room state: every
- * lifecycle command is handed to an injected {@link RoomManager}, and the
- * transport only turns the manager's {@link RoomCommandResult} into sends.
+ * lifecycle command and every authoritative action is handed to an injected
+ * {@link MatchRoomManager}, and the transport only turns the manager's
+ * {@link RoomCommandResult} / {@link MatchCommandResult} into sends.
  *
- * Two invariants keep the transport a thin layer:
+ * Three invariants keep the transport a thin layer:
  *
  * - A client message is validated with the shared `validateClientMessage`
  *   (which also pins the protocol version on `create`/`join`) before the room
  *   manager is called. Invalid input produces a protocol `error` and leaves the
  *   room untouched.
+ * - An `action` is forwarded to {@link MatchRoomManager.action} exactly like a
+ *   lifecycle command. The manager owns turn arbitration and builds the
+ *   per-seat `action_result` / `snapshot` deliveries, so the transport never
+ *   applies a board rule or answers an action locally.
  * - Deliveries are addressed by `playerToken`, per the contract in
  *   `contracts.ts`. A seat's token is only ever sent back to the connection
  *   that owns that seat, and a token with no live connection is dropped
@@ -36,11 +41,12 @@ import type {
 } from '../../src/games/minesweeper/online/index';
 import { DEFAULT_ROOM_SERVER_PORT } from './contracts';
 import type {
+  MatchCommandResult,
+  MatchRoomManager,
   PlayerToken,
   RoomCommandResult,
   RoomConnection,
   RoomDelivery,
-  RoomManager,
 } from './contracts';
 
 /** HTTP path of the health probe: `GET /health` → `200 {"status":"ok"}`. */
@@ -62,12 +68,12 @@ const MAX_CLIENT_MESSAGE_BYTES = 64 * 1024;
 /** Options accepted by {@link startRoomServer}. */
 export interface RoomServerOptions {
   /**
-   * The room manager the transport delegates every lifecycle command to.
-   * Injecting it (instead of constructing a room table here) keeps the
-   * transport testable against a fake and keeps room state out of the socket
-   * layer.
+   * The room manager the transport delegates every lifecycle command and
+   * authoritative action to. Injecting it (instead of constructing a room
+   * table here) keeps the transport testable against a fake and keeps room
+   * state out of the socket layer.
    */
-  readonly manager: RoomManager;
+  readonly manager: MatchRoomManager;
   /** Bind host; defaults to loopback so a local server is not exposed. */
   readonly host?: string;
   /** Bind port; `0` asks the OS for a free port (useful in tests). */
@@ -166,12 +172,12 @@ function readMessageIdentity(input: unknown): MessageIdentity {
  * token. It never asks the room manager to change state when a socket closes.
  */
 class RoomSocketHub {
-  private readonly manager: RoomManager;
+  private readonly manager: MatchRoomManager;
   private readonly connections = new Map<WebSocket, ClientConnection>();
   private readonly tokenConnections = new Map<PlayerToken, Set<ClientConnection>>();
   private nextConnectionId = 1;
 
-  constructor(manager: RoomManager) {
+  constructor(manager: MatchRoomManager) {
     this.manager = manager;
   }
 
@@ -230,10 +236,7 @@ class RoomSocketHub {
     }
 
     try {
-      const result = this.runCommand(connection, validation.value);
-      if (result !== null) {
-        this.applyCommandResult(connection, result);
-      }
+      this.applyCommandResult(connection, this.runCommand(connection, validation.value));
     } catch {
       // A manager failure is a server-side fault, but it must not drop the
       // socket or take the process down. Report it as a rejected request while
@@ -247,11 +250,11 @@ class RoomSocketHub {
     }
   }
 
-  /** Dispatch one validated client message; `null` means it was answered directly. */
+  /** Dispatch one validated client message to the manager. */
   private runCommand(
     connection: ClientConnection,
     message: ClientToServerMessage,
-  ): RoomCommandResult | null {
+  ): RoomCommandResult | MatchCommandResult {
     const roomConnection: RoomConnection = {
       connectionId: connection.id,
       playerToken: connection.playerToken,
@@ -271,21 +274,16 @@ class RoomSocketHub {
       case 'rematch':
         return this.manager.rematch(roomConnection, message);
       case 'action':
-        // The shared protocol accepts actions, but the authoritative match
-        // layer (#484) owns them. The room lifecycle transport must not
-        // pretend to apply one.
-        this.sendError(
-          connection.socket,
-          'bad-request',
-          'action messages are not handled by the room lifecycle transport',
-        );
-        return null;
+        // The manager also owns the authoritative match layer (#484); forward
+        // the action and let it decide the deliveries. A rejection comes back
+        // as a match result and is sent by `applyCommandResult`.
+        return this.manager.action(roomConnection, message);
     }
   }
 
   private applyCommandResult(
     connection: ClientConnection,
-    result: RoomCommandResult,
+    result: RoomCommandResult | MatchCommandResult,
   ): void {
     if (!result.ok) {
       sendMessage(connection.socket, result.error);
