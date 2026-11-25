@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   JOIN_TIMEOUT_MS,
   ROOM_CAPACITY,
+  publicRoomState,
   type RoomCommandFailure,
   type RoomCommandResult,
   type RoomCommandSuccess,
@@ -474,6 +475,13 @@ describe('online room creation and joining', () => {
     expect(resumed.boundToken).toBe(joined.guestToken);
     expect(resumed.deliveries).toHaveLength(1);
     expect(resumed.deliveries[0]?.playerToken).toBe(joined.guestToken);
+    // A reconnecting seat learns the current state only from this message: it
+    // must be the stored record's public projection, not a stale or zeroed
+    // copy whose seq the client would discard as already applied.
+    expect(resumed.deliveries[0]?.message).toEqual({
+      ...publicRoomState(before),
+      playerToken: joined.guestToken,
+    });
     expect(manager.getRoom(created.roomId)).toEqual(before);
     expect(manager.getRoom(created.roomId)?.seats).toHaveLength(2);
 
@@ -521,6 +529,10 @@ describe('online room creation and joining', () => {
     );
     expect(playingResume.deliveries).toHaveLength(1);
     expect(playingResume.boundToken).toBe(room.guestToken);
+    expect(playingResume.deliveries[0]?.message).toEqual({
+      ...publicRoomState(playing),
+      playerToken: room.guestToken,
+    });
     expect(room.manager.getRoom(room.roomId)).toEqual(playing);
     expect(room.manager.getMatch(room.roomId)).toBe(room.match);
 
@@ -535,6 +547,10 @@ describe('online room creation and joining', () => {
     );
     expect(finishedResume.deliveries).toHaveLength(1);
     expect(finishedResume.boundToken).toBe(room.hostToken);
+    expect(finishedResume.deliveries[0]?.message).toEqual({
+      ...publicRoomState(finished),
+      playerToken: room.hostToken,
+    });
     expect(room.manager.getRoom(room.roomId)).toEqual(finished);
   });
 
@@ -582,7 +598,7 @@ describe('online room creation and joining', () => {
     );
   });
 
-  it('rejects an invalid config or protocol version without creating a room', () => {
+  it('rejects an invalid config or protocol version without creating or mutating a room', () => {
     const manager = makeManager();
     expect(
       expectError(
@@ -601,8 +617,22 @@ describe('online room creation and joining', () => {
     );
     expect(manager.roomCount).toBe(0);
 
-    createRoom(manager);
+    const created = createRoom(manager);
     expect(manager.roomCount).toBe(1);
+
+    // `join` repeats the same manager-level version guard; a mismatched
+    // client must not take the second seat.
+    expectRejectedWithoutChange(
+      manager,
+      created.roomId,
+      () =>
+        manager.join(
+          connection(),
+          joinMessage(created.roomId, { protocolVersion: PROTOCOL_VERSION + 1 }),
+        ),
+      'bad-request',
+    );
+    expect(manager.getRoom(created.roomId)?.seats).toHaveLength(1);
   });
 
   it('mints unique room ids and seat tokens across many creates', () => {
@@ -827,6 +857,28 @@ describe('online room leave and dissolve', () => {
     const rejoined = joinRoom(manager, created.roomId);
     expect(rejoined.guestToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(manager.getRoom(created.roomId)?.stateReason).toBe('guest-joined');
+  });
+
+  it('rejects leave and rematch from a connection with no seat', () => {
+    const manager = makeManager();
+    const created = createRoom(manager);
+    joinRoom(manager, created.roomId);
+
+    // Both commands look the seat up before their state guard, so an unknown
+    // token must be rejected as `not-in-room` instead of dereferencing null.
+    expectRejectedWithoutChange(
+      manager,
+      created.roomId,
+      () => manager.leave(connection('stale-token'), leaveMessage(created.roomId)),
+      'not-in-room',
+    );
+    expectRejectedWithoutChange(
+      manager,
+      created.roomId,
+      () => manager.rematch(connection('stale-token'), rematchMessage(created.roomId)),
+      'not-in-room',
+    );
+    expect(manager.getRoom(created.roomId)?.seats).toHaveLength(2);
   });
 
   it('returns a ready room to waiting when the guest leaves', () => {
@@ -1084,20 +1136,50 @@ describe('online room join timeout', () => {
     expect(manager.getRoom(created.roomId)).toBeUndefined();
   });
 
-  it('rejects turn and match timers because the match layer owns them', () => {
-    const room = playingRoom();
+  it('rejects turn, match and expired join timers outside the lobby', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const playing = playingRoom({ now: () => Date.now() });
+    const beforePlaying = snapshot(playing.manager, playing.roomId);
+
     expectRejectedWithoutChange(
-      room.manager,
-      room.roomId,
-      () => room.manager.timeout(room.roomId, 'turn'),
+      playing.manager,
+      playing.roomId,
+      () => playing.manager.timeout(playing.roomId, 'turn'),
       'invalid-state',
     );
     expectRejectedWithoutChange(
-      room.manager,
-      room.roomId,
-      () => room.manager.timeout(room.roomId, 'match'),
+      playing.manager,
+      playing.roomId,
+      () => playing.manager.timeout(playing.roomId, 'match'),
       'invalid-state',
     );
+
+    // A join timer that was scheduled before `start` can fire after the
+    // deadline while the match is running; it must not dissolve the room.
+    vi.advanceTimersByTime(JOIN_TIMEOUT_MS + 1);
+    expectRejectedWithoutChange(
+      playing.manager,
+      playing.roomId,
+      () => playing.manager.timeout(playing.roomId, 'join'),
+      'invalid-state',
+    );
+    expect(playing.manager.getRoom(playing.roomId)).toEqual(beforePlaying);
+    expect(playing.manager.getMatch(playing.roomId)).toBe(playing.match);
+
+    // The same expired join timer must not close a finished room either.
+    expectOk(
+      playing.manager.finishMatch(playing.roomId, playing.match.matchId, 'mine-hit'),
+    );
+    const beforeFinished = snapshot(playing.manager, playing.roomId);
+    vi.advanceTimersByTime(JOIN_TIMEOUT_MS + 1);
+    expectRejectedWithoutChange(
+      playing.manager,
+      playing.roomId,
+      () => playing.manager.timeout(playing.roomId, 'join'),
+      'invalid-state',
+    );
+    expect(playing.manager.getRoom(playing.roomId)).toEqual(beforeFinished);
   });
 });
 
@@ -1295,6 +1377,9 @@ describe('online room isolation and source constraints', () => {
       ['rematch', manager.rematch(connection(token), rematchMessage(missing))],
       ['dissolve', manager.dissolve(missing, 'server-shutdown')],
       ['timeout', manager.timeout(missing, 'join')],
+      // Match-layer seam (#484): not a wire command, but it has its own
+      // explicit room-not-found branch and must not throw on a missing room.
+      ['finishMatch', manager.finishMatch(missing, 'match_missing', 'mine-hit')],
     ];
 
     for (const [name, result] of results) {
