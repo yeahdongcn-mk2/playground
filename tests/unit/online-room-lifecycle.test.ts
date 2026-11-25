@@ -181,6 +181,7 @@ function expectRoomStateBroadcast(
     readonly playerIds?: readonly string[];
     readonly stateReason?: string | null;
     readonly matchId?: string | null;
+    readonly turnPlayerId?: string | null;
   },
 ): void {
   const success = expectOk(result);
@@ -204,6 +205,9 @@ function expectRoomStateBroadcast(
     }
     if (expected.matchId !== undefined) {
       expect(message.matchId).toBe(expected.matchId);
+    }
+    if (expected.turnPlayerId !== undefined) {
+      expect(message.turnPlayerId).toBe(expected.turnPlayerId);
     }
   }
 }
@@ -723,8 +727,9 @@ describe('online room readiness and start', () => {
     const room = readyRoom();
     const before = snapshot(room.manager, room.roomId);
 
-    const started = expectOk(
-      room.manager.start(connection(room.hostToken), startMessage(room.roomId)),
+    const started = room.manager.start(
+      connection(room.hostToken),
+      startMessage(room.roomId),
     );
     const record = room.manager.getRoom(room.roomId);
     const match = room.manager.getMatch(room.roomId);
@@ -751,15 +756,15 @@ describe('online room readiness and start', () => {
     expect(match.engine.state.status).toBe('ready');
     expect(match.engine.state.mineCount).toBe(CONFIG.mines);
 
-    expect(started.deliveries).toHaveLength(2);
-    for (const delivery of started.deliveries) {
-      expect(delivery.message).toMatchObject({
-        type: 'room_state',
-        state: 'playing',
-        matchId: record?.matchId,
-        turnPlayerId: record?.hostId,
-      });
-    }
+    expectRoomStateBroadcast(started, {
+      state: 'playing',
+      seq: before.seq + 1,
+      ready: [true, true],
+      playerIds: before.seats.map((seat) => seat.playerId),
+      stateReason: 'match-started',
+      matchId: record?.matchId ?? null,
+      turnPlayerId: before.hostId,
+    });
   });
 
   it('rejects ready, leave and rematch while the match is playing', () => {
@@ -797,6 +802,7 @@ describe('online room leave and dissolve', () => {
     const created = createRoom(manager);
     const joined = joinRoom(manager, created.roomId);
 
+    const beforeLeave = snapshot(manager, created.roomId);
     const left = expectOk(
       manager.leave(connection(joined.guestToken), leaveMessage(created.roomId)),
     );
@@ -805,6 +811,13 @@ describe('online room leave and dissolve', () => {
     expect(room?.seats).toHaveLength(1);
     expect(room?.seats[0]?.playerId).toBe(room?.hostId);
     expect(room?.stateReason).toBe('player-left');
+    expectRoomStateBroadcast(left, {
+      state: 'waiting',
+      seq: beforeLeave.seq + 1,
+      ready: [false],
+      playerIds: [beforeLeave.hostId],
+      stateReason: 'player-left',
+    });
     expect(left.deliveries.map((delivery) => delivery.playerToken)).toEqual([
       created.hostToken,
     ]);
@@ -828,6 +841,14 @@ describe('online room leave and dissolve', () => {
     expect(next?.state).toBe('waiting');
     expect(next?.seats).toHaveLength(1);
     expect(next?.seq).toBe(before.seq + 1);
+    expect(next?.stateReason).toBe('player-left');
+    expectRoomStateBroadcast(left, {
+      state: 'waiting',
+      seq: before.seq + 1,
+      ready: [true],
+      playerIds: [before.hostId],
+      stateReason: 'player-left',
+    });
     expect(left.deliveries).toHaveLength(1);
     expect(left.deliveries[0]?.playerToken).toBe(room.hostToken);
   });
