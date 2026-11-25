@@ -296,6 +296,71 @@ async function waitForPortRelease(port: number, timeoutMs = 10_000): Promise<voi
   throw new Error(`port ${port} still accepts connections after the server was stopped`);
 }
 
+/** The `/proc/<pid>/stat` fields this test needs: process state and group id. */
+interface ProcessStat {
+  readonly state: string;
+  readonly processGroup: number;
+}
+
+/**
+ * Read `state` and `pgrp` from one `/proc/<pid>/stat` line.
+ *
+ * The comm field is parenthesised and may itself contain spaces or parentheses,
+ * so the fields after the last `)` are parsed instead of splitting the line.
+ */
+function parseProcessStat(stat: string): ProcessStat | null {
+  const commEnd = stat.lastIndexOf(')');
+  if (commEnd === -1) {
+    return null;
+  }
+  // After comm come state, ppid, pgrp.
+  const fields = stat.slice(commEnd + 2).split(' ');
+  const state = fields[0];
+  const rawProcessGroup = fields[2];
+  if (state === undefined || rawProcessGroup === undefined) {
+    return null;
+  }
+  const processGroup = Number(rawProcessGroup);
+  if (!Number.isInteger(processGroup)) {
+    return null;
+  }
+  return { state, processGroup };
+}
+
+/**
+ * True when the listed pids contain a non-zombie member of `groupId`.
+ *
+ * Separated from `/proc` access so the zombie filter can be tested with
+ * synthetic stat lines. A pid whose stat cannot be read or parsed leaves the
+ * group's state unknown, so the answer stays conservative (`true`).
+ */
+function hasLiveGroupMember(
+  groupId: number,
+  listPids: () => readonly string[],
+  readStat: (pid: string) => string | null,
+): boolean {
+  let sawUnknownMember = false;
+  for (const pid of listPids()) {
+    if (!/^\d+$/.test(pid)) {
+      continue;
+    }
+    const stat = readStat(pid);
+    if (stat === null) {
+      sawUnknownMember = true;
+      continue;
+    }
+    const parsed = parseProcessStat(stat);
+    if (parsed === null) {
+      sawUnknownMember = true;
+      continue;
+    }
+    if (parsed.processGroup === groupId && parsed.state !== 'Z') {
+      return true;
+    }
+  }
+  return sawUnknownMember;
+}
+
 /**
  * True while the child's process group still has a live (non-zombie) member.
  *
@@ -321,30 +386,18 @@ function isProcessGroupAlive(groupId: number): boolean {
   }
 
   try {
-    for (const entry of readdirSync('/proc')) {
-      if (!/^\d+$/.test(entry)) {
-        continue;
-      }
-      let stat: string;
-      try {
-        stat = readFileSync(`/proc/${entry}/stat`, 'utf8');
-      } catch {
-        // The process exited between listing /proc and reading its stat.
-        continue;
-      }
-      const commEnd = stat.lastIndexOf(')');
-      if (commEnd === -1) {
-        continue;
-      }
-      // /proc/<pid>/stat: after the parenthesised comm come state, ppid, pgrp.
-      const fields = stat.slice(commEnd + 2).split(' ');
-      const state = fields[0];
-      const processGroup = Number(fields[2]);
-      if (processGroup === groupId && state !== undefined && state !== 'Z') {
-        return true;
-      }
-    }
-    return false;
+    return hasLiveGroupMember(
+      groupId,
+      () => readdirSync('/proc'),
+      (pid) => {
+        try {
+          return readFileSync(`/proc/${pid}/stat`, 'utf8');
+        } catch {
+          // The process exited between listing /proc and reading its stat.
+          return null;
+        }
+      },
+    );
   } catch {
     // If /proc is unreadable, keep the conservative kill(0) answer.
     return true;
@@ -363,7 +416,7 @@ async function waitForProcessGroupGone(
     }
     await delay(50);
   }
-  throw new Error(`process group ${groupId} still has live members after SIGTERM`);
+  throw new Error(`process group ${groupId} still has live members`);
 }
 
 // npm does not forward SIGTERM to the tsx process it starts, so the process
@@ -394,59 +447,36 @@ describe.skipIf(process.platform === 'win32')('room server entry point', () => {
     }
   }, 60_000);
 
-  it('runs the entry directly and exits cleanly with code 0 on SIGTERM', async () => {
-    const port = await freePort();
-    const child = spawnRoomProcess(
-      process.execPath,
-      ['--import', 'tsx', 'server/room/main.ts'],
-      { PORT: String(port) },
-    );
-    const output = captureOutput(child);
+  it.each(['SIGTERM', 'SIGINT'] as const)(
+    'runs the entry directly and exits cleanly with code 0 on %s',
+    async (signal) => {
+      const port = await freePort();
+      const child = spawnRoomProcess(
+        process.execPath,
+        ['--import', 'tsx', 'server/room/main.ts'],
+        { PORT: String(port) },
+      );
+      const output = captureOutput(child);
 
-    try {
-      const response = await waitForHealth(child, output, port);
-      expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ status: 'ok' });
-      await waitForListeningLine(child, output, port);
+      try {
+        const response = await waitForHealth(child, output, port);
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ status: 'ok' });
+        await waitForListeningLine(child, output, port);
 
-      expect(child.exitCode).toBeNull();
-      child.kill('SIGTERM');
+        expect(child.exitCode).toBeNull();
+        child.kill(signal);
 
-      const exit = await waitForExit(child, 15_000);
-      expect(exit.signal).toBeNull();
-      expect(exit.code).toBe(0);
-      await waitForPortRelease(port);
-    } finally {
-      await stopChild(child);
-    }
-  }, 60_000);
-
-  it('runs the entry directly and exits cleanly with code 0 on SIGINT', async () => {
-    const port = await freePort();
-    const child = spawnRoomProcess(
-      process.execPath,
-      ['--import', 'tsx', 'server/room/main.ts'],
-      { PORT: String(port) },
-    );
-    const output = captureOutput(child);
-
-    try {
-      const response = await waitForHealth(child, output, port);
-      expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ status: 'ok' });
-      await waitForListeningLine(child, output, port);
-
-      expect(child.exitCode).toBeNull();
-      child.kill('SIGINT');
-
-      const exit = await waitForExit(child, 15_000);
-      expect(exit.signal).toBeNull();
-      expect(exit.code).toBe(0);
-      await waitForPortRelease(port);
-    } finally {
-      await stopChild(child);
-    }
-  }, 60_000);
+        const exit = await waitForExit(child, 15_000);
+        expect(exit.signal).toBeNull();
+        expect(exit.code).toBe(0);
+        await waitForPortRelease(port);
+      } finally {
+        await stopChild(child);
+      }
+    },
+    60_000,
+  );
 
   it.each(['abc', '70000'])(
     'prints a readable error and exits non-zero for PORT=%s',
@@ -473,12 +503,92 @@ describe.skipIf(process.platform === 'win32')('room server entry point', () => {
   );
 });
 
+describe('process group liveness parsing', () => {
+  /** Build a minimal `/proc/<pid>/stat` line; comm may contain spaces/parens. */
+  function statLine(pid: number, comm: string, state: string, processGroup: number): string {
+    return `${pid} (${comm}) ${state} ${pid} ${processGroup} 0 -1 0 0 0 0 0 0 0 0 0 0 20 0 1 0 0`;
+  }
+
+  it('treats a group that only has zombie members as gone', () => {
+    const stats: Record<string, string> = {
+      11: statLine(11, 'tsx server/room/main.ts', 'Z', 11),
+      12: statLine(12, 'node (room worker)', 'Z', 11),
+    };
+    expect(
+      hasLiveGroupMember(
+        11,
+        () => Object.keys(stats),
+        (pid) => stats[pid] ?? null,
+      ),
+    ).toBe(false);
+  });
+
+  it('still reports a live member of the group as alive', () => {
+    const stats: Record<string, string> = { 21: statLine(21, 'node (room worker)', 'S', 21) };
+    expect(
+      hasLiveGroupMember(
+        21,
+        () => Object.keys(stats),
+        (pid) => stats[pid] ?? null,
+      ),
+    ).toBe(true);
+  });
+
+  it('still reports a mixed group with a live member as alive', () => {
+    const stats: Record<string, string> = {
+      21: statLine(21, 'node (room worker)', 'S', 21),
+      22: statLine(22, 'defunct', 'Z', 21),
+    };
+    expect(
+      hasLiveGroupMember(
+        21,
+        () => Object.keys(stats),
+        (pid) => stats[pid] ?? null,
+      ),
+    ).toBe(true);
+  });
+
+  it('ignores live processes in other groups', () => {
+    const stats: Record<string, string> = { 31: statLine(31, 'node', 'R', 99) };
+    expect(
+      hasLiveGroupMember(
+        31,
+        () => Object.keys(stats),
+        (pid) => stats[pid] ?? null,
+      ),
+    ).toBe(false);
+  });
+
+  it('stays conservative when a stat entry cannot be inspected', () => {
+    const unreadable: Record<string, string | undefined> = { 41: undefined };
+    expect(
+      hasLiveGroupMember(
+        41,
+        () => Object.keys(unreadable),
+        (pid) => unreadable[pid] ?? null,
+      ),
+    ).toBe(true);
+
+    const malformed: Record<string, string> = { 42: 'garbage without a comm field' };
+    expect(
+      hasLiveGroupMember(
+        42,
+        () => Object.keys(malformed),
+        (pid) => malformed[pid] ?? null,
+      ),
+    ).toBe(true);
+  });
+});
+
 describe.skipIf(process.platform === 'win32')('process group liveness probe', () => {
   it('reports a group with a live member as still alive', async () => {
     const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1_000)'], {
       detached: true,
       stdio: 'ignore',
     });
+    // A failed spawn emits 'error'; without a listener it surfaces as an
+    // uncaught exception instead of the readable failure below.
+    child.once('error', () => undefined);
 
     try {
       const pid = child.pid;
@@ -486,7 +596,7 @@ describe.skipIf(process.platform === 'win32')('process group liveness probe', ()
         throw new Error('failed to spawn the process-group liveness fixture');
       }
       await expect(waitForProcessGroupGone(pid, 500)).rejects.toThrow(
-        `process group ${pid} still has live members after SIGTERM`,
+        `process group ${pid} still has live members`,
       );
     } finally {
       await stopChild(child);
