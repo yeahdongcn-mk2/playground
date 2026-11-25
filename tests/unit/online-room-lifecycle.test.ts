@@ -266,6 +266,30 @@ function messagesOfType<T extends ServerToClientMessage['type']>(
 }
 
 /**
+ * Assert one message type reached every given seat exactly once.
+ *
+ * `room_state` copies are seat-specific and `snapshot`/`end` copies are
+ * identical, but none of them carries the recipient token inside the payload,
+ * so a count or content assertion alone cannot tell a real broadcast from two
+ * copies to the same seat. Comparing the sorted recipient lists pins both the
+ * recipient set and the one-copy-per-seat property; delivery order is not part
+ * of the protocol. `room_state` keeps its per-seat uniqueness through the same
+ * comparison, so two copies to one seat fail here.
+ */
+function expectSeatBroadcast(
+  result: RoomCommandResult | MatchCommandResult,
+  type: ServerToClientMessage['type'],
+  playerTokens: readonly string[],
+): void {
+  const success = expectOk(result);
+  const recipients = success.deliveries
+    .filter((delivery) => delivery.message.type === type)
+    .map((delivery) => delivery.playerToken);
+  expect(new Set(recipients).size).toBe(playerTokens.length);
+  expect([...recipients].sort()).toEqual([...playerTokens].sort());
+}
+
+/**
  * The join timeout must consume the room's next two sequence numbers.
  *
  * A client that applied the timeout at N+1 would drop a `room_closed` that
@@ -965,6 +989,10 @@ describe('online room readiness and start', () => {
     // both seats: one state change, one shared sequence.
     expect(messagesOfType(started, 'room_state')).toHaveLength(2);
     expect(messagesOfType(started, 'snapshot')).toHaveLength(2);
+    // Two copies alone do not prove a broadcast: each seat must receive its
+    // own `room_state`, and both must receive the shared snapshot.
+    expectSeatBroadcast(started, 'room_state', [room.hostToken, room.guestToken]);
+    expectSeatBroadcast(started, 'snapshot', [room.hostToken, room.guestToken]);
     expectRoomStateMessages(messagesOfType(started, 'room_state'), {
       state: 'playing',
       seq: before.seq + 1,
@@ -1648,6 +1676,7 @@ describe('online authoritative match', () => {
     ]);
     // The verdict goes to the actor first; the snapshot is a broadcast.
     expect(success.deliveries[0]?.playerToken).toBe(room.hostToken);
+    expectSeatBroadcast(result, 'action_result', [room.hostToken]);
 
     const actionResult = messagesOfType(result, 'action_result')[0];
     if (actionResult === undefined) {
@@ -1670,6 +1699,8 @@ describe('online authoritative match', () => {
 
     const snapshots = messagesOfType(result, 'snapshot');
     expect(snapshots).toHaveLength(2);
+    // The accepted-action snapshot must reach both seats, not twice the actor.
+    expectSeatBroadcast(result, 'snapshot', [room.hostToken, room.guestToken]);
     expect(snapshots[0]).toEqual(snapshots[1]);
     expect(snapshots[0]).toMatchObject({
       type: 'snapshot',
@@ -1909,6 +1940,11 @@ describe('online authoritative match', () => {
       'room_state',
     ]);
 
+    // The terminal snapshot and end are broadcasts: both seats must receive
+    // one copy each, not two copies to the actor.
+    expectSeatBroadcast(result, 'snapshot', [room.hostToken, room.guestToken]);
+    expectSeatBroadcast(result, 'end', [room.hostToken, room.guestToken]);
+
     const ends = messagesOfType(result, 'end');
     expect(ends).toHaveLength(2);
     expect(ends[0]).toEqual(ends[1]);
@@ -1985,6 +2021,9 @@ describe('online authoritative match', () => {
       'room_state',
       'room_state',
     ]);
+
+    // One end per seat, not two to the forfeiting seat.
+    expectSeatBroadcast(result, 'end', [room.hostToken, room.guestToken]);
 
     const ends = messagesOfType(result, 'end');
     expect(ends).toHaveLength(2);
