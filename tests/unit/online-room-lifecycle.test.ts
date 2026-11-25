@@ -240,6 +240,40 @@ function expectTimeoutThenClose(
   }
 }
 
+/**
+ * Assert a successful command notified every current seat that the room closed.
+ *
+ * `room_closed` is the only terminal notification, so its `seq` has to be the
+ * sequence of the dissolving transition: reusing the pre-transition seq would
+ * let a client drop it as a duplicate. The payload, per-seat recipients and
+ * delivery count are pinned too, so an empty or stale broadcast fails here.
+ */
+function expectRoomClosedBroadcast(
+  result: RoomCommandResult,
+  expected: {
+    readonly roomId: string;
+    readonly seq: number;
+    readonly reason: string;
+    readonly playerTokens: readonly string[];
+  },
+): void {
+  const success = expectOk(result);
+  expect(success.deliveries).toHaveLength(expected.playerTokens.length);
+  expect(success.deliveries.map((delivery) => delivery.playerToken)).toEqual(
+    expected.playerTokens,
+  );
+  for (const delivery of success.deliveries) {
+    const message = delivery.message;
+    if (message.type !== 'room_closed') {
+      throw new Error(`expected a room_closed delivery, got ${message.type}`);
+    }
+    expect(message.roomId).toBe(expected.roomId);
+    expect(message.seq).toBe(expected.seq);
+    expect(message.reason).toBe(expected.reason);
+    expect(message.finalState).toBe('dissolved');
+  }
+}
+
 interface CreatedRoom {
   readonly manager: InMemoryRoomManager;
   readonly roomId: string;
@@ -374,14 +408,19 @@ describe('online room creation and joining', () => {
   it('fills both seats on join without exposing either token to the other seat', () => {
     const manager = makeManager();
     const created = createRoom(manager);
+    const beforeJoin = snapshot(manager, created.roomId);
     const joined = joinRoom(manager, created.roomId);
     const room = manager.getRoom(created.roomId);
+    if (room === undefined) {
+      throw new Error('join must keep the room in the table');
+    }
 
-    expect(room?.state).toBe('waiting');
-    expect(room?.seats).toHaveLength(2);
-    expect(room?.seats.map((seat) => seat.isHost)).toEqual([true, false]);
-    expect(room?.seats.map((seat) => seat.ready)).toEqual([false, false]);
-    expect(new Set(room?.seats.map((seat) => seat.playerToken)).size).toBe(2);
+    expect(room.state).toBe('waiting');
+    expect(room.seats).toHaveLength(2);
+    expect(room.seq).toBe(beforeJoin.seq + 1);
+    expect(room.seats.map((seat) => seat.isHost)).toEqual([true, false]);
+    expect(room.seats.map((seat) => seat.ready)).toEqual([false, false]);
+    expect(new Set(room.seats.map((seat) => seat.playerToken)).size).toBe(2);
 
     expect(joined.result.boundToken).toBe(joined.guestToken);
     expect(joined.result.deliveries).toHaveLength(2);
@@ -401,6 +440,17 @@ describe('online room creation and joining', () => {
         delivery.playerToken === created.hostToken ? joined.guestToken : created.hostToken,
       );
     }
+
+    // The host already applied create's seq=1; a join broadcast that reused it
+    // would be dropped as a duplicate, so pin the transition's seq, state and
+    // reason on every per-seat copy.
+    expectRoomStateBroadcast(joined.result, {
+      state: 'waiting',
+      seq: beforeJoin.seq + 1,
+      ready: [false, false],
+      playerIds: room.seats.map((seat) => seat.playerId),
+      stateReason: 'guest-joined',
+    });
   });
 
   it('resumes a seat by token without adding a player or changing the sequence', () => {
@@ -792,23 +842,20 @@ describe('online room leave and dissolve', () => {
         expectOk(manager.ready(connection(joined.guestToken), readyMessage(created.roomId, true)));
       }
       expect(manager.getRoom(created.roomId)?.state).toBe(state);
+      const beforeLeave = snapshot(manager, created.roomId);
 
-      const left = expectOk(
+      // The terminal broadcast must carry the dissolving transition's seq;
+      // reusing the pre-dissolve seq would make clients drop the only message
+      // that tells them the room is gone.
+      expectRoomClosedBroadcast(
         manager.leave(connection(created.hostToken), leaveMessage(created.roomId)),
-      );
-      expect(left.deliveries).toHaveLength(2);
-      for (const delivery of left.deliveries) {
-        expect(delivery.message).toMatchObject({
-          type: 'room_closed',
+        {
           roomId: created.roomId,
+          seq: beforeLeave.seq + 1,
           reason: 'host-left',
-          finalState: 'dissolved',
-        });
-      }
-      expect(left.deliveries.map((delivery) => delivery.playerToken)).toEqual([
-        created.hostToken,
-        joined.guestToken,
-      ]);
+          playerTokens: [created.hostToken, joined.guestToken],
+        },
+      );
       expect(manager.getRoom(created.roomId)).toBeUndefined();
       expect(manager.roomCount).toBe(0);
 
@@ -821,30 +868,36 @@ describe('online room leave and dissolve', () => {
 
   it('lets the server dissolve playing and finished rooms exactly once', () => {
     const playing = playingRoom();
-    const closed = expectOk(playing.manager.dissolve(playing.roomId, 'server-shutdown'));
-    expect(closed.deliveries).toHaveLength(2);
-    expect(closed.deliveries[0]?.message).toMatchObject({
-      type: 'room_closed',
+    const beforePlayingDissolve = snapshot(playing.manager, playing.roomId);
+    expectRoomClosedBroadcast(playing.manager.dissolve(playing.roomId, 'server-shutdown'), {
+      roomId: playing.roomId,
+      seq: beforePlayingDissolve.seq + 1,
       reason: 'server-shutdown',
-      finalState: 'dissolved',
+      playerTokens: [playing.hostToken, playing.guestToken],
     });
     expect(playing.manager.getRoom(playing.roomId)).toBeUndefined();
     expectError(playing.manager.dissolve(playing.roomId, 'again'), 'room-not-found');
 
     const finished = playingRoom();
     expectOk(finished.manager.finishMatch(finished.roomId, finished.match.matchId, 'mine-hit'));
-    const afterFinish = expectOk(finished.manager.dissolve(finished.roomId, 'host-closed'));
-    expect(afterFinish.deliveries).toHaveLength(2);
+    const beforeFinishedDissolve = snapshot(finished.manager, finished.roomId);
+    expectRoomClosedBroadcast(finished.manager.dissolve(finished.roomId, 'host-closed'), {
+      roomId: finished.roomId,
+      seq: beforeFinishedDissolve.seq + 1,
+      reason: 'host-closed',
+      playerTokens: [finished.hostToken, finished.guestToken],
+    });
     expect(finished.manager.getRoom(finished.roomId)).toBeUndefined();
 
     // A blank server reason falls back to the neutral default instead of
     // broadcasting an empty room_closed reason.
     const blankReason = playingRoom();
-    const blankClosed = expectOk(blankReason.manager.dissolve(blankReason.roomId, '   '));
-    expect(blankClosed.deliveries[0]?.message).toMatchObject({
-      type: 'room_closed',
+    const beforeBlankDissolve = snapshot(blankReason.manager, blankReason.roomId);
+    expectRoomClosedBroadcast(blankReason.manager.dissolve(blankReason.roomId, '   '), {
+      roomId: blankReason.roomId,
+      seq: beforeBlankDissolve.seq + 1,
       reason: 'dissolved',
-      finalState: 'dissolved',
+      playerTokens: [blankReason.hostToken, blankReason.guestToken],
     });
   });
 
@@ -1100,10 +1153,20 @@ describe('online room finished and rematch', () => {
     const room = playingRoom();
     expectOk(room.manager.finishMatch(room.roomId, room.match.matchId, 'forfeit'));
     expectOk(room.manager.rematch(connection(room.hostToken), rematchMessage(room.roomId, true)));
-    const declined = expectOk(
+    const beforeDecline = snapshot(room.manager, room.roomId);
+    // A decline is not a state transfer, but its broadcast still advances the
+    // seq and must say why: clients may otherwise keep showing rematch-pending.
+    expectRoomStateBroadcast(
       room.manager.rematch(connection(room.guestToken), rematchMessage(room.roomId, false)),
+      {
+        state: 'finished',
+        seq: beforeDecline.seq + 1,
+        stateReason: 'rematch-declined',
+        ready: [true, true],
+        playerIds: beforeDecline.seats.map((seat) => seat.playerId),
+        matchId: room.match.matchId,
+      },
     );
-    expect(declined.deliveries).toHaveLength(2);
     expect(room.manager.getRoom(room.roomId)?.state).toBe('finished');
     expect(room.manager.getRoom(room.roomId)?.matchId).toBe(room.match.matchId);
 
