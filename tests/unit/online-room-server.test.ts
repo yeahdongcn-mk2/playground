@@ -69,6 +69,8 @@ function commandFailure(code: RoomErrorCode): RoomCommandResult {
  */
 class FakeRoomManager implements RoomManager {
   readonly calls: string[] = [];
+  /** Makes the next `join` throw, exercising the transport's fault boundary. */
+  throwOnNextJoin = false;
   private config: CreateMessage['config'] = CONFIG;
   private roomId = '';
   private state: RoomRecord['state'] = 'idle';
@@ -95,6 +97,10 @@ class FakeRoomManager implements RoomManager {
 
   join(_connection: RoomConnection, message: JoinMessage): RoomCommandResult {
     this.calls.push('join');
+    if (this.throwOnNextJoin) {
+      this.throwOnNextJoin = false;
+      throw new Error('fake room manager failure');
+    }
     if (this.roomId === '' || message.roomId !== this.roomId) {
       return commandFailure('room-not-found');
     }
@@ -239,6 +245,10 @@ class TestClient {
     this.socket.send(text);
   }
 
+  sendBinary(data: Buffer): void {
+    this.socket.send(data, { binary: true });
+  }
+
   next(): Promise<ServerToClientMessage> {
     const message = this.queued.shift();
     if (message !== undefined) {
@@ -349,6 +359,20 @@ describe('room WebSocket/HTTP transport', () => {
     expect(missing.status).toBe(404);
   });
 
+  it('rejects a WebSocket upgrade outside the room path', async () => {
+    const server = await startTestServer(new FakeRoomManager());
+    const socket = new WebSocket(`ws://127.0.0.1:${server.port}/not-ws`);
+
+    const outcome = await new Promise<{ readonly error: Error | null }>((resolve) => {
+      socket.once('open', () => resolve({ error: null }));
+      socket.once('error', (error: Error) => resolve({ error }));
+    });
+    socket.terminate();
+
+    expect(outcome.error).toBeInstanceOf(Error);
+    expect(socket.readyState).not.toBe(WebSocket.OPEN);
+  });
+
   it('drives create → join → ready over real WebSocket connections', async () => {
     const manager = new FakeRoomManager();
     const server = await startTestServer(manager);
@@ -413,6 +437,16 @@ describe('room WebSocket/HTTP transport', () => {
     const wrongDirection = await client.next();
     expect(wrongDirection).toMatchObject({ type: 'error', code: 'bad-request' });
 
+    // A valid protocol message in a binary frame must be rejected as binary:
+    // decoding it as text would otherwise accept the command.
+    client.sendBinary(Buffer.from(JSON.stringify(createMessage({ requestId: 'req-binary' }))));
+    const binaryFrame = await client.next();
+    expect(binaryFrame).toMatchObject({
+      type: 'error',
+      code: 'bad-request',
+      requestId: null,
+    });
+
     client.sendRaw(JSON.stringify({ type: 'bogus', requestId: 'req-unknown' }));
     const unknownType = await client.next();
     expect(unknownType).toMatchObject({
@@ -439,6 +473,27 @@ describe('room WebSocket/HTTP transport', () => {
     expect(unsettledAction).toMatchObject({ type: 'error', code: 'bad-request' });
 
     expect(manager.calls).toEqual([]);
+  });
+
+  it('reports a manager failure without dropping the connection', async () => {
+    const manager = new FakeRoomManager();
+    manager.throwOnNextJoin = true;
+    const server = await startTestServer(manager);
+    const client = await connect(server.port);
+
+    client.send(joinMessage('room-missing', { requestId: 'req-manager-failure' }));
+    const failure = await client.next();
+    expect(failure).toMatchObject({
+      type: 'error',
+      code: 'bad-request',
+      requestId: 'req-manager-failure',
+      roomId: 'room-missing',
+    });
+
+    // The socket survives the server-side fault and still serves requests.
+    client.send(createMessage());
+    const created = await nextRoomState(client);
+    expect(created.state).toBe('waiting');
   });
 
   it('broadcasts timeout and room_closed deliveries to every seated connection', async () => {
@@ -477,7 +532,7 @@ describe('room WebSocket/HTTP transport', () => {
     expect(guestClosed).toMatchObject({ type: 'room_closed', roomId });
   });
 
-  it('cleans up a disconnected connection without changing room state', async () => {
+  it('keeps room state unchanged when a connection disconnects', async () => {
     const manager = new FakeRoomManager();
     const { server, host, guest, roomId } = await createSeatedRoom(manager);
     const callsBefore = [...manager.calls];
@@ -485,7 +540,6 @@ describe('room WebSocket/HTTP transport', () => {
     const guestClosed = guest.closed();
     guest.terminate();
     await guestClosed;
-    await new Promise((resolve) => setTimeout(resolve, 25));
 
     expect(manager.calls).toEqual(callsBefore);
     expect(manager.room.seats).toHaveLength(2);
@@ -503,6 +557,50 @@ describe('room WebSocket/HTTP transport', () => {
     const hostClosed = await host.next();
     expect(hostClosed.type).toBe('room_closed');
     expect(manager.calls).toEqual(callsBefore);
+  });
+
+  it('drops a delivery for a seat with no live connection instead of re-addressing it', async () => {
+    // An offline seat keeps its bearer token in the room state. Build one
+    // deterministically (created but never connected) so the assertion does
+    // not depend on close-event timing.
+    const manager = new FakeRoomManager();
+    manager.create({ connectionId: 'offline-host', playerToken: null }, createMessage());
+    const offlineSeat = manager.room.seats.find((seat) => seat.isHost);
+    if (offlineSeat === undefined) {
+      throw new Error('seeded room is missing its host seat');
+    }
+    const offlineToken = offlineSeat.playerToken;
+
+    const server = await startTestServer(manager);
+    const guest = await connect(server.port);
+    guest.send(joinMessage(manager.room.roomId));
+    const guestState = await nextRoomState(guest);
+    const guestToken = requiredToken(guestState);
+
+    // The host seat's per-seat room_state carries its bearer token. With no
+    // live connection for that token the delivery must be dropped, never
+    // re-addressed to another connection (which would leak the offline token).
+    const offlineState = roomStateDeliveries(manager.room).find(
+      (delivery) => delivery.playerToken === offlineToken,
+    );
+    if (offlineState === undefined) {
+      throw new Error('expected a room_state delivery for the offline token');
+    }
+    server.deliver([offlineState]);
+
+    // A distinguishable marker proves the live guest sees only its own delivery.
+    const marker: RoomClosedMessage = {
+      type: 'room_closed',
+      roomId: manager.room.roomId,
+      seq: manager.room.seq,
+      reason: 'delivery-drop marker',
+      finalState: 'dissolved',
+    };
+    server.deliver([{ playerToken: guestToken, message: marker }]);
+
+    const received = await guest.next();
+    expect(received).toEqual(marker);
+    expect(JSON.stringify(received)).not.toContain(offlineToken);
   });
 
   it('closes cleanly and releases the listening port', async () => {

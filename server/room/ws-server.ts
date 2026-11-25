@@ -236,11 +236,13 @@ class RoomSocketHub {
       }
     } catch {
       // A manager failure is a server-side fault, but it must not drop the
-      // socket or take the process down. Report it as a rejected request.
+      // socket or take the process down. Report it as a rejected request while
+      // keeping the already-validated identity so the client can correlate it.
       this.sendError(
         connection.socket,
         'bad-request',
         'the room service could not handle the message',
+        readMessageIdentity(validation.value),
       );
     }
   }
@@ -353,8 +355,16 @@ class RoomSocketHub {
     socket: WebSocket,
     code: ProtocolErrorCode,
     message: string,
+    identity: MessageIdentity = { requestId: null, roomId: null },
   ): void {
-    sendMessage(socket, createProtocolError(code, { message }));
+    sendMessage(
+      socket,
+      createProtocolError(code, {
+        requestId: identity.requestId,
+        roomId: identity.roomId,
+        message,
+      }),
+    );
   }
 }
 
