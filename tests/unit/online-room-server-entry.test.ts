@@ -193,18 +193,23 @@ describe('main shutdown', () => {
 });
 
 describe('startRoomServerFromConfig', () => {
-  it('serves /health on a system-assigned port and releases it on close', async () => {
+  it('binds the HOST override, serves /health, and releases the port on close', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     try {
-      const config = resolveRoomServerConfig({ HOST: '127.0.0.1', PORT: '0' });
+      // A non-default HOST proves `startRoomServerFromConfig` forwards
+      // `config.host`; with the default the forwarded value is invisible.
+      const config = resolveRoomServerConfig({ HOST: '0.0.0.0', PORT: '0' });
       const server = await startRoomServerFromConfig(config);
       servers.push(server);
 
+      expect(server.host).toBe('0.0.0.0');
       expect(server.port).toBeGreaterThan(0);
       expect(log).toHaveBeenCalledWith(
-        `room server listening on http://127.0.0.1:${server.port}`,
+        `room server listening on http://0.0.0.0:${server.port}`,
       );
 
+      // A wildcard bind still accepts loopback connections, and hitting it via
+      // 127.0.0.1 proves the listener is actually reachable, not just reported.
       const response = await fetch(`http://127.0.0.1:${server.port}/health`);
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ status: 'ok' });
