@@ -164,6 +164,82 @@ function roomStateOf(result: RoomCommandResult): RoomStateMessage {
   return message;
 }
 
+/**
+ * Assert a successful command broadcast one `room_state` per seat.
+ *
+ * Each per-seat copy must carry the transition's state and sequence, preserve
+ * the seat order/readiness, and (when given) its reason and match id. A
+ * command that delivers nothing, an old record, or a record with the wrong
+ * sequence fails here.
+ */
+function expectRoomStateBroadcast(
+  result: RoomCommandResult,
+  expected: {
+    readonly state: RoomStateMessage['state'];
+    readonly seq: number;
+    readonly ready: readonly boolean[];
+    readonly playerIds?: readonly string[];
+    readonly stateReason?: string | null;
+    readonly matchId?: string | null;
+  },
+): void {
+  const success = expectOk(result);
+  expect(success.deliveries).toHaveLength(expected.ready.length);
+  expect(new Set(success.deliveries.map((delivery) => delivery.playerToken)).size).toBe(
+    expected.ready.length,
+  );
+  for (const delivery of success.deliveries) {
+    const message = delivery.message;
+    if (message.type !== 'room_state') {
+      throw new Error(`expected a room_state delivery, got ${message.type}`);
+    }
+    expect(message.state).toBe(expected.state);
+    expect(message.seq).toBe(expected.seq);
+    expect(message.players.map((player) => player.ready)).toEqual(expected.ready);
+    if (expected.playerIds !== undefined) {
+      expect(message.players.map((player) => player.playerId)).toEqual(expected.playerIds);
+    }
+    if (expected.stateReason !== undefined) {
+      expect(message.stateReason).toBe(expected.stateReason);
+    }
+    if (expected.matchId !== undefined) {
+      expect(message.matchId).toBe(expected.matchId);
+    }
+  }
+}
+
+/**
+ * The join timeout must consume the room's next two sequence numbers.
+ *
+ * A client that applied the timeout at N+1 would drop a `room_closed` that
+ * reused the same seq, so the pair has to be pinned as consecutive on every
+ * per-seat copy.
+ */
+function expectTimeoutThenClose(
+  success: RoomCommandSuccess,
+  beforeSeq: number,
+): void {
+  const timeouts = success.deliveries.flatMap((delivery) =>
+    delivery.message.type === 'timeout' ? [delivery.message] : [],
+  );
+  const closes = success.deliveries.flatMap((delivery) =>
+    delivery.message.type === 'room_closed' ? [delivery.message] : [],
+  );
+  const timeout = timeouts[0];
+  if (timeout === undefined) {
+    throw new Error('expected a timeout delivery');
+  }
+  expect(timeouts).toHaveLength(2);
+  expect(closes).toHaveLength(2);
+  expect(timeout.seq).toBe(beforeSeq + 1);
+  for (const copy of timeouts) {
+    expect(copy.seq).toBe(timeout.seq);
+  }
+  for (const close of closes) {
+    expect(close.seq).toBe(timeout.seq + 1);
+  }
+}
+
 interface CreatedRoom {
   readonly manager: InMemoryRoomManager;
   readonly roomId: string;
@@ -496,21 +572,49 @@ describe('online room readiness and start', () => {
     const created = createRoom(manager);
     const host = connection(created.hostToken);
 
-    expectOk(manager.ready(host, readyMessage(created.roomId, true)));
+    const beforeHostReady = snapshot(manager, created.roomId);
+    expectRoomStateBroadcast(manager.ready(host, readyMessage(created.roomId, true)), {
+      state: 'waiting',
+      seq: beforeHostReady.seq + 1,
+      stateReason: null,
+      ready: [true],
+      playerIds: [beforeHostReady.hostId],
+    });
     expect(manager.getRoom(created.roomId)?.state).toBe('waiting');
 
     const joined = joinRoom(manager, created.roomId);
     const guest = connection(joined.guestToken);
     expect(manager.getRoom(created.roomId)?.state).toBe('waiting');
 
-    expectOk(manager.ready(guest, readyMessage(created.roomId, true)));
+    const beforeAllReady = snapshot(manager, created.roomId);
+    expectRoomStateBroadcast(manager.ready(guest, readyMessage(created.roomId, true)), {
+      state: 'ready',
+      seq: beforeAllReady.seq + 1,
+      stateReason: 'all-ready',
+      ready: [true, true],
+      playerIds: beforeAllReady.seats.map((seat) => seat.playerId),
+    });
     expect(manager.getRoom(created.roomId)?.state).toBe('ready');
     expect(manager.getRoom(created.roomId)?.seats.every((seat) => seat.ready)).toBe(true);
 
-    expectOk(manager.ready(host, readyMessage(created.roomId, false)));
+    const beforeUnready = snapshot(manager, created.roomId);
+    expectRoomStateBroadcast(manager.ready(host, readyMessage(created.roomId, false)), {
+      state: 'waiting',
+      seq: beforeUnready.seq + 1,
+      stateReason: 'unready',
+      ready: [false, true],
+      playerIds: beforeUnready.seats.map((seat) => seat.playerId),
+    });
     expect(manager.getRoom(created.roomId)?.state).toBe('waiting');
 
-    expectOk(manager.ready(host, readyMessage(created.roomId, true)));
+    const beforeReReady = snapshot(manager, created.roomId);
+    expectRoomStateBroadcast(manager.ready(host, readyMessage(created.roomId, true)), {
+      state: 'ready',
+      seq: beforeReReady.seq + 1,
+      stateReason: 'all-ready',
+      ready: [true, true],
+      playerIds: beforeReReady.seats.map((seat) => seat.playerId),
+    });
     expect(manager.getRoom(created.roomId)?.state).toBe('ready');
   });
 
@@ -832,10 +936,10 @@ describe('online room join timeout', () => {
     expect(success.deliveries[2]?.message).toMatchObject({
       type: 'room_closed',
       roomId: created.roomId,
-      seq: before.seq + 2,
       reason: 'join-timeout',
       finalState: 'dissolved',
     });
+    expectTimeoutThenClose(success, before.seq);
 
     expect(manager.getRoom(created.roomId)).toBeUndefined();
     expect(manager.roomCount).toBe(0);
@@ -870,6 +974,7 @@ describe('online room join timeout', () => {
     expectError(manager.timeout(created.roomId, 'join'), 'deadline-passed');
     expect(manager.getRoom(created.roomId)?.state).toBe('ready');
 
+    const beforeTimeout = snapshot(manager, created.roomId);
     vi.advanceTimersByTime(60_000);
     const success = expectOk(manager.timeout(created.roomId, 'join'));
     expect(success.deliveries.map((delivery) => delivery.message.type)).toEqual([
@@ -878,6 +983,7 @@ describe('online room join timeout', () => {
       'room_closed',
       'room_closed',
     ]);
+    expectTimeoutThenClose(success, beforeTimeout.seq);
     expect(manager.getRoom(created.roomId)).toBeUndefined();
   });
 
@@ -891,6 +997,7 @@ describe('online room join timeout', () => {
     expectOk(manager.ready(connection(joined.guestToken), readyMessage(created.roomId, true)));
     expect(manager.getRoom(created.roomId)?.state).toBe('ready');
 
+    const beforeTimeout = snapshot(manager, created.roomId);
     vi.advanceTimersByTime(JOIN_TIMEOUT_MS);
     const success = expectOk(manager.timeout(created.roomId, 'join'));
     expect(success.deliveries.map((delivery) => delivery.message.type)).toEqual([
@@ -899,6 +1006,7 @@ describe('online room join timeout', () => {
       'room_closed',
       'room_closed',
     ]);
+    expectTimeoutThenClose(success, beforeTimeout.seq);
     expect(manager.getRoom(created.roomId)).toBeUndefined();
   });
 
@@ -922,12 +1030,19 @@ describe('online room join timeout', () => {
 describe('online room finished and rematch', () => {
   it('keeps the finished result until both players accept the rematch', () => {
     const room = playingRoom();
-    const finished = expectOk(
+    const beforeFinish = snapshot(room.manager, room.roomId);
+    expectRoomStateBroadcast(
       room.manager.finishMatch(room.roomId, room.match.matchId, 'mine-hit'),
+      {
+        state: 'finished',
+        seq: beforeFinish.seq + 1,
+        stateReason: 'mine-hit',
+        ready: [true, true],
+        playerIds: beforeFinish.seats.map((seat) => seat.playerId),
+        matchId: room.match.matchId,
+      },
     );
     const finishedRecord = room.manager.getRoom(room.roomId);
-
-    expect(finished.deliveries).toHaveLength(2);
     expect(finishedRecord).toMatchObject({
       state: 'finished',
       turnPlayerId: null,
@@ -937,15 +1052,32 @@ describe('online room finished and rematch', () => {
     expect(finishedRecord?.matchId).toBe(room.match.matchId);
     expect(room.manager.getMatch(room.roomId)).toBe(room.match);
 
-    const hostAccepted = expectOk(
+    const beforeHostRematch = snapshot(room.manager, room.roomId);
+    expectRoomStateBroadcast(
       room.manager.rematch(connection(room.hostToken), rematchMessage(room.roomId, true)),
+      {
+        state: 'finished',
+        seq: beforeHostRematch.seq + 1,
+        stateReason: 'rematch-pending',
+        ready: [true, true],
+        playerIds: beforeHostRematch.seats.map((seat) => seat.playerId),
+        matchId: room.match.matchId,
+      },
     );
-    expect(hostAccepted.deliveries).toHaveLength(2);
     expect(room.manager.getRoom(room.roomId)?.state).toBe('finished');
     expect(room.manager.getRoom(room.roomId)?.matchId).toBe(room.match.matchId);
 
-    const guestAccepted = expectOk(
+    const beforeGuestRematch = snapshot(room.manager, room.roomId);
+    expectRoomStateBroadcast(
       room.manager.rematch(connection(room.guestToken), rematchMessage(room.roomId, true)),
+      {
+        state: 'ready',
+        seq: beforeGuestRematch.seq + 1,
+        stateReason: 'rematch',
+        ready: [true, true],
+        playerIds: beforeGuestRematch.seats.map((seat) => seat.playerId),
+        matchId: null,
+      },
     );
     const ready = room.manager.getRoom(room.roomId);
     expect(ready).toMatchObject({
@@ -962,7 +1094,6 @@ describe('online room finished and rematch', () => {
     );
     expect(ready?.seats.every((seat) => seat.ready)).toBe(true);
     expect(room.manager.getMatch(room.roomId)).toBeNull();
-    expect(guestAccepted.deliveries).toHaveLength(2);
   });
 
   it('lets a decline cancel the whole pending rematch', () => {
