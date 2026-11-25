@@ -224,6 +224,24 @@ function digestState(
   };
 }
 
+/**
+ * Digest one step of the live match after an accepted action.
+ *
+ * The room layer samples this while it applies actions, so the replay log
+ * carries expectations measured from the original match instead of a second
+ * run of `replayMatch` over the same config and seed. A replay that rebuilds
+ * the board from the wrong config or seed then fails at the first differing
+ * step.
+ */
+export function matchDigest(
+  match: EngineMatch,
+  seq: number,
+  turnId: number,
+): ReplayDigest {
+  const runtime = runtimeFor(match);
+  return digestState(runtime.engine, seq, turnId, match.seedHash);
+}
+
 function assertActionFields(action: ReplayAction, label: string): void {
   if (action === null || typeof action !== 'object') {
     throw new TypeError(`${label} must be an object, received ${formatValue(action)}.`);

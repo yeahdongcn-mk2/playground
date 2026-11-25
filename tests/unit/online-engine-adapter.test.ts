@@ -7,6 +7,7 @@ import {
   endPayload,
   engineAdapter,
   hashSeed,
+  matchDigest,
   ReplayMismatchError,
   replayMatch,
 } from '../../src/games/minesweeper/online/adapter';
@@ -82,17 +83,27 @@ function nextHiddenCell(match: EngineMatch): CellPosition | null {
 /**
  * Play one deterministic opening and then reveal hidden cells until the match
  * ends or `maxActions` is reached. When `mirror` is supplied, the same actions
- * are applied to the second match so both stay in lockstep.
+ * are applied to the second match so both stay in lockstep. When
+ * `expectedDigests` is supplied, every step is digested from the live engine,
+ * independently of the replay path under test.
  */
 function playMatch(
   match: EngineMatch,
-  options: { readonly maxActions: number; readonly flagFirst: boolean; readonly mirror?: EngineMatch },
+  options: {
+    readonly maxActions: number;
+    readonly flagFirst: boolean;
+    readonly mirror?: EngineMatch;
+    readonly expectedDigests?: ReplayDigest[];
+  },
 ): ReplayAction[] {
   const actions: ReplayAction[] = [];
   const apply = (kind: ActionKind, row: number, col: number): void => {
     const accepted = action(actions.length + 1, kind, row, col);
     actions.push(accepted);
     applyAndRecord(match, accepted);
+    options.expectedDigests?.push(
+      matchDigest(match, accepted.seq, accepted.turnId),
+    );
     if (options.mirror !== undefined) {
       applyAndRecord(options.mirror, accepted);
     }
@@ -122,6 +133,24 @@ function statsFor(match: EngineMatch, turnCount: number): MatchStats {
   };
 }
 
+function expectReplayMismatch(
+  record: ReplayRecord,
+  expected: readonly ReplayDigest[],
+  seq: number,
+): void {
+  let mismatch: unknown;
+  try {
+    replayMatch(record, expected);
+  } catch (caught) {
+    mismatch = caught;
+  }
+  expect(mismatch).toBeInstanceOf(ReplayMismatchError);
+  if (!(mismatch instanceof ReplayMismatchError)) {
+    throw new Error('expected a ReplayMismatchError');
+  }
+  expect(mismatch.seq).toBe(seq);
+}
+
 describe('online minesweeper engine adapter', () => {
   it('creates a deterministic Node engine without pre-placing mines', () => {
     expect(hashSeed(42)).toBe(
@@ -135,6 +164,12 @@ describe('online minesweeper engine adapter', () => {
 
     const firstReveal = engine.reveal(4, 4);
     expect(firstReveal.hitMine).toBe(false);
+    // The whole 3x3 first-click safe zone is mine-free, not just (4,4).
+    for (let row = 3; row <= 5; row += 1) {
+      for (let col = 3; col <= 5; col += 1) {
+        expect(engine.state.board[row]?.[col]?.mine).toBe(false);
+      }
+    }
     expect(engine.currentStatus).not.toBe('ready');
     expect(engine.state.board.flat().filter((cell) => cell.mine)).toHaveLength(
       CONFIG.mines,
@@ -160,6 +195,55 @@ describe('online minesweeper engine adapter', () => {
       engineAdapter.expandEndBoard(second),
     );
     expect(engineAdapter.getReplayRecord(first).actions).toEqual(actions);
+  });
+
+  it('honours the first-click safe zone and passes firstClickSafe:false through', () => {
+    const unsafeConfig: MinesweeperConfig = {
+      rows: 5,
+      cols: 5,
+      mines: 8,
+      firstClickSafe: false,
+    };
+    // At seed 7 the engine mines (1,3), a neighbour of the (2,2) first click,
+    // when the safe zone is disabled. Keeping that mine proves the adapter
+    // forwards firstClickSafe:false instead of forcing the safe policy on.
+    const unsafe = createMatch('first-click-unsafe', unsafeConfig, 7);
+    const unsafeResult = engineAdapter.applyAction(
+      unsafe,
+      action(1, 'reveal', 2, 2),
+    );
+    expect(unsafeResult.status).toBe('playing');
+    const unsafeBoard = engineAdapter.expandEndBoard(unsafe);
+    expect(unsafeBoard[1]?.[3]?.mine).toBe(true);
+
+    const safe = createMatch(
+      'first-click-safe',
+      { ...unsafeConfig, firstClickSafe: true },
+      7,
+    );
+    const safeResult = engineAdapter.applyAction(safe, action(1, 'reveal', 2, 2));
+    expect(safeResult.status).toBe('playing');
+    expect(safeResult.revealedCells).toContainEqual({ row: 2, col: 2 });
+    const safeBoard = engineAdapter.expandEndBoard(safe);
+    for (let row = 1; row <= 3; row += 1) {
+      for (let col = 1; col <= 3; col += 1) {
+        expect(safeBoard[row]?.[col]?.mine).toBe(false);
+      }
+    }
+    // The eight neighbours around the first click are explicitly mine-free.
+    const neighbours: readonly (readonly [number, number])[] = [
+      [1, 1],
+      [1, 2],
+      [1, 3],
+      [2, 1],
+      [2, 3],
+      [3, 1],
+      [3, 2],
+      [3, 3],
+    ];
+    for (const [row, col] of neighbours) {
+      expect(safeBoard[row]?.[col]?.mine).toBe(false);
+    }
   });
 
   it('projects a redacted board without mine fields or hidden adjacency', () => {
@@ -235,17 +319,24 @@ describe('online minesweeper engine adapter', () => {
 
   it('replays config, seed and ordered actions and compares every digest', () => {
     const match = createMatch('replay');
-    const actions = playMatch(match, { maxActions: 10, flagFirst: true });
+    // Sample digests while the original match plays instead of replaying it,
+    // so rebuilding from a wrong config or seed cannot agree with itself.
+    const expected: ReplayDigest[] = [];
+    const actions = playMatch(match, {
+      maxActions: 10,
+      flagFirst: true,
+      expectedDigests: expected,
+    });
     const record = engineAdapter.getReplayRecord(match);
     expect(record.seed).toBe(SEED);
     expect(record.actions).toEqual(actions);
-
-    const expected = engineAdapter.replay(record);
     expect(expected).toHaveLength(actions.length);
+
     const outcome = replayMatch(record, expected);
     expect(outcome.digests).toEqual(expected);
     expect(outcome.status).toBe(match.state.status);
     expect(outcome.finalDigest).toEqual(expected.at(-1));
+    expect(engineAdapter.replay(record)).toEqual(expected);
 
     const reversed: ReplayRecord = {
       ...record,
@@ -267,6 +358,22 @@ describe('online minesweeper engine adapter', () => {
       throw new Error('expected a ReplayMismatchError');
     }
     expect(mismatch.seq).toBe(expected[1]?.seq);
+
+    const firstSeq = expected[0]?.seq;
+    if (firstSeq === undefined) {
+      throw new Error('expected at least one replay digest');
+    }
+    // A changed seed or mine count must fail against live-match digests,
+    // proving the expected values do not come from the replay path under test.
+    expectReplayMismatch({ ...record, seed: record.seed + 1 }, expected, firstSeq);
+    expectReplayMismatch(
+      {
+        ...record,
+        config: { ...record.config, mines: record.config.mines - 1 },
+      },
+      expected,
+      firstSeq,
+    );
 
     const missing = expected.slice(0, 1);
     expect(() => replayMatch(record, missing)).toThrow(/Replay mismatch at seq/);
