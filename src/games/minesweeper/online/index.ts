@@ -61,11 +61,7 @@ export type {
   TimeoutMessage,
   TimeoutTimer,
 } from './types';
-export {
-  MESSAGE_SPECS,
-  PROTOCOL_ERROR_CODES,
-  PROTOCOL_VERSION,
-} from './types';
+export { MESSAGE_SPECS, PROTOCOL_VERSION } from './types';
 
 export type { EndPayloadInput, ReplayOutcome } from './adapter';
 export {
@@ -91,6 +87,7 @@ export {
   createProtocolError,
   createProtocolValidator,
   evaluateAction,
+  PROTOCOL_ERROR_CODES,
   protocolErrorFromResult,
   protocolValidator,
   validateAction,

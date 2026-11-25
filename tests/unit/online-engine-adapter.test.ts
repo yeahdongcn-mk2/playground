@@ -19,19 +19,104 @@ import {
   type EndMessage,
   type EngineMatch,
   type MatchStats,
+  type ProtocolErrorCode,
   type ReplayAction,
   type ReplayDigest,
   type ReplayRecord,
   type SnapshotMessage,
 } from '../../src/games/minesweeper/online/index';
+import * as onlineEntry from '../../src/games/minesweeper/online/index';
 import type { MinesweeperConfig } from '../../src/games/minesweeper/engine';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const ONLINE_DIR = join(ROOT, 'src', 'games', 'minesweeper', 'online');
 const ADAPTER_PATH = join(ONLINE_DIR, 'adapter.ts');
 const INDEX_PATH = join(ONLINE_DIR, 'index.ts');
+const PROTOCOL_PATH = join(ONLINE_DIR, 'protocol.ts');
+const TYPES_PATH = join(ONLINE_DIR, 'types.ts');
 const ADAPTER_SOURCE = readFileSync(ADAPTER_PATH, 'utf8');
 const INDEX_SOURCE = readFileSync(INDEX_PATH, 'utf8');
+const PROTOCOL_SOURCE = readFileSync(PROTOCOL_PATH, 'utf8');
+const TYPES_SOURCE = readFileSync(TYPES_PATH, 'utf8');
+
+interface ContractModule {
+  readonly file: string;
+  readonly specifier: string;
+  readonly source: string;
+}
+
+/** The three internal modules whose public names index.ts must forward. */
+const CONTRACT_MODULES: readonly ContractModule[] = [
+  { file: 'types.ts', specifier: './types', source: TYPES_SOURCE },
+  { file: 'adapter.ts', specifier: './adapter', source: ADAPTER_SOURCE },
+  { file: 'protocol.ts', specifier: './protocol', source: PROTOCOL_SOURCE },
+];
+
+interface ContractExport {
+  readonly name: string;
+  readonly kind: 'type' | 'value';
+}
+
+/** Split an export list into public names, dropping `type` modifiers and aliases. */
+function exportListNames(list: string): readonly string[] {
+  return list
+    .split(',')
+    .map((entry) => entry.trim().replace(/^type\s+/, ''))
+    .map((entry) => entry.split(/\s+as\s+/).pop()?.trim() ?? '')
+    .filter((name) => /^[A-Za-z_$][\w$]*$/.test(name));
+}
+
+/** Every public name one module declares with a local `export` statement. */
+function declaredExports(source: string): readonly ContractExport[] {
+  const exports: ContractExport[] = [];
+  const declaration =
+    /^export\s+(?:declare\s+)?(interface|type|const|let|var|function|class|enum)\s+([A-Za-z_$][\w$]*)/gm;
+  for (const match of source.matchAll(declaration)) {
+    const keyword = match[1];
+    const name = match[2];
+    if (keyword === undefined || name === undefined) {
+      continue;
+    }
+    exports.push({
+      name,
+      kind: keyword === 'interface' || keyword === 'type' ? 'type' : 'value',
+    });
+  }
+  const localList = /^export\s+(type\s+)?\{([^}]*)\}(?!\s*from)/gm;
+  for (const match of source.matchAll(localList)) {
+    const blockIsType = match[1] !== undefined;
+    const list = match[2];
+    if (list === undefined) {
+      continue;
+    }
+    for (const name of exportListNames(list)) {
+      exports.push({
+        name,
+        kind: blockIsType || list.includes(`type ${name}`) ? 'type' : 'value',
+      });
+    }
+  }
+  return exports;
+}
+
+/** Names index.ts forwards, keyed by the sibling module it forwards them from. */
+function forwardedNames(source: string): ReadonlyMap<string, ReadonlySet<string>> {
+  const forwarded = new Map<string, Set<string>>();
+  const reExport = /export\s+(?:type\s+)?\{([^}]*)\}\s+from\s+'([^']+)'/g;
+  for (const match of source.matchAll(reExport)) {
+    const list = match[1];
+    const specifier = match[2];
+    if (list === undefined || specifier === undefined) {
+      continue;
+    }
+    const names = forwarded.get(specifier) ?? new Set<string>();
+    for (const name of exportListNames(list)) {
+      names.add(name);
+    }
+    forwarded.set(specifier, names);
+  }
+  return forwarded;
+}
 
 const CONFIG: MinesweeperConfig = {
   rows: 9,
@@ -457,6 +542,46 @@ describe('online engine adapter action limits', () => {
   });
 });
 
+describe('online minesweeper single entry export surface', () => {
+  it('forwards every public name of the three contract modules', () => {
+    const forwarded = forwardedNames(INDEX_SOURCE);
+    expect(new Set(forwarded.keys())).toEqual(
+      new Set(CONTRACT_MODULES.map((module) => module.specifier)),
+    );
+    for (const module of CONTRACT_MODULES) {
+      const expected = declaredExports(module.source)
+        .map((entry) => entry.name)
+        .sort();
+      const actual = [...(forwarded.get(module.specifier) ?? [])].sort();
+      expect(actual, `${module.file} must be forwarded by index.ts`).toEqual(expected);
+    }
+  });
+
+  it('resolves every forwarded value at runtime', () => {
+    const entry = onlineEntry as unknown as Record<string, unknown>;
+    for (const module of CONTRACT_MODULES) {
+      for (const { name, kind } of declaredExports(module.source)) {
+        if (kind === 'value') {
+          expect(entry[name], `${name} from ${module.file}`).toBeDefined();
+        }
+      }
+    }
+  });
+
+  it('keeps the exported error codes in sync with the ProtocolErrorCode union', () => {
+    const exhaustive: { readonly [K in ProtocolErrorCode]: true } = {
+      'unsupported-version': true,
+      'room-not-found': true,
+      'not-your-turn': true,
+      'stale-state': true,
+      'invalid-action': true,
+      'deadline-passed': true,
+      'bad-request': true,
+    };
+    expect([...PROTOCOL_ERROR_CODES].sort()).toEqual(Object.keys(exhaustive).sort());
+  });
+});
+
 describe('online minesweeper cross-module wiring through index.ts', () => {
   it('serves the version, message table and error codes from the single entry', () => {
     expect(PROTOCOL_VERSION).toBe(1);
@@ -470,9 +595,16 @@ describe('online minesweeper cross-module wiring through index.ts', () => {
   it('keeps index.ts a re-export surface instead of a second DTO layer', () => {
     // The entry may only forward the three internal modules; a local DTO,
     // function or constant here would be a second source of the contract.
-    expect(INDEX_SOURCE).not.toMatch(
-      /^(?:export\s+)?(?:interface|class|function|const|let|var)\s/m,
+    const localDeclaration =
+      /^(?:export\s+)?(?:interface|type|enum|class|function|const|let|var)\s+[A-Za-z_$]/m;
+    expect(INDEX_SOURCE).not.toMatch(localDeclaration);
+    // Multi-line `export type { ... } from` lists are re-exports, not local
+    // declarations, but a local DTO type or enum must be rejected.
+    expect("export type { Foo } from './types';\n").not.toMatch(localDeclaration);
+    expect('export type ShadowCell = { readonly mine: boolean };\n').toMatch(
+      localDeclaration,
     );
+    expect('enum Shadow { A }\n').toMatch(localDeclaration);
     const reExported = [...INDEX_SOURCE.matchAll(/from\s+'(\.\/[^']+)'/g)].map(
       (match) => match[1],
     );
