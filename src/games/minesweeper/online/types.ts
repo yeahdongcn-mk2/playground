@@ -74,15 +74,19 @@ export type MatchEndReason =
   | 'turn-timeout'
   | 'match-timeout';
 
+/** Every error code the server may return in an `error` message. */
+export const PROTOCOL_ERROR_CODES = [
+  'unsupported-version',
+  'room-not-found',
+  'not-your-turn',
+  'stale-state',
+  'invalid-action',
+  'deadline-passed',
+  'bad-request',
+] as const;
+
 /** Error codes the server returns in an `error` message. */
-export type ProtocolErrorCode =
-  | 'unsupported-version'
-  | 'room-not-found'
-  | 'not-your-turn'
-  | 'stale-state'
-  | 'invalid-action'
-  | 'deadline-passed'
-  | 'bad-request';
+export type ProtocolErrorCode = (typeof PROTOCOL_ERROR_CODES)[number];
 
 /** Public player summary carried by `room_state`. */
 export interface PlayerView {

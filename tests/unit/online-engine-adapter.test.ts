@@ -4,33 +4,34 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   createMatchEngine,
+  createProtocolError,
   endPayload,
   engineAdapter,
   hashSeed,
   matchDigest,
+  MESSAGE_SPECS,
+  PROTOCOL_ERROR_CODES,
+  PROTOCOL_VERSION,
   ReplayMismatchError,
   replayMatch,
-} from '../../src/games/minesweeper/online/adapter';
-import type {
-  ActionKind,
-  EngineMatch,
-  MatchStats,
-  ReplayAction,
-  ReplayDigest,
-  ReplayRecord,
-} from '../../src/games/minesweeper/online/types';
+  validateServerMessage,
+  type ActionKind,
+  type EndMessage,
+  type EngineMatch,
+  type MatchStats,
+  type ReplayAction,
+  type ReplayDigest,
+  type ReplayRecord,
+  type SnapshotMessage,
+} from '../../src/games/minesweeper/online/index';
 import type { MinesweeperConfig } from '../../src/games/minesweeper/engine';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const ADAPTER_PATH = join(
-  ROOT,
-  'src',
-  'games',
-  'minesweeper',
-  'online',
-  'adapter.ts',
-);
+const ONLINE_DIR = join(ROOT, 'src', 'games', 'minesweeper', 'online');
+const ADAPTER_PATH = join(ONLINE_DIR, 'adapter.ts');
+const INDEX_PATH = join(ONLINE_DIR, 'index.ts');
 const ADAPTER_SOURCE = readFileSync(ADAPTER_PATH, 'utf8');
+const INDEX_SOURCE = readFileSync(INDEX_PATH, 'utf8');
 
 const CONFIG: MinesweeperConfig = {
   rows: 9,
@@ -453,5 +454,116 @@ describe('online engine adapter action limits', () => {
     expect(() => engineAdapter.applyAction(match, action(1, 'reveal', 0, 0))).toThrow(
       /already ended/,
     );
+  });
+});
+
+describe('online minesweeper cross-module wiring through index.ts', () => {
+  it('serves the version, message table and error codes from the single entry', () => {
+    expect(PROTOCOL_VERSION).toBe(1);
+    expect(MESSAGE_SPECS).toHaveLength(14);
+    for (const code of PROTOCOL_ERROR_CODES) {
+      const validated = validateServerMessage(createProtocolError(code));
+      expect(validated.ok, code).toBe(true);
+    }
+  });
+
+  it('keeps index.ts a re-export surface instead of a second DTO layer', () => {
+    // The entry may only forward the three internal modules; a local DTO,
+    // function or constant here would be a second source of the contract.
+    expect(INDEX_SOURCE).not.toMatch(
+      /^(?:export\s+)?(?:interface|class|function|const|let|var)\s/m,
+    );
+    const reExported = [...INDEX_SOURCE.matchAll(/from\s+'(\.\/[^']+)'/g)].map(
+      (match) => match[1],
+    );
+    expect(reExported.length).toBeGreaterThan(0);
+    expect(new Set(reExported)).toEqual(
+      new Set(['./types', './adapter', './protocol']),
+    );
+  });
+
+  it('plays, projects, replays and ends one match through the single entry', () => {
+    const config: MinesweeperConfig = {
+      rows: 5,
+      cols: 5,
+      mines: 3,
+      firstClickSafe: true,
+    };
+    const match = engineAdapter.createMatch({
+      matchId: 'wired',
+      config,
+      seed: SEED,
+    });
+    expect(match.seedHash).toBe(hashSeed(SEED));
+    expect(match.state.board.flat().some((cell) => cell.mine)).toBe(false);
+
+    const expected: ReplayDigest[] = [];
+    const applied: ReplayAction[] = [];
+    const apply = (kind: ActionKind, row: number, col: number): void => {
+      const accepted = action(applied.length + 1, kind, row, col);
+      engineAdapter.applyAction(match, accepted);
+      engineAdapter.recordAction(match, accepted);
+      applied.push(accepted);
+      expected.push(matchDigest(match, accepted.seq, accepted.turnId));
+    };
+    apply('flag', 0, 0);
+    apply('reveal', 2, 2);
+    expect(applied.map((accepted) => accepted.kind)).toEqual(['flag', 'reveal']);
+
+    // The redacted projection is a valid server-to-client snapshot message.
+    const snapshot = engineAdapter.projectSnapshot(match);
+    const snapshotMessage: SnapshotMessage = {
+      type: 'snapshot',
+      roomId: 'room-1',
+      matchId: match.matchId,
+      seq: applied.length,
+      turnPlayerId: 'player-a',
+      turnId: applied.length,
+      deadlineAt: 5_000,
+      matchDeadlineAt: 60_000,
+      ...snapshot,
+    };
+    const validatedSnapshot = validateServerMessage(snapshotMessage);
+    expect(validatedSnapshot.ok).toBe(true);
+    if (!validatedSnapshot.ok) {
+      throw new Error(validatedSnapshot.message);
+    }
+    expect(validatedSnapshot.value).toEqual(snapshotMessage);
+    expect(JSON.stringify(validatedSnapshot.value)).not.toContain('"seed"');
+    expect(JSON.stringify(validatedSnapshot.value)).not.toContain('"mine"');
+
+    // Rebuilding from the recorded replay input reproduces the same digests.
+    const record = engineAdapter.getReplayRecord(match);
+    expect(record.actions).toEqual(applied);
+    const replayed = replayMatch(record, expected);
+    expect(replayed.digests).toEqual(expected);
+    expect(replayed.digests).toHaveLength(applied.length);
+    expect(replayed.finalDigest).toEqual(expected.at(-1));
+    expect(engineAdapter.replay(record)).toEqual(expected);
+
+    // The end payload is the only value that publishes the seed and all mines,
+    // and it also travels through the same validator from the same entry.
+    const end: EndMessage = {
+      type: 'end',
+      roomId: 'room-1',
+      seq: applied.length + 1,
+      ...endPayload(match, {
+        reason: match.state.status === 'lost' ? 'mine-hit' : 'forfeit',
+        winnerId: 'player-a',
+        loserId: 'player-b',
+        stats: statsFor(match, applied.length),
+      }),
+    };
+    const validatedEnd = validateServerMessage(end);
+    expect(validatedEnd.ok).toBe(true);
+    if (!validatedEnd.ok) {
+      throw new Error(validatedEnd.message);
+    }
+    expect(end.seed).toBe(SEED);
+    expect(hashSeed(end.seed)).toBe(snapshot.seedHash);
+    expect(end.finalSnapshot.flat().filter((cell) => cell.mine)).toHaveLength(
+      config.mines,
+    );
+    expect(end.finalSnapshot.flat().every((cell) => 'mine' in cell)).toBe(true);
   });
 });

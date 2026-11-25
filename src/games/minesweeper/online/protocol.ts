@@ -8,7 +8,7 @@
  * object, so rejecting a message cannot consume a turn or change a match.
  */
 
-import { MESSAGE_SPECS, PROTOCOL_VERSION } from './types';
+import { MESSAGE_SPECS, PROTOCOL_ERROR_CODES, PROTOCOL_VERSION } from './types';
 import type {
   ActionIdStatus,
   ActionMessage,
@@ -37,15 +37,6 @@ const MATCH_END_REASONS = [
   'match-timeout',
 ] as const;
 const TIMEOUT_TIMERS = ['join', 'turn', 'match'] as const;
-const PROTOCOL_ERROR_CODES = [
-  'unsupported-version',
-  'room-not-found',
-  'not-your-turn',
-  'stale-state',
-  'invalid-action',
-  'deadline-passed',
-  'bad-request',
-] as const;
 
 /**
  * A rejected check. It carries the wire error fields a room service needs:
