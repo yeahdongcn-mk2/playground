@@ -29,7 +29,7 @@ function oxlintArgs(): string[] {
 describe('lint coverage contract', () => {
   it('makes npm run lint check src, tests, scripts and server with oxlint', () => {
     expect(lintCommand.startsWith('oxlint ')).toBe(true);
-    expect(oxlintArgs()).toEqual(expect.arrayContaining(['src', 'tests', 'scripts']));
+    expect(oxlintArgs()).toEqual(expect.arrayContaining(['src', 'tests', 'scripts', 'server']));
   });
 
   it('keeps the module boundary check after oxlint', () => {

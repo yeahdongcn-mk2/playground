@@ -22,10 +22,7 @@
  */
 
 import { randomBytes, randomUUID } from 'node:crypto';
-import {
-  createProtocolError,
-  type ProtocolErrorOptions,
-} from '../../src/games/minesweeper/online/protocol';
+import { createProtocolError } from '../../src/games/minesweeper/online/index';
 import type {
   CreateMessage,
   ErrorMessage,
@@ -34,6 +31,7 @@ import type {
   PlayerPresence,
   PlayerView,
   ProtocolErrorCode,
+  ProtocolErrorOptions,
   ReadyMessage,
   RematchMessage,
   RoomState,
@@ -41,7 +39,7 @@ import type {
   ServerToClientMessage,
   StartMessage,
   TimeoutTimer,
-} from '../../src/games/minesweeper/online/types';
+} from '../../src/games/minesweeper/online/index';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -140,6 +138,7 @@ export interface RoomRecord {
   readonly state: RoomState;
   /** Monotonic sequence stamped on every `room_state` broadcast. */
   readonly seq: number;
+  /** Must equal the `playerId` of exactly one host seat. */
   readonly hostId: PlayerId;
   readonly seats: readonly RoomSeat[];
   readonly matchId: string | null;
@@ -206,10 +205,20 @@ export interface RoomDelivery {
   readonly message: ServerToClientMessage;
 }
 
-/** Successful command: the messages to deliver, in delivery order. */
+/**
+ * Successful command: the messages to deliver, in delivery order.
+ *
+ * `boundToken` is set only by `create` and `join`, which seat the requesting
+ * connection: it is the token that connection now owns, whether freshly issued
+ * or resumed from `JoinMessage.playerToken`. The transport binds it to the
+ * calling connection before dispatching. Any other delivery token that has no
+ * live connection belongs to an offline seat and must be dropped, never
+ * re-addressed to the caller.
+ */
 export interface RoomCommandSuccess {
   readonly ok: true;
   readonly deliveries: readonly RoomDelivery[];
+  readonly boundToken?: PlayerToken;
 }
 
 /** Reason a lifecycle command was rejected before it changed any state. */
@@ -293,8 +302,9 @@ export type RoomCommandResult = RoomCommandSuccess | RoomCommandFailure;
  * A connection as the room manager sees it.
  *
  * The transport owns the socket and the connection→token map. It passes the
- * token it has learned (null before create/join) so the manager can find the
- * caller's seat without trusting any room state sent by the client.
+ * token it has already bound (null before `create`/`join`); a resuming `join`
+ * takes the seat token from `JoinMessage.playerToken` instead, and the success
+ * `boundToken` tells the transport what to bind.
  */
 export interface RoomConnection {
   readonly connectionId: string;
@@ -320,15 +330,43 @@ export function roomStateDeliveries(room: RoomRecord): readonly RoomDelivery[] {
 }
 
 /**
- * Address one already-seat-independent message to every seat.
+ * Success for a command that seated the calling connection (`create`/`join`).
+ *
+ * It binds the connection to its token and broadcasts the new room state. The
+ * transport must send the remaining deliveries by their own tokens and drop
+ * any token without a live connection instead of re-addressing it.
+ */
+export function seatedCommandSuccess(
+  room: RoomRecord,
+  seat: RoomSeat,
+): RoomCommandSuccess {
+  return {
+    ok: true,
+    deliveries: roomStateDeliveries(room),
+    boundToken: seat.playerToken,
+  };
+}
+
+/**
+ * One message that is safe to send to every seat.
+ *
+ * `room_state` is excluded because its per-seat copy carries `playerToken`
+ * (use {@link roomStateDeliveries}); `error` is excluded because it answers the
+ * requesting connection, not the room.
+ */
+export type BroadcastMessage = Exclude<ServerToClientMessage, RoomStateMessage | ErrorMessage>;
+
+/**
+ * Address one seat-independent message to every current seat.
  *
  * Room-level events (`timeout`, `room_closed`, `snapshot`, `end`, ...) are
  * broadcast this way: one shared message object, one delivery per seat. Empty
- * rooms produce no deliveries.
+ * rooms produce no deliveries. Build the deliveries before removing the seat
+ * that triggered the event, so a leaving seat still receives `room_closed`.
  */
 export function broadcastToSeats(
   room: RoomRecord,
-  message: ServerToClientMessage,
+  message: BroadcastMessage,
 ): readonly RoomDelivery[] {
   return room.seats.map((seat) => ({ playerToken: seat.playerToken, message }));
 }
@@ -352,7 +390,7 @@ export function broadcastToSeats(
 export interface RoomManager {
   /** `idle → waiting`: validate the request, assign a room, seat the host. */
   create(connection: RoomConnection, message: CreateMessage): RoomCommandResult;
-  /** Join a waiting room, or resume a seat with a valid token. */
+  /** Join a waiting room (new token) or resume a seat with `JoinMessage.playerToken`. */
   join(connection: RoomConnection, message: JoinMessage): RoomCommandResult;
   /** Set or clear one seat's readiness; readiness may flip the room state. */
   ready(connection: RoomConnection, message: ReadyMessage): RoomCommandResult;

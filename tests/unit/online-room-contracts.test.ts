@@ -14,6 +14,8 @@ import {
   ROOM_ERROR_PROTOCOL_CODE,
   roomErrorMessage,
   roomStateDeliveries,
+  seatedCommandSuccess,
+  type PublicRoomState,
   type RoomCommandResult,
   type RoomConnection,
   type RoomManager,
@@ -23,7 +25,7 @@ import {
 import {
   validateClientMessage,
   validateServerMessage,
-} from '../../src/games/minesweeper/online/protocol';
+} from '../../src/games/minesweeper/online/index';
 import type {
   CreateMessage,
   JoinMessage,
@@ -32,7 +34,7 @@ import type {
   RematchMessage,
   StartMessage,
   TimeoutMessage,
-} from '../../src/games/minesweeper/online/types';
+} from '../../src/games/minesweeper/online/index';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const DESIGN = readFileSync(join(ROOT, 'docs', 'minesweeper-online-design.md'), 'utf8');
@@ -142,6 +144,11 @@ const JOIN_MESSAGE: JoinMessage = {
   displayName: 'Grace',
 };
 
+const RESUME_JOIN_MESSAGE: JoinMessage = {
+  ...JOIN_MESSAGE,
+  playerToken: issuePlayerToken(),
+};
+
 const READY_MESSAGE: ReadyMessage = {
   type: 'ready',
   roomId: 'room_contract_test',
@@ -185,6 +192,25 @@ const CONNECTION: RoomConnection = {
   playerToken: null,
 };
 
+/**
+ * Every design event the room manager owns. The `satisfies` clause makes
+ * deleting or renaming a `RoomManager` method a type error here too.
+ */
+const ROOM_MANAGER_EVENTS = [
+  'create',
+  'join',
+  'ready',
+  'start',
+  'leave',
+  'dissolve',
+  'rematch',
+  'timeout',
+] as const satisfies readonly (keyof RoomManager)[];
+
+/** Events owned by the authoritative match layer (#484), not the room manager. */
+const MATCH_LAYER_EVENTS = ['action', 'end'] as const;
+const ROOM_MANAGER_EVENT_SET: ReadonlySet<string> = new Set(ROOM_MANAGER_EVENTS);
+
 /** Every lifecycle command answers with the same rejection shape. */
 function stubManager(): RoomManager {
   const reject = (): RoomCommandResult => ({
@@ -216,11 +242,13 @@ describe('online room contracts constants', () => {
     expect(JOIN_TIMEOUT_MS).toBe(LIFECYCLE.timers.join.defaultMs);
   });
 
-  it('declares every lifecycle event the contract covers', () => {
+  it('declares every lifecycle event the room manager owns', () => {
     const events = LIFECYCLE.events.map((event) => event.name);
-    for (const event of ['create', 'join', 'ready', 'start', 'leave', 'dissolve', 'rematch', 'timeout']) {
+    for (const event of ROOM_MANAGER_EVENTS) {
       expect(events, `design:room-lifecycle should declare ${event}`).toContain(event);
     }
+    const unmanaged = events.filter((event) => !ROOM_MANAGER_EVENT_SET.has(event));
+    expect(unmanaged.sort()).toEqual([...MATCH_LAYER_EVENTS]);
   });
 });
 
@@ -238,6 +266,7 @@ describe('online room identifiers', () => {
     expect(new Set(tokens).size).toBe(tokens.length);
     for (const token of tokens) {
       expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(Buffer.from(token, 'base64url')).toHaveLength(32);
     }
   });
 
@@ -291,6 +320,13 @@ describe('online room public state', () => {
     expect(JSON.stringify(state)).not.toContain('playerToken');
   });
 
+  it('cannot grow a playerToken field without a type error', () => {
+    const room = makeRoom();
+    // @ts-expect-error publicRoomState deliberately has no playerToken field.
+    const leaked: PublicRoomState = { ...publicRoomState(room), playerToken: 'leaked' };
+    expect(leaked.roomId).toBe(room.roomId);
+  });
+
   it('produces a public state the #482 server validator accepts', () => {
     const state = publicRoomState(makeRoom());
     const validation = validateServerMessage(state);
@@ -333,6 +369,20 @@ describe('online room delivery model', () => {
     }
   });
 
+  it('binds the calling connection to the token of the seat it just took', () => {
+    const room = makeRoom();
+    const host = room.seats[0];
+    expect(host).toBeDefined();
+    if (host === undefined) {
+      return;
+    }
+
+    const success = seatedCommandSuccess(room, host);
+    expect(success.ok).toBe(true);
+    expect(success.boundToken).toBe(host.playerToken);
+    expect(success.deliveries).toEqual(roomStateDeliveries(room));
+  });
+
   it('broadcasts one seat-independent message to every seat', () => {
     const room = makeRoom();
     expect(validateServerMessage(TIMEOUT_MESSAGE).ok).toBe(true);
@@ -358,6 +408,7 @@ describe('online room protocol reuse', () => {
     for (const message of [
       CREATE_MESSAGE,
       JOIN_MESSAGE,
+      RESUME_JOIN_MESSAGE,
       READY_MESSAGE,
       START_MESSAGE,
       LEAVE_MESSAGE,
@@ -374,6 +425,7 @@ describe('online room protocol reuse', () => {
       { ...CREATE_MESSAGE, config: { ...CONFIG, mines: undefined } },
       { ...CREATE_MESSAGE, protocolVersion: 999 },
       { ...JOIN_MESSAGE, seat: 'player_guest' },
+      { ...JOIN_MESSAGE, playerToken: 42 },
       { ...READY_MESSAGE, roomId: undefined },
       { ...START_MESSAGE, requestId: 7 },
       { ...LEAVE_MESSAGE, roomId: 42 },
