@@ -1,0 +1,139 @@
+/**
+ * Startup entry point for the standalone online Minesweeper room service.
+ *
+ * This module only wires the process environment, the in-memory room manager
+ * and the WebSocket transport together. It owns no room or match behaviour:
+ * every lifecycle command and every authoritative action still belongs to
+ * `room-manager.ts` / `match.ts`, and the transport stays in `ws-server.ts`.
+ *
+ * The file is import-safe: the socket is only opened when the module is the
+ * process entry point (`npm run server:room`), so the unit tests can import the
+ * helpers without starting a listener.
+ */
+
+import { pathToFileURL } from 'node:url';
+import { DEFAULT_ROOM_SERVER_PORT } from './contracts';
+import { createRoomManager } from './room-manager';
+import { startRoomServer, type RoomServer } from './ws-server';
+
+/** Resolved bind settings for one room-server start. */
+export interface RoomServerConfig {
+  /** Host or address to bind; loopback unless `HOST` overrides it. */
+  readonly host: string;
+  /** TCP port; `0` asks the OS for an ephemeral port. */
+  readonly port: number;
+}
+
+/** Loopback bind host used when `HOST` is unset or only whitespace. */
+const DEFAULT_ROOM_SERVER_HOST = '127.0.0.1';
+
+/** Highest valid TCP port. */
+const MAX_PORT = 65_535;
+
+/** Build the one readable error every invalid `PORT` value produces. */
+function invalidPortError(raw: string): Error {
+  return new Error(
+    `Invalid PORT "${raw}": expected a decimal integer between 0 and ${MAX_PORT} ` +
+      `(0 lets the OS pick a free port); leave PORT unset to use ${DEFAULT_ROOM_SERVER_PORT}.`,
+  );
+}
+
+/**
+ * Resolve bind settings from the process environment.
+ *
+ * `HOST` is trimmed and falls back to loopback when unset or blank. `PORT` is
+ * trimmed and falls back to {@link DEFAULT_ROOM_SERVER_PORT} when unset or
+ * blank; otherwise it must be a decimal integer in `0..65535`, where `0` means
+ * an ephemeral port. Anything else throws a readable error instead of silently
+ * binding something unintended.
+ */
+export function resolveRoomServerConfig(env: NodeJS.ProcessEnv = process.env): RoomServerConfig {
+  const rawHost = env.HOST?.trim() ?? '';
+  const host = rawHost === '' ? DEFAULT_ROOM_SERVER_HOST : rawHost;
+
+  const rawPort = env.PORT?.trim() ?? '';
+  if (rawPort === '') {
+    return { host, port: DEFAULT_ROOM_SERVER_PORT };
+  }
+  if (!/^\d+$/.test(rawPort)) {
+    throw invalidPortError(rawPort);
+  }
+
+  const port = Number(rawPort);
+  if (port > MAX_PORT) {
+    throw invalidPortError(rawPort);
+  }
+  return { host, port };
+}
+
+/**
+ * Start one room server from resolved settings.
+ *
+ * The manager is created here rather than shared with the transport so the
+ * entry point has no global state. Once listening, it reports the actual bind
+ * address (which differs from the request when `port: 0` was used) and returns
+ * the transport handle, whose `close()` is idempotent.
+ */
+export async function startRoomServerFromConfig(
+  config: RoomServerConfig,
+): Promise<RoomServer> {
+  const server = await startRoomServer({
+    manager: createRoomManager(),
+    host: config.host,
+    port: config.port,
+  });
+  console.log(`room server listening on http://${server.host}:${server.port}`);
+  return server;
+}
+
+/** Report an unknown thrown value without hiding a plain string. */
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Start the room server from `env` and wire graceful shutdown.
+ *
+ * A successful start registers one-shot `SIGTERM` and `SIGINT` handlers that
+ * close the server through its idempotent `close()`, after which the event loop
+ * drains and the process exits normally. A startup failure is printed and sets
+ * a non-zero exit code; a failed close does the same. Returns the running
+ * handle (or `null` on startup failure); the direct-execution path ignores it.
+ */
+export async function main(env: NodeJS.ProcessEnv = process.env): Promise<RoomServer | null> {
+  let server: RoomServer;
+  try {
+    server = await startRoomServerFromConfig(resolveRoomServerConfig(env));
+  } catch (error) {
+    console.error(describeError(error));
+    process.exitCode = 1;
+    return null;
+  }
+
+  const shutdown = (): void => {
+    void server.close().catch((error: unknown) => {
+      console.error(describeError(error));
+      process.exitCode = 1;
+    });
+  };
+  process.once('SIGTERM', shutdown);
+  process.once('SIGINT', shutdown);
+  return server;
+}
+
+/** True only when this module is the file Node/tsx was asked to run. */
+function isDirectExecution(): boolean {
+  const entry = process.argv[1];
+  if (entry === undefined) {
+    return false;
+  }
+  try {
+    return pathToFileURL(entry).href === import.meta.url;
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectExecution()) {
+  void main();
+}
