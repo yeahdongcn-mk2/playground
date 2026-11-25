@@ -191,6 +191,15 @@ export interface MatchState {
   readonly digests: readonly ReplayDigest[];
   /** Bounded idempotency cache, in insertion order. */
   readonly actionResults: ReadonlyMap<string, CachedActionResult>;
+  /**
+   * Cumulative safe cells each player revealed with an accepted action.
+   *
+   * The match timeout ranks the players by this count (design 3.4), so it must
+   * be tracked per player: the shared `ReplayAction` log deliberately carries
+   * no actor. A reveal that hits a mine or only flood-fills hidden neighbours
+   * still belongs to the player who submitted it, and a flag reveals nothing.
+   */
+  readonly revealedSafeByPlayer: Readonly<Record<string, number>>;
   readonly stats: MatchStats;
   readonly finished: boolean;
   /** Set exactly when `finished` is true. */
@@ -217,7 +226,8 @@ export type MatchActionOutcome = MatchActionSuccess | ProtocolValidationFailure;
  *
  * `match-timeout` is deliberately absent: design 3.4 decides that ending by
  * revealed-safe-cell progress, with a draw when both players are tied, so it
- * cannot be expressed as "this player lost". #485 owns that rule.
+ * cannot be expressed as "this player lost". {@link matchTimeout} owns that
+ * rule.
  */
 export type ForfeitReason = Extract<MatchEndReason, 'forfeit' | 'turn-timeout'>;
 
@@ -453,6 +463,10 @@ export function createMatchState(input: CreateMatchStateInput): MatchState {
   }
 
   const playerIds = Object.freeze(seats.map((seat) => seat.playerId));
+  const revealedSafeByPlayer: Record<string, number> = {};
+  for (const playerId of playerIds) {
+    revealedSafeByPlayer[playerId] = 0;
+  }
   const base = {
     matchId,
     config,
@@ -472,6 +486,7 @@ export function createMatchState(input: CreateMatchStateInput): MatchState {
     actions: Object.freeze([] as ReplayAction[]),
     digests: Object.freeze([] as ReplayDigest[]),
     actionResults: new Map<string, CachedActionResult>(),
+    revealedSafeByPlayer: Object.freeze(revealedSafeByPlayer),
     finished: false,
     end: null,
   } satisfies Omit<MatchState, 'stats' | 'snapshot'>;
@@ -605,6 +620,16 @@ export function applyMatchAction(
     nowMs,
     state.stats.turnCount + 1,
   );
+  // A flag reveals nothing and a mine hit reveals no safe cell, so the global
+  // safe-cell delta is exactly this actor's contribution to the shared board.
+  const revealedSafeNow = Math.max(
+    0,
+    projected.revealedSafeCount - state.stats.revealedSafeCount,
+  );
+  const revealedSafeByPlayer = Object.freeze({
+    ...state.revealedSafeByPlayer,
+    [actorId]: (state.revealedSafeByPlayer[actorId] ?? 0) + revealedSafeNow,
+  });
 
   const ended = projected.engineStatus === 'won' || projected.engineStatus === 'lost';
   const turnId = ended ? state.turnId : state.turnId + 1;
@@ -675,6 +700,7 @@ export function applyMatchAction(
     actions: Object.freeze([...state.actions, replayAction]),
     digests: Object.freeze([...state.digests, digest]),
     actionResults,
+    revealedSafeByPlayer,
     stats,
     finished: ended,
     end,
@@ -760,6 +786,87 @@ export function forfeitMatch(
   const next: MatchState = Object.freeze({
     ...state,
     engine: state.engine,
+    seq,
+    stats,
+    finished: true,
+    end,
+    snapshot,
+  });
+  return { ok: true, state: next, end, snapshot };
+}
+
+/**
+ * End a match when the whole-match timer expires (design 3.4).
+ *
+ * Unlike {@link forfeitMatch}, this ending is not "one player loses": the
+ * players are ranked by the number of safe cells they have revealed, and an
+ * equal count is a draw with both `winnerId` and `loserId` set to null. The
+ * engine is only expanded into the end payload, never advanced, and a match
+ * that already ended rejects the call so no second `end` can be produced.
+ */
+export function matchTimeout(
+  state: MatchState,
+  nowMs: number,
+): MatchForfeitOutcome {
+  assertSafeInteger('nowMs', nowMs, 0);
+
+  if (state.finished) {
+    return failure(
+      'invalid-action',
+      `match ${formatValue(state.matchId)} has already ended; it cannot time out again.`,
+      state.seq,
+    );
+  }
+
+  const seq = state.seq + 1;
+  const stats = projectStats(
+    state.engine,
+    state.startedAtMs,
+    nowMs,
+    state.stats.turnCount,
+  );
+  const ranked = state.playerIds.map((playerId) => ({
+    playerId,
+    revealed: state.revealedSafeByPlayer[playerId] ?? 0,
+  }));
+  const [first, second] = ranked;
+  if (first === undefined || second === undefined) {
+    throw new TypeError('a match must have exactly two seated players.');
+  }
+  let winnerId: string | null = null;
+  let loserId: string | null = null;
+  if (first.revealed > second.revealed) {
+    winnerId = first.playerId;
+    loserId = second.playerId;
+  } else if (second.revealed > first.revealed) {
+    winnerId = second.playerId;
+    loserId = first.playerId;
+  }
+  // Equal safe-cell counts are a draw: the design does not fall back to turn
+  // order, seat order or any other tie-breaker.
+
+  const finalSnapshot =
+    state.engine.state.status === 'ready' ? unplayedEndBoard(state) : undefined;
+  const end = buildEnd(
+    state.engine,
+    'match-timeout',
+    winnerId,
+    loserId,
+    stats,
+    seq,
+    finalSnapshot,
+  );
+  const snapshot = projectSnapshot({
+    matchId: state.matchId,
+    engine: state.engine,
+    seq,
+    turnId: state.turnId,
+    turnPlayerId: state.turnPlayerId,
+    turnDeadlineAt: state.turnDeadlineAt,
+    matchDeadlineAt: state.matchDeadlineAt,
+  });
+  const next: MatchState = Object.freeze({
+    ...state,
     seq,
     stats,
     finished: true,

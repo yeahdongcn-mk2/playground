@@ -42,6 +42,7 @@ import {
   type MatchRoomManager,
   type PlayerId,
   type PlayerToken,
+  type PresenceRoomManager,
   type RoomCommandFailure,
   type RoomCommandResult,
   type RoomConnection,
@@ -61,6 +62,7 @@ import {
   type JoinMessage,
   type LeaveMessage,
   type MatchEndReason,
+  type PlayerPresence,
   type ProtocolErrorCode,
   type ProtocolValidationFailure,
   type ReadyMessage,
@@ -82,6 +84,7 @@ import {
   createMatchState,
   forfeitMatch,
   matchReplayRecord,
+  matchTimeout,
   toActionResultMessage,
   toEndMessage,
   toSnapshotMessage,
@@ -242,7 +245,7 @@ function seatStateDelivery(room: RoomRecord, seat: RoomSeat): RoomDelivery {
  * deliver, a failure carries one `error` message and leaves the table exactly
  * as it was.
  */
-export class InMemoryRoomManager implements MatchRoomManager {
+export class InMemoryRoomManager implements MatchRoomManager, PresenceRoomManager {
   private readonly rooms = new Map<RoomId, RoomEntry>();
   private readonly now: () => number;
   private readonly joinTimeoutMs: number;
@@ -383,7 +386,7 @@ export class InMemoryRoomManager implements MatchRoomManager {
       if (seat === null) {
         return reject('not-in-room', { requestId: message.requestId, roomId: room.roomId }, room);
       }
-      return this.resumeSeat(room, seat);
+      return this.resumeSeat(entry, seat);
     }
 
     if (room.state !== 'waiting') {
@@ -469,10 +472,14 @@ export class InMemoryRoomManager implements MatchRoomManager {
     if (room.state !== 'ready') {
       return reject('invalid-state', { requestId: message.requestId, roomId: room.roomId }, room);
     }
+    // t-start guard (design 3.2): the host may only start while both seats are
+    // online. A grace-expired seat is removed or dissolves the room; a
+    // reconnect restores `online` before its own start can be accepted.
+    if (room.seats.some((current) => current.presence !== 'online')) {
+      return reject('invalid-state', { requestId: message.requestId, roomId: room.roomId }, room);
+    }
     // `ready` is only set when both seats are full and ready, so the state
-    // guard also covers the design's readiness check. Presence and the
-    // "both still online" half of t-start belong to the reconnect layer
-    // (#485); until it is wired in every seated player is online.
+    // guard also covers the design's readiness check.
 
     const now = this.now();
     const matchId = `match_${randomUUID()}`;
@@ -760,13 +767,18 @@ export class InMemoryRoomManager implements MatchRoomManager {
     }
 
     votes.add(seat.playerId);
-    if (votes.size < room.seats.length) {
-      const next = withSeq(room, { stateReason: 'rematch-pending' });
+    const allVoted = votes.size >= room.seats.length;
+    // t-rematch guard (design 3.2): both seats must still be online, not just
+    // have voted. An offline vote stays pending and the transition completes
+    // only when a later rematch re-checks the guard with everyone back online.
+    const allOnline = room.seats.every((current) => current.presence === 'online');
+    if (!allVoted || !allOnline) {
+      const next = withSeq(room, {
+        stateReason: allVoted ? 'rematch-waiting-online' : 'rematch-pending',
+      });
       this.rooms.set(room.roomId, { ...entry, record: next, rematchVotes: votes });
       return { ok: true, deliveries: roomStateDeliveries(next) };
     }
-    // Presence/online checks for t-rematch belong to the reconnect layer
-    // (#485); until it is wired in every seated player is online.
 
     const next = withSeq(room, {
       state: 'ready',
@@ -790,13 +802,18 @@ export class InMemoryRoomManager implements MatchRoomManager {
   }
 
   /**
-   * Expire the `join` window and dissolve the room.
+   * Expire one lifecycle timer.
    *
-   * `turn` and `match` timers are owned by #485 and intentionally rejected
-   * here so a timer call alone never produces a `finished` room; only the
-   * match layer may make that transition. The caller schedules the timer; the
-   * deadline is the authority, which makes an early call a `deadline-passed`
-   * rejection with no state change.
+   * - `join`: dissolve a waiting/ready room exactly once (design 3.4).
+   * - `turn`: the current player forfeits; one `timeout(timer=turn)`, one
+   *   `end` and one `room_state(finished)` are broadcast.
+   * - `match`: the match ends by the per-player safe-cell ranking in
+   *   `server/room/match.ts`; a tie is a draw with no winner/loser.
+   *
+   * Every branch rejects before the deadline so a caller can schedule a timer
+   * optimistically without risking an early ending. Once the room is no longer
+   * in the timer's state, a repeated call is an `invalid-state` rejection and
+   * never produces a second terminal message.
    */
   timeout(roomId: RoomId, timer: TimeoutTimer): RoomCommandResult {
     const entry = this.rooms.get(roomId);
@@ -804,41 +821,211 @@ export class InMemoryRoomManager implements MatchRoomManager {
       return reject('room-not-found', { roomId });
     }
     const room = entry.record;
-    if (timer !== 'join') {
-      return reject('invalid-state', { roomId }, room);
-    }
-    if (room.state !== 'waiting' && room.state !== 'ready') {
-      return reject('invalid-state', { roomId }, room);
-    }
-    if (this.now() < room.joinDeadlineAt) {
-      return reject('deadline-passed', { roomId }, room);
+    if (timer === 'join') {
+      if (room.state !== 'waiting' && room.state !== 'ready') {
+        return reject('invalid-state', { roomId }, room);
+      }
+      if (this.now() < room.joinDeadlineAt) {
+        return reject('deadline-passed', { roomId }, room);
+      }
+
+      // Two sequential broadcasts need two sequence numbers: a client that
+      // applied the timeout at N+1 would drop a room_closed carrying the same
+      // seq. Once the record is removed no version at N+1 has to be readable.
+      const timeout: TimeoutMessage = {
+        type: 'timeout',
+        roomId: room.roomId,
+        matchId: null,
+        seq: room.seq + 1,
+        timer: 'join',
+        subjectId: null,
+        deadlineAt: room.joinDeadlineAt,
+        resultingState: 'dissolved',
+        reason: 'join-timeout',
+      };
+      const closed: RoomClosedMessage = {
+        type: 'room_closed',
+        roomId: room.roomId,
+        seq: room.seq + 2,
+        reason: 'join-timeout',
+        finalState: 'dissolved',
+      };
+      const deliveries = [...broadcastToSeats(room, timeout), ...broadcastToSeats(room, closed)];
+
+      this.rooms.delete(room.roomId);
+      return { ok: true, deliveries };
     }
 
-    // Two sequential broadcasts need two sequence numbers: a client that
-    // applied the timeout at N+1 would drop a room_closed carrying the same
-    // seq. Once the record is removed no version at N+1 has to be readable.
+    if (room.state !== 'playing' || entry.match === null) {
+      return reject('invalid-state', { roomId }, room);
+    }
+    const deadline =
+      timer === 'turn' ? entry.match.state.turnDeadlineAt : entry.match.state.matchDeadlineAt;
+    if (this.now() < deadline) {
+      return reject('deadline-passed', { roomId }, room);
+    }
+    return this.finishByTimer(entry, timer);
+  }
+
+  /**
+   * Apply one connection-layer presence value to the seat owning a token.
+   *
+   * Presence is connection state, not a room transition: this method never
+   * moves `seq`, `turnId`, a seed or any deadline. The updated `room_state` is
+   * delivered to the current seats so both clients see the new presence; a
+   * repeated value is idempotent and produces no deliveries.
+   */
+  setPresence(playerToken: PlayerToken, presence: PlayerPresence): RoomCommandResult {
+    if (presence !== 'online' && presence !== 'reconnecting' && presence !== 'offline') {
+      return reject('bad-request', {});
+    }
+    const found = this.findEntryByToken(playerToken);
+    if (found === null) {
+      return reject('not-in-room', {});
+    }
+    const { entry, seat } = found;
+    if (seat.presence === presence) {
+      return { ok: true, deliveries: [] };
+    }
+    const seats = entry.record.seats.map((current) =>
+      current.playerId === seat.playerId ? { ...current, presence } : current,
+    );
+    // Deliberately not `withSeq`: presence is connection state and must leave
+    // the room sequence (and every timer) untouched.
+    const next: RoomRecord = { ...entry.record, seats };
+    this.rooms.set(next.roomId, { ...entry, record: next });
+    return { ok: true, deliveries: roomStateDeliveries(next) };
+  }
+
+  /**
+   * Resolve a seat whose reconnect grace window has run out (design 5.6).
+   *
+   * The connection layer calls this only for a seat it has marked `offline`; a
+   * call for an online seat is stale (for example reconnect won the race) and
+   * changes nothing. Lobby outcomes release a guest seat or dissolve the room
+   * for its host; a playing forfeit only happens when it is that player's turn,
+   * otherwise the seat is reserved until its turn or the match timer ends.
+   */
+  graceExpired(playerToken: PlayerToken): RoomCommandResult {
+    const found = this.findEntryByToken(playerToken);
+    if (found === null) {
+      return reject('not-in-room', {});
+    }
+    const { entry, seat } = found;
+    const room = entry.record;
+    if (seat.presence !== 'offline') {
+      return reject('invalid-state', { roomId: room.roomId }, room);
+    }
+
+    if (room.state === 'waiting' || room.state === 'ready') {
+      if (seat.isHost) {
+        return this.dissolveEntry(entry, 'host-grace-expired');
+      }
+      const seats = room.seats.filter((current) => current.playerId !== seat.playerId);
+      const next = withSeq(room, {
+        seats,
+        state: room.state === 'ready' ? 'waiting' : room.state,
+        stateReason: 'grace-expired',
+      });
+      this.rooms.set(room.roomId, { ...entry, record: next });
+      return { ok: true, deliveries: roomStateDeliveries(next) };
+    }
+
+    if (room.state === 'playing') {
+      if (room.turnPlayerId !== seat.playerId) {
+        // Not this player's turn: keep the seat. The turn timer will forfeit
+        // if they are still offline when the turn reaches them, and the match
+        // timer remains authoritative either way.
+        return { ok: true, deliveries: [] };
+      }
+      return this.finishByTimer(entry, 'turn');
+    }
+
+    // `finished` retains its result until the rematch window closes; a
+    // dissolved room has already been removed from the table.
+    if (room.state === 'finished') {
+      return { ok: true, deliveries: [] };
+    }
+    return reject('invalid-state', { roomId: room.roomId }, room);
+  }
+
+  /**
+   * Apply one turn or match ending and publish its single terminal triple.
+   *
+   * The match layer produces the verdict (`turn-timeout` forfeits the current
+   * player, `match-timeout` ranks safe-cell counts), then `finishMatch` records
+   * `playing → finished`. `timeout`, `end` and `room_state` all carry the same
+   * finished sequence, so a retry cannot produce a second terminal result.
+   */
+  private finishByTimer(
+    entry: RoomEntry,
+    timer: 'turn' | 'match',
+  ): RoomCommandResult {
+    const room = entry.record;
+    const match = entry.match;
+    if (room.state !== 'playing' || match === null) {
+      return reject('invalid-state', { roomId: room.roomId }, room);
+    }
+
+    const now = this.now();
+    const outcome =
+      timer === 'turn'
+        ? forfeitMatch(match.state, match.state.turnPlayerId, now, 'turn-timeout')
+        : matchTimeout(match.state, now);
+    if (!outcome.ok) {
+      return reject('invalid-state', { roomId: room.roomId }, room);
+    }
+
+    const reason: MatchEndReason = timer === 'turn' ? 'turn-timeout' : 'match-timeout';
+    const ended = this.finishMatch(room.roomId, match.matchId, reason);
+    if (!ended.ok) {
+      return reject('invalid-state', { roomId: room.roomId }, room);
+    }
+    const finishedEntry = this.rooms.get(room.roomId);
+    if (finishedEntry === undefined) {
+      return reject('room-not-found', { roomId: room.roomId });
+    }
+    this.rooms.set(room.roomId, {
+      ...finishedEntry,
+      match: { ...match, state: outcome.state },
+    });
+    const finished = finishedEntry.record;
     const timeout: TimeoutMessage = {
       type: 'timeout',
       roomId: room.roomId,
-      matchId: null,
-      seq: room.seq + 1,
-      timer: 'join',
-      subjectId: null,
-      deadlineAt: room.joinDeadlineAt,
-      resultingState: 'dissolved',
-      reason: 'join-timeout',
+      matchId: match.matchId,
+      seq: finished.seq,
+      timer,
+      subjectId: timer === 'turn' ? match.state.turnPlayerId : null,
+      deadlineAt:
+        timer === 'turn' ? match.state.turnDeadlineAt : match.state.matchDeadlineAt,
+      resultingState: 'finished',
+      reason,
     };
-    const closed: RoomClosedMessage = {
-      type: 'room_closed',
-      roomId: room.roomId,
-      seq: room.seq + 2,
-      reason: 'join-timeout',
-      finalState: 'dissolved',
+    return {
+      ok: true,
+      deliveries: [
+        ...broadcastToSeats(finished, timeout),
+        ...broadcastToSeats(finished, toEndMessage(outcome.end, room.roomId, finished.seq)),
+        ...ended.deliveries,
+      ],
     };
-    const deliveries = [...broadcastToSeats(room, timeout), ...broadcastToSeats(room, closed)];
+  }
 
-    this.rooms.delete(room.roomId);
-    return { ok: true, deliveries };
+  /** The live seat owning a token, across every room in the table. */
+  private findEntryByToken(
+    playerToken: PlayerToken,
+  ): { readonly entry: RoomEntry; readonly seat: RoomSeat } | null {
+    if (typeof playerToken !== 'string' || playerToken.length === 0) {
+      return null;
+    }
+    for (const entry of this.rooms.values()) {
+      const seat = findSeatByToken(entry.record, playerToken);
+      if (seat !== null) {
+        return { entry, seat };
+      }
+    }
+    return null;
   }
 
   /**
@@ -895,17 +1082,59 @@ export class InMemoryRoomManager implements MatchRoomManager {
   }
 
   /**
-   * Confirm one seat and return its current `room_state`.
+   * Resume a seat for a `join` carrying its original token (design 5.3/5.4).
    *
-   * A duplicate or retried `join` is idempotent: only that seat gets the
-   * current state and the sequence does not move. Presence changes and the
-   * playing snapshot are owned by the reconnect layer (#485), so this manager
-   * deliberately does not mutate the seat here.
+   * The seat keeps its `playerId`, host flag and token, the room keeps its
+   * `seq` and every deadline, and presence flips back to `online` without a
+   * room event. Recovery is a full snapshot at the current seq: `playing`
+   * sends the current match snapshot (never the offline actions or an
+   * unacknowledged `action_result`), `finished` re-sends the retained `end`,
+   * and the lobby only restores the room state. A repeated join therefore
+   * returns the same information without moving anything.
    */
-  private resumeSeat(room: RoomRecord, seat: RoomSeat): RoomCommandResult {
+  private resumeSeat(entry: RoomEntry, seat: RoomSeat): RoomCommandResult {
+    const room = entry.record;
+    const presenceChanged = seat.presence !== 'online';
+    const record: RoomRecord = presenceChanged
+      ? {
+          ...room,
+          seats: room.seats.map((current) =>
+            current.playerId === seat.playerId ? { ...current, presence: 'online' } : current,
+          ),
+        }
+      : room;
+    if (presenceChanged) {
+      this.rooms.set(record.roomId, { ...entry, record });
+    }
+
+    const resumedSeat = record.seats.find(
+      (current) => current.playerId === seat.playerId,
+    );
+    if (resumedSeat === undefined) {
+      throw new Error(`seat ${seat.playerId} disappeared from room ${room.roomId}`);
+    }
+    const deliveries: RoomDelivery[] = presenceChanged
+      ? [...roomStateDeliveries(record)]
+      : [seatStateDelivery(record, resumedSeat)];
+
+    if (record.state === 'playing' && entry.match !== null) {
+      deliveries.push({
+        playerToken: seat.playerToken,
+        message: toSnapshotMessage(entry.match.state.snapshot, record.roomId, record.seq),
+      });
+    } else if (record.state === 'finished') {
+      const end = entry.match?.state.end;
+      if (end !== null && end !== undefined) {
+        deliveries.push({
+          playerToken: seat.playerToken,
+          message: toEndMessage(end, record.roomId, record.seq),
+        });
+      }
+    }
+
     return {
       ok: true,
-      deliveries: [seatStateDelivery(room, seat)],
+      deliveries,
       boundToken: seat.playerToken,
     };
   }
