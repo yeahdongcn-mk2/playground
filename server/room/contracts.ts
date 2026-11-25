@@ -72,6 +72,82 @@ export const TURN_TIMEOUT_MS = 30_000;
  */
 export const MATCH_TIMEOUT_MS = 900_000;
 
+/**
+ * Application-level WebSocket ping interval (design 5.1 and the
+ * `design:reconnect` `heartbeat.intervalMs` value).
+ *
+ * The server sends one `ping` per live connection on this cadence. The client
+ * answers `pong` on the same socket; the server clock alone decides whether a
+ * beat was answered, so client throttling cannot extend a deadline.
+ */
+export const HEARTBEAT_INTERVAL_MS = 5_000;
+
+/**
+ * Consecutive unanswered heartbeat beats that mark a player `offline`
+ * (design 5.1, `design:reconnect` `heartbeat.missedBeats`).
+ *
+ * One lost packet or a throttled background tab must not look like a
+ * forfeit, so detection needs a streak rather than a single miss.
+ */
+export const HEARTBEAT_MISSED_BEATS = 2;
+
+/**
+ * Time from the last answered heartbeat to offline detection: exactly
+ * {@link HEARTBEAT_MISSED_BEATS} missed {@link HEARTBEAT_INTERVAL_MS} beats.
+ *
+ * This is a derived constant rather than a copy of `10_000` so the heartbeat
+ * policy stays the single source of the 10 s detection threshold that design
+ * 5.1 requires to be shorter than the grace and turn windows.
+ */
+export const OFFLINE_DETECT_MS = HEARTBEAT_INTERVAL_MS * HEARTBEAT_MISSED_BEATS;
+
+/**
+ * How long an `offline` seat is reserved for its token before the room layer
+ * resolves it (design 5.2 and `design:reconnect` `grace.graceMs`).
+ *
+ * The window starts when offline detection fires, not when the socket closed.
+ * It buys the player time to reconnect with the original token; it does not
+ * pause or reset {@link TURN_TIMEOUT_MS} or {@link MATCH_TIMEOUT_MS}, so going
+ * offline can never be used to buy unlimited time or dodge the match cap.
+ * When it lapses, the room manager applies the design 5.6 outcome for the
+ * room state at that moment.
+ *
+ * The four durations form one ordered chain:
+ * `OFFLINE_DETECT_MS < RECONNECT_GRACE_MS < TURN_TIMEOUT_MS < MATCH_TIMEOUT_MS`
+ * — a player is declared offline before the grace window opens, the grace
+ * window closes before a turn forfeit, and the turn deadline is far tighter
+ * than the hard match cap.
+ */
+export const RECONNECT_GRACE_MS = 15_000;
+
+/**
+ * Guard the heartbeat/grace/turn/match ordering the reconnect design relies
+ * on.
+ *
+ * The values above are constants, but the ordering is a load-bearing part of
+ * the contract: swapping any two would make detection race the grace window
+ * or let a grace period outlive the turn it is supposed to protect. A runtime
+ * guard keeps that failure loud at import time instead of silently changing
+ * the semantics; `tests/unit/online-reconnect-contracts.test.ts` also pins the
+ * numbers independently.
+ */
+function assertPresenceTimerOrder(): void {
+  const ordered =
+    HEARTBEAT_MISSED_BEATS >= 1 &&
+    OFFLINE_DETECT_MS === HEARTBEAT_INTERVAL_MS * HEARTBEAT_MISSED_BEATS &&
+    OFFLINE_DETECT_MS < RECONNECT_GRACE_MS &&
+    RECONNECT_GRACE_MS < TURN_TIMEOUT_MS &&
+    TURN_TIMEOUT_MS < MATCH_TIMEOUT_MS;
+  if (!ordered) {
+    throw new Error(
+      'presence timer contract violated: expected ' +
+        'OFFLINE_DETECT_MS < RECONNECT_GRACE_MS < TURN_TIMEOUT_MS < MATCH_TIMEOUT_MS',
+    );
+  }
+}
+
+assertPresenceTimerOrder();
+
 /** Seats per room, fixed by design 3.4 (a two-player match). */
 export const ROOM_CAPACITY = 2;
 
@@ -344,6 +420,75 @@ export type MatchCommandResult =
 export interface RoomConnection {
   readonly connectionId: string;
   readonly playerToken: PlayerToken | null;
+}
+
+// ---------------------------------------------------------------------------
+// Presence and reconnect contract
+// ---------------------------------------------------------------------------
+
+/**
+ * The only socket capability the presence controller needs.
+ *
+ * The transport owns the socket, its lifecycle and the connection→token map;
+ * the controller only needs to send one application-level `ping` on a live
+ * connection. Keeping this surface narrow lets tests fake heartbeat timing
+ * without a WebSocket, and keeps close/error handling out of the controller.
+ */
+export interface PresenceSocket {
+  /** Send one application-level ping on this live connection. */
+  ping(): void;
+}
+
+/**
+ * Connection-layer presence controller (#485, design 5.1–5.3).
+ *
+ * The transport calls these hooks; the controller turns them into heartbeat
+ * timers, presence transitions and grace deadlines, and reports the result
+ * through {@link PresenceRoomManager}. It never edits a room record itself:
+ * heartbeat bookkeeping must not raise a room event or change `seq`,
+ * `turnId` or `seed`.
+ *
+ * `tokenBound` / `tokenUnbound` are how the controller learns which seat a
+ * connection represents. The transport binds the token returned by
+ * `create` / `join` and unbinds it on `leave` or seat release; before a bind,
+ * a connection has no player presence to report. The implementation is
+ * constructed with a {@link PresenceRoomManager}, which is the only way it can
+ * affect room state.
+ */
+export interface PresenceController {
+  /** A transport connection is ready; start its heartbeat from this moment. */
+  connectionOpened(connectionId: string, socket: PresenceSocket): void;
+  /** The connection is gone; stop its heartbeat and let its bound token go offline. */
+  connectionClosed(connectionId: string): void;
+  /** A valid `pong` arrived; reset the miss streak for this connection. */
+  pongReceived(connectionId: string): void;
+  /** The connection now owns `playerToken`; heartbeat outcomes apply to that seat. */
+  tokenBound(connectionId: string, playerToken: PlayerToken): void;
+  /** The connection no longer owns a seat (leave, release or replacement). */
+  tokenUnbound(connectionId: string): void;
+}
+
+/**
+ * Room-layer half of the presence seam (#485, design 5.2 and 5.6).
+ *
+ * Implemented by the room manager (or a thin adapter around it) and called by
+ * the {@link PresenceController}. Both commands are synchronous and
+ * serialized like every other room command, and both answer with the same
+ * {@link RoomCommandResult} the transport already delivers: the caller never
+ * gets to mutate a room record directly.
+ *
+ * - `setPresence` mirrors one connection-layer presence value onto the seat
+ *   that owns the token. It does not change {@link RoomState} or `seq`; the
+ *   only room event presence can eventually produce is `graceExpired`.
+ * - `graceExpired` is the room event for a lapsed reconnect window. It
+ *   releases the seat, dissolves the room or records the forfeit / retained
+ *   result exactly as design 5.6 prescribes for the current state.
+ */
+export interface PresenceRoomManager {
+  /** Apply one presence value to the seat owning `playerToken`. */
+  setPresence(playerToken: PlayerToken, presence: PlayerPresence): RoomCommandResult;
+  /** Resolve the seat whose reconnect grace window has run out. */
+  graceExpired(playerToken: PlayerToken): RoomCommandResult;
 }
 
 // ---------------------------------------------------------------------------
