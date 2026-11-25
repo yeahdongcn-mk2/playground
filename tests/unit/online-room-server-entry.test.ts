@@ -15,6 +15,17 @@ afterEach(async () => {
   );
 });
 
+/** Build a stand-in transport handle for tests that mock `startRoomServer`. */
+function fakeRoomServer(overrides: Partial<RoomServer> = {}): RoomServer {
+  return {
+    host: '127.0.0.1',
+    port: 0,
+    deliver: () => undefined,
+    close: () => Promise.resolve(),
+    ...overrides,
+  };
+}
+
 /** Return the readable message a rejected `PORT` value produces. */
 function invalidPortMessage(rawPort: string): string {
   try {
@@ -102,6 +113,83 @@ describe('resolveRoomServerConfig', () => {
       expect(message).toContain('0 and 65535');
     },
   );
+});
+
+describe('server/room/main.ts import safety', () => {
+  it('does not start the room server when the module is imported', async () => {
+    const startRoomServer = vi.fn(async () => fakeRoomServer());
+    vi.resetModules();
+    vi.doMock('../../server/room/ws-server', () => ({ startRoomServer }));
+    // A bypassed guard must reach the mocked transport even when the ambient
+    // environment carries an invalid PORT; 0 is always valid and ephemeral.
+    vi.stubEnv('PORT', '0');
+
+    try {
+      const mod = await import('../../server/room/main');
+      // Give a bypassed (but asynchronous) startup a chance to reach the mock.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(startRoomServer).not.toHaveBeenCalled();
+
+      // Prove the mock is wired to the dynamically imported module: without
+      // this, a broken mock path could hide a bypassed guard whenever 8787 is
+      // already occupied.
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      try {
+        await mod.startRoomServerFromConfig({ host: '127.0.0.1', port: 0 });
+      } finally {
+        log.mockRestore();
+      }
+      expect(startRoomServer).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.doUnmock('../../server/room/ws-server');
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  });
+});
+
+describe('main shutdown', () => {
+  it('reports a failed close and exits non-zero on SIGTERM', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const previousExitCode = process.exitCode;
+    const close = vi.fn(() => Promise.reject(new Error('close failed')));
+    const startRoomServer = vi.fn(async () => fakeRoomServer({ close }));
+    // Intercept registration so the assertion path never installs a real signal
+    // handler whose rejected close outlives this test.
+    const once = vi.spyOn(process, 'once').mockImplementation(() => process);
+
+    vi.resetModules();
+    vi.doMock('../../server/room/ws-server', () => ({ startRoomServer }));
+
+    try {
+      const { main } = await import('../../server/room/main');
+      const server = await main({ PORT: '0' });
+      expect(server).not.toBeNull();
+
+      const sigterm = once.mock.calls.find(([event]) => event === 'SIGTERM')?.[1];
+      expect(sigterm).toBeTypeOf('function');
+      if (sigterm === undefined) {
+        throw new Error('main() did not register a SIGTERM handler');
+      }
+
+      // Clear any ambient value so the assertion proves the handler set it.
+      process.exitCode = undefined;
+      sigterm();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(error).toHaveBeenCalledWith('close failed');
+      expect(process.exitCode).toBe(1);
+    } finally {
+      process.exitCode = previousExitCode;
+      once.mockRestore();
+      vi.doUnmock('../../server/room/ws-server');
+      vi.resetModules();
+      log.mockRestore();
+      error.mockRestore();
+    }
+  });
 });
 
 describe('startRoomServerFromConfig', () => {
