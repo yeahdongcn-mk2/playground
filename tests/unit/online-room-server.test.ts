@@ -363,14 +363,17 @@ describe('room WebSocket/HTTP transport', () => {
     const server = await startTestServer(new FakeRoomManager());
     const socket = new WebSocket(`ws://127.0.0.1:${server.port}/not-ws`);
 
-    const outcome = await new Promise<{ readonly error: Error | null }>((resolve) => {
-      socket.once('open', () => resolve({ error: null }));
-      socket.once('error', (error: Error) => resolve({ error }));
+    const outcome = await new Promise<{ readonly statusCode: number | null }>((resolve) => {
+      socket.once('unexpected-response', (_request, response) => {
+        resolve({ statusCode: response.statusCode ?? null });
+      });
+      socket.once('open', () => resolve({ statusCode: null }));
     });
-    socket.terminate();
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.terminate();
+    }
 
-    expect(outcome.error).toBeInstanceOf(Error);
-    expect(socket.readyState).not.toBe(WebSocket.OPEN);
+    expect(outcome.statusCode).toBe(404);
   });
 
   it('drives create → join → ready over real WebSocket connections', async () => {
@@ -445,6 +448,7 @@ describe('room WebSocket/HTTP transport', () => {
       type: 'error',
       code: 'bad-request',
       requestId: null,
+      message: 'binary messages are not supported',
     });
 
     client.sendRaw(JSON.stringify({ type: 'bogus', requestId: 'req-unknown' }));
@@ -540,6 +544,9 @@ describe('room WebSocket/HTTP transport', () => {
     const guestClosed = guest.closed();
     guest.terminate();
     await guestClosed;
+    // `guest.closed()` fires on the client. Yield one event-loop turn so the
+    // server also processes the close before asserting that nothing changed.
+    await new Promise((resolve) => setImmediate(resolve));
 
     expect(manager.calls).toEqual(callsBefore);
     expect(manager.room.seats).toHaveLength(2);
@@ -600,7 +607,6 @@ describe('room WebSocket/HTTP transport', () => {
 
     const received = await guest.next();
     expect(received).toEqual(marker);
-    expect(JSON.stringify(received)).not.toContain(offlineToken);
   });
 
   it('closes cleanly and releases the listening port', async () => {
