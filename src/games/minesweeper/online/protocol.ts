@@ -19,6 +19,7 @@ import type {
   MessageFieldSpec,
   MessageSpec,
   OnlineMessage,
+  OnlineMessageType,
   ProtocolErrorCode,
   ProtocolResult,
   ProtocolValidator,
@@ -361,6 +362,41 @@ function checkFieldValue(
   return checkNominalType(field.type, value, path);
 }
 
+const ALLOWED_MESSAGE_FIELDS: ReadonlyMap<OnlineMessageType, ReadonlySet<string>> = new Map(
+  MESSAGE_SPECS.map((spec) => {
+    const names = new Set<string>(['type']);
+    for (const field of spec.fields) {
+      names.add(field.name);
+    }
+    return [spec.type, names] as const;
+  }),
+);
+
+/**
+ * Reject fields the contract does not list for this message.
+ *
+ * `design:protocol` fixes the exact field set per message, so a stray field is
+ * a contract violation rather than a forward-compatible extension: for
+ * example a `snapshot` carrying `seed` or `mine` would leak server state. The
+ * discriminant `type` is always allowed; every other allowed name must appear
+ * in `MESSAGE_SPECS`.
+ */
+function checkUnknownFields(
+  message: Readonly<Record<string, unknown>>,
+  spec: MessageSpec,
+): string | null {
+  const allowed = ALLOWED_MESSAGE_FIELDS.get(spec.type);
+  if (allowed === undefined) {
+    return `no field spec registered for "${spec.type}"`;
+  }
+  for (const name of Object.keys(message)) {
+    if (!allowed.has(name)) {
+      return `unknown field "${name}" for "${spec.type}"`;
+    }
+  }
+  return null;
+}
+
 function checkFields(
   message: Readonly<Record<string, unknown>>,
   spec: MessageSpec,
@@ -440,25 +476,27 @@ export function classifyActionId(
 /**
  * Run the full action gate without applying anything.
  *
- * A duplicate `actionId` wins over sequence checks: it is a retry, so the
- * server must return the cached `action_result` and must not apply the action
- * again. Every rejection leaves the caller's state untouched; the gate only
- * reads the supplied context.
+ * The turn owner is checked first, matching design 4.5 step 1: a player who is
+ * not on turn never receives another player's cached result.
+ * After that a duplicate `actionId` wins over sequence checks: it is a retry,
+ * so the server must return the cached `action_result` and must not apply the
+ * action again. Every rejection leaves the caller's state untouched; the gate
+ * only reads the supplied context.
  */
 export function evaluateAction(
   action: ActionMessage,
   context: ActionValidationContext,
 ): ActionGate {
-  if (classifyActionId(action.actionId, context.recentActionIds) === 'duplicate') {
-    return { ok: true, status: 'duplicate', action };
-  }
-
   if (context.actorId !== context.turnPlayerId) {
     return failure(
       'not-your-turn',
       `player ${context.actorId} cannot act while it is ${context.turnPlayerId}'s turn`,
       context.currentSeq,
     );
+  }
+
+  if (classifyActionId(action.actionId, context.recentActionIds) === 'duplicate') {
+    return { ok: true, status: 'duplicate', action };
   }
 
   const seq = checkSeq(context.currentSeq, action.seq);
@@ -570,6 +608,11 @@ export function validateMessage<M extends OnlineMessage>(
   const fieldsProblem = checkFields(input, spec);
   if (fieldsProblem !== null) {
     return failure('bad-request', fieldsProblem);
+  }
+
+  const unknownField = checkUnknownFields(input, spec);
+  if (unknownField !== null) {
+    return failure('bad-request', unknownField);
   }
 
   if (spec.fields.some((field) => field.name === 'protocolVersion')) {

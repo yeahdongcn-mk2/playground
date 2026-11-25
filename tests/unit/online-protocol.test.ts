@@ -21,11 +21,19 @@ import {
 import {
   MESSAGE_SPECS,
   PROTOCOL_VERSION,
+  type ActionKind,
   type ActionMessage,
+  type ActionResultMessage,
   type ActionValidationContext,
   type ClientToServerMessage,
+  type MatchEndReason,
+  type PlayerPresence,
   type ProtocolErrorCode,
+  type RoomClosedMessage,
+  type RoomState,
   type ServerToClientMessage,
+  type SnapshotEngineStatus,
+  type TimeoutTimer,
 } from '../../src/games/minesweeper/online/types';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -34,15 +42,62 @@ const PROTOCOL_SOURCE = readFileSync(
   'utf8',
 );
 
-const SHARED_ERROR_CODES: readonly ProtocolErrorCode[] = [
-  'unsupported-version',
-  'room-not-found',
-  'not-your-turn',
-  'stale-state',
-  'invalid-action',
-  'deadline-passed',
-  'bad-request',
-];
+const SHARED_ERROR_CODES = enumValues<ProtocolErrorCode>({
+  'unsupported-version': true,
+  'room-not-found': true,
+  'not-your-turn': true,
+  'stale-state': true,
+  'invalid-action': true,
+  'deadline-passed': true,
+  'bad-request': true,
+});
+
+/**
+ * Exhaustive runtime mirror of a shared string union.
+ *
+ * The `{ readonly [K in T]: true }` parameter makes TypeScript reject a list
+ * that misses or invents a member, so the expectations below cannot drift from
+ * the shared contract types in `types.ts` unnoticed.
+ */
+function enumValues<T extends string>(all: { readonly [K in T]: true }): readonly T[] {
+  return Object.keys(all) as T[];
+}
+
+const ALL_ACTION_KINDS = enumValues<ActionKind>({ reveal: true, flag: true });
+const ALL_SNAPSHOT_STATUSES = enumValues<SnapshotEngineStatus>({
+  playing: true,
+  won: true,
+  lost: true,
+});
+const ALL_MATCH_END_REASONS = enumValues<MatchEndReason>({
+  'mine-hit': true,
+  'all-safe-revealed': true,
+  forfeit: true,
+  'turn-timeout': true,
+  'match-timeout': true,
+});
+const ALL_TIMEOUT_TIMERS = enumValues<TimeoutTimer>({ join: true, turn: true, match: true });
+const ALL_PLAYER_PRESENCES = enumValues<PlayerPresence>({
+  online: true,
+  reconnecting: true,
+  offline: true,
+});
+/**
+ * `idle` is the pre-room state: design 3.1 says it exists before a room is
+ * created and design 4.3 never puts it on the wire, so only the other states
+ * are reachable in `room_state`/`timeout`/`room_closed`.
+ */
+const WIRE_ROOM_STATES = enumValues<Exclude<RoomState, 'idle'>>({
+  waiting: true,
+  ready: true,
+  playing: true,
+  finished: true,
+  dissolved: true,
+});
+const TIMEOUT_RESULTING_STATES = enumValues<Extract<RoomState, 'finished' | 'dissolved'>>({
+  finished: true,
+  dissolved: true,
+});
 
 const CONFIG = {
   rows: 9,
@@ -197,32 +252,36 @@ const VALID_CLIENT_MESSAGES: readonly ClientToServerMessage[] = [
   { type: 'leave', roomId: 'room-1', requestId: 'req-leave' },
 ];
 
+const ACTION_RESULT_MESSAGE: ActionResultMessage = {
+  type: 'action_result',
+  roomId: 'room-1',
+  matchId: 'match-1',
+  actionId: 'action-1',
+  seq: 7,
+  turnId: 3,
+  accepted: true,
+  reason: null,
+  revealedCells: [{ row: 2, col: 3 }],
+  flaggedCell: null,
+  turnPlayerId: 'p2',
+  deadlineAt: 30_000,
+};
+
+const ROOM_CLOSED_MESSAGE: RoomClosedMessage = {
+  type: 'room_closed',
+  roomId: 'room-1',
+  seq: 3,
+  reason: 'join deadline passed',
+  finalState: 'dissolved',
+};
+
 const VALID_SERVER_MESSAGES: readonly ServerToClientMessage[] = [
   ROOM_STATE_MESSAGE,
   SNAPSHOT_MESSAGE,
-  {
-    type: 'action_result',
-    roomId: 'room-1',
-    matchId: 'match-1',
-    actionId: 'action-1',
-    seq: 7,
-    turnId: 3,
-    accepted: true,
-    reason: null,
-    revealedCells: [{ row: 2, col: 3 }],
-    flaggedCell: null,
-    turnPlayerId: 'p2',
-    deadlineAt: 30_000,
-  },
+  ACTION_RESULT_MESSAGE,
   END_MESSAGE,
   TIMEOUT_MESSAGE,
-  {
-    type: 'room_closed',
-    roomId: 'room-1',
-    seq: 3,
-    reason: 'join deadline passed',
-    finalState: 'dissolved',
-  },
+  ROOM_CLOSED_MESSAGE,
   ERROR_MESSAGE,
 ];
 
@@ -422,6 +481,104 @@ describe('online protocol message validation', () => {
     ).toBe('bad-request');
   });
 
+  it('accepts every legal action kind, snapshot status, end reason and timer', () => {
+    for (const kind of ALL_ACTION_KINDS) {
+      expect(validateClientMessage({ ...ACTION, kind }).ok, `action.kind=${kind}`).toBe(true);
+    }
+
+    for (const engineStatus of ALL_SNAPSHOT_STATUSES) {
+      expect(
+        validateServerMessage({ ...SNAPSHOT_MESSAGE, engineStatus }).ok,
+        `snapshot.engineStatus=${engineStatus}`,
+      ).toBe(true);
+    }
+
+    for (const reason of ALL_MATCH_END_REASONS) {
+      expect(
+        validateServerMessage({ ...END_MESSAGE, reason }).ok,
+        `end.reason=${reason}`,
+      ).toBe(true);
+    }
+
+    for (const timer of ALL_TIMEOUT_TIMERS) {
+      expect(
+        validateServerMessage({ ...TIMEOUT_MESSAGE, timer }).ok,
+        `timeout.timer=${timer}`,
+      ).toBe(true);
+    }
+  });
+
+  it('accepts every legal player presence', () => {
+    for (const presence of ALL_PLAYER_PRESENCES) {
+      expect(
+        validateServerMessage({
+          ...ROOM_STATE_MESSAGE,
+          players: [{ ...PLAYER, presence }],
+        }).ok,
+        `presence=${presence}`,
+      ).toBe(true);
+    }
+  });
+
+  it('accepts every wire-reachable RoomState in the message that carries it', () => {
+    for (const state of WIRE_ROOM_STATES) {
+      const message =
+        state === 'dissolved'
+          ? { ...ROOM_CLOSED_MESSAGE, finalState: state }
+          : { ...ROOM_STATE_MESSAGE, state };
+      expect(validateServerMessage(message).ok, `RoomState=${state}`).toBe(true);
+    }
+
+    for (const resultingState of TIMEOUT_RESULTING_STATES) {
+      expect(
+        validateServerMessage({ ...TIMEOUT_MESSAGE, resultingState }).ok,
+        `timeout.resultingState=${resultingState}`,
+      ).toBe(true);
+    }
+  });
+
+  it('accepts a non-null flagged cell and rejects malformed cells', () => {
+    const flagged: ActionResultMessage = {
+      ...ACTION_RESULT_MESSAGE,
+      revealedCells: [],
+      flaggedCell: { row: 2, col: 3 },
+    };
+    expect(validateServerMessage(flagged).ok).toBe(true);
+    expect(validateServerMessage({ ...ACTION_RESULT_MESSAGE, flaggedCell: null }).ok).toBe(true);
+
+    for (const flaggedCell of [{ row: '2', col: 3 }, { row: 2 }, {}]) {
+      const rejected = expectFailure(
+        validateServerMessage({ ...ACTION_RESULT_MESSAGE, flaggedCell }),
+      );
+      expect(rejected.code).toBe('bad-request');
+      expect(rejected.message).toContain('flaggedCell');
+    }
+  });
+
+  it('rejects unknown top-level fields instead of silently ignoring them', () => {
+    const leakedSeed = expectFailure(
+      validateServerMessage({ ...SNAPSHOT_MESSAGE, seed: 42 }),
+    );
+    expect(leakedSeed.code).toBe('bad-request');
+    expect(leakedSeed.message).toContain('unknown field');
+    expect(leakedSeed.message).toContain('seed');
+
+    const leakedMine = expectFailure(
+      validateServerMessage({ ...SNAPSHOT_MESSAGE, mine: true }),
+    );
+    expect(leakedMine.code).toBe('bad-request');
+    expect(leakedMine.message).toContain('mine');
+
+    const unknownOnClient = expectFailure(
+      validateClientMessage({ ...ACTION, seed: 42 }),
+    );
+    expect(unknownOnClient.code).toBe('bad-request');
+    expect(unknownOnClient.message).toContain('unknown field');
+
+    // `end` legitimately publishes the seed, so the same key must still pass there.
+    expect(validateServerMessage({ ...END_MESSAGE, seed: 42 }).ok).toBe(true);
+  });
+
   it('validates the nested config and player list', () => {
     const badRows = expectFailure(
       validateClientMessage({
@@ -574,6 +731,22 @@ describe('online protocol action gate', () => {
       currentTurnId: ACTION.turnId + 1,
     });
     expect(evaluateAction(ACTION, context)).toMatchObject({ ok: true, status: 'duplicate' });
+  });
+
+  it('rejects a non-acting player before the duplicate shortcut can expose a cached result', () => {
+    const context = createContext({
+      actorId: 'p2',
+      recentActionIds: new Set([ACTION.actionId]),
+    });
+    expect(evaluateAction(ACTION, context)).toMatchObject({
+      ok: false,
+      code: 'not-your-turn',
+      retryable: false,
+    });
+    expect(expectFailure(validateAction(ACTION, context))).toMatchObject({
+      code: 'not-your-turn',
+      retryable: false,
+    });
   });
 
   it('rejects an action from the player who is not on turn', () => {
