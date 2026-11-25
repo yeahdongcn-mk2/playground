@@ -4,8 +4,11 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   JOIN_TIMEOUT_MS,
+  MATCH_TIMEOUT_MS,
   ROOM_CAPACITY,
+  TURN_TIMEOUT_MS,
   publicRoomState,
+  type MatchCommandResult,
   type RoomCommandFailure,
   type RoomCommandResult,
   type RoomCommandSuccess,
@@ -21,16 +24,25 @@ import {
 } from '../../server/room/room-manager';
 import {
   PROTOCOL_VERSION,
+  hashSeed,
+  replayMatch,
   validateServerMessage,
+  type ActionMessage,
   type CreateMessage,
+  type EndMessage,
   type JoinMessage,
   type LeaveMessage,
+  type ProtocolErrorCode,
   type ReadyMessage,
   type RematchMessage,
   type RoomStateMessage,
+  type ServerToClientMessage,
   type StartMessage,
 } from '../../src/games/minesweeper/online/index';
-import type { MinesweeperConfig } from '../../src/games/minesweeper/engine';
+import type {
+  MinesweeperCell,
+  MinesweeperConfig,
+} from '../../src/games/minesweeper/engine';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const MANAGER_PATH = join(ROOT, 'server', 'room', 'room-manager.ts');
@@ -135,7 +147,7 @@ function expectNoCrossTalk(
 }
 
 function expectOk(
-  result: RoomCommandResult,
+  result: RoomCommandResult | MatchCommandResult,
   allTokens: readonly string[] = [],
 ): RoomCommandSuccess {
   if (!result.ok) {
@@ -166,6 +178,45 @@ function roomStateOf(result: RoomCommandResult): RoomStateMessage {
 }
 
 /**
+ * Assert the `room_state` copies in a successful command.
+ *
+ * Start also broadcasts a `snapshot` per seat, so this helper takes the
+ * already-filtered `room_state` messages and a separate count assertion keeps
+ * lifecycle commands from silently changing their delivery count.
+ */
+function expectRoomStateMessages(
+  messages: readonly RoomStateMessage[],
+  expected: {
+    readonly state: RoomStateMessage['state'];
+    readonly seq: number;
+    readonly ready: readonly boolean[];
+    readonly playerIds?: readonly string[];
+    readonly stateReason?: string | null;
+    readonly matchId?: string | null;
+    readonly turnPlayerId?: string | null;
+  },
+): void {
+  expect(messages).toHaveLength(expected.ready.length);
+  for (const message of messages) {
+    expect(message.state).toBe(expected.state);
+    expect(message.seq).toBe(expected.seq);
+    expect(message.players.map((player) => player.ready)).toEqual(expected.ready);
+    if (expected.playerIds !== undefined) {
+      expect(message.players.map((player) => player.playerId)).toEqual(expected.playerIds);
+    }
+    if (expected.stateReason !== undefined) {
+      expect(message.stateReason).toBe(expected.stateReason);
+    }
+    if (expected.matchId !== undefined) {
+      expect(message.matchId).toBe(expected.matchId);
+    }
+    if (expected.turnPlayerId !== undefined) {
+      expect(message.turnPlayerId).toBe(expected.turnPlayerId);
+    }
+  }
+}
+
+/**
  * Assert a successful command broadcast one `room_state` per seat.
  *
  * Each per-seat copy must carry the transition's state and sequence, preserve
@@ -190,27 +241,28 @@ function expectRoomStateBroadcast(
   expect(new Set(success.deliveries.map((delivery) => delivery.playerToken)).size).toBe(
     expected.ready.length,
   );
-  for (const delivery of success.deliveries) {
-    const message = delivery.message;
-    if (message.type !== 'room_state') {
-      throw new Error(`expected a room_state delivery, got ${message.type}`);
-    }
-    expect(message.state).toBe(expected.state);
-    expect(message.seq).toBe(expected.seq);
-    expect(message.players.map((player) => player.ready)).toEqual(expected.ready);
-    if (expected.playerIds !== undefined) {
-      expect(message.players.map((player) => player.playerId)).toEqual(expected.playerIds);
-    }
-    if (expected.stateReason !== undefined) {
-      expect(message.stateReason).toBe(expected.stateReason);
-    }
-    if (expected.matchId !== undefined) {
-      expect(message.matchId).toBe(expected.matchId);
-    }
-    if (expected.turnPlayerId !== undefined) {
-      expect(message.turnPlayerId).toBe(expected.turnPlayerId);
-    }
-  }
+  expectRoomStateMessages(
+    success.deliveries.map((delivery) => {
+      if (delivery.message.type !== 'room_state') {
+        throw new Error(`expected a room_state delivery, got ${delivery.message.type}`);
+      }
+      return delivery.message;
+    }),
+    expected,
+  );
+}
+
+/** Every message of one type in a successful command, in delivery order. */
+function messagesOfType<T extends ServerToClientMessage['type']>(
+  result: RoomCommandResult | MatchCommandResult,
+  type: T,
+): Extract<ServerToClientMessage, { readonly type: T }>[] {
+  const success = expectOk(result);
+  return success.deliveries.flatMap((delivery) =>
+    delivery.message.type === type
+      ? [delivery.message as Extract<ServerToClientMessage, { readonly type: T }>]
+      : [],
+  );
 }
 
 /**
@@ -344,6 +396,123 @@ function playingRoom(options: RoomManagerOptions = {}): PlayingRoom {
     throw new Error('start must create a match handle');
   }
   return { ...room, match };
+}
+
+/** The retained match of a room that must be playing or finished. */
+function matchOf(manager: InMemoryRoomManager, roomId: string): RoomMatch {
+  const match = manager.getMatch(roomId);
+  if (match === null) {
+    throw new Error(`room ${roomId} has no match`);
+  }
+  return match;
+}
+
+interface ActionOverrides {
+  readonly actionId?: string;
+  readonly seq?: number;
+  readonly turnId?: number;
+  readonly kind?: 'reveal' | 'flag';
+  readonly row?: number;
+  readonly col?: number;
+  readonly matchId?: string;
+}
+
+/**
+ * Build an action against the room's current seq/turn, letting a test override
+ * exactly the field it wants to make stale or invalid.
+ */
+function actionFor(
+  manager: InMemoryRoomManager,
+  roomId: string,
+  overrides: ActionOverrides = {},
+): ActionMessage {
+  const room = manager.getRoom(roomId);
+  if (room === undefined || room.matchId === null) {
+    throw new Error(`room ${roomId} has no running match`);
+  }
+  const match = matchOf(manager, roomId);
+  return {
+    type: 'action',
+    roomId,
+    matchId: match.matchId,
+    actionId: `action_${room.seq + 1}`,
+    seq: room.seq,
+    turnId: match.state.turnId,
+    kind: 'reveal',
+    row: 0,
+    col: 0,
+    clientTimeMs: NOW,
+    ...overrides,
+  };
+}
+
+/** Assert a match-layer rejection carries a shared protocol code. */
+function expectMatchError(
+  result: MatchCommandResult,
+  code: ProtocolErrorCode,
+): Extract<MatchCommandResult, { readonly ok: false }> {
+  expect(result.ok, `expected match failure ${code}`).toBe(false);
+  if (result.ok) {
+    throw new Error(`expected match failure ${code}, but the command succeeded`);
+  }
+  expect(result.code).toBe(code);
+  expect(validateServerMessage(result.error).ok, JSON.stringify(result.error)).toBe(true);
+  return result;
+}
+
+/**
+ * A rejected action must not move the room or the match: the record and the
+ * match handle are compared as before/after values, and the match handle must
+ * be the exact same object (a rejection never replaces it).
+ */
+function expectMatchRejectedWithoutChange(
+  manager: InMemoryRoomManager,
+  roomId: string,
+  call: () => MatchCommandResult,
+  code: ProtocolErrorCode,
+): void {
+  const beforeRoom = snapshot(manager, roomId);
+  const beforeMatch = manager.getMatch(roomId);
+  const beforeBoard = JSON.stringify(beforeMatch?.state.engine.state.board ?? null);
+  const beforeReplay = JSON.stringify(manager.getReplayRecord(roomId));
+  const failure = expectMatchError(call(), code);
+  expect(manager.getRoom(roomId)).toEqual(beforeRoom);
+  expect(manager.getMatch(roomId)).toBe(beforeMatch);
+  expect(JSON.stringify(manager.getMatch(roomId)?.state.engine.state.board ?? null)).toBe(
+    beforeBoard,
+  );
+  expect(JSON.stringify(manager.getReplayRecord(roomId))).toBe(beforeReplay);
+  expect(failure.error.roomId).toBe(roomId);
+}
+
+/** The host and guest player ids of a two-seat room. */
+function seatIds(
+  manager: InMemoryRoomManager,
+  roomId: string,
+): { readonly hostId: string; readonly guestId: string } {
+  const seats = manager.getRoom(roomId)?.seats ?? [];
+  const host = seats.find((seat) => seat.isHost);
+  const guest = seats.find((seat) => !seat.isHost);
+  if (host === undefined || guest === undefined) {
+    throw new Error(`room ${roomId} does not have two seats`);
+  }
+  return { hostId: host.playerId, guestId: guest.playerId };
+}
+
+/** First hidden, unflagged cell of the retained match; any reveal target. */
+function firstHiddenCell(manager: InMemoryRoomManager, roomId: string): MinesweeperCell {
+  const cell = matchOf(manager, roomId)
+    .state.engine.state.board.flat()
+    .find((candidate) => !candidate.revealed && !candidate.flagged);
+  if (cell === undefined) {
+    throw new Error('expected a hidden cell in the match');
+  }
+  return cell;
+}
+
+/** Number of mine cells in an end-only board. */
+function countMines(end: EndMessage): number {
+  return end.finalSnapshot.flat().filter((cell) => cell.mine).length;
 }
 
 /** Run a command that must be rejected without changing the stored record. */
@@ -770,10 +939,10 @@ describe('online room readiness and start', () => {
       hostId: before.hostId,
       turnPlayerId: before.hostId,
       stateReason: 'match-started',
+      deadlineAt: NOW + TURN_TIMEOUT_MS,
     });
     expect(record?.matchId).toMatch(/^match_[0-9a-f-]{36}$/);
     expect(record?.matchId).not.toBeNull();
-    expect(record?.deadlineAt).toBeNull();
 
     expect(match).not.toBeNull();
     if (match === null) {
@@ -785,8 +954,18 @@ describe('online room readiness and start', () => {
     expect(match.seed).toBeLessThan(0x1_0000_0000);
     expect(match.engine.state.status).toBe('ready');
     expect(match.engine.state.mineCount).toBe(CONFIG.mines);
+    // The host moves first and the initial deadlines come from the defaults.
+    expect(match.state.turnId).toBe(0);
+    expect(match.state.turnPlayerId).toBe(before.hostId);
+    expect(match.state.turnDeadlineAt).toBe(NOW + TURN_TIMEOUT_MS);
+    expect(match.state.matchDeadlineAt).toBe(NOW + MATCH_TIMEOUT_MS);
+    expect(match.state.seq).toBe(before.seq + 1);
 
-    expectRoomStateBroadcast(started, {
+    // start broadcasts the room state first, then the redacted snapshot to
+    // both seats: one state change, one shared sequence.
+    expect(messagesOfType(started, 'room_state')).toHaveLength(2);
+    expect(messagesOfType(started, 'snapshot')).toHaveLength(2);
+    expectRoomStateMessages(messagesOfType(started, 'room_state'), {
       state: 'playing',
       seq: before.seq + 1,
       ready: [true, true],
@@ -795,6 +974,22 @@ describe('online room readiness and start', () => {
       matchId: record?.matchId ?? null,
       turnPlayerId: before.hostId,
     });
+    const snapshots = messagesOfType(started, 'snapshot');
+    expect(snapshots[0]).toMatchObject({
+      type: 'snapshot',
+      roomId: room.roomId,
+      matchId: record?.matchId,
+      seq: before.seq + 1,
+      turnId: 0,
+      turnPlayerId: before.hostId,
+      deadlineAt: NOW + TURN_TIMEOUT_MS,
+      matchDeadlineAt: NOW + MATCH_TIMEOUT_MS,
+      seedHash: hashSeed(match.seed),
+    });
+    expect(snapshots[0]).toEqual(snapshots[1]);
+    expect(JSON.stringify(snapshots[0])).not.toContain('"seed"');
+    expect(JSON.stringify(snapshots[0])).not.toContain('"mine"');
+    expect(snapshots[0]?.board.flat().every((cell) => !cell.revealed)).toBe(true);
   });
 
   it('rejects ready, leave and rematch while the match is playing', () => {
@@ -1317,7 +1512,7 @@ describe('online room finished and rematch', () => {
     const firstStart = expectOk(
       manager.start(connection(created.hostToken), startMessage(created.roomId)),
     );
-    expect(firstStart.deliveries).toHaveLength(2);
+    expect(firstStart.deliveries).toHaveLength(4);
     const firstMatch = manager.getMatch(created.roomId);
     if (firstMatch === null) {
       throw new Error('first start must create a match');
@@ -1361,6 +1556,572 @@ describe('online room finished and rematch', () => {
       () => manager.rematch(connection(created.hostToken), rematchMessage(created.roomId)),
       'invalid-state',
     );
+  });
+});
+
+describe('online authoritative match', () => {
+  it('uses the configured turn and match timeouts for the start deadlines', () => {
+    const room = playingRoom({ turnTimeoutMs: 1_000, matchTimeoutMs: 5_000 });
+    const match = matchOf(room.manager, room.roomId);
+    const record = room.manager.getRoom(room.roomId);
+
+    expect(match.state.turnDeadlineAt).toBe(NOW + 1_000);
+    expect(match.state.matchDeadlineAt).toBe(NOW + 5_000);
+    expect(record?.deadlineAt).toBe(NOW + 1_000);
+  });
+
+  it('rotates the turn and resets the turn deadline from each accepted action', () => {
+    let now = NOW;
+    const room = playingRoom({
+      now: () => now,
+      turnTimeoutMs: 1_000,
+      matchTimeoutMs: 60_000,
+    });
+    const { hostId, guestId } = seatIds(room.manager, room.roomId);
+
+    now += 400;
+    expectOk(
+      room.manager.action(
+        connection(room.hostToken),
+        actionFor(room.manager, room.roomId, { actionId: 'rotate-1' }),
+      ),
+    );
+    expect(room.manager.getRoom(room.roomId)).toMatchObject({
+      turnPlayerId: guestId,
+      deadlineAt: now + 1_000,
+    });
+    expect(matchOf(room.manager, room.roomId).state.turnDeadlineAt).toBe(now + 1_000);
+
+    now += 500;
+    const hidden = firstHiddenCell(room.manager, room.roomId);
+    expectOk(
+      room.manager.action(
+        connection(room.guestToken),
+        actionFor(room.manager, room.roomId, {
+          actionId: 'rotate-2',
+          kind: 'flag',
+          row: hidden.row,
+          col: hidden.col,
+        }),
+      ),
+    );
+    expect(room.manager.getRoom(room.roomId)).toMatchObject({
+      turnPlayerId: hostId,
+      deadlineAt: now + 1_000,
+    });
+    expect(matchOf(room.manager, room.roomId).state.turnId).toBe(2);
+  });
+
+  it('never lets a reset turn deadline run past the match deadline', () => {
+    let now = NOW;
+    const room = playingRoom({
+      now: () => now,
+      turnTimeoutMs: 10_000,
+      matchTimeoutMs: 1_000,
+    });
+
+    now += 400;
+    expectOk(
+      room.manager.action(
+        connection(room.hostToken),
+        actionFor(room.manager, room.roomId, { actionId: 'capped-deadline' }),
+      ),
+    );
+    expect(room.manager.getRoom(room.roomId)?.deadlineAt).toBe(NOW + 1_000);
+    expect(matchOf(room.manager, room.roomId).state.turnDeadlineAt).toBe(NOW + 1_000);
+  });
+
+  it('accepts one action: room seq/turn advance, action_result then snapshot', () => {
+    const room = playingRoom({ turnTimeoutMs: 1_000, matchTimeoutMs: 60_000 });
+    const { guestId } = seatIds(room.manager, room.roomId);
+    const before = snapshot(room.manager, room.roomId);
+    const beforeMatch = matchOf(room.manager, room.roomId);
+
+    const message = actionFor(room.manager, room.roomId, { actionId: 'host-reveal' });
+    const result = room.manager.action(connection(room.hostToken), message);
+
+    const success = expectOk(result);
+    expect(success.deliveries.map((delivery) => delivery.message.type)).toEqual([
+      'action_result',
+      'snapshot',
+      'snapshot',
+    ]);
+    // The verdict goes to the actor first; the snapshot is a broadcast.
+    expect(success.deliveries[0]?.playerToken).toBe(room.hostToken);
+
+    const actionResult = messagesOfType(result, 'action_result')[0];
+    if (actionResult === undefined) {
+      throw new Error('expected an action_result delivery');
+    }
+    expect(actionResult).toMatchObject({
+      type: 'action_result',
+      roomId: room.roomId,
+      matchId: room.match.matchId,
+      actionId: 'host-reveal',
+      seq: before.seq + 1,
+      turnId: 1,
+      accepted: true,
+      reason: null,
+      turnPlayerId: guestId,
+      deadlineAt: NOW + 1_000,
+    });
+    expect(actionResult.revealedCells.length).toBeGreaterThan(0);
+    expect(actionResult.flaggedCell).toBeNull();
+
+    const snapshots = messagesOfType(result, 'snapshot');
+    expect(snapshots).toHaveLength(2);
+    expect(snapshots[0]).toEqual(snapshots[1]);
+    expect(snapshots[0]).toMatchObject({
+      type: 'snapshot',
+      roomId: room.roomId,
+      matchId: room.match.matchId,
+      seq: before.seq + 1,
+      turnId: 1,
+      turnPlayerId: guestId,
+      deadlineAt: NOW + 1_000,
+      matchDeadlineAt: NOW + 60_000,
+      seedHash: beforeMatch.state.seedHash,
+    });
+
+    const after = snapshot(room.manager, room.roomId);
+    expect(after).toMatchObject({
+      state: 'playing',
+      seq: before.seq + 1,
+      turnPlayerId: guestId,
+      deadlineAt: NOW + 1_000,
+    });
+    const afterMatch = matchOf(room.manager, room.roomId);
+    expect(afterMatch.state.seq).toBe(before.seq + 1);
+    expect(afterMatch.state.turnId).toBe(1);
+    expect(afterMatch.state.turnPlayerId).toBe(guestId);
+    expect(afterMatch.state.actions).toHaveLength(1);
+    expect(afterMatch.state.digests).toHaveLength(1);
+    expect(afterMatch.state.engine.state.board[0]?.[0]?.revealed).toBe(true);
+  });
+
+  it('returns the cached action_result for a repeated actionId without moving seq/turn', () => {
+    const room = playingRoom();
+    const message = actionFor(room.manager, room.roomId, { actionId: 'retry-me' });
+    expectOk(room.manager.action(connection(room.hostToken), message));
+    const before = snapshot(room.manager, room.roomId);
+    const beforeMatch = matchOf(room.manager, room.roomId);
+
+    // The host's turn has already passed when the retry arrives; idempotency
+    // must win and return the cached verdict without applying a second step.
+    const duplicate = room.manager.action(connection(room.hostToken), message);
+    const success = expectOk(duplicate);
+    expect(success.deliveries).toHaveLength(1);
+    expect(success.deliveries[0]?.playerToken).toBe(room.hostToken);
+    expect(success.deliveries[0]?.message.type).toBe('action_result');
+    const cached = messagesOfType(duplicate, 'action_result')[0];
+    if (cached === undefined) {
+      throw new Error('expected the cached action_result');
+    }
+    expect(cached).toMatchObject({
+      actionId: 'retry-me',
+      accepted: true,
+      seq: before.seq,
+      turnId: beforeMatch.state.turnId,
+    });
+
+    expect(room.manager.getRoom(room.roomId)).toEqual(before);
+    expect(matchOf(room.manager, room.roomId)).toBe(beforeMatch);
+  });
+
+  it('rejects another player reusing an accepted actionId without moving seq/turn', () => {
+    const room = playingRoom();
+    const message = actionFor(room.manager, room.roomId, { actionId: 'shared-id' });
+    expectOk(room.manager.action(connection(room.hostToken), message));
+
+    expectMatchRejectedWithoutChange(
+      room.manager,
+      room.roomId,
+      () => room.manager.action(connection(room.guestToken), message),
+      'invalid-action',
+    );
+  });
+
+  it('rejects non-current, stale, expired, out-of-bounds and foreign actions unchanged', () => {
+    const room = playingRoom({ turnTimeoutMs: 1_000, matchTimeoutMs: 60_000 });
+    const manager = room.manager;
+    const host = connection(room.hostToken);
+    const guest = connection(room.guestToken);
+
+    expectMatchRejectedWithoutChange(
+      manager,
+      room.roomId,
+      () => manager.action(guest, actionFor(manager, room.roomId, { actionId: 'not-my-turn' })),
+      'not-your-turn',
+    );
+    expectMatchRejectedWithoutChange(
+      manager,
+      room.roomId,
+      () =>
+        manager.action(
+          host,
+          actionFor(manager, room.roomId, {
+            actionId: 'stale-seq',
+            seq: (manager.getRoom(room.roomId)?.seq ?? 1) - 1,
+          }),
+        ),
+      'stale-state',
+    );
+    expectMatchRejectedWithoutChange(
+      manager,
+      room.roomId,
+      () =>
+        manager.action(
+          host,
+          actionFor(manager, room.roomId, { actionId: 'stale-turn', turnId: 99 }),
+        ),
+      'stale-state',
+    );
+    expectMatchRejectedWithoutChange(
+      manager,
+      room.roomId,
+      () =>
+        manager.action(
+          host,
+          actionFor(manager, room.roomId, {
+            actionId: 'out-of-bounds',
+            row: CONFIG.rows,
+            col: 0,
+          }),
+        ),
+      'invalid-action',
+    );
+    expectMatchRejectedWithoutChange(
+      manager,
+      room.roomId,
+      () =>
+        manager.action(
+          host,
+          actionFor(manager, room.roomId, { actionId: 'other-match', matchId: 'match_other' }),
+        ),
+      'invalid-action',
+    );
+    expectMatchRejectedWithoutChange(
+      manager,
+      room.roomId,
+      () => manager.action(connection('stale-token'), actionFor(manager, room.roomId)),
+      'invalid-action',
+    );
+
+    expectMatchError(
+      manager.action(host, {
+        ...actionFor(manager, room.roomId, { actionId: 'missing-room' }),
+        roomId: 'room_missing',
+      }),
+      'room-not-found',
+    );
+
+    // A cell that is already revealed is not a legal target, and the rejected
+    // attempt must not consume the guest's turn either.
+    expectOk(
+      manager.action(host, actionFor(manager, room.roomId, { actionId: 'open-corner' })),
+    );
+    expectMatchRejectedWithoutChange(
+      manager,
+      room.roomId,
+      () =>
+        manager.action(
+          guest,
+          actionFor(manager, room.roomId, { actionId: 'already-revealed', row: 0, col: 0 }),
+        ),
+      'invalid-action',
+    );
+
+    // The deadline is exclusive: arriving exactly at it is already too late.
+    let now = NOW;
+    const timed = playingRoom({
+      now: () => now,
+      turnTimeoutMs: 1_000,
+      matchTimeoutMs: 60_000,
+    });
+    now += 1_000;
+    expectMatchRejectedWithoutChange(
+      timed.manager,
+      timed.roomId,
+      () =>
+        timed.manager.action(
+          connection(timed.hostToken),
+          actionFor(timed.manager, timed.roomId, { actionId: 'too-late' }),
+        ),
+      'deadline-passed',
+    );
+
+    // No action is valid before start; the lobby has no match at all.
+    const lobby = readyRoom();
+    expectMatchRejectedWithoutChange(
+      lobby.manager,
+      lobby.roomId,
+      () =>
+        lobby.manager.action(connection(lobby.hostToken), {
+          type: 'action',
+          roomId: lobby.roomId,
+          matchId: 'match_missing',
+          actionId: 'lobby-action',
+          seq: 0,
+          turnId: 0,
+          kind: 'reveal',
+          row: 0,
+          col: 0,
+          clientTimeMs: NOW,
+        }),
+      'invalid-action',
+    );
+  });
+
+  it('broadcasts end and finishes the room when the current player hits a mine', () => {
+    const room = playingRoom({ createSeed: () => 2_024 });
+    const manager = room.manager;
+    const { hostId, guestId } = seatIds(manager, room.roomId);
+    const before = snapshot(manager, room.roomId);
+
+    expectOk(
+      manager.action(connection(room.hostToken), actionFor(manager, room.roomId, {
+        actionId: 'first-reveal',
+      })),
+    );
+    const mine = matchOf(manager, room.roomId)
+      .state.engine.state.board.flat()
+      .find((cell) => cell.mine && !cell.revealed && !cell.flagged);
+    if (mine === undefined) {
+      throw new Error('expected a hidden mine after the first reveal');
+    }
+
+    const result = manager.action(
+      connection(room.guestToken),
+      actionFor(manager, room.roomId, {
+        actionId: 'hit-the-mine',
+        row: mine.row,
+        col: mine.col,
+      }),
+    );
+    const success = expectOk(result);
+    expect(success.deliveries.map((delivery) => delivery.message.type)).toEqual([
+      'action_result',
+      'snapshot',
+      'snapshot',
+      'end',
+      'end',
+      'room_state',
+      'room_state',
+    ]);
+
+    const ends = messagesOfType(result, 'end');
+    expect(ends).toHaveLength(2);
+    expect(ends[0]).toEqual(ends[1]);
+    if (ends[0] === undefined) {
+      throw new Error('expected an end delivery');
+    }
+    expect(ends[0]).toMatchObject({
+      type: 'end',
+      roomId: room.roomId,
+      matchId: room.match.matchId,
+      reason: 'mine-hit',
+      winnerId: hostId,
+      loserId: guestId,
+      seed: room.match.seed,
+      // Two accepted actions: the host's opening reveal and the fatal reveal.
+      seq: before.seq + 2,
+    });
+    expect(countMines(ends[0])).toBe(CONFIG.mines);
+
+    expectRoomStateMessages(messagesOfType(result, 'room_state'), {
+      state: 'finished',
+      seq: before.seq + 2,
+      ready: [true, true],
+      stateReason: 'mine-hit',
+      matchId: room.match.matchId,
+      turnPlayerId: null,
+    });
+
+    const record = manager.getRoom(room.roomId);
+    expect(record).toMatchObject({
+      state: 'finished',
+      seq: before.seq + 2,
+      turnPlayerId: null,
+      deadlineAt: null,
+      matchId: room.match.matchId,
+    });
+    const match = matchOf(manager, room.roomId);
+    expect(match.state.finished).toBe(true);
+    expect(match.state.end?.reason).toBe('mine-hit');
+    expect(match.state.seq).toBe(before.seq + 2);
+
+    expectMatchRejectedWithoutChange(
+      manager,
+      room.roomId,
+      () => manager.action(connection(room.hostToken), actionFor(manager, room.roomId)),
+      'invalid-action',
+    );
+  });
+
+  it('forfeits into exactly one end per seat and a finished room', () => {
+    const room = playingRoom();
+    const manager = room.manager;
+    const { guestId } = seatIds(manager, room.roomId);
+    const before = snapshot(manager, room.roomId);
+
+    expectMatchRejectedWithoutChange(
+      manager,
+      room.roomId,
+      () => manager.forfeit(room.roomId, 'match_other', guestId),
+      'invalid-action',
+    );
+    expectMatchRejectedWithoutChange(
+      manager,
+      room.roomId,
+      () => manager.forfeit(room.roomId, room.match.matchId, 'player_missing'),
+      'invalid-action',
+    );
+
+    const result = manager.forfeit(room.roomId, room.match.matchId, guestId);
+    const success = expectOk(result);
+    expect(success.deliveries.map((delivery) => delivery.message.type)).toEqual([
+      'end',
+      'end',
+      'room_state',
+      'room_state',
+    ]);
+
+    const ends = messagesOfType(result, 'end');
+    expect(ends).toHaveLength(2);
+    expect(ends[0]).toEqual(ends[1]);
+    if (ends[0] === undefined) {
+      throw new Error('expected an end delivery');
+    }
+    expect(ends[0]).toMatchObject({
+      type: 'end',
+      roomId: room.roomId,
+      matchId: room.match.matchId,
+      reason: 'forfeit',
+      winnerId: before.hostId,
+      loserId: guestId,
+      seed: room.match.seed,
+      seq: before.seq + 1,
+    });
+    expect(countMines(ends[0])).toBe(CONFIG.mines);
+
+    expectRoomStateMessages(messagesOfType(result, 'room_state'), {
+      state: 'finished',
+      seq: before.seq + 1,
+      ready: [true, true],
+      stateReason: 'forfeit',
+      matchId: room.match.matchId,
+      turnPlayerId: null,
+    });
+
+    expect(manager.getRoom(room.roomId)).toMatchObject({
+      state: 'finished',
+      turnPlayerId: null,
+      deadlineAt: null,
+    });
+    const match = matchOf(manager, room.roomId);
+    expect(match.state.finished).toBe(true);
+    expect(match.state.end?.reason).toBe('forfeit');
+    expect(match.state.seq).toBe(before.seq + 1);
+
+    expectMatchRejectedWithoutChange(
+      manager,
+      room.roomId,
+      () => manager.forfeit(room.roomId, room.match.matchId, guestId),
+      'invalid-action',
+    );
+  });
+
+  it('clears the match runtime state on rematch and starts a fresh match', () => {
+    const room = playingRoom();
+    const manager = room.manager;
+    const { guestId } = seatIds(manager, room.roomId);
+    const firstMatchId = room.match.matchId;
+    expectOk(manager.forfeit(room.roomId, firstMatchId, guestId));
+
+    expectOk(manager.rematch(connection(room.hostToken), rematchMessage(room.roomId, true)));
+    expectOk(manager.rematch(connection(room.guestToken), rematchMessage(room.roomId, true)));
+
+    expect(manager.getRoom(room.roomId)).toMatchObject({
+      state: 'ready',
+      matchId: null,
+      turnPlayerId: null,
+      deadlineAt: null,
+    });
+    expect(manager.getMatch(room.roomId)).toBeNull();
+    expect(manager.getReplayRecord(room.roomId)).toBeNull();
+    expect(manager.getReplayDigests(room.roomId)).toBeNull();
+
+    const restarted = manager.start(
+      connection(room.hostToken),
+      startMessage(room.roomId),
+    );
+    expectOk(restarted);
+    const second = matchOf(manager, room.roomId);
+    expect(second.matchId).not.toBe(firstMatchId);
+    expect(second.state.actions).toEqual([]);
+    expect(second.state.digests).toEqual([]);
+    expect(second.state.finished).toBe(false);
+    expect(second.state.seq).toBe(manager.getRoom(room.roomId)?.seq);
+    expect(messagesOfType(restarted, 'snapshot')[0]?.seq).toBe(
+      manager.getRoom(room.roomId)?.seq,
+    );
+  });
+
+  it('exposes the replay record and digests of the accepted actions', () => {
+    const room = playingRoom({ turnTimeoutMs: 1_000, matchTimeoutMs: 60_000 });
+    const manager = room.manager;
+    const before = snapshot(manager, room.roomId);
+
+    expect(manager.getReplayRecord('room_missing')).toBeNull();
+    expect(manager.getReplayDigests('room_missing')).toBeNull();
+    const empty = manager.getReplayRecord(room.roomId);
+    if (empty === null) {
+      throw new Error('a started match must expose a replay record');
+    }
+    expect(empty.actions).toEqual([]);
+    expect(manager.getReplayDigests(room.roomId)).toEqual([]);
+
+    expectOk(
+      manager.action(
+        connection(room.hostToken),
+        actionFor(manager, room.roomId, { actionId: 'replay-reveal' }),
+      ),
+    );
+    const hidden = firstHiddenCell(manager, room.roomId);
+    expectOk(
+      manager.action(
+        connection(room.guestToken),
+        actionFor(manager, room.roomId, {
+          actionId: 'replay-flag',
+          kind: 'flag',
+          row: hidden.row,
+          col: hidden.col,
+        }),
+      ),
+    );
+
+    const record = manager.getReplayRecord(room.roomId);
+    const digests = manager.getReplayDigests(room.roomId);
+    if (record === null || digests === null) {
+      throw new Error('the accepted actions must be recorded for replay');
+    }
+    expect(record.matchId).toBe(room.match.matchId);
+    expect(record.seed).toBe(room.match.seed);
+    expect(record.config).toEqual(CONFIG);
+    expect(record.actions.map((action) => action.seq)).toEqual([
+      before.seq + 1,
+      before.seq + 2,
+    ]);
+    expect(record.actions.map((action) => action.actionId)).toEqual([
+      'replay-reveal',
+      'replay-flag',
+    ]);
+    expect(record.actions.map((action) => action.kind)).toEqual(['reveal', 'flag']);
+    expect(digests.map((digest) => digest.seq)).toEqual([before.seq + 1, before.seq + 2]);
+
+    const outcome = replayMatch(record, digests);
+    expect(outcome.digests).toEqual([...digests]);
+    expect(outcome.status).toBe('playing');
   });
 });
 
