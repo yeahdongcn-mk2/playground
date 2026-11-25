@@ -23,9 +23,14 @@
  *   that owns that seat, and a token with no live connection is dropped
  *   instead of being re-addressed to the caller.
  *
- * The transport is intentionally passive about connection lifecycle: a closed
- * socket removes its connection mapping and nothing else. Presence, reconnect
- * grace and timer-driven room transitions belong to the room/match layers.
+ * Connection lifecycle has two transport-owned rules. First, a closed socket
+ * removes its connection mapping and nothing else: presence, reconnect grace
+ * and timer-driven room transitions belong to the injected
+ * {@link PresenceController} and the room/match layers, which the transport
+ * only notifies. Second, a `playerToken` has at most one live socket: a
+ * successful `create`/`join` that binds a token already owned by another
+ * connection closes the older socket (`4001` / `session-replaced`). Replacing
+ * only swaps sockets, so it never advances `seq` or moves a room deadline.
  */
 
 import { createServer as createHttpServer } from 'node:http';
@@ -44,6 +49,8 @@ import type {
   MatchCommandResult,
   MatchRoomManager,
   PlayerToken,
+  PresenceController,
+  PresenceSocket,
   RoomCommandResult,
   RoomConnection,
   RoomDelivery,
@@ -65,6 +72,12 @@ const DEFAULT_ROOM_SERVER_HOST = '127.0.0.1';
  */
 const MAX_CLIENT_MESSAGE_BYTES = 64 * 1024;
 
+/** Application close code for a socket replaced by a newer connection. */
+const SESSION_REPLACED_CLOSE_CODE = 4001;
+
+/** Application close reason paired with {@link SESSION_REPLACED_CLOSE_CODE}. */
+const SESSION_REPLACED_REASON = 'session-replaced';
+
 /** Options accepted by {@link startRoomServer}. */
 export interface RoomServerOptions {
   /**
@@ -74,6 +87,16 @@ export interface RoomServerOptions {
    * state out of the socket layer.
    */
   readonly manager: MatchRoomManager;
+  /**
+   * Optional connection-layer presence controller (design 5.1–5.3).
+   *
+   * When injected, the transport reports socket open/close, `pong` frames and
+   * token bind/unbind changes to it, and hands it a ping-only socket adapter.
+   * The controller owns heartbeat timing and grace; the transport never drives
+   * a timer itself. Without a controller the transport keeps the pre-presence
+   * behaviour: connections live and die and the room layer is untouched.
+   */
+  readonly presence?: PresenceController;
   /** Bind host; defaults to loopback so a local server is not exposed. */
   readonly host?: string;
   /** Bind port; `0` asks the OS for a free port (useful in tests). */
@@ -169,16 +192,21 @@ function readMessageIdentity(input: unknown): MessageIdentity {
  * Per-server connection registry.
  *
  * The registry is the only place that knows which socket owns which seat
- * token. It never asks the room manager to change state when a socket closes.
+ * token. It holds at most one live socket per token: binding a token that
+ * another connection already owns replaces that connection. It never asks the
+ * room manager to change state when a socket closes; presence changes are
+ * reported to the injected {@link PresenceController} instead.
  */
 class RoomSocketHub {
   private readonly manager: MatchRoomManager;
+  private readonly presence: PresenceController | null;
   private readonly connections = new Map<WebSocket, ClientConnection>();
-  private readonly tokenConnections = new Map<PlayerToken, Set<ClientConnection>>();
+  private readonly tokenConnections = new Map<PlayerToken, ClientConnection>();
   private nextConnectionId = 1;
 
-  constructor(manager: MatchRoomManager) {
+  constructor(manager: MatchRoomManager, presence: PresenceController | null) {
     this.manager = manager;
+    this.presence = presence;
   }
 
   addConnection(socket: WebSocket): void {
@@ -193,13 +221,30 @@ class RoomSocketHub {
     socket.on('message', (data: RawData, isBinary: boolean) => {
       this.handleMessage(connection, data, isBinary);
     });
+    socket.on('pong', () => {
+      this.presence?.pongReceived(connection.id);
+    });
     socket.on('close', () => {
       this.removeConnection(connection);
+      this.presence?.connectionClosed(connection.id);
     });
     socket.on('error', () => {
       // A transport error is followed by `close`, which cleans the mapping.
       socket.terminate();
     });
+
+    this.presence?.connectionOpened(connection.id, this.presenceSocket(socket));
+  }
+
+  /** Adapt the live socket to the ping-only surface the controller may use. */
+  private presenceSocket(socket: WebSocket): PresenceSocket {
+    return {
+      ping: () => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.ping();
+        }
+      },
+    };
   }
 
   deliverAll(deliveries: readonly RoomDelivery[]): void {
@@ -213,6 +258,12 @@ class RoomSocketHub {
     data: RawData,
     isBinary: boolean,
   ): void {
+    // A replaced connection may still have a frame in flight while it closes.
+    // It no longer owns a socket entry, so it must not act on the room.
+    if (this.connections.get(connection.socket) !== connection) {
+      return;
+    }
+
     if (isBinary) {
       this.sendError(connection.socket, 'bad-request', 'binary messages are not supported');
       return;
@@ -236,7 +287,14 @@ class RoomSocketHub {
     }
 
     try {
-      this.applyCommandResult(connection, this.runCommand(connection, validation.value));
+      const result = this.runCommand(connection, validation.value);
+      if (validation.value.type === 'leave' && result.ok) {
+        // The seat is released, so the connection stops owning its token. This
+        // is a transport binding change, not a room event: a deliberate leave
+        // must not open a reconnect grace window for the token.
+        this.unbindToken(connection);
+      }
+      this.applyCommandResult(connection, result);
     } catch {
       // A manager failure is a server-side fault, but it must not drop the
       // socket or take the process down. Report it as a rejected request while
@@ -297,17 +355,14 @@ class RoomSocketHub {
   }
 
   private deliver(delivery: RoomDelivery): void {
-    const recipients = this.tokenConnections.get(delivery.playerToken);
-    if (recipients === undefined) {
+    const recipient = this.tokenConnections.get(delivery.playerToken);
+    if (recipient === undefined) {
       // The seat has no live connection (offline), so the message is dropped
       // rather than sent to a different connection.
       return;
     }
-    const payload = JSON.stringify(delivery.message);
-    for (const recipient of recipients) {
-      if (recipient.socket.readyState === WebSocket.OPEN) {
-        recipient.socket.send(payload);
-      }
+    if (recipient.socket.readyState === WebSocket.OPEN) {
+      recipient.socket.send(JSON.stringify(delivery.message));
     }
   }
 
@@ -316,37 +371,64 @@ class RoomSocketHub {
       return;
     }
     this.unbindToken(connection);
+    this.replaceTokenOwner(token, connection);
     connection.playerToken = token;
-    const recipients = this.tokenConnections.get(token);
-    if (recipients === undefined) {
-      this.tokenConnections.set(token, new Set([connection]));
-      return;
-    }
-    recipients.add(connection);
+    this.tokenConnections.set(token, connection);
+    this.presence?.tokenBound(connection.id, token);
   }
 
+  /**
+   * Close and forget the connection that currently owns `token`.
+   *
+   * The old connection is unbound before its socket closes, so the later
+   * `close` event cannot make the presence controller start a grace window for
+   * the token: it is already owned by the replacement. Only the socket swap is
+   * observable, and this path never calls the room manager, so `seq` and the
+   * `turn` / `match` deadlines stay exactly where they were.
+   */
+  private replaceTokenOwner(token: PlayerToken, replacement: ClientConnection): void {
+    const existing = this.tokenConnections.get(token);
+    if (existing === undefined || existing === replacement) {
+      return;
+    }
+    this.tokenConnections.delete(token);
+    existing.playerToken = null;
+    this.connections.delete(existing.socket);
+    this.presence?.tokenUnbound(existing.id);
+    existing.socket.close(SESSION_REPLACED_CLOSE_CODE, SESSION_REPLACED_REASON);
+  }
+
+  /** Release one connection's token binding without closing its socket. */
   private unbindToken(connection: ClientConnection): void {
     const token = connection.playerToken;
     if (token === null) {
       return;
     }
     connection.playerToken = null;
-    const recipients = this.tokenConnections.get(token);
-    if (recipients === undefined) {
-      return;
-    }
-    recipients.delete(connection);
-    if (recipients.size === 0) {
+    if (this.tokenConnections.get(token) === connection) {
       this.tokenConnections.delete(token);
     }
+    this.presence?.tokenUnbound(connection.id);
   }
 
+  /**
+   * Forget a closed socket.
+   *
+   * The presence controller owns the token→offline transition through
+   * `connectionClosed`, so this helper only clears the transport maps and must
+   * not emit `tokenUnbound` (which means the seat was released or replaced
+   * while the connection was still usable).
+   */
   private removeConnection(connection: ClientConnection): void {
-    if (!this.connections.has(connection.socket)) {
+    this.connections.delete(connection.socket);
+    const token = connection.playerToken;
+    if (token === null) {
       return;
     }
-    this.connections.delete(connection.socket);
-    this.unbindToken(connection);
+    connection.playerToken = null;
+    if (this.tokenConnections.get(token) === connection) {
+      this.tokenConnections.delete(token);
+    }
   }
 
   private sendError(
@@ -410,7 +492,7 @@ export async function startRoomServer(
 ): Promise<RoomServer> {
   const host = options.host ?? DEFAULT_ROOM_SERVER_HOST;
   const requestedPort = options.port ?? DEFAULT_ROOM_SERVER_PORT;
-  const hub = new RoomSocketHub(options.manager);
+  const hub = new RoomSocketHub(options.manager, options.presence ?? null);
   const webSocketServer = new WebSocketServer({
     noServer: true,
     maxPayload: MAX_CLIENT_MESSAGE_BYTES,
