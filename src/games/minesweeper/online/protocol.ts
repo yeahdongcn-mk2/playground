@@ -37,7 +37,8 @@ const MATCH_END_REASONS = [
   'match-timeout',
 ] as const;
 const TIMEOUT_TIMERS = ['join', 'turn', 'match'] as const;
-const PROTOCOL_ERROR_CODES = [
+/** Every error code the server may return in an `error` message. */
+export const PROTOCOL_ERROR_CODES = [
   'unsupported-version',
   'room-not-found',
   'not-your-turn',

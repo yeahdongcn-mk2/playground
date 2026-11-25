@@ -4,33 +4,119 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   createMatchEngine,
+  createProtocolError,
   endPayload,
   engineAdapter,
   hashSeed,
   matchDigest,
+  MESSAGE_SPECS,
+  PROTOCOL_ERROR_CODES,
+  PROTOCOL_VERSION,
   ReplayMismatchError,
   replayMatch,
-} from '../../src/games/minesweeper/online/adapter';
-import type {
-  ActionKind,
-  EngineMatch,
-  MatchStats,
-  ReplayAction,
-  ReplayDigest,
-  ReplayRecord,
-} from '../../src/games/minesweeper/online/types';
+  validateServerMessage,
+  type ActionKind,
+  type EndMessage,
+  type EngineMatch,
+  type MatchStats,
+  type ProtocolErrorCode,
+  type ReplayAction,
+  type ReplayDigest,
+  type ReplayRecord,
+  type SnapshotMessage,
+} from '../../src/games/minesweeper/online/index';
+import * as onlineEntry from '../../src/games/minesweeper/online/index';
 import type { MinesweeperConfig } from '../../src/games/minesweeper/engine';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const ADAPTER_PATH = join(
-  ROOT,
-  'src',
-  'games',
-  'minesweeper',
-  'online',
-  'adapter.ts',
-);
+const ONLINE_DIR = join(ROOT, 'src', 'games', 'minesweeper', 'online');
+const ADAPTER_PATH = join(ONLINE_DIR, 'adapter.ts');
+const INDEX_PATH = join(ONLINE_DIR, 'index.ts');
+const PROTOCOL_PATH = join(ONLINE_DIR, 'protocol.ts');
+const TYPES_PATH = join(ONLINE_DIR, 'types.ts');
 const ADAPTER_SOURCE = readFileSync(ADAPTER_PATH, 'utf8');
+const INDEX_SOURCE = readFileSync(INDEX_PATH, 'utf8');
+const PROTOCOL_SOURCE = readFileSync(PROTOCOL_PATH, 'utf8');
+const TYPES_SOURCE = readFileSync(TYPES_PATH, 'utf8');
+
+interface ContractModule {
+  readonly file: string;
+  readonly specifier: string;
+  readonly source: string;
+}
+
+/** The three internal modules whose public names index.ts must forward. */
+const CONTRACT_MODULES: readonly ContractModule[] = [
+  { file: 'types.ts', specifier: './types', source: TYPES_SOURCE },
+  { file: 'adapter.ts', specifier: './adapter', source: ADAPTER_SOURCE },
+  { file: 'protocol.ts', specifier: './protocol', source: PROTOCOL_SOURCE },
+];
+
+interface ContractExport {
+  readonly name: string;
+  readonly kind: 'type' | 'value';
+}
+
+/** Split an export list into public names, dropping `type` modifiers and aliases. */
+function exportListNames(list: string): readonly string[] {
+  return list
+    .split(',')
+    .map((entry) => entry.trim().replace(/^type\s+/, ''))
+    .map((entry) => entry.split(/\s+as\s+/).pop()?.trim() ?? '')
+    .filter((name) => /^[A-Za-z_$][\w$]*$/.test(name));
+}
+
+/** Every public name one module declares with a local `export` statement. */
+function declaredExports(source: string): readonly ContractExport[] {
+  const exports: ContractExport[] = [];
+  const declaration =
+    /^export\s+(?:declare\s+)?(interface|type|const|let|var|function|class|enum)\s+([A-Za-z_$][\w$]*)/gm;
+  for (const match of source.matchAll(declaration)) {
+    const keyword = match[1];
+    const name = match[2];
+    if (keyword === undefined || name === undefined) {
+      continue;
+    }
+    exports.push({
+      name,
+      kind: keyword === 'interface' || keyword === 'type' ? 'type' : 'value',
+    });
+  }
+  const localList = /^export\s+(type\s+)?\{([^}]*)\}(?!\s*from)/gm;
+  for (const match of source.matchAll(localList)) {
+    const blockIsType = match[1] !== undefined;
+    const list = match[2];
+    if (list === undefined) {
+      continue;
+    }
+    for (const name of exportListNames(list)) {
+      exports.push({
+        name,
+        kind: blockIsType || list.includes(`type ${name}`) ? 'type' : 'value',
+      });
+    }
+  }
+  return exports;
+}
+
+/** Names index.ts forwards, keyed by the sibling module it forwards them from. */
+function forwardedNames(source: string): ReadonlyMap<string, ReadonlySet<string>> {
+  const forwarded = new Map<string, Set<string>>();
+  const reExport = /export\s+(?:type\s+)?\{([^}]*)\}\s+from\s+'([^']+)'/g;
+  for (const match of source.matchAll(reExport)) {
+    const list = match[1];
+    const specifier = match[2];
+    if (list === undefined || specifier === undefined) {
+      continue;
+    }
+    const names = forwarded.get(specifier) ?? new Set<string>();
+    for (const name of exportListNames(list)) {
+      names.add(name);
+    }
+    forwarded.set(specifier, names);
+  }
+  return forwarded;
+}
 
 const CONFIG: MinesweeperConfig = {
   rows: 9,
@@ -453,5 +539,163 @@ describe('online engine adapter action limits', () => {
     expect(() => engineAdapter.applyAction(match, action(1, 'reveal', 0, 0))).toThrow(
       /already ended/,
     );
+  });
+});
+
+describe('online minesweeper single entry export surface', () => {
+  it('forwards every public name of the three contract modules', () => {
+    const forwarded = forwardedNames(INDEX_SOURCE);
+    expect(new Set(forwarded.keys())).toEqual(
+      new Set(CONTRACT_MODULES.map((module) => module.specifier)),
+    );
+    for (const module of CONTRACT_MODULES) {
+      const expected = declaredExports(module.source)
+        .map((entry) => entry.name)
+        .sort();
+      const actual = [...(forwarded.get(module.specifier) ?? [])].sort();
+      expect(actual, `${module.file} must be forwarded by index.ts`).toEqual(expected);
+    }
+  });
+
+  it('resolves every forwarded value at runtime', () => {
+    const entry = onlineEntry as unknown as Record<string, unknown>;
+    for (const module of CONTRACT_MODULES) {
+      for (const { name, kind } of declaredExports(module.source)) {
+        if (kind === 'value') {
+          expect(entry[name], `${name} from ${module.file}`).toBeDefined();
+        }
+      }
+    }
+  });
+
+  it('keeps the exported error codes in sync with the ProtocolErrorCode union', () => {
+    const exhaustive: { readonly [K in ProtocolErrorCode]: true } = {
+      'unsupported-version': true,
+      'room-not-found': true,
+      'not-your-turn': true,
+      'stale-state': true,
+      'invalid-action': true,
+      'deadline-passed': true,
+      'bad-request': true,
+    };
+    expect([...PROTOCOL_ERROR_CODES].sort()).toEqual(Object.keys(exhaustive).sort());
+  });
+});
+
+describe('online minesweeper cross-module wiring through index.ts', () => {
+  it('serves the version, message table and error codes from the single entry', () => {
+    expect(PROTOCOL_VERSION).toBe(1);
+    expect(MESSAGE_SPECS).toHaveLength(14);
+    for (const code of PROTOCOL_ERROR_CODES) {
+      const validated = validateServerMessage(createProtocolError(code));
+      expect(validated.ok, code).toBe(true);
+    }
+  });
+
+  it('keeps index.ts a re-export surface instead of a second DTO layer', () => {
+    // The entry may only forward the three internal modules; a local DTO,
+    // function or constant here would be a second source of the contract.
+    const localDeclaration =
+      /^(?:export\s+)?(?:interface|type|enum|class|function|const|let|var)\s+[A-Za-z_$]/m;
+    expect(INDEX_SOURCE).not.toMatch(localDeclaration);
+    // Multi-line `export type { ... } from` lists are re-exports, not local
+    // declarations, but a local DTO type or enum must be rejected.
+    expect("export type { Foo } from './types';\n").not.toMatch(localDeclaration);
+    expect('export type ShadowCell = { readonly mine: boolean };\n').toMatch(
+      localDeclaration,
+    );
+    expect('enum Shadow { A }\n').toMatch(localDeclaration);
+    const reExported = [...INDEX_SOURCE.matchAll(/from\s+'(\.\/[^']+)'/g)].map(
+      (match) => match[1],
+    );
+    expect(reExported.length).toBeGreaterThan(0);
+    expect(new Set(reExported)).toEqual(
+      new Set(['./types', './adapter', './protocol']),
+    );
+  });
+
+  it('plays, projects, replays and ends one match through the single entry', () => {
+    const config: MinesweeperConfig = {
+      rows: 5,
+      cols: 5,
+      mines: 3,
+      firstClickSafe: true,
+    };
+    const match = engineAdapter.createMatch({
+      matchId: 'wired',
+      config,
+      seed: SEED,
+    });
+    expect(match.seedHash).toBe(hashSeed(SEED));
+    expect(match.state.board.flat().some((cell) => cell.mine)).toBe(false);
+
+    const expected: ReplayDigest[] = [];
+    const applied: ReplayAction[] = [];
+    const apply = (kind: ActionKind, row: number, col: number): void => {
+      const accepted = action(applied.length + 1, kind, row, col);
+      engineAdapter.applyAction(match, accepted);
+      engineAdapter.recordAction(match, accepted);
+      applied.push(accepted);
+      expected.push(matchDigest(match, accepted.seq, accepted.turnId));
+    };
+    apply('flag', 0, 0);
+    apply('reveal', 2, 2);
+    expect(applied.map((accepted) => accepted.kind)).toEqual(['flag', 'reveal']);
+
+    // The redacted projection is a valid server-to-client snapshot message.
+    const snapshot = engineAdapter.projectSnapshot(match);
+    const snapshotMessage: SnapshotMessage = {
+      type: 'snapshot',
+      roomId: 'room-1',
+      matchId: match.matchId,
+      seq: applied.length,
+      turnPlayerId: 'player-a',
+      turnId: applied.length,
+      deadlineAt: 5_000,
+      matchDeadlineAt: 60_000,
+      ...snapshot,
+    };
+    const validatedSnapshot = validateServerMessage(snapshotMessage);
+    expect(validatedSnapshot.ok).toBe(true);
+    if (!validatedSnapshot.ok) {
+      throw new Error(validatedSnapshot.message);
+    }
+    expect(validatedSnapshot.value).toEqual(snapshotMessage);
+    expect(JSON.stringify(validatedSnapshot.value)).not.toContain('"seed"');
+    expect(JSON.stringify(validatedSnapshot.value)).not.toContain('"mine"');
+
+    // Rebuilding from the recorded replay input reproduces the same digests.
+    const record = engineAdapter.getReplayRecord(match);
+    expect(record.actions).toEqual(applied);
+    const replayed = replayMatch(record, expected);
+    expect(replayed.digests).toEqual(expected);
+    expect(replayed.digests).toHaveLength(applied.length);
+    expect(replayed.finalDigest).toEqual(expected.at(-1));
+    expect(engineAdapter.replay(record)).toEqual(expected);
+
+    // The end payload is the only value that publishes the seed and all mines,
+    // and it also travels through the same validator from the same entry.
+    const end: EndMessage = {
+      type: 'end',
+      roomId: 'room-1',
+      seq: applied.length + 1,
+      ...endPayload(match, {
+        reason: match.state.status === 'lost' ? 'mine-hit' : 'forfeit',
+        winnerId: 'player-a',
+        loserId: 'player-b',
+        stats: statsFor(match, applied.length),
+      }),
+    };
+    const validatedEnd = validateServerMessage(end);
+    expect(validatedEnd.ok).toBe(true);
+    if (!validatedEnd.ok) {
+      throw new Error(validatedEnd.message);
+    }
+    expect(end.seed).toBe(SEED);
+    expect(hashSeed(end.seed)).toBe(snapshot.seedHash);
+    expect(end.finalSnapshot.flat().filter((cell) => cell.mine)).toHaveLength(
+      config.mines,
+    );
+    expect(end.finalSnapshot.flat().every((cell) => 'mine' in cell)).toBe(true);
   });
 });
