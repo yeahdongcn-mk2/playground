@@ -368,6 +368,102 @@ describe('online minesweeper engine adapter', () => {
     expect(snapshot.remainingMines).toBe(CONFIG.mines - 1);
   });
 
+  it('advances elapsed time through tick only after the first reveal', () => {
+    const match = createMatch('clock');
+    expect(engineAdapter.projectSnapshot(match).elapsedMs).toBe(0);
+
+    // The clock stays frozen before the first reveal, like the single-player engine.
+    expect(engineAdapter.tick(match, 500)).toBe(0);
+    expect(engineAdapter.tick(match, 500)).toBe(0);
+    expect(match.state.elapsedMs).toBe(0);
+    expect(engineAdapter.projectSnapshot(match).elapsedMs).toBe(0);
+
+    applyAndRecord(match, action(1, 'reveal', 4, 4));
+    expect(match.state.status).toBe('playing');
+
+    expect(engineAdapter.tick(match, 250)).toBe(250);
+    expect(match.state.elapsedMs).toBe(250);
+    expect(engineAdapter.projectSnapshot(match).elapsedMs).toBe(250);
+
+    expect(engineAdapter.tick(match, 750)).toBe(1000);
+    expect(match.state.elapsedMs).toBe(1000);
+    expect(engineAdapter.projectSnapshot(match).elapsedMs).toBe(1000);
+  });
+
+  it('freezes elapsed time through tick after a win or a loss', () => {
+    const lost = createMatch('clock-lost');
+    applyAndRecord(lost, action(1, 'reveal', 4, 4));
+    expect(engineAdapter.tick(lost, 400)).toBe(400);
+
+    const mine = engineAdapter
+      .expandEndBoard(lost)
+      .flat()
+      .find((cell) => cell.mine);
+    if (mine === undefined) {
+      throw new Error('expected the seeded board to contain a mine');
+    }
+    applyAndRecord(lost, action(2, 'reveal', mine.row, mine.col));
+    expect(lost.state.status).toBe('lost');
+    expect(engineAdapter.tick(lost, 500)).toBe(400);
+    expect(engineAdapter.projectSnapshot(lost).elapsedMs).toBe(400);
+
+    const won = createMatch('clock-won');
+    applyAndRecord(won, action(1, 'reveal', 4, 4));
+    expect(engineAdapter.tick(won, 700)).toBe(700);
+    let seq = 1;
+    while (won.state.status === 'playing') {
+      const next = engineAdapter
+        .expandEndBoard(won)
+        .flat()
+        .find((cell) => !cell.mine && !cell.revealed);
+      if (next === undefined) {
+        break;
+      }
+      seq += 1;
+      applyAndRecord(won, action(seq, 'reveal', next.row, next.col));
+    }
+    expect(won.state.status).toBe('won');
+    expect(engineAdapter.tick(won, 300)).toBe(700);
+    expect(engineAdapter.projectSnapshot(won).elapsedMs).toBe(700);
+  });
+
+  it('rejects invalid tick deltas', () => {
+    const match = createMatch('clock-invalid');
+    applyAndRecord(match, action(1, 'reveal', 4, 4));
+
+    expect(() => engineAdapter.tick(match, -1)).toThrow(RangeError);
+    expect(() => engineAdapter.tick(match, Number.NaN)).toThrow(RangeError);
+    expect(() => engineAdapter.tick(match, Number.POSITIVE_INFINITY)).toThrow(
+      RangeError,
+    );
+    expect(match.state.elapsedMs).toBe(0);
+  });
+
+  it('keeps match digests and replay digests independent of the clock', () => {
+    const match = createMatch('clock-digest');
+    const expected: ReplayDigest[] = [];
+    const actions = playMatch(match, {
+      maxActions: 2,
+      flagFirst: true,
+      expectedDigests: expected,
+    });
+    expect(match.state.status).toBe('playing');
+    const last = actions.at(-1);
+    if (last === undefined) {
+      throw new Error('expected at least one recorded action');
+    }
+    const digestBefore = matchDigest(match, last.seq, last.turnId);
+    const recordBefore = engineAdapter.getReplayRecord(match);
+
+    expect(engineAdapter.tick(match, 5_000)).toBe(5_000);
+    // The clock changed, but the digest deliberately excludes elapsed time.
+    expect(engineAdapter.projectSnapshot(match).elapsedMs).toBe(5_000);
+    expect(matchDigest(match, last.seq, last.turnId)).toEqual(digestBefore);
+    expect(engineAdapter.getReplayRecord(match)).toEqual(recordBefore);
+    expect(engineAdapter.replay(recordBefore)).toEqual(expected);
+    expect(replayMatch(recordBefore, expected).digests).toEqual(expected);
+  });
+
   it('records ordered actions and rejects illegal or out-of-order input', () => {
     const match = createMatch('ordering');
     applyAndRecord(match, action(1, 'flag', 0, 0));

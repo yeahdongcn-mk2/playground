@@ -612,14 +612,23 @@ export interface EngineActionResult {
 
 /**
  * Server-side adapter over the pure rules engine. It creates match engines,
- * applies accepted actions, projects redacted snapshots, expands the final
- * board and records/replays the ordered action log.
+ * applies accepted actions, advances the match clock, projects redacted
+ * snapshots, expands the final board and records/replays the ordered action
+ * log.
  */
 export interface EngineAdapter {
   /** Create the authoritative engine for a match with a server-chosen seed. */
   createMatch(input: CreateMatchInput): EngineMatch;
   /** Apply one accepted reveal or flag to the match engine. */
   applyAction(match: EngineMatch, action: ReplayAction): EngineActionResult;
+  /**
+   * Advance the engine clock by `deltaMs` and return the elapsed match time.
+   *
+   * Semantics match `MinesweeperEngine.tick`: the clock only runs between the
+   * first reveal and a win or loss, so ticking earlier or later leaves it
+   * unchanged, and an invalid delta throws. The room layer owns the timer.
+   */
+  tick(match: EngineMatch, deltaMs: number): number;
   /** Project the current engine state into a client-safe snapshot. */
   projectSnapshot(match: EngineMatch): RedactedSnapshot;
   /** Return the end-only board with every mine position expanded. */

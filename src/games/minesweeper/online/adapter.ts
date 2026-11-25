@@ -375,6 +375,19 @@ function applyAction(match: EngineMatch, action: ReplayAction): EngineActionResu
   return applyToEngine(runtime.engine, match.config, action);
 }
 
+/**
+ * Advance the authoritative clock for one match.
+ *
+ * Delegating to `MinesweeperEngine.tick` keeps the single-player freeze rules:
+ * the clock runs only while playing and an invalid delta throws. Because the
+ * redacted snapshot reads `engine.state.elapsedMs`, both broadcasts and
+ * reconnect snapshots then carry the real match duration.
+ */
+function tick(match: EngineMatch, deltaMs: number): number {
+  const runtime = runtimeFor(match);
+  return runtime.engine.tick(deltaMs);
+}
+
 function projectSnapshot(match: EngineMatch): RedactedSnapshot {
   const runtime = runtimeFor(match);
   return projectEngineSnapshot(runtime.engine, match.seedHash);
@@ -573,6 +586,7 @@ function replay(record: ReplayRecord): readonly ReplayDigest[] {
 export const engineAdapter: EngineAdapter = {
   createMatch,
   applyAction,
+  tick,
   projectSnapshot,
   expandEndBoard,
   recordAction,
