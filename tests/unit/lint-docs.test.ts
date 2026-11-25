@@ -259,9 +259,9 @@ describe('lint coverage guard', () => {
     expect(() => expectLintCoverage(regression)).toThrow();
   });
 
-  it('accepts the current wording that lists scripts as an oxlint target', () => {
+  it('accepts the current wording that lists every oxlint target', () => {
     const current =
-      'oxlint（覆盖 `src`、`tests` 与 `scripts`）+ `scripts/check-boundaries.mjs` 模块边界检查';
+      'oxlint（覆盖 `src`、`tests`、`scripts` 与 `server`）+ `scripts/check-boundaries.mjs` 模块边界检查';
     expect(() => expectLintCoverage(current)).not.toThrow();
   });
 

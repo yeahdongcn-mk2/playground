@@ -27,7 +27,7 @@ function oxlintArgs(): string[] {
 }
 
 describe('lint coverage contract', () => {
-  it('makes npm run lint check src, tests and scripts with oxlint', () => {
+  it('makes npm run lint check src, tests, scripts and server with oxlint', () => {
     expect(lintCommand.startsWith('oxlint ')).toBe(true);
     expect(oxlintArgs()).toEqual(expect.arrayContaining(['src', 'tests', 'scripts']));
   });
@@ -67,7 +67,7 @@ describe('lint coverage contract', () => {
     }
   });
 
-  it('reports no warnings or errors for src, tests and scripts', () => {
+  it('reports no warnings or errors for src, tests, scripts and server', () => {
     const result = spawnSync(process.execPath, [OXLINT_BIN, '--format=json', ...oxlintArgs()], {
       cwd: ROOT,
       encoding: 'utf8',

@@ -25,7 +25,7 @@
 - **完整可玩打砖块**：480×720 逻辑球场，10 列砖块按 4 档配色，移动挡板接球、击碎砖块计分；漏球扣命，三条命用完结束；每过一关砖块更多、球速更快；键盘、鼠标与触屏都能玩。
 - **完整可玩扫雷**：初级 / 中级 / 高级三档预设，也可自定义行、列与雷数；左键翻开、右键插旗，触屏轻点翻开、长按插旗；第一次翻开总是安全的，踩雷结束，翻开全部安全格获胜；剩余雷数与用时实时显示；获胜后记录本机最高用时并按难度分桶展示（不跨设备），支持一键清空本机记录、重开与返回大厅。
 - **可交互空白游戏**：方向键 / WASD、鼠标点击拖动、触屏点击拖动都能移动光标；重置位置、返回大厅、页面隐藏自动休眠。
-- **工程化**：TypeScript strict、oxlint（覆盖 `src`、`tests` 与 `scripts`；error 与 warning 都会失败，warning 经 `--deny-warnings` 升级）+ `scripts/check-boundaries.mjs` 模块边界检查（失败同样返回非 0）、Vitest 单元测试、Playwright 桌面与手机端端到端测试，以及按同样顺序执行检查的 GitHub Actions CI。
+- **工程化**：TypeScript strict、oxlint（覆盖 `src`、`tests`、`scripts` 与 `server`；error 与 warning 都会失败，warning 经 `--deny-warnings` 升级）+ `scripts/check-boundaries.mjs` 模块边界检查（失败同样返回非 0）、Vitest 单元测试、Playwright 桌面与手机端端到端测试，以及按同样顺序执行检查的 GitHub Actions CI。
 
 框架的契约、生命周期、输入 / 资源 / 渲染约定与 2D/3D 扩展方式见 **[docs/framework.md](docs/framework.md)**。
 技术栈选型与候选对比见 **[docs/tech-stack-decision.md](docs/tech-stack-decision.md)**（t1 交付）。
@@ -233,7 +233,7 @@ pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和
 | `npm run score` | 运行 score 时先执行 `npm run build`（`check:budget` 读取 `dist/`，因此干净检出上无需手动预构建），再汇总六条校验并与 `docs/score-baseline.json` 对比：默认打印「指标 / 当前值 / 基线值 / 差值」表格，并在末尾输出一行 `SCORE_JSON <json>`；任一指标退化时退出 1，指标变好只报差值、不自动更新基线；`npm run score -- --update` 用当前值重建基线（快照不完整时拒绝写入并退出 2） |
 | `npm run test:e2e` | 先构建，再用 `vite preview` 跑全部 Playwright 项目（Chromium 桌面 / Pixel 7 + `mobile-webkit`） |
 | `npm run test:e2e:webkit` | 先构建，再只跑 `mobile-webkit` 项目（iPhone SE (3rd gen)）：framework 手机端、扫雷 WebKit 冒烟、触屏手势 / 触屏难度表单、贪食蛇 / 俄罗斯方块 / 2048 / 打砖块的手机端用例，2048 READY 两跑字节守卫，以及 320×640 / 360×640 / 375×667 / 412×839 窄屏契约 |
-| `npm run lint` | oxlint（覆盖 `src`、`tests` 与 `scripts`；error 与 warning 都会失败，warning 经 `--deny-warnings` 升级）+ `scripts/check-boundaries.mjs` 模块依赖方向检查（失败同样返回非 0） |
+| `npm run lint` | oxlint（覆盖 `src`、`tests`、`scripts` 与 `server`；error 与 warning 都会失败，warning 经 `--deny-warnings` 升级）+ `scripts/check-boundaries.mjs` 模块依赖方向检查（失败同样返回非 0） |
 | `npm run check:budget` | 检查体积门禁：入口不含引擎标记（Phaser.Game/Scene/AUTO、THREE.）且 ≤50 KB gzip，`dist/assets` 全部 JS chunk 合计 ≤450 KB gzip，`dist/assets/zhen-sha-view-*.js` 合计 ≤35 KB gzip。0 个匹配视为失败并提示先 `npm run build`，多个匹配按合计判定；所有 gzip 数字由 `node:zlib` 的 `gzipSync` 默认级别测得，Vite build 打印的 gzip 不是门禁输入 |
 | `npm run screenshots` | 构建后生成 `docs/screenshots/` 中的界面截图；其中 `after-blank-desktop.png` / `after-blank-mobile.png` 已分别被 desktop / mobile 固定环境 sha256 清单收录，宿主命令会在写第一张空白图前被写前护栏拒绝并提示 `npm run screenshots:container -- screenshots`。Chromium 的 hub 图未被清单收录且先于空白图写盘，所以失败的宿主运行也会改写 `after-hub-desktop.png`；容器命令还会写出 `after-hub-desktop.png` / `after-hub-mobile.png`，提交前都用 `git checkout -- docs/screenshots/after-hub-*.png` 还原 |
 | `npm run screenshots:webkit` | 构建后用 WebKit 生成大厅与空白画布的 375×667 手机截图；两张图已被固定环境 sha256 清单收录，宿主命令会在写出前被拒绝，重拍用 `npm run screenshots:container -- screenshots:webkit` |
@@ -396,7 +396,7 @@ games/<game>/scene → 对应引擎（动态 import）
 
 ```bash
 npm run typecheck    # 通过
-npm run lint         # 通过（oxlint 覆盖 src、tests 与 scripts；error 与 warning 都会失败，warning 经 --deny-warnings 升级；另跑 scripts/check-boundaries.mjs，失败返回非 0）
+npm run lint         # 通过（oxlint 覆盖 src、tests、scripts 与 server；error 与 warning 都会失败，warning 经 --deny-warnings 升级；另跑 scripts/check-boundaries.mjs，失败返回非 0）
 npm run test:unit    # 1963 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
 npm run build        # 通过
 npm run check:budget # 通过，实际输出：
