@@ -16,23 +16,30 @@
  *   token is attached to a message, so a seat never receives another seat's
  *   token.
  *
- * The manager owns room lifecycle and seating only. The authoritative match
- * layer (#484) calls {@link InMemoryRoomManager.finishMatch} once it has
- * produced the `end` payload; action validation, snapshots and verdicts are
- * deliberately absent here. Turn/match timer policy belongs to #485, so
- * {@link InMemoryRoomManager.timeout} handles the `join` timer only.
+ * The manager owns room lifecycle, seating and the authoritative match table
+ * (#484). `start` builds one immutable match state from `server/room/match.ts`
+ * and stores it next to the room; `action` proves the caller owns the current
+ * turn and delegates every rule (seq/turnId, deadline, bounds, cell state,
+ * idempotency, verdicts) to that state machine. `forfeit` and
+ * {@link InMemoryRoomManager.finishMatch} provide the server-internal endings.
+ * Turn/match timer *scheduling* is deliberately absent: #485 owns the timers,
+ * while this manager exposes the deadlines and the `join` timeout only.
  */
 
 import { randomInt, randomUUID } from 'node:crypto';
 import {
   JOIN_TIMEOUT_MS,
+  MATCH_TIMEOUT_MS,
   ROOM_CAPACITY,
+  TURN_TIMEOUT_MS,
   broadcastToSeats,
   createRoomId,
   issuePlayerToken,
   roomErrorMessage,
   roomStateDeliveries,
   seatedCommandSuccess,
+  type MatchCommandResult,
+  type MatchRoomManager,
   type PlayerId,
   type PlayerToken,
   type RoomCommandFailure,
@@ -41,19 +48,25 @@ import {
   type RoomDelivery,
   type RoomErrorCode,
   type RoomId,
-  type RoomManager,
   type RoomRecord,
   type RoomSeat,
 } from './contracts';
 import {
   PROTOCOL_VERSION,
-  createMatchEngine,
+  createProtocolError,
+  protocolErrorFromResult,
+  type ActionMessage,
   type CreateMessage,
+  type EngineMatch,
   type JoinMessage,
   type LeaveMessage,
   type MatchEndReason,
+  type ProtocolErrorCode,
+  type ProtocolValidationFailure,
   type ReadyMessage,
   type RematchMessage,
+  type ReplayDigest,
+  type ReplayRecord,
   type RoomClosedMessage,
   type RoomState,
   type StartMessage,
@@ -63,14 +76,25 @@ import {
 import {
   validateConfig,
   type MinesweeperConfig,
-  type MinesweeperEngine,
 } from '../../src/games/minesweeper/engine';
+import {
+  applyMatchAction,
+  createMatchState,
+  forfeitMatch,
+  matchReplayRecord,
+  toActionResultMessage,
+  toEndMessage,
+  toSnapshotMessage,
+  type MatchState,
+} from './match';
 
 /** Runtime handle for the authoritative match owned by the room. */
 export interface RoomMatch {
   readonly matchId: string;
   readonly seed: number;
-  readonly engine: MinesweeperEngine;
+  readonly engine: EngineMatch;
+  /** Full match bookkeeping: seq, turn, deadlines, replay log and verdict. */
+  readonly state: MatchState;
 }
 
 /** Constructor hooks used by the transport and tests. */
@@ -79,6 +103,10 @@ export interface RoomManagerOptions {
   readonly now?: () => number;
   /** `join` window in milliseconds; defaults to the design's 120 s. */
   readonly joinTimeoutMs?: number;
+  /** Turn window in milliseconds; defaults to the design's 30 s. */
+  readonly turnTimeoutMs?: number;
+  /** Whole-match window in milliseconds; defaults to the design's 900 s. */
+  readonly matchTimeoutMs?: number;
   /** Seed source for a new match; defaults to 32 bits from `node:crypto`. */
   readonly createSeed?: () => number;
 }
@@ -151,6 +179,38 @@ function reject(
   };
 }
 
+/**
+ * Build a match-layer rejection without touching the table.
+ *
+ * Match failures use the shared protocol codes (the same ones
+ * `evaluateAction` returns), never the internal room codes, so the transport
+ * can forward the error unchanged.
+ */
+function rejectMatch(
+  code: ProtocolErrorCode,
+  roomId: RoomId | null,
+  currentSeq: number | null,
+  message: string,
+): Extract<MatchCommandResult, { readonly ok: false }> {
+  return {
+    ok: false,
+    code,
+    error: createProtocolError(code, { roomId, currentSeq, message }),
+  };
+}
+
+/** Fold one `evaluateAction`/`forfeitMatch` rejection into a match failure. */
+function rejectGate(
+  failure: ProtocolValidationFailure,
+  roomId: RoomId | null,
+): Extract<MatchCommandResult, { readonly ok: false }> {
+  return {
+    ok: false,
+    code: failure.code,
+    error: protocolErrorFromResult(failure, { roomId }),
+  };
+}
+
 /** Replace a room record and bump the broadcast sequence. */
 function withSeq(room: RoomRecord, patch: RoomPatch): RoomRecord {
   return { ...room, ...patch, seq: room.seq + 1 };
@@ -182,15 +242,19 @@ function seatStateDelivery(room: RoomRecord, seat: RoomSeat): RoomDelivery {
  * deliver, a failure carries one `error` message and leaves the table exactly
  * as it was.
  */
-export class InMemoryRoomManager implements RoomManager {
+export class InMemoryRoomManager implements MatchRoomManager {
   private readonly rooms = new Map<RoomId, RoomEntry>();
   private readonly now: () => number;
   private readonly joinTimeoutMs: number;
+  private readonly turnTimeoutMs: number;
+  private readonly matchTimeoutMs: number;
   private readonly createSeed: () => number;
 
   constructor(options: RoomManagerOptions = {}) {
     this.now = options.now ?? Date.now;
     this.joinTimeoutMs = options.joinTimeoutMs ?? JOIN_TIMEOUT_MS;
+    this.turnTimeoutMs = options.turnTimeoutMs ?? TURN_TIMEOUT_MS;
+    this.matchTimeoutMs = options.matchTimeoutMs ?? MATCH_TIMEOUT_MS;
     this.createSeed = options.createSeed ?? randomSeed;
   }
 
@@ -215,6 +279,22 @@ export class InMemoryRoomManager implements RoomManager {
    */
   getMatch(roomId: RoomId): RoomMatch | null {
     return this.rooms.get(roomId)?.match ?? null;
+  }
+
+  /**
+   * Replay input (match id, config, seed and accepted actions) for the match
+   * currently held by the room, or null when no match is running/retained.
+   *
+   * Server-only: the seed must never be sent to a client before `end`.
+   */
+  getReplayRecord(roomId: RoomId): ReplayRecord | null {
+    const match = this.rooms.get(roomId)?.match;
+    return match === null || match === undefined ? null : matchReplayRecord(match.state);
+  }
+
+  /** Recorded per-step digests of the retained match, in accepted-seq order. */
+  getReplayDigests(roomId: RoomId): readonly ReplayDigest[] | null {
+    return this.rooms.get(roomId)?.match?.state.digests ?? null;
   }
 
   /** `idle → waiting`: validate the request, assign a room and seat the host. */
@@ -366,8 +446,9 @@ export class InMemoryRoomManager implements RoomManager {
   }
 
   /**
-   * `ready → playing`: mint a new matchId and seed, then hold one authoritative
-   * engine. The match layer owns every action and snapshot from here on.
+   * `ready → playing`: mint a new matchId and seed, then hold the authoritative
+   * match state. The starting `room_state` and the redacted `snapshot` are
+   * broadcast to both seats; from here on the match layer owns every action.
    */
   start(connection: RoomConnection, message: StartMessage): RoomCommandResult {
     const entry = this.rooms.get(message.roomId);
@@ -393,25 +474,224 @@ export class InMemoryRoomManager implements RoomManager {
     // "both still online" half of t-start belong to the reconnect layer
     // (#485); until it is wired in every seated player is online.
 
+    const now = this.now();
     const matchId = `match_${randomUUID()}`;
     const seed = this.createSeed();
-    const engine = createMatchEngine(room.config, seed);
+    const matchState = createMatchState({
+      matchId,
+      // The starting snapshot shares the room_state broadcast sequence: one
+      // state change, one seq, so a client can echo either message back.
+      initialSeq: room.seq + 1,
+      config: room.config,
+      seed,
+      seats: room.seats.map((current) => ({
+        playerId: current.playerId,
+        isHost: current.isHost,
+      })),
+      nowMs: now,
+      turnDurationMs: this.turnTimeoutMs,
+      matchDurationMs: this.matchTimeoutMs,
+    });
     // `joinDeadlineAt` stays at its lobby value; it is only meaningful while
     // the room is waiting/ready and is reset by rematch.
     const next = withSeq(room, {
       state: 'playing',
       matchId,
-      turnPlayerId: room.hostId,
-      deadlineAt: null,
+      turnPlayerId: matchState.turnPlayerId,
+      deadlineAt: matchState.turnDeadlineAt,
       stateReason: 'match-started',
     });
 
     this.rooms.set(room.roomId, {
       ...entry,
       record: next,
-      match: { matchId, seed, engine },
+      match: { matchId, seed, engine: matchState.engine, state: matchState },
     });
-    return { ok: true, deliveries: roomStateDeliveries(next) };
+    const snapshot = toSnapshotMessage(matchState.snapshot, room.roomId);
+    return {
+      ok: true,
+      deliveries: [...roomStateDeliveries(next), ...broadcastToSeats(next, snapshot)],
+    };
+  }
+
+  /**
+   * Submit one reveal/flag for the current turn (`MatchRoomManager.action`).
+   *
+   * Admission is the match layer's: the room only proves the caller owns a
+   * seat in a playing match with the expected matchId, then hands the action
+   * to `applyMatchAction`. A rejection changes neither the room record nor the
+   * match state. An accepted action advances the room seq to the match seq,
+   * updates the turn and its deadline, and delivers one `action_result` to the
+   * actor followed by the `snapshot` broadcast. A duplicate `actionId` returns
+   * the cached `action_result` without moving the room. A terminal action
+   * additionally broadcasts `end` and moves the room to `finished`.
+   */
+  action(connection: RoomConnection, message: ActionMessage): MatchCommandResult {
+    const entry = this.rooms.get(message.roomId);
+    if (entry === undefined) {
+      return rejectMatch(
+        'room-not-found',
+        message.roomId,
+        null,
+        `room ${message.roomId} is not in the table`,
+      );
+    }
+    const room = entry.record;
+    const seat = findSeatByToken(room, connection.playerToken);
+    if (seat === null) {
+      return rejectMatch(
+        'invalid-action',
+        room.roomId,
+        room.seq,
+        'the connection does not own a seat in this room',
+      );
+    }
+    const match = entry.match;
+    if (room.state !== 'playing' || match === null) {
+      return rejectMatch(
+        'invalid-action',
+        room.roomId,
+        room.seq,
+        `room ${room.roomId} has no running match`,
+      );
+    }
+    if (message.matchId !== match.matchId) {
+      return rejectMatch(
+        'invalid-action',
+        room.roomId,
+        room.seq,
+        `match ${message.matchId} is not the current match ${match.matchId}`,
+      );
+    }
+
+    const outcome = applyMatchAction(
+      match.state,
+      seat.playerId,
+      {
+        actionId: message.actionId,
+        seq: message.seq,
+        turnId: message.turnId,
+        kind: message.kind,
+        row: message.row,
+        col: message.col,
+      },
+      this.now(),
+    );
+    if (!outcome.ok) {
+      return rejectGate(outcome, room.roomId);
+    }
+
+    if (outcome.status === 'duplicate') {
+      // Retry of an already accepted action: replay the cached verdict to the
+      // actor only; the room seq/turn and the board stay exactly as they are.
+      return {
+        ok: true,
+        deliveries: [
+          {
+            playerToken: seat.playerToken,
+            message: toActionResultMessage(outcome.actionResult, room.roomId),
+          },
+        ],
+      };
+    }
+
+    const nextMatch: RoomMatch = { ...match, state: outcome.state };
+    if (outcome.end !== null) {
+      // The terminal action shares its advanced seq with `end`: one state
+      // change, so finishMatch's seq bump is that same `outcome.state.seq`.
+      const ended = this.finishMatch(room.roomId, match.matchId, outcome.end.reason);
+      if (!ended.ok) {
+        return rejectMatch('invalid-action', room.roomId, room.seq, ended.error.message);
+      }
+      const finishedEntry = this.rooms.get(room.roomId);
+      if (finishedEntry === undefined) {
+        return rejectMatch('room-not-found', room.roomId, null, 'room disappeared');
+      }
+      this.rooms.set(room.roomId, { ...finishedEntry, match: nextMatch });
+      const finished = finishedEntry.record;
+      return {
+        ok: true,
+        deliveries: [
+          {
+            playerToken: seat.playerToken,
+            message: toActionResultMessage(outcome.actionResult, room.roomId),
+          },
+          ...broadcastToSeats(finished, toSnapshotMessage(outcome.snapshot, room.roomId)),
+          ...broadcastToSeats(finished, toEndMessage(outcome.end, room.roomId)),
+          ...ended.deliveries,
+        ],
+      };
+    }
+
+    const nextRecord: RoomRecord = {
+      ...room,
+      seq: outcome.state.seq,
+      turnPlayerId: outcome.state.turnPlayerId,
+      deadlineAt: outcome.state.turnDeadlineAt,
+    };
+    this.rooms.set(room.roomId, { ...entry, record: nextRecord, match: nextMatch });
+    return {
+      ok: true,
+      deliveries: [
+        {
+          playerToken: seat.playerToken,
+          message: toActionResultMessage(outcome.actionResult, room.roomId),
+        },
+        ...broadcastToSeats(nextRecord, toSnapshotMessage(outcome.snapshot, room.roomId)),
+      ],
+    };
+  }
+
+  /**
+   * Server-internal concession (`forfeit`): produce one `end` for both seats,
+   * then move the room to `finished` through {@link finishMatch}.
+   *
+   * No board action is applied and no turn is consumed; the forfeiting player
+   * must be seated in the identified match. Called by the room layer itself
+   * (for example a host concession command or #485's grace timeout), never by
+   * an untrusted wire message here.
+   */
+  forfeit(roomId: RoomId, matchId: string, playerId: PlayerId): MatchCommandResult {
+    const entry = this.rooms.get(roomId);
+    if (entry === undefined) {
+      return rejectMatch('room-not-found', roomId, null, `room ${roomId} is not in the table`);
+    }
+    const room = entry.record;
+    const match = entry.match;
+    if (room.state !== 'playing' || match === null || match.matchId !== matchId) {
+      return rejectMatch(
+        'invalid-action',
+        room.roomId,
+        room.seq,
+        `match ${matchId} is not the running match in room ${room.roomId}`,
+      );
+    }
+
+    const outcome = forfeitMatch(match.state, playerId, this.now(), 'forfeit');
+    if (!outcome.ok) {
+      return rejectGate(outcome, room.roomId);
+    }
+
+    const ended = this.finishMatch(room.roomId, matchId, 'forfeit');
+    if (!ended.ok) {
+      return rejectMatch('invalid-action', room.roomId, room.seq, ended.error.message);
+    }
+    const finishedEntry = this.rooms.get(room.roomId);
+    if (finishedEntry === undefined) {
+      return rejectMatch('room-not-found', room.roomId, null, 'room disappeared');
+    }
+    this.rooms.set(room.roomId, {
+      ...finishedEntry,
+      match: { ...match, state: outcome.state },
+    });
+    const finished = finishedEntry.record;
+    return {
+      ok: true,
+      deliveries: [
+        ...broadcastToSeats(finished, toEndMessage(outcome.end, room.roomId)),
+        ...ended.deliveries,
+      ],
+    };
   }
 
   /** Leave a lobby room; losing the host dissolves the room for everyone. */
