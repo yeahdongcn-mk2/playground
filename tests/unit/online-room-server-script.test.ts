@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { readdirSync, readFileSync } from 'node:fs';
 import { createServer as createNetServer, connect, type Server } from 'node:net';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -295,24 +296,74 @@ async function waitForPortRelease(port: number, timeoutMs = 10_000): Promise<voi
   throw new Error(`port ${port} still accepts connections after the server was stopped`);
 }
 
-/** Resolve once no process remains in the child's process group. */
+/**
+ * True while the child's process group still has a live (non-zombie) member.
+ *
+ * `kill(-pgid, 0)` also succeeds for an unreaped zombie. In a CI container PID 1
+ * does not always reap orphans, so the server killed by SIGTERM can linger as a
+ * zombie and make that probe report a live group forever. On Linux, confirm
+ * through `/proc` that at least one member is not in state `Z`; the check
+ * mirrors `isProcessGroupAlive` in `scripts/install-playwright-ci.mjs`.
+ */
+function isProcessGroupAlive(groupId: number): boolean {
+  try {
+    process.kill(-groupId, 0);
+  } catch (error) {
+    // ESRCH means the group is gone. EPERM means it still exists but we may not
+    // signal it, so fall through to the /proc check instead of guessing.
+    if ((error as NodeJS.ErrnoException).code !== 'EPERM') {
+      return false;
+    }
+  }
+
+  if (process.platform !== 'linux') {
+    return true;
+  }
+
+  try {
+    for (const entry of readdirSync('/proc')) {
+      if (!/^\d+$/.test(entry)) {
+        continue;
+      }
+      let stat: string;
+      try {
+        stat = readFileSync(`/proc/${entry}/stat`, 'utf8');
+      } catch {
+        // The process exited between listing /proc and reading its stat.
+        continue;
+      }
+      const commEnd = stat.lastIndexOf(')');
+      if (commEnd === -1) {
+        continue;
+      }
+      // /proc/<pid>/stat: after the parenthesised comm come state, ppid, pgrp.
+      const fields = stat.slice(commEnd + 2).split(' ');
+      const state = fields[0];
+      const processGroup = Number(fields[2]);
+      if (processGroup === groupId && state !== undefined && state !== 'Z') {
+        return true;
+      }
+    }
+    return false;
+  } catch {
+    // If /proc is unreadable, keep the conservative kill(0) answer.
+    return true;
+  }
+}
+
+/** Resolve once no live (non-zombie) process remains in the child's group. */
 async function waitForProcessGroupGone(
   groupId: number,
   timeoutMs = 10_000,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    try {
-      process.kill(-groupId, 0);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
-        return;
-      }
-      throw error;
+    if (!isProcessGroupAlive(groupId)) {
+      return;
     }
     await delay(50);
   }
-  throw new Error(`process group ${groupId} still has running members after SIGTERM`);
+  throw new Error(`process group ${groupId} still has live members after SIGTERM`);
 }
 
 // npm does not forward SIGTERM to the tsx process it starts, so the process
@@ -370,6 +421,33 @@ describe.skipIf(process.platform === 'win32')('room server entry point', () => {
     }
   }, 60_000);
 
+  it('runs the entry directly and exits cleanly with code 0 on SIGINT', async () => {
+    const port = await freePort();
+    const child = spawnRoomProcess(
+      process.execPath,
+      ['--import', 'tsx', 'server/room/main.ts'],
+      { PORT: String(port) },
+    );
+    const output = captureOutput(child);
+
+    try {
+      const response = await waitForHealth(child, output, port);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ status: 'ok' });
+      await waitForListeningLine(child, output, port);
+
+      expect(child.exitCode).toBeNull();
+      child.kill('SIGINT');
+
+      const exit = await waitForExit(child, 15_000);
+      expect(exit.signal).toBeNull();
+      expect(exit.code).toBe(0);
+      await waitForPortRelease(port);
+    } finally {
+      await stopChild(child);
+    }
+  }, 60_000);
+
   it.each(['abc', '70000'])(
     'prints a readable error and exits non-zero for PORT=%s',
     async (rawPort) => {
@@ -393,4 +471,25 @@ describe.skipIf(process.platform === 'win32')('room server entry point', () => {
     },
     30_000,
   );
+});
+
+describe.skipIf(process.platform === 'win32')('process group liveness probe', () => {
+  it('reports a group with a live member as still alive', async () => {
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1_000)'], {
+      detached: true,
+      stdio: 'ignore',
+    });
+
+    try {
+      const pid = child.pid;
+      if (pid === undefined) {
+        throw new Error('failed to spawn the process-group liveness fixture');
+      }
+      await expect(waitForProcessGroupGone(pid, 500)).rejects.toThrow(
+        `process group ${pid} still has live members after SIGTERM`,
+      );
+    } finally {
+      await stopChild(child);
+    }
+  }, 15_000);
 });
