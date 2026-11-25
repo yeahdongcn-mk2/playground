@@ -13,6 +13,7 @@ import {
   toSnapshotMessage,
   verifyMatchReplay,
   type CreateMatchStateInput,
+  type ForfeitReason,
   type MatchAction,
   type MatchActionOutcome,
   type MatchActionSuccess,
@@ -344,6 +345,20 @@ describe('online match core: action admission', () => {
     expect(state.seq).toBe(0);
     expect(state.actions).toEqual([]);
   });
+
+  it('rejects a non-object action instead of throwing', () => {
+    const state = start({ seed: 23 });
+    for (const action of [null, 'reveal', 42, undefined]) {
+      rejected(
+        applyMatchAction(state, 'host', action as unknown as MatchAction, 1_500),
+        'invalid-action',
+      );
+    }
+    expect(state.seq).toBe(0);
+    expect(state.turnId).toBe(0);
+    expect(state.actions).toEqual([]);
+    expect(state.actionResults.size).toBe(0);
+  });
 });
 
 describe('online match core: caller-owned sequence', () => {
@@ -608,6 +623,52 @@ describe('online match core: endings', () => {
     expect(outcome.end.finalSnapshot).toHaveLength(CONFIG.rows);
   });
 
+  it('keeps the real flags when a flag-only match is forfeited before any reveal', () => {
+    const state = start({ seed: 2_024 });
+    const hostFlag = accepted(
+      act(state, { actionId: 'flag-host', kind: 'flag', row: 0, col: 0 }, 'host', 1_500),
+    );
+    const guestFlag = accepted(
+      act(
+        hostFlag.state,
+        { actionId: 'flag-guest', kind: 'flag', row: 0, col: 1 },
+        'guest',
+        1_600,
+      ),
+    );
+    // No reveal happened, so the engine still has no mine layout of its own;
+    // the two flags are real public actions, though.
+    expect(guestFlag.state.engine.state.status).toBe('ready');
+    expect(guestFlag.state.stats.flagsPlaced).toBe(2);
+    expect(guestFlag.state.snapshot.board.flat().filter((cell) => cell.flagged)).toHaveLength(2);
+
+    const outcome = forfeitMatch(guestFlag.state, 'guest', 2_000);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) {
+      throw new Error(`forfeit was rejected: ${outcome.code}`);
+    }
+    expect(outcome.end.stats.flagsPlaced).toBe(2);
+    const flags = outcome.end.finalSnapshot
+      .flat()
+      .filter((cell) => cell.flagged)
+      .map((cell) => `${cell.row},${cell.col}`)
+      .sort();
+    expect(flags).toEqual(['0,0', '0,1']);
+    expect(outcome.end.finalSnapshot.flat().filter((cell) => cell.revealed)).toHaveLength(0);
+    expect(countMines(outcome.end.finalSnapshot)).toBe(CONFIG.mines);
+    // The end board and the same-state snapshot must agree on every public
+    // cell, so `end.finalSnapshot` never contradicts the last snapshot.
+    for (const [rowIndex, row] of outcome.end.finalSnapshot.entries()) {
+      for (const [colIndex, cell] of row.entries()) {
+        const publicCell = outcome.snapshot.board[rowIndex]?.[colIndex];
+        expect(publicCell).toBeDefined();
+        expect(cell.flagged).toBe(publicCell?.flagged);
+        expect(cell.revealed).toBe(publicCell?.revealed);
+      }
+    }
+    expect(outcome.end.seed).toBe(2_024);
+  });
+
   it('uses the timer end reasons the reconnect layer needs', () => {
     const state = start({ seed: 72 });
     const turnTimeout = forfeitMatch(state, state.turnPlayerId, 1_500, 'turn-timeout');
@@ -618,13 +679,28 @@ describe('online match core: endings', () => {
     expect(turnTimeout.end.reason).toBe('turn-timeout');
     expect(turnTimeout.end.winnerId).toBe('guest');
     expect(turnTimeout.end.loserId).toBe('host');
+  });
 
-    const matchTimeout = forfeitMatch(state, 'host', 1_500, 'match-timeout');
-    expect(matchTimeout.ok).toBe(true);
-    if (!matchTimeout.ok) {
-      throw new Error(`match timeout was rejected: ${matchTimeout.code}`);
+  it('rejects an unseated player and the unsupported match-timeout reason', () => {
+    const state = start({ seed: 75 });
+    const unknown = forfeitMatch(state, 'stranger', 1_500);
+    expect(unknown.ok).toBe(false);
+    if (unknown.ok) {
+      throw new Error('an unseated player ended the match');
     }
-    expect(matchTimeout.end.reason).toBe('match-timeout');
+    expect(unknown.code).toBe('invalid-action');
+    expect(unknown.currentSeq).toBe(0);
+    expect(unknown.message).toContain('not seated');
+    expect(state.finished).toBe(false);
+    expect(state.seq).toBe(0);
+
+    // Design 3.4 decides a match timeout by revealed-safe-cell progress and
+    // allows a draw, so this player-loses entry point must not fake a winner.
+    expect(() =>
+      forfeitMatch(state, 'host', 1_500, 'match-timeout' as unknown as ForfeitReason),
+    ).toThrow(/reason must be "forfeit" or "turn-timeout"/);
+    expect(state.finished).toBe(false);
+    expect(state.seq).toBe(0);
   });
 });
 
@@ -660,6 +736,24 @@ describe('online match core: wire mapping', () => {
     const end = toEndMessage(ended.end, 'room_1', 9);
     expect(end).toMatchObject({ type: 'end', roomId: 'room_1', seq: 9 });
     expect(validateServerMessage(end).ok).toBe(true);
+  });
+
+  it('rejects an empty room id and a negative room seq in every wire helper', () => {
+    const state = start({ seed: 76 });
+    const first = accepted(act(state, { actionId: 'wire-guard' }, 'host', 1_500));
+    const ended = forfeitMatch(first.state, 'guest', 1_600);
+    if (!ended.ok) {
+      throw new Error(`forfeit was rejected: ${ended.code}`);
+    }
+    const stampers: ReadonlyArray<(roomId: string, roomSeq: number) => unknown> = [
+      (roomId, roomSeq) => toSnapshotMessage(first.snapshot, roomId, roomSeq),
+      (roomId, roomSeq) => toActionResultMessage(first.actionResult, roomId, roomSeq),
+      (roomId, roomSeq) => toEndMessage(ended.end, roomId, roomSeq),
+    ];
+    for (const stamp of stampers) {
+      expect(() => stamp('', 1)).toThrow(/roomId must be a non-empty string/);
+      expect(() => stamp('room_1', -1)).toThrow(/roomSeq/);
+    }
   });
 });
 

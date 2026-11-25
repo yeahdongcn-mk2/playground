@@ -212,11 +212,14 @@ export interface MatchActionSuccess {
 /** Action admission: exactly `evaluateAction`'s failure shape on rejection. */
 export type MatchActionOutcome = MatchActionSuccess | ProtocolValidationFailure;
 
-/** Non-action endings the room layer can request through {@link forfeitMatch}. */
-export type ForfeitReason = Extract<
-  MatchEndReason,
-  'forfeit' | 'turn-timeout' | 'match-timeout'
->;
+/**
+ * Non-action endings the room layer can request through {@link forfeitMatch}.
+ *
+ * `match-timeout` is deliberately absent: design 3.4 decides that ending by
+ * revealed-safe-cell progress, with a draw when both players are tied, so it
+ * cannot be expressed as "this player lost". #485 owns that rule.
+ */
+export type ForfeitReason = Extract<MatchEndReason, 'forfeit' | 'turn-timeout'>;
 
 /** Non-action ending outcome; a finished match or an unknown player is rejected. */
 export type MatchForfeitOutcome =
@@ -372,8 +375,11 @@ function buildEnd(
  * The engine plants mines on the first reveal, so an unplayed match has no
  * layout yet; its seed commitment alone cannot define one. To still publish
  * every mine position, the server probes the canonical opening at (0, 0) on a
- * throwaway engine with the same seed/config, keeps that layout, and marks
- * every cell hidden because the real match never revealed anything.
+ * throwaway engine with the same seed/config and takes the mine layout from
+ * that probe. The real engine is still authoritative for what players did:
+ * flags placed before the first reveal are public actions and consume turns,
+ * so every cell keeps the real `revealed`/`flagged` values (the match never
+ * revealed anything, so the published board is still fully hidden).
  */
 function unplayedEndBoard(state: MatchState): RevealedBoard {
   const probe = engineAdapter.createMatch({
@@ -389,9 +395,19 @@ function unplayedEndBoard(state: MatchState): RevealedBoard {
     row: 0,
     col: 0,
   });
-  return engineAdapter.expandEndBoard(probe).map((row) =>
+  const probeBoard = engineAdapter.expandEndBoard(probe);
+  return state.engine.state.board.map((row, rowIndex) =>
     Object.freeze(
-      row.map((cell) => Object.freeze({ ...cell, revealed: false, flagged: false })),
+      row.map((cell, colIndex) => {
+        // Both engines share the same validated config, so the probe has a
+        // cell for every real one; only the secret layout comes from it.
+        const probeCell = probeBoard[rowIndex]![colIndex]!;
+        return Object.freeze({
+          ...cell,
+          mine: probeCell.mine,
+          adjacentMines: probeCell.adjacentMines,
+        });
+      }),
     ),
   );
 }
@@ -679,10 +695,12 @@ export function applyMatchAction(
  * End a match without applying a board action.
  *
  * This is the server-side ending for a concession (`reason` defaults to
- * `forfeit`) and for the turn/match timer paths #485 will call with
- * `turn-timeout` / `match-timeout`. The engine is only expanded into the end
- * payload, never advanced, and repeated calls after `finished` cannot produce
- * a second end.
+ * `forfeit`) and for the turn timer path #485 will call with `turn-timeout`.
+ * A whole-match timeout is not accepted here: design 3.4 ranks the players by
+ * revealed safe cells (a tie is a draw), which this player-loses API cannot
+ * express; #485 owns that computation. The engine is only expanded into the
+ * end payload, never advanced, and repeated calls after `finished` cannot
+ * produce a second end.
  */
 export function forfeitMatch(
   state: MatchState,
@@ -691,9 +709,9 @@ export function forfeitMatch(
   reason: ForfeitReason = 'forfeit',
 ): MatchForfeitOutcome {
   assertSafeInteger('nowMs', nowMs, 0);
-  if (reason !== 'forfeit' && reason !== 'turn-timeout' && reason !== 'match-timeout') {
+  if (reason !== 'forfeit' && reason !== 'turn-timeout') {
     throw new TypeError(
-      `reason must be "forfeit", "turn-timeout" or "match-timeout", received ${formatValue(reason)}.`,
+      `reason must be "forfeit" or "turn-timeout", received ${formatValue(reason)}.`,
     );
   }
 
