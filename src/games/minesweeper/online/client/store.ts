@@ -586,6 +586,16 @@ export function createRoomClientStore(options: RoomClientStoreOptions): RoomClie
       appliedTypesAtSeq = new Set();
     }
     if (lastSeq === state.lastSeq && sameError(error, state.error)) return;
+    // A terminal error already reported is not replaced by a late queued
+    // frame: the seat or protocol is still unusable, and a recoverable wire
+    // error would make the UI look like a normal turn/validation failure
+    // again. The frame may still align `lastSeq` (above) so the resync payload
+    // at that seq is admitted.
+    if (state.error !== null && TERMINAL_ERROR_CODES.has(state.error.code)) {
+      if (lastSeq === state.lastSeq) return;
+      publish({ ...state, lastSeq });
+      return;
+    }
     publish({ ...state, lastSeq, error });
   }
 

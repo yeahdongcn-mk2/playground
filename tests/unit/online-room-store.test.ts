@@ -765,6 +765,30 @@ describe('room client store connection state', () => {
     expect(store.getState().error?.code).toBe('session-replaced');
   });
 
+  it('keeps a terminal error when a late queued wire error arrives', () => {
+    const { store, transport } = setup('host');
+    transport.emitError('session-replaced');
+    expect(store.getState().error?.code).toBe('session-replaced');
+
+    store.applyServerMessage(makeError({ code: 'not-your-turn', currentSeq: 3 }));
+    let state = store.getState();
+    expect(state.error?.code).toBe('session-replaced');
+    expect(state.error?.retryable).toBe(false);
+    // The late frame still aligns lastSeq so the resync payload is admitted.
+    expect(state.lastSeq).toBe(3);
+
+    // A late error that does not advance the seq changes nothing at all.
+    const seen: RoomClientState[] = [];
+    store.subscribe((next) => seen.push(next));
+    store.applyServerMessage(makeError({ code: 'bad-request', currentSeq: 2 }));
+    store.applyServerMessage(makeError({ code: 'stale-state', currentSeq: null }));
+    expect(seen).toEqual([]);
+
+    state = store.getState();
+    expect(state.error?.code).toBe('session-replaced');
+    expect(state.lastSeq).toBe(3);
+  });
+
   it('starts from the transport current status and lets a listener unsubscribe', () => {
     const { store, transport } = setup('host', 'reconnecting');
     expect(store.getState().connection).toBe('reconnecting');
@@ -790,6 +814,9 @@ describe('room client store connection state', () => {
     const { store, transport } = setup('host');
 
     for (const code of ROOM_CLIENT_ERROR_CODES) {
+      // Each code is checked on its own store: a terminal error is kept and
+      // must not be replaced by the next (recoverable) code in the loop.
+      store.reset();
       if ((CONNECTION_ERROR_CODES as readonly string[]).includes(code)) {
         transport.emitError(code as ConnectionErrorCode);
       } else {
@@ -865,6 +892,27 @@ describe('room client selectors identity', () => {
     guest.store.applyServerMessage(playingRoom({ turnPlayerId: GUEST_ID }));
     guest.store.applyServerMessage(makeSnapshot({ seq: 2, turnPlayerId: GUEST_ID }));
     expect(roomSelectors.isMyTurn(guest.store.getState())).toBe(true);
+  });
+
+  it('reports isMyTurn false outside the playing phase even when this seat owns the turn', () => {
+    const { store } = startPlaying({ turnPlayerId: HOST_ID });
+    expect(roomSelectors.isMyTurn(store.getState())).toBe(true);
+
+    // `end` keeps the board, so the turn owner is still this seat: only the
+    // phase guard can make the selector false. This assertion fails if the
+    // `phase === 'playing'` check is removed.
+    store.applyServerMessage(makeEnd({ seq: 3 }));
+    let state = store.getState();
+    expect(state.phase).toBe('finished');
+    expect(state.room?.turnPlayerId).toBe(HOST_ID);
+    expect(state.snapshot?.turnPlayerId).toBe(HOST_ID);
+    expect(roomSelectors.isMyTurn(state)).toBe(false);
+
+    // Dissolving the room reports the same false, now with no room/board.
+    store.applyServerMessage(makeRoomClosed({ seq: 4, reason: 'finished' }));
+    state = store.getState();
+    expect(state.phase).toBe('dissolved');
+    expect(roomSelectors.isMyTurn(state)).toBe(false);
   });
 });
 
