@@ -284,6 +284,7 @@ const vector = directions.vector(); // 对角线已归一化
 npm run typecheck    # tsc --noEmit
 npm run lint         # oxlint（src / tests / scripts / server；error 与 warning 都会失败，warning 经 --deny-warnings 升级）+ scripts/check-boundaries.mjs（失败返回非 0）
 npm run test:unit    # Vitest：storage / input / router / dom 与六个游戏（含镇煞）的纯规则引擎
+npm run sync:zhen-sha-size # 刷新 docs/zhen-sha-production-size.json：统计 src/games/zhen-sha/ 下所有非测试源文件，历史评估表冻结于 43c9ab1
 npm run build        # 类型检查 + 生产构建
 npm run check:budget # 检查体积门禁：入口不含引擎标记（Phaser.Game/Scene/AUTO、THREE.）且 ≤50 KB gzip，dist/assets 全部 JS chunk 合计 ≤450 KB gzip，dist/assets/zhen-sha-view-*.js 合计 ≤35 KB gzip；0 个匹配视为失败并提示先 npm run build，多个匹配按合计判定，gzip 由 node:zlib 的 gzipSync 默认级别测得（Vite build 打印的 gzip 不是门禁输入）
 npm run test:e2e     # 先 build，再用 vite preview 跑 Chromium 桌面 / Pixel 7 与 mobile-webkit
@@ -291,6 +292,8 @@ npm run test:e2e:webkit # 先 build，只跑 mobile-webkit（iPhone SE (3rd gen)
 ```
 
 当前提交本地通过：`typecheck`、`lint`、`build`、`check:budget` 通过；`npm run test:unit` 2366 passed；`npm run test:e2e` 168 passed（桌面 100 + 手机 36 + WebKit 32）。
+
+- 镇煞生产规模分两份契约：`docs/zhen-sha-kill-gate.md` 的历史评估表冻结于 `43c9ab1`（4 个文件 / 1,416 行），不再随引擎 PR 回写；当前生产规模由 `docs/zhen-sha-production-size.json` 滚动跟踪，统计 `src/games/zhen-sha/` 下所有非测试源文件（含仅被测试引用的 `boss-chart-adapter.ts`，因此不等于历史基线口径），漂移时单测失败并提示运行 `npm run sync:zhen-sha-size`。
 
 - 单测只覆盖引擎无关逻辑；不要在 Node 里启动 Phaser。
 - 端到端使用 `data-testid`，覆盖进入 / 返回、最近游玩时间、键盘 / 鼠标 / 触屏、修饰键、重置、容器级缩放、未知路由、快速切换的晚到 mount、休眠时销毁和监听器清理；贪食蛇、俄罗斯方块、2048、打砖块与扫雷另有完整玩法用例（暂停 / 重开、计分 / 结束、窗口失焦暂停与恢复、手机端触屏按钮或拖动、像素绘制与监听器清理，扫雷另有左右键、固定雷盘、难度预设与自定义切换、非法自定义错误、格子可见文本、焦点迁移、畸形调试雷盘回退、胜利 / 踩雷与计时器 / 调试接缝清理）。

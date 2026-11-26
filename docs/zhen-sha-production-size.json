@@ -1,0 +1,43 @@
+{
+  "directory": "src/games/zhen-sha",
+  "caliber": "统计 src/games/zhen-sha/ 下所有非测试 .ts 与 .css 源文件（含仅被测试引用的文件），排除 *.test.ts、*.test.css 与 *.d.ts；行数按换行符个数计数，与 wc -l 一致。",
+  "files": [
+    {
+      "file": "boss-chart-adapter.ts",
+      "lines": 90
+    },
+    {
+      "file": "boss-chart.ts",
+      "lines": 134
+    },
+    {
+      "file": "bosses.ts",
+      "lines": 148
+    },
+    {
+      "file": "debug.ts",
+      "lines": 140
+    },
+    {
+      "file": "engine.ts",
+      "lines": 678
+    },
+    {
+      "file": "index.ts",
+      "lines": 29
+    },
+    {
+      "file": "settlement.ts",
+      "lines": 518
+    },
+    {
+      "file": "zhen-sha-view.ts",
+      "lines": 928
+    },
+    {
+      "file": "zhen-sha.css",
+      "lines": 800
+    }
+  ],
+  "total": 3465
+}

@@ -59,6 +59,7 @@
     "verify:screenshots:repro": "node scripts/verify-screenshot-repro.mjs",
     "verify:screenshots:doc-dims": "node scripts/check-screenshot-doc-dims.mjs",
     "verify:doc-counts": "node scripts/check-doc-counts.mjs",
+    "sync:zhen-sha-size": "node scripts/sync-zhen-sha-size.mjs",
     "docs:counts:write": "node scripts/sync-doc-counts.mjs"
   },
   "dependencies": {

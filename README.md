@@ -230,6 +230,7 @@ pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和
 | `npm run test:unit` | Vitest 单元测试 |
 | `npm run docs:counts:write` | 单测计数唯一入口：默认跑一次 `npm run test:unit` 并读取 Vitest JSON 报告，或用 `--report <vitest.json>` 复用已有报告；把实测 `numTotalTests` 写入 `README.md`、`docs/framework.md`、`docs/snake-design.md` 三处计数与 `docs/score-baseline.json` 的 `unitTests`，只改数字、其余字节不动，重复跑无 diff；子任务不再修改这些计数 |
 | `npm run verify:doc-counts` | 校验三份文档记录的单测计数与 Vitest 实测 `numTotalTests` 一致；基线 `docs/score-baseline.json` 的 `unitTests` 由 `npm run score` 复核 |
+| `npm run sync:zhen-sha-size` | 重新生成 `docs/zhen-sha-production-size.json`：滚动快照统计 `src/games/zhen-sha/` 下所有非测试源文件（含仅被测试引用的 `boss-chart-adapter.ts`），漂移时 `npm run test:unit` 失败并提示重跑本命令；`docs/zhen-sha-kill-gate.md` 的历史评估表冻结于 `43c9ab1`（4 个文件 / 1,416 行），不随引擎 PR 回写，两者口径不同 |
 | `npm run score` | 运行 score 时先执行 `npm run build`（`check:budget` 读取 `dist/`，因此干净检出上无需手动预构建），再汇总六条校验并与 `docs/score-baseline.json` 对比：默认打印「指标 / 当前值 / 基线值 / 差值」表格，并在末尾输出一行 `SCORE_JSON <json>`；任一指标退化时退出 1，指标变好只报差值、不自动更新基线；`npm run score -- --update` 用当前值重建基线（快照不完整时拒绝写入并退出 2） |
 | `npm run test:e2e` | 先构建，再用 `vite preview` 跑全部 Playwright 项目（Chromium 桌面 / Pixel 7 + `mobile-webkit`） |
 | `npm run test:e2e:webkit` | 先构建，再只跑 `mobile-webkit` 项目（iPhone SE (3rd gen)）：framework 手机端、扫雷 WebKit 冒烟、触屏手势 / 触屏难度表单、贪食蛇 / 俄罗斯方块 / 2048 / 打砖块的手机端用例，2048 READY 两跑字节守卫，以及 320×640 / 360×640 / 375×667 / 412×839 窄屏契约 |
