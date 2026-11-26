@@ -22,6 +22,14 @@
  *   `contracts.ts`. A seat's token is only ever sent back to the connection
  *   that owns that seat, and a token with no live connection is dropped
  *   instead of being re-addressed to the caller.
+ * - Every delivery batch passes one seam: the batch is sent to its seats and
+ *   then each room it mentions is re-armed in the injected
+ *   {@link DeadlineScheduler}. Command results and the asynchronous presence /
+ *   grace-expiry deliveries both go through it, so a lifecycle command that
+ *   moved `joinDeadlineAt`, `turnDeadlineAt` or `matchDeadlineAt` is followed by
+ *   exactly one timer recomputation and a dissolved/finished room loses its
+ *   timer. The scheduler owns the timers; the transport only tells it which
+ *   rooms changed.
  *
  * Connection lifecycle has two transport-owned rules. First, a closed socket
  * removes its connection mapping and nothing else: presence, reconnect grace
@@ -54,7 +62,9 @@ import type {
   RoomCommandResult,
   RoomConnection,
   RoomDelivery,
+  RoomId,
 } from './contracts';
+import type { DeadlineScheduler } from './deadline-scheduler';
 
 /** HTTP path of the health probe: `GET /health` → `200 {"status":"ok"}`. */
 export const ROOM_HEALTH_PATH = '/health';
@@ -95,8 +105,22 @@ export interface RoomServerOptions {
    * The controller owns heartbeat timing and grace; the transport never drives
    * a timer itself. Without a controller the transport keeps the pre-presence
    * behaviour: connections live and die and the room layer is untouched.
+   *
+   * The optional `close` hook is the controller's own shutdown cleanup: the
+   * transport calls it before closing the sockets so heartbeat and grace
+   * timers do not outlive the server.
    */
-  readonly presence?: PresenceController;
+  readonly presence?: PresenceController & { readonly close?: () => void };
+  /**
+   * Optional room-deadline scheduler (`deadline-scheduler.ts`).
+   *
+   * The transport refreshes it after every delivered batch, which covers both
+   * client command results and the asynchronous presence / grace-expiry
+   * deliveries the controller hands back through `RoomServer.deliver`. It is
+   * cancelled wholesale by `close()`. Without a scheduler the transport keeps
+   * its command-only behaviour and no timer is armed.
+   */
+  readonly deadlines?: DeadlineScheduler;
   /** Bind host; defaults to loopback so a local server is not exposed. */
   readonly host?: string;
   /** Bind port; `0` asks the OS for a free port (useful in tests). */
@@ -113,7 +137,9 @@ export interface RoomServer {
    * Deliver room messages that were not a response to a client message, such
    * as timer-driven `timeout`/`room_closed` broadcasts. The room manager uses
    * this for its asynchronous deliveries; tokens without a live connection are
-   * dropped.
+   * dropped. Any room mentioned by the batch is re-armed in the deadline
+   * scheduler after the send, so a presence transition that dissolved the room
+   * also releases its timer.
    */
   deliver(deliveries: readonly RoomDelivery[]): void;
   /** Stop accepting connections, close every client and release the port. */
@@ -205,6 +231,12 @@ function readMessageIdentity(input: unknown): MessageIdentity {
  * room manager to change state when a socket closes; presence changes are
  * reported to the injected {@link PresenceController} instead.
  *
+ * Delivery is also the scheduler seam: after a batch is sent, the optional
+ * `onDeliver` callback receives that same batch so the host can re-arm the
+ * rooms it mentions. Keeping the callback on the one `deliverAll` path means a
+ * client command result, a server-initiated delivery and a presence transition
+ * are treated identically.
+ *
  * Exported so the unit tests can drive it directly with fake sockets and
  * assert deterministic registry behaviour (replacement removes the old socket
  * before it closes). Production code reaches it through {@link startRoomServer}.
@@ -214,13 +246,19 @@ function readMessageIdentity(input: unknown): MessageIdentity {
 export class RoomSocketHub {
   private readonly manager: MatchRoomManager;
   private readonly presence: PresenceController | null;
+  private readonly onDeliver: ((deliveries: readonly RoomDelivery[]) => void) | null;
   private readonly connections = new Map<WebSocket, ClientConnection>();
   private readonly tokenConnections = new Map<PlayerToken, ClientConnection>();
   private nextConnectionId = 1;
 
-  constructor(manager: MatchRoomManager, presence: PresenceController | null) {
+  constructor(
+    manager: MatchRoomManager,
+    presence: PresenceController | null,
+    onDeliver: ((deliveries: readonly RoomDelivery[]) => void) | null = null,
+  ) {
     this.manager = manager;
     this.presence = presence;
+    this.onDeliver = onDeliver;
   }
 
   addConnection(socket: WebSocket): void {
@@ -299,6 +337,13 @@ export class RoomSocketHub {
   deliverAll(deliveries: readonly RoomDelivery[]): void {
     for (const delivery of deliveries) {
       this.deliver(delivery);
+    }
+    // The batch is sent before the deadline seam runs: a timeout that jumps
+    // straight to `finished` must reach the clients before its timer is
+    // cancelled, and a command result is already observable when the next
+    // deadline is armed.
+    if (this.onDeliver !== null) {
+      this.onDeliver(deliveries);
     }
   }
 
@@ -535,6 +580,34 @@ function closeHttpServer(server: HttpServer): Promise<void> {
 }
 
 /**
+ * Re-arm the deadline of every room mentioned by one delivered batch.
+ *
+ * The scheduler is an internal collaborator on the delivery path, so a fault
+ * in it must not turn an already-successful command into a protocol error or
+ * break the batch that was just sent. The room id comes from the message, and
+ * `null` (an error frame that never travels as a delivery) is ignored.
+ */
+function refreshDeliveredRooms(
+  deadlines: DeadlineScheduler,
+  deliveries: readonly RoomDelivery[],
+): void {
+  const roomIds = new Set<RoomId>();
+  for (const delivery of deliveries) {
+    const roomId = delivery.message.roomId;
+    if (roomId !== null) {
+      roomIds.add(roomId);
+    }
+  }
+  for (const roomId of roomIds) {
+    try {
+      deadlines.refresh(roomId);
+    } catch (error) {
+      console.error(`[room] deadline refresh failed for ${roomId}`, error);
+    }
+  }
+}
+
+/**
  * Start the HTTP/WebSocket transport on a real socket.
  *
  * `port: 0` binds an ephemeral port and the returned handle reports the actual
@@ -546,13 +619,27 @@ export async function startRoomServer(
 ): Promise<RoomServer> {
   const host = options.host ?? DEFAULT_ROOM_SERVER_HOST;
   const requestedPort = options.port ?? DEFAULT_ROOM_SERVER_PORT;
-  const hub = new RoomSocketHub(options.manager, options.presence ?? null);
+  const presence = options.presence ?? null;
+  const deadlines = options.deadlines ?? null;
+  let closing = false;
+  const hub = new RoomSocketHub(
+    options.manager,
+    presence,
+    deadlines === null
+      ? null
+      : (deliveries) => {
+          // A late delivery after shutdown must not re-arm a deadline that
+          // `close()` already released.
+          if (!closing) {
+            refreshDeliveredRooms(deadlines, deliveries);
+          }
+        },
+  );
   const webSocketServer = new WebSocketServer({
     noServer: true,
     maxPayload: MAX_CLIENT_MESSAGE_BYTES,
   });
   const httpServer = createHttpServer(handleHttpRequest);
-  let closing = false;
 
   webSocketServer.on('connection', (socket: WebSocket) => {
     hub.addConnection(socket);
@@ -579,6 +666,19 @@ export async function startRoomServer(
     if (closePromise === null) {
       closing = true;
       closePromise = (async () => {
+        // Stop timer owners before the sockets go away, so no heartbeat or
+        // grace timer survives the transport. Both cleanups are best-effort:
+        // a failure there must not skip closing the listeners.
+        try {
+          presence?.close?.();
+        } catch (error) {
+          console.error('[room] presence close failed', error);
+        }
+        try {
+          deadlines?.cancelAll();
+        } catch (error) {
+          console.error('[room] deadline cancelAll failed', error);
+        }
         await closeWebSocketServer(webSocketServer);
         await closeHttpServer(httpServer);
       })();

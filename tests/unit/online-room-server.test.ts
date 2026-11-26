@@ -3,8 +3,11 @@ import { WebSocket } from 'ws';
 import {
   broadcastToSeats,
   createRoomId,
+  HEARTBEAT_INTERVAL_MS,
   issuePlayerToken,
   JOIN_TIMEOUT_MS,
+  MATCH_TIMEOUT_MS,
+  RECONNECT_GRACE_MS,
   ROOM_CAPACITY,
   roomErrorMessage,
   roomStateDeliveries,
@@ -21,6 +24,16 @@ import {
   type RoomRecord,
   type RoomSeat,
 } from '../../server/room/contracts';
+import {
+  createDeadlineScheduler,
+  type DeadlineScheduler,
+} from '../../server/room/deadline-scheduler';
+import {
+  createPresenceController,
+  type PresenceClock,
+  type PresenceTimer,
+} from '../../server/room/presence';
+import { createRoomManager, type InMemoryRoomManager } from '../../server/room/room-manager';
 import {
   ROOM_HEALTH_PATH,
   ROOM_WS_PATH,
@@ -383,6 +396,8 @@ class TestClient {
   private readonly queued: ServerToClientMessage[] = [];
   private readonly waiting: ((message: ServerToClientMessage) => void)[] = [];
   private readonly closeInfo: Promise<{ readonly code: number; readonly reason: string }>;
+  /** Every frame received, kept for "exactly once" assertions. */
+  readonly received: ServerToClientMessage[] = [];
 
   private constructor(socket: WebSocket) {
     this.socket = socket;
@@ -393,6 +408,7 @@ class TestClient {
     });
     socket.on('message', (data) => {
       const message = JSON.parse(data.toString()) as ServerToClientMessage;
+      this.received.push(message);
       const waiter = this.waiting.shift();
       if (waiter !== undefined) {
         waiter(message);
@@ -403,8 +419,11 @@ class TestClient {
     socket.on('error', () => undefined);
   }
 
-  static async connect(port: number): Promise<TestClient> {
-    const socket = new WebSocket(`ws://127.0.0.1:${port}${ROOM_WS_PATH}`);
+  static async connect(
+    port: number,
+    options: { readonly autoPong?: boolean } = {},
+  ): Promise<TestClient> {
+    const socket = new WebSocket(`ws://127.0.0.1:${port}${ROOM_WS_PATH}`, options);
     await new Promise<void>((resolve, reject) => {
       socket.once('open', () => resolve());
       socket.once('error', (error) => reject(error));
@@ -501,6 +520,111 @@ function firstRoomState(socket: FakeServerSocket): RoomStateMessage {
     throw new Error('expected a room_state frame');
   }
   return message;
+}
+
+interface TestTimer {
+  dueAt: number;
+  readonly intervalMs: number | null;
+  readonly callback: () => void;
+}
+
+/**
+ * Deterministic clock shared by the room manager, presence controller and
+ * deadline scheduler.
+ *
+ * `advance` runs due callbacks in due/creation order, letting a callback arm
+ * the next timer at the advanced instant; intervals re-arm themselves. This is
+ * the transport-level counterpart of the scheduler's own clock double: it
+ * proves the real manager and the real transport agree on deadlines without
+ * sleeping through a 30 s turn or a 120 s join window.
+ */
+class TestClock implements PresenceClock {
+  private current: number;
+  private nextHandle = 1;
+  private readonly timers = new Map<number, TestTimer>();
+
+  constructor(start: number) {
+    this.current = start;
+  }
+
+  now(): number {
+    return this.current;
+  }
+
+  setTimeout(callback: () => void, delayMs: number): PresenceTimer {
+    return this.schedule(callback, delayMs, null);
+  }
+
+  setInterval(callback: () => void, intervalMs: number): PresenceTimer {
+    return this.schedule(callback, intervalMs, intervalMs);
+  }
+
+  clearTimeout(handle: PresenceTimer): void {
+    this.timers.delete(handle as unknown as number);
+  }
+
+  clearInterval(handle: PresenceTimer): void {
+    this.timers.delete(handle as unknown as number);
+  }
+
+  advance(ms: number): void {
+    const target = this.current + ms;
+    for (let guard = 0; guard < 100_000; guard += 1) {
+      let nextId: number | null = null;
+      let nextEntry: TestTimer | null = null;
+      for (const [id, entry] of this.timers) {
+        if (entry.dueAt > target) {
+          continue;
+        }
+        if (
+          nextEntry === null ||
+          entry.dueAt < nextEntry.dueAt ||
+          (entry.dueAt === nextEntry.dueAt && id < (nextId ?? 0))
+        ) {
+          nextId = id;
+          nextEntry = entry;
+        }
+      }
+      if (nextId === null || nextEntry === null) {
+        this.current = target;
+        return;
+      }
+      this.current = nextEntry.dueAt;
+      if (nextEntry.intervalMs === null) {
+        this.timers.delete(nextId);
+      } else {
+        nextEntry.dueAt += nextEntry.intervalMs;
+      }
+      nextEntry.callback();
+    }
+    throw new Error('test clock fired too many timers');
+  }
+
+  get timerCount(): number {
+    return this.timers.size;
+  }
+
+  /** Earliest pending due time, or null when nothing is armed. */
+  nextDueAt(): number | null {
+    let earliest: number | null = null;
+    for (const entry of this.timers.values()) {
+      if (earliest === null || entry.dueAt < earliest) {
+        earliest = entry.dueAt;
+      }
+    }
+    return earliest;
+  }
+
+  private schedule(
+    callback: () => void,
+    delayMs: number,
+    intervalMs: number | null,
+  ): PresenceTimer {
+    const id = this.nextHandle;
+    this.nextHandle += 1;
+    this.timers.set(id, { dueAt: this.current + delayMs, intervalMs, callback });
+    return id as unknown as PresenceTimer;
+  }
 }
 
 interface PresenceEvent {
@@ -673,6 +797,10 @@ function readyMessage(roomId: string, ready: boolean): ReadyMessage {
   return { type: 'ready', requestId: 'req-ready', roomId, ready };
 }
 
+function startMessage(roomId: string): StartMessage {
+  return { type: 'start', requestId: 'req-start', roomId };
+}
+
 /** Wire-valid action echoing the fake room's current seq and match id. */
 function actionMessage(
   manager: FakeRoomManager,
@@ -696,15 +824,52 @@ function actionMessage(
 async function startTestServer(
   manager: MatchRoomManager,
   presence?: PresenceController,
+  deadlines?: DeadlineScheduler,
 ): Promise<RoomServer> {
   const server = await startRoomServer({
     manager,
     presence,
+    deadlines,
     host: '127.0.0.1',
     port: 0,
   });
   servers.push(server);
   return server;
+}
+
+/**
+ * Wait until one client has received a frame of `type` matching `predicate`.
+ *
+ * `fromIndex` restricts the search to frames received after that position, so
+ * a stale frame from an earlier phase cannot satisfy a "this just happened"
+ * assertion. Callers snapshot `client.received.length` before the action.
+ */
+async function waitForMessage(
+  client: TestClient,
+  type: ServerToClientMessage['type'],
+  predicate: (message: ServerToClientMessage) => boolean = () => true,
+  description: string = type,
+  fromIndex: number = 0,
+): Promise<ServerToClientMessage> {
+  await vi.waitFor(
+    () => {
+      if (
+        !client.received
+          .slice(fromIndex)
+          .some((message) => message.type === type && predicate(message))
+      ) {
+        throw new Error(`timed out waiting for ${description}`);
+      }
+    },
+    { interval: 5, timeout: 2_000 },
+  );
+  const found = client.received
+    .slice(fromIndex)
+    .find((message) => message.type === type && predicate(message));
+  if (found === undefined) {
+    throw new Error(`missing ${description} after wait`);
+  }
+  return found;
 }
 
 async function connect(port: number): Promise<TestClient> {
@@ -1484,5 +1649,409 @@ describe('room WebSocket/HTTP transport', () => {
 
     const health = await fetch(`http://127.0.0.1:${restarted.port}${ROOM_HEALTH_PATH}`);
     expect(health.status).toBe(200);
+  });
+});
+
+describe('room deadline wiring', () => {
+  const START = 1_700_000_000_000;
+
+  /** Real manager + real scheduler sharing one deterministic clock. */
+  function createScheduledServer(): {
+    readonly clock: TestClock;
+    readonly manager: InMemoryRoomManager;
+    readonly scheduler: DeadlineScheduler;
+    readonly start: () => Promise<RoomServer>;
+  } {
+    const clock = new TestClock(START);
+    const manager = createRoomManager({
+      now: () => clock.now(),
+      createSeed: () => 7,
+    });
+    let server: RoomServer | null = null;
+    const scheduler = createDeadlineScheduler({
+      manager,
+      clock,
+      deliver: (deliveries) => server?.deliver(deliveries),
+    });
+    return {
+      clock,
+      manager,
+      scheduler,
+      start: async () => {
+        server = await startTestServer(manager, undefined, scheduler);
+        return server;
+      },
+    };
+  }
+
+  it('arms one timer per room and re-arms it after every lifecycle command', async () => {
+    const harness = createScheduledServer();
+    const server = await harness.start();
+    const host = await connect(server.port);
+    host.send(createMessage());
+    const created = await nextRoomState(host);
+    const roomId = created.roomId;
+    const hostToken = requiredToken(created);
+
+    const room = harness.manager.getRoom(roomId);
+    if (room === undefined) {
+      throw new Error('create did not store a room');
+    }
+    expect(harness.scheduler.scheduledRoomCount).toBe(1);
+    expect(harness.clock.nextDueAt()).toBe(room.joinDeadlineAt);
+
+    // `join` only adds a seat while the shared join window keeps running.
+    const guest = await connect(server.port);
+    guest.send(joinMessage(roomId));
+    const guestState = await nextRoomState(guest);
+    await nextRoomState(host);
+    const guestToken = requiredToken(guestState);
+    expect(harness.scheduler.scheduledRoomCount).toBe(1);
+    expect(harness.clock.nextDueAt()).toBe(room.joinDeadlineAt);
+
+    // `ready` does not move a deadline; the same one timer stays armed.
+    host.send(readyMessage(roomId, true));
+    await nextRoomState(host);
+    await nextRoomState(guest);
+    guest.send(readyMessage(roomId, true));
+    await nextRoomState(host);
+    await nextRoomState(guest);
+    expect(harness.scheduler.scheduledRoomCount).toBe(1);
+    expect(harness.clock.nextDueAt()).toBe(room.joinDeadlineAt);
+
+    // `start` replaces the join window with the match's turn deadline.
+    host.send(startMessage(roomId));
+    const startedRoom = await waitForMessage(
+      host,
+      'room_state',
+      (message) => message.type === 'room_state' && message.state === 'playing',
+      'playing room_state',
+    );
+    expect(startedRoom).toMatchObject({ type: 'room_state', roomId, state: 'playing' });
+    const match = harness.manager.getMatch(roomId);
+    if (match === null) {
+      throw new Error('start did not create a match');
+    }
+    expect(harness.scheduler.scheduledRoomCount).toBe(1);
+    expect(harness.clock.nextDueAt()).toBe(match.state.turnDeadlineAt);
+
+    // An accepted action moves the turn deadline; the old timer must be gone.
+    harness.clock.advance(10_000);
+    const playing = harness.manager.getRoom(roomId);
+    const actingMatch = harness.manager.getMatch(roomId);
+    if (playing === undefined || actingMatch === null) {
+      throw new Error('the room must still be playing');
+    }
+    host.send({
+      type: 'action',
+      roomId,
+      matchId: actingMatch.matchId,
+      actionId: 'action-wired-1',
+      seq: playing.seq,
+      turnId: actingMatch.state.turnId,
+      kind: 'reveal',
+      row: 0,
+      col: 0,
+      clientTimeMs: harness.clock.now(),
+    });
+    await waitForMessage(
+      host,
+      'action_result',
+      (message) => message.type === 'action_result' && message.accepted,
+      'accepted action_result',
+    );
+    const advanced = harness.manager.getMatch(roomId);
+    if (advanced === null) {
+      throw new Error('the match disappeared after an accepted action');
+    }
+    expect(advanced.state.turnDeadlineAt).toBe(START + 10_000 + TURN_TIMEOUT_MS);
+    expect(harness.clock.nextDueAt()).toBe(advanced.state.turnDeadlineAt);
+
+    // Replacing the guest socket resumes the seat but must not move either
+    // deadline: the timer still points at the deadline the action produced.
+    const replacement = await connect(server.port);
+    replacement.send(
+      joinMessage(roomId, { playerToken: guestToken, requestId: 'req-reconnect' }),
+    );
+    await waitForMessage(
+      replacement,
+      'room_state',
+      (message) => message.type === 'room_state' && message.playerToken === guestToken,
+      'resumed room_state',
+    );
+    const resumedSnapshot = await waitForMessage(
+      replacement,
+      'snapshot',
+      () => true,
+      'resumed snapshot',
+    );
+    expect(resumedSnapshot).toMatchObject({
+      type: 'snapshot',
+      deadlineAt: advanced.state.turnDeadlineAt,
+      matchDeadlineAt: advanced.state.matchDeadlineAt,
+    });
+    expect(harness.manager.getMatch(roomId)?.state.turnDeadlineAt).toBe(
+      advanced.state.turnDeadlineAt,
+    );
+    expect(harness.clock.nextDueAt()).toBe(advanced.state.turnDeadlineAt);
+
+    // Reaching that original deadline produces exactly one terminal result.
+    harness.clock.advance(TURN_TIMEOUT_MS);
+    await waitForMessage(
+      host,
+      'timeout',
+      (message) => message.type === 'timeout' && message.timer === 'turn',
+      'turn timeout',
+    );
+    await waitForMessage(
+      replacement,
+      'end',
+      (message) => message.type === 'end' && message.reason === 'turn-timeout',
+      'turn end',
+    );
+    expect(harness.manager.getRoom(roomId)?.state).toBe('finished');
+    expect(harness.scheduler.scheduledRoomCount).toBe(0);
+    expect(host.received.filter((message) => message.type === 'timeout')).toHaveLength(1);
+    expect(host.received.filter((message) => message.type === 'end')).toHaveLength(1);
+
+    // Re-joining the retained match cannot resurrect its timer, and the
+    // resume itself must re-send the retained end (not just match the old one).
+    const framesBeforeResume = replacement.received.length;
+    replacement.send(
+      joinMessage(roomId, { playerToken: guestToken, requestId: 'req-resume-finished' }),
+    );
+    await waitForMessage(
+      replacement,
+      'end',
+      (message) => message.type === 'end',
+      'resumed end',
+      framesBeforeResume,
+    );
+    expect(harness.scheduler.scheduledRoomCount).toBe(0);
+    expect(harness.clock.nextDueAt()).toBeNull();
+    expect(
+      harness.manager.getRoom(roomId)?.seats.find((seat) => seat.isHost)?.playerToken,
+    ).toBe(hostToken);
+
+    // `rematch` restarts the join window: the scheduler must arm the new join
+    // deadline instead of leaving the finished match's timer cancelled.
+    host.send({ type: 'rematch', requestId: 'req-rematch-host', roomId, accept: true });
+    replacement.send({
+      type: 'rematch',
+      requestId: 'req-rematch-guest',
+      roomId,
+      accept: true,
+    });
+    await waitForMessage(
+      host,
+      'room_state',
+      (message) =>
+        message.type === 'room_state' &&
+        message.state === 'ready' &&
+        message.stateReason === 'rematch',
+      'rematch ready state',
+    );
+    const ready = harness.manager.getRoom(roomId);
+    if (ready === undefined) {
+      throw new Error('rematch did not keep the room');
+    }
+    expect(ready.state).toBe('ready');
+    expect(harness.scheduler.scheduledRoomCount).toBe(1);
+    expect(harness.clock.nextDueAt()).toBe(ready.joinDeadlineAt);
+
+    harness.clock.advance(JOIN_TIMEOUT_MS);
+    await waitForMessage(
+      host,
+      'timeout',
+      (message) => message.type === 'timeout' && message.timer === 'join',
+      'join timeout after rematch',
+    );
+    expect(harness.manager.roomCount).toBe(0);
+    expect(harness.scheduler.scheduledRoomCount).toBe(0);
+  });
+
+  it('cancels the room timer when a lifecycle command dissolves the room', async () => {
+    const harness = createScheduledServer();
+    const server = await harness.start();
+    const host = await connect(server.port);
+    host.send(createMessage());
+    const created = await nextRoomState(host);
+    expect(harness.scheduler.scheduledRoomCount).toBe(1);
+
+    host.send({ type: 'leave', requestId: 'req-leave', roomId: created.roomId });
+    await waitForMessage(
+      host,
+      'room_closed',
+      (message) => message.type === 'room_closed',
+      'room_closed',
+    );
+
+    expect(harness.manager.roomCount).toBe(0);
+    expect(harness.scheduler.scheduledRoomCount).toBe(0);
+    expect(harness.clock.nextDueAt()).toBeNull();
+
+    // Even a far-future wakeup finds no room and produces no extra event.
+    harness.clock.advance(JOIN_TIMEOUT_MS * 2);
+    expect(harness.manager.roomCount).toBe(0);
+    expect(host.received.filter((message) => message.type === 'timeout')).toHaveLength(0);
+  });
+
+  it('cancels every deadline timer when the server closes', async () => {
+    const harness = createScheduledServer();
+    const server = await harness.start();
+    const host = await connect(server.port);
+    host.send(createMessage());
+    const created = await nextRoomState(host);
+    expect(harness.scheduler.scheduledRoomCount).toBe(1);
+
+    await server.close();
+
+    // The scheduler released its timer, so a later join window cannot fire on
+    // a server that is already gone.
+    expect(harness.scheduler.scheduledRoomCount).toBe(0);
+    expect(harness.clock.nextDueAt()).toBeNull();
+
+    // A delivery that races shutdown (an embedder call here) must not re-arm
+    // the deadline that close() just released.
+    const afterClose: RoomClosedMessage = {
+      type: 'room_closed',
+      roomId: created.roomId,
+      seq: 0,
+      reason: 'after-close',
+      finalState: 'dissolved',
+    };
+    server.deliver([{ playerToken: 'after-close', message: afterClose }]);
+    expect(harness.scheduler.scheduledRoomCount).toBe(0);
+    expect(harness.clock.nextDueAt()).toBeNull();
+
+    harness.clock.advance(JOIN_TIMEOUT_MS * 2);
+    expect(harness.manager.roomCount).toBe(1);
+    expect(harness.manager.getRoom(created.roomId)?.state).toBe('waiting');
+  });
+
+  it('re-arms after a presence delivery expires a grace window and dissolves the room', async () => {
+    const clock = new TestClock(START);
+    const manager = createRoomManager({ now: () => clock.now() });
+    let server: RoomServer | null = null;
+    const deliver = (deliveries: readonly RoomDelivery[]): void => {
+      server?.deliver(deliveries);
+    };
+    const presence = createPresenceController({ manager, deliver, clock });
+    const scheduler = createDeadlineScheduler({ manager, deliver, clock });
+    server = await startTestServer(manager, presence, scheduler);
+
+    // This client never answers a heartbeat, so the seat goes offline without
+    // any test-owned timing loop.
+    const host = await TestClient.connect(server.port, { autoPong: false });
+    clients.push(host);
+    host.send(createMessage());
+    const created = await nextRoomState(host);
+    expect(scheduler.scheduledRoomCount).toBe(1);
+
+    clock.advance(HEARTBEAT_INTERVAL_MS);
+    clock.advance(HEARTBEAT_INTERVAL_MS);
+    await waitForMessage(
+      host,
+      'room_state',
+      (message) =>
+        message.type === 'room_state' &&
+        message.players.some((player) => player.presence === 'offline'),
+      'offline room_state',
+    );
+    // The presence delivery went through the transport's batch seam: the
+    // join timer is still the one room deadline the scheduler tracks (presence
+    // moves no deadline). The clock also holds the grace timer, so only the
+    // scheduler count proves the join timer is still armed.
+    expect(scheduler.scheduledRoomCount).toBe(1);
+    expect(created.joinDeadlineAt).toBe(START + JOIN_TIMEOUT_MS);
+
+    clock.advance(RECONNECT_GRACE_MS);
+    const closed = await waitForMessage(
+      host,
+      'room_closed',
+      (message) => message.type === 'room_closed',
+      'grace-expired room_closed',
+    );
+    expect(closed).toMatchObject({
+      type: 'room_closed',
+      roomId: created.roomId,
+      reason: 'host-grace-expired',
+      finalState: 'dissolved',
+    });
+    expect(manager.roomCount).toBe(0);
+    // That delivery was also the scheduler's re-arm input: the dissolved room
+    // has no deadline, so the previously armed join timer is gone. The
+    // heartbeat interval still belongs to the connection and is not a room
+    // deadline, so only the scheduler count is asserted here.
+    expect(scheduler.scheduledRoomCount).toBe(0);
+    // The only timer the shared clock still owns is the connection's heartbeat
+    // interval; the dissolved room's join deadline is gone.
+    expect(clock.timerCount).toBe(1);
+  });
+
+  it('keeps the whole-match cap in the timer even when the turn window is longer', async () => {
+    const clock = new TestClock(START);
+    const manager = createRoomManager({
+      now: () => clock.now(),
+      createSeed: () => 7,
+      turnTimeoutMs: MATCH_TIMEOUT_MS + 1_000,
+      matchTimeoutMs: MATCH_TIMEOUT_MS,
+    });
+    let server: RoomServer | null = null;
+    const scheduler = createDeadlineScheduler({
+      manager,
+      clock,
+      deliver: (deliveries) => server?.deliver(deliveries),
+    });
+    server = await startTestServer(manager, undefined, scheduler);
+
+    const host = await connect(server.port);
+    host.send(createMessage());
+    const created = await nextRoomState(host);
+    const guest = await connect(server.port);
+    guest.send(joinMessage(created.roomId));
+    await nextRoomState(guest);
+    await nextRoomState(host);
+    host.send(readyMessage(created.roomId, true));
+    await nextRoomState(host);
+    await nextRoomState(guest);
+    guest.send(readyMessage(created.roomId, true));
+    await nextRoomState(host);
+    await nextRoomState(guest);
+    host.send(startMessage(created.roomId));
+    await waitForMessage(
+      host,
+      'room_state',
+      (message) => message.type === 'room_state' && message.state === 'playing',
+      'playing room_state',
+    );
+
+    const match = manager.getMatch(created.roomId);
+    if (match === null) {
+      throw new Error('start did not create a match');
+    }
+    expect(clock.nextDueAt()).toBe(match.state.matchDeadlineAt);
+    // The match layer caps the turn deadline at the match cap, so the two are
+    // the same instant here; the scheduler's tie-break must still pick 'match'.
+    expect(match.state.turnDeadlineAt).toBe(match.state.matchDeadlineAt);
+
+    clock.advance(MATCH_TIMEOUT_MS);
+    await waitForMessage(
+      host,
+      'timeout',
+      (message) => message.type === 'timeout' && message.timer === 'match',
+      'match timeout',
+    );
+    const end = await waitForMessage(
+      guest,
+      'end',
+      (message) => message.type === 'end' && message.reason === 'match-timeout',
+      'match end',
+    );
+    expect(end).toMatchObject({ type: 'end', reason: 'match-timeout' });
+    expect(manager.getRoom(created.roomId)?.state).toBe('finished');
+    expect(scheduler.scheduledRoomCount).toBe(0);
+    expect(host.received.filter((message) => message.type === 'timeout')).toHaveLength(1);
+    expect(host.received.filter((message) => message.type === 'end')).toHaveLength(1);
   });
 });
