@@ -1,7 +1,7 @@
 import { escapeHtml } from '../core/dom';
 import type { GameModule } from '../core/game';
 import { formatLastPlayed, type PlayHistoryReader } from './play-history';
-import { gameHref } from './router';
+import { gameHref, onlineRoomHref } from './router';
 
 const GITHUB_URL = 'https://github.com/yeahdongcn-mk2/playground';
 
@@ -61,6 +61,9 @@ export function renderHub(
           <div class="hero-actions">
             <a class="button button--primary" href="${gameHref(FEATURE_GAME_ID)}" data-testid="enter-zhen-sha">
               开始《镇煞》 <span aria-hidden="true">→</span>
+            </a>
+            <a class="button button--ghost" href="${onlineRoomHref()}" data-testid="enter-online-minesweeper">
+              联机扫雷 <span aria-hidden="true">→</span>
             </a>
             <a class="button button--ghost" href="${gameHref('blank')}" data-testid="enter-blank">
               进入空白画布
