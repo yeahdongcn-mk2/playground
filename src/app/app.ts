@@ -169,6 +169,13 @@ export class App {
       return;
     }
 
+    if (route.kind === 'online') {
+      // The online room page is wired by the entry task; keep a recoverable
+      // page instead of falling through to the single-player game route.
+      this.renderRouteError('联机房间入口尚未接入', '联机房间页面正在接入，请先返回大厅。', false);
+      return;
+    }
+
     const game = findGame(route.id);
     if (!game) {
       this.renderRouteError('没有找到这个游戏', `游戏 ${route.id} 尚未注册到大厅。`, true);
