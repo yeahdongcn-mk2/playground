@@ -96,6 +96,20 @@ const systemPresenceClock: PresenceClock = {
  */
 export type PresenceDeliverySink = (deliveries: readonly RoomDelivery[]) => void;
 
+/**
+ * Controller handle returned by {@link createPresenceController}.
+ *
+ * The hook surface is exactly {@link PresenceController}; `close` is the
+ * transport-shutdown cleanup. Closing every socket stops each heartbeat, but a
+ * seat already inside its grace window would otherwise keep a timer until the
+ * process exits, so the host may release every heartbeat and grace timer at
+ * once when it closes the transport.
+ */
+export interface PresenceControllerHandle extends PresenceController {
+  /** Stop every heartbeat and grace timer; close notifications are then inert. */
+  close(): void;
+}
+
 /** Construction options for {@link createPresenceController}. */
 export interface PresenceControllerOptions {
   /** Room-layer half of the seam; the only way presence can affect a room. */
@@ -154,7 +168,7 @@ interface TokenState {
  */
 export function createPresenceController(
   options: PresenceControllerOptions,
-): PresenceController {
+): PresenceControllerHandle {
   const manager = options.manager;
   const deliver = options.deliver;
   const clock = options.clock ?? systemPresenceClock;
@@ -433,11 +447,35 @@ export function createPresenceController(
     detachToken(connection);
   }
 
+  /**
+   * Release every timer on transport shutdown.
+   *
+   * Socket closes already stop their heartbeats, but a seat sitting in a grace
+   * window would keep its timer alive; the host calls this once when the
+   * transport closes so no heartbeat or expiry survives it. Room state is left
+   * untouched: the room table is an in-process table that the caller is
+   * shutting down, not something presence is allowed to mutate.
+   */
+  function close(): void {
+    for (const connection of connections.values()) {
+      stopHeartbeat(connection);
+    }
+    connections.clear();
+    for (const state of tokens.values()) {
+      if (state.grace !== null) {
+        clock.clearTimeout(state.grace);
+        state.grace = null;
+      }
+    }
+    tokens.clear();
+  }
+
   return {
     connectionOpened,
     connectionClosed,
     pongReceived,
     tokenBound,
     tokenUnbound,
+    close,
   };
 }
