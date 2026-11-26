@@ -133,6 +133,14 @@ interface MessageIdentity {
   readonly roomId: string | null;
 }
 
+/** Presence hook names, used to label controller faults in diagnostics. */
+type PresenceHook =
+  | 'connectionOpened'
+  | 'connectionClosed'
+  | 'pongReceived'
+  | 'tokenBound'
+  | 'tokenUnbound';
+
 function readRequestPath(request: IncomingMessage): string {
   try {
     return new URL(request.url ?? '/', 'http://room.invalid').pathname;
@@ -196,8 +204,14 @@ function readMessageIdentity(input: unknown): MessageIdentity {
  * another connection already owns replaces that connection. It never asks the
  * room manager to change state when a socket closes; presence changes are
  * reported to the injected {@link PresenceController} instead.
+ *
+ * Exported so the unit tests can drive it directly with fake sockets and
+ * assert deterministic registry behaviour (replacement removes the old socket
+ * before it closes). Production code reaches it through {@link startRoomServer}.
+ *
+ * @internal
  */
-class RoomSocketHub {
+export class RoomSocketHub {
   private readonly manager: MatchRoomManager;
   private readonly presence: PresenceController | null;
   private readonly connections = new Map<WebSocket, ClientConnection>();
@@ -225,19 +239,23 @@ class RoomSocketHub {
       // A replaced socket may still deliver a pong while it closes; the
       // connection no longer owns an active entry, so do not report it.
       if (this.connections.get(socket) === connection) {
-        this.notifyPresence((presence) => presence.pongReceived(connection.id));
+        this.notifyPresence('pongReceived', (presence) =>
+          presence.pongReceived(connection.id),
+        );
       }
     });
     socket.on('close', () => {
       this.removeConnection(connection);
-      this.notifyPresence((presence) => presence.connectionClosed(connection.id));
+      this.notifyPresence('connectionClosed', (presence) =>
+        presence.connectionClosed(connection.id),
+      );
     });
     socket.on('error', () => {
       // A transport error is followed by `close`, which cleans the mapping.
       socket.terminate();
     });
 
-    this.notifyPresence((presence) =>
+    this.notifyPresence('connectionOpened', (presence) =>
       presence.connectionOpened(connection.id, this.presenceSocket(socket)),
     );
   }
@@ -250,15 +268,20 @@ class RoomSocketHub {
    * must not prevent a replacement close, skip deliveries or leak an uncaught
    * exception out of a WebSocket event listener.
    */
-  private notifyPresence(hook: (presence: PresenceController) => void): void {
+  private notifyPresence(
+    hook: PresenceHook,
+    notify: (presence: PresenceController) => void,
+  ): void {
     if (this.presence === null) {
       return;
     }
     try {
-      hook(this.presence);
-    } catch {
-      // The controller is an internal collaborator; its failure is reported
-      // by its own tests, not by corrupting the transport's state machine.
+      notify(this.presence);
+    } catch (error) {
+      // The controller is an internal collaborator, so its failure must not
+      // corrupt the transport's state machine. Report it rather than swallow
+      // it: a controller fault would otherwise be completely invisible.
+      console.error(`[room] presence ${hook} hook failed`, error);
     }
   }
 
@@ -403,7 +426,9 @@ class RoomSocketHub {
     this.replaceTokenOwner(token);
     connection.playerToken = token;
     this.tokenConnections.set(token, connection);
-    this.notifyPresence((presence) => presence.tokenBound(connection.id, token));
+    this.notifyPresence('tokenBound', (presence) =>
+      presence.tokenBound(connection.id, token),
+    );
   }
 
   /**
@@ -435,7 +460,9 @@ class RoomSocketHub {
     if (this.tokenConnections.get(token) === connection) {
       this.tokenConnections.delete(token);
     }
-    this.notifyPresence((presence) => presence.tokenUnbound(connection.id));
+    this.notifyPresence('tokenUnbound', (presence) =>
+      presence.tokenUnbound(connection.id),
+    );
   }
 
   /**

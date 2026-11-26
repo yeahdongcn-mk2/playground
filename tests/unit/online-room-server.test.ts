@@ -24,6 +24,7 @@ import {
 import {
   ROOM_HEALTH_PATH,
   ROOM_WS_PATH,
+  RoomSocketHub,
   startRoomServer,
   type RoomServer,
 } from '../../server/room/ws-server';
@@ -65,6 +66,7 @@ afterEach(async () => {
     client.terminate();
   }
   await Promise.all(servers.splice(0).map((server) => server.close()));
+  vi.restoreAllMocks();
 });
 
 function commandFailure(code: RoomErrorCode): RoomCommandResult {
@@ -444,6 +446,63 @@ class TestClient {
   }
 }
 
+type FakeSocketListener = (...args: unknown[]) => void;
+
+/**
+ * Server-side socket double for driving {@link RoomSocketHub} directly.
+ *
+ * The transport only needs `on`, `send`, `ping`, `close`, `terminate` and
+ * `readyState`, so the fake records outgoing frames and close calls and lets a
+ * test emit `message` / `pong` events at a deterministic point in time — in
+ * particular after a replacement has closed the socket but before its `close`
+ * event would arrive.
+ */
+class FakeServerSocket {
+  readyState: number = WebSocket.OPEN;
+  readonly sent: ServerToClientMessage[] = [];
+  readonly closeCalls: { readonly code?: number; readonly reason?: string }[] = [];
+  private readonly listeners = new Map<string, FakeSocketListener[]>();
+
+  on(event: string, listener: FakeSocketListener): this {
+    const listeners = this.listeners.get(event) ?? [];
+    listeners.push(listener);
+    this.listeners.set(event, listeners);
+    return this;
+  }
+
+  emit(event: string, ...args: unknown[]): void {
+    for (const listener of this.listeners.get(event) ?? []) {
+      listener(...args);
+    }
+  }
+
+  send(payload: string): void {
+    this.sent.push(JSON.parse(payload) as ServerToClientMessage);
+  }
+
+  ping(): void {
+    // The hub's presence adapter pings; the fake has no network to ping.
+  }
+
+  close(code?: number, reason?: string): void {
+    this.closeCalls.push({ code, reason });
+    this.readyState = WebSocket.CLOSING;
+  }
+
+  terminate(): void {
+    this.readyState = WebSocket.CLOSED;
+  }
+}
+
+/** First `room_state` frame a fake server socket received. */
+function firstRoomState(socket: FakeServerSocket): RoomStateMessage {
+  const message = socket.sent.find((candidate) => candidate.type === 'room_state');
+  if (message === undefined || message.type !== 'room_state') {
+    throw new Error('expected a room_state frame');
+  }
+  return message;
+}
+
 interface PresenceEvent {
   readonly kind: 'opened' | 'closed' | 'pong' | 'bound' | 'unbound';
   readonly connectionId: string;
@@ -505,6 +564,55 @@ class FakePresenceController implements PresenceController {
       throw new Error(`no presence socket for ${connectionId}`);
     }
     socket.ping();
+  }
+}
+
+/**
+ * Presence controller that throws from every hook.
+ *
+ * The transport promises that an observer fault cannot break socket
+ * bookkeeping, replacement, delivery or event-listener isolation; this fake
+ * makes each of those promises falsifiable. It still records the adapter and
+ * the hook calls so the test can drive a heartbeat round and prove that the
+ * throw happened at the transport boundary instead of never being invoked.
+ */
+class ThrowingPresenceController implements PresenceController {
+  readonly calls: string[] = [];
+  readonly openedIds: string[] = [];
+  readonly closedIds: string[] = [];
+  private readonly sockets = new Map<string, PresenceSocket>();
+
+  connectionOpened(connectionId: string, socket: PresenceSocket): void {
+    this.openedIds.push(connectionId);
+    this.sockets.set(connectionId, socket);
+    this.fail('connectionOpened');
+  }
+
+  connectionClosed(connectionId: string): void {
+    this.closedIds.push(connectionId);
+    this.fail('connectionClosed');
+  }
+
+  pongReceived(): void {
+    this.fail('pongReceived');
+  }
+
+  tokenBound(): void {
+    this.fail('tokenBound');
+  }
+
+  tokenUnbound(): void {
+    this.fail('tokenUnbound');
+  }
+
+  /** Send one heartbeat ping through the adapter stored before the throw. */
+  ping(connectionId: string): void {
+    this.sockets.get(connectionId)?.ping();
+  }
+
+  private fail(hook: string): never {
+    this.calls.push(hook);
+    throw new Error(`presence ${hook} threw`);
   }
 }
 
@@ -1182,10 +1290,9 @@ describe('room WebSocket/HTTP transport', () => {
       { kind: 'closed', connectionId: guestId, playerToken: null },
     ]);
 
-    // Only the new socket holds the token now. The old socket is already
-    // closing, so the 4001 close plus the unbound timeline above are the
-    // observable proof its mapping is gone; this marker proves the token now
-    // routes to the replacement alone.
+    // Only the new socket holds the token now. The registry-level removal of
+    // the old socket is proven deterministically by the dedicated hub test
+    // below; this marker proves the token now routes to the replacement alone.
     const marker: RoomClosedMessage = {
       type: 'room_closed',
       roomId,
@@ -1195,6 +1302,166 @@ describe('room WebSocket/HTTP transport', () => {
     };
     server.deliver([{ playerToken: guestToken, message: marker }]);
     expect(await replacement.next()).toEqual(marker);
+  });
+
+  it('removes a replaced socket from the hub registry before its close event', () => {
+    const manager = new FakeRoomManager();
+    const presence = new FakePresenceController();
+    const hub = new RoomSocketHub(manager, presence);
+    const oldSocket = new FakeServerSocket();
+    const replacement = new FakeServerSocket();
+
+    hub.addConnection(oldSocket as unknown as WebSocket);
+    oldSocket.emit('message', JSON.stringify(createMessage()), false);
+    const created = firstRoomState(oldSocket);
+    const hostToken = requiredToken(created);
+    const oldConnectionId = presence.events.find(
+      (event) => event.kind === 'opened',
+    )?.connectionId;
+    if (oldConnectionId === undefined) {
+      throw new Error('missing opened event for the replaced socket');
+    }
+
+    hub.addConnection(replacement as unknown as WebSocket);
+    replacement.emit(
+      'message',
+      JSON.stringify(
+        joinMessage(created.roomId, {
+          playerToken: hostToken,
+          requestId: 'req-reconnect',
+        }),
+      ),
+      false,
+    );
+
+    expect(firstRoomState(replacement).playerToken).toBe(hostToken);
+    expect(oldSocket.closeCalls).toEqual([
+      { code: 4001, reason: 'session-replaced' },
+    ]);
+
+    // A frame that arrives while the replaced socket is still closing must not
+    // reach the room manager: the registry entry is deleted before the
+    // socket's `close` event, so its handlers are already inert.
+    const callsBefore = [...manager.calls];
+    oldSocket.emit(
+      'message',
+      JSON.stringify(readyMessage(created.roomId, true)),
+      false,
+    );
+    expect(manager.calls).toEqual(callsBefore);
+
+    // The same rule covers the late-pong guard: a pong from the replaced
+    // socket is not reported, while the replacement's pong still is.
+    const replacementConnectionId = presence.events.find(
+      (event) =>
+        event.kind === 'opened' && event.connectionId !== oldConnectionId,
+    )?.connectionId;
+    if (replacementConnectionId === undefined) {
+      throw new Error('missing opened event for the replacement socket');
+    }
+    oldSocket.emit('pong');
+    expect(
+      presence.events.some(
+        (event) =>
+          event.kind === 'pong' && event.connectionId === oldConnectionId,
+      ),
+    ).toBe(false);
+    replacement.emit('pong');
+    expect(
+      presence.events.some(
+        (event) =>
+          event.kind === 'pong' &&
+          event.connectionId === replacementConnectionId,
+      ),
+    ).toBe(true);
+
+    // Its later `close` event only clears an already-missing mapping.
+    oldSocket.emit('close');
+    expect(manager.calls).toEqual(callsBefore);
+  });
+
+  it('contains presence controller faults without breaking create, join, replacement or delivery', async () => {
+    const manager = new FakeRoomManager();
+    const presence = new ThrowingPresenceController();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { server, host, guest, roomId } = await createSeatedRoom(
+      manager,
+      presence,
+    );
+
+    // create/join already delivered room_state to both seats even though every
+    // connectionOpened/tokenBound hook threw.
+    expect(manager.calls).toEqual(['create', 'join']);
+
+    const guestSeat = manager.room.seats.find((seat) => !seat.isHost);
+    if (guestSeat === undefined) {
+      throw new Error('seated room is missing a guest seat');
+    }
+    const guestToken = guestSeat.playerToken;
+
+    const replacement = await connect(server.port);
+    const oldClosed = guest.closedWith();
+    replacement.send(
+      joinMessage(roomId, {
+        playerToken: guestToken,
+        requestId: 'req-reconnect',
+      }),
+    );
+
+    // Replacement still completes, closes the old socket with 4001 and delivers
+    // the resumed state even though tokenUnbound/tokenBound threw.
+    const resumed = await nextRoomState(replacement);
+    expect(resumed.playerToken).toBe(guestToken);
+    expect(await oldClosed).toEqual({ code: 4001, reason: 'session-replaced' });
+
+    // A heartbeat pong is forwarded, and its hook's throw stays inside the
+    // transport event listener instead of escaping.
+    const hostConnectionId = presence.openedIds[0];
+    if (hostConnectionId === undefined) {
+      throw new Error('no opened connection recorded');
+    }
+    presence.ping(hostConnectionId);
+    await vi.waitFor(
+      () => expect(presence.calls).toContain('pongReceived'),
+      { interval: 10, timeout: 2_000 },
+    );
+
+    // Server-initiated delivery to the new owner is not skipped after a
+    // throwing tokenBound.
+    const marker: RoomClosedMessage = {
+      type: 'room_closed',
+      roomId,
+      seq: manager.room.seq,
+      reason: 'fault isolation marker',
+      finalState: 'dissolved',
+    };
+    server.deliver([{ playerToken: guestToken, message: marker }]);
+    expect(await replacement.next()).toEqual(marker);
+
+    // The close listener is isolated too.
+    const hostClosed = host.closed();
+    host.terminate();
+    await hostClosed;
+    await vi.waitFor(
+      () => expect(presence.closedIds).toContain(hostConnectionId),
+      { interval: 10, timeout: 2_000 },
+    );
+
+    // Every hook was actually invoked and threw; the transport reported the
+    // fault instead of letting it corrupt bookkeeping or escape.
+    expect(presence.calls).toEqual(
+      expect.arrayContaining([
+        'connectionOpened',
+        'tokenBound',
+        'tokenUnbound',
+        'pongReceived',
+        'connectionClosed',
+      ]),
+    );
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[room] presence connectionOpened hook failed',
+      expect.any(Error),
+    );
   });
 
   it('closes cleanly and releases the listening port', async () => {
