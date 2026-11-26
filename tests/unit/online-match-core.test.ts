@@ -748,6 +748,124 @@ describe('online match core: endings', () => {
     });
   });
 
+  it('accumulates each player\'s revealed safe cells across separate turns', () => {
+    const initial = start({ seed: 85 });
+    const hostFirst = findHidden(initial);
+    if (hostFirst === null) {
+      throw new Error('expected a hidden cell for the host first reveal');
+    }
+    const hostTurn1 = accepted(
+      act(
+        initial,
+        { actionId: 'host-reveal-1', row: hostFirst.row, col: hostFirst.col },
+        'host',
+        1_100,
+      ),
+    );
+    const hostFirstDelta =
+      hostTurn1.state.stats.revealedSafeCount - initial.stats.revealedSafeCount;
+    expect(hostFirstDelta).toBeGreaterThan(0);
+
+    const guestSafe = findHidden(
+      hostTurn1.state,
+      (cell) => !cell.mine && cell.adjacentMines > 0,
+    );
+    if (guestSafe === null) {
+      throw new Error('expected a hidden safe cell for the guest reveal');
+    }
+    const guestTurn = accepted(
+      act(
+        hostTurn1.state,
+        { actionId: 'guest-reveal', row: guestSafe.row, col: guestSafe.col },
+        'guest',
+        1_200,
+      ),
+    );
+    const guestDelta =
+      guestTurn.state.stats.revealedSafeCount - hostTurn1.state.stats.revealedSafeCount;
+    expect(guestDelta).toBeGreaterThan(0);
+
+    // Reveal a single non-zero cell so this turn cannot flood the board and
+    // makes the second positive increment for the same player explicit.
+    const hostSecondSafe = findHidden(
+      guestTurn.state,
+      (cell) => !cell.mine && cell.adjacentMines > 0,
+    );
+    if (hostSecondSafe === null) {
+      throw new Error('expected a hidden safe cell for the host second reveal');
+    }
+    const hostTurn2 = accepted(
+      act(
+        guestTurn.state,
+        { actionId: 'host-reveal-2', row: hostSecondSafe.row, col: hostSecondSafe.col },
+        'host',
+        1_300,
+      ),
+    );
+    const hostSecondDelta =
+      hostTurn2.state.stats.revealedSafeCount - guestTurn.state.stats.revealedSafeCount;
+    expect(hostSecondDelta).toBeGreaterThan(0);
+
+    // The per-player record is a running total, not the largest single-turn
+    // increment: the host's count is the sum of both host turns.
+    expect(hostTurn2.state.revealedSafeByPlayer).toEqual({
+      host: hostFirstDelta + hostSecondDelta,
+      guest: guestDelta,
+    });
+    expect(hostTurn2.state.stats.revealedSafeCount).toBe(
+      hostFirstDelta + guestDelta + hostSecondDelta,
+    );
+
+    const outcome = matchTimeout(hostTurn2.state, 1_400);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) {
+      throw new Error(`match timeout was rejected: ${outcome.code}`);
+    }
+    expect(outcome.end.winnerId).toBe('host');
+    expect(outcome.end.loserId).toBe('guest');
+  });
+
+  it('ranks a guest lead at match timeout', () => {
+    const state = start({ seed: 86 });
+    const flagTarget = findHidden(state);
+    if (flagTarget === null) {
+      throw new Error('expected a hidden cell for the host flag');
+    }
+    const flagged = accepted(
+      act(
+        state,
+        { actionId: 'host-flag', kind: 'flag', row: flagTarget.row, col: flagTarget.col },
+        'host',
+        1_100,
+      ),
+    );
+    expect(flagged.state.revealedSafeByPlayer).toEqual({ host: 0, guest: 0 });
+
+    const guestSafe = findHidden(flagged.state, (cell) => !cell.mine);
+    if (guestSafe === null) {
+      throw new Error('expected a hidden safe cell for the guest reveal');
+    }
+    const guestTurn = accepted(
+      act(
+        flagged.state,
+        { actionId: 'guest-reveal', row: guestSafe.row, col: guestSafe.col },
+        'guest',
+        1_200,
+      ),
+    );
+    expect(guestTurn.state.revealedSafeByPlayer['guest']).toBeGreaterThan(0);
+    expect(guestTurn.state.revealedSafeByPlayer['host']).toBe(0);
+
+    const outcome = matchTimeout(guestTurn.state, 1_300);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) {
+      throw new Error(`match timeout was rejected: ${outcome.code}`);
+    }
+    expect(outcome.end.reason).toBe('match-timeout');
+    expect(outcome.end.winnerId).toBe('guest');
+    expect(outcome.end.loserId).toBe('host');
+  });
+
   it('ends by revealed-safe-cell ranking when the match timer expires', () => {
     const state = start({ seed: 83 });
     const safe = findHidden(state);

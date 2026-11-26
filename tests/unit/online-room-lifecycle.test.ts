@@ -1455,7 +1455,7 @@ describe('online room reconnect and presence', () => {
   it('restores an offline seat at the current seq without moving deadlines', () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
-    const room = playingRoom({ now: () => Date.now() });
+    const room = playingRoom({ now: () => Date.now(), createSeed: () => 2_024 });
     const allTokens = [room.hostToken, room.guestToken];
     const before = snapshot(room.manager, room.roomId);
     const beforeMatch = room.match;
@@ -1485,6 +1485,31 @@ describe('online room reconnect and presence', () => {
       deliveries: [],
     });
 
+    // The opponent keeps playing while the guest is offline. The room seq
+    // advances and the board changes, so a resume that only replays the
+    // pre-offline state (or loses the offline increment) fails the assertions
+    // below instead of passing them.
+    const safe = firstHiddenSafeCell(room.manager, room.roomId);
+    const action = expectOk(
+      room.manager.action(
+        connection(room.hostToken),
+        actionFor(room.manager, room.roomId, { row: safe.row, col: safe.col }),
+      ),
+      allTokens,
+    );
+    expect(action.deliveries.some((delivery) => delivery.message.type === 'action_result')).toBe(
+      true,
+    );
+    const afterAction = snapshot(room.manager, room.roomId);
+    const afterMatch = matchOf(room.manager, room.roomId);
+    expect(afterAction.seq).toBe(before.seq + 1);
+    expect(afterMatch.state.seq).toBe(afterAction.seq);
+    expect(afterMatch.state.finished).toBe(false);
+    expect(afterMatch.state.turnId).toBe(beforeMatch.state.turnId + 1);
+    expect(afterMatch.state.stats.revealedSafeCount).toBeGreaterThan(
+      beforeMatch.state.stats.revealedSafeCount,
+    );
+
     vi.advanceTimersByTime(RECONNECT_GRACE_MS - 1);
     const resumed = expectOk(
       room.manager.join(
@@ -1505,22 +1530,27 @@ describe('online room reconnect and presence', () => {
     expect(resumedStates).toHaveLength(2);
     for (const state of resumedStates) {
       expect(state.state).toBe('playing');
-      expect(state.seq).toBe(before.seq);
+      expect(state.seq).toBe(afterAction.seq);
       expect(state.players.every((player) => player.presence === 'online')).toBe(true);
     }
+    // The reconnect snapshot is the current seq, not the one from before the
+    // guest went offline, and it carries the board/turn caused by the action
+    // the guest missed.
     const resumedSnapshot = messagesOfType(resumed, 'snapshot')[0];
     expect(resumedSnapshot).toMatchObject({
-      seq: before.seq,
+      seq: afterAction.seq,
       matchId: room.match.matchId,
-      turnId: room.match.state.turnId,
-      turnPlayerId: room.match.state.turnPlayerId,
-      deadlineAt: beforeMatch.state.turnDeadlineAt,
-      matchDeadlineAt: beforeMatch.state.matchDeadlineAt,
+      turnId: afterMatch.state.turnId,
+      turnPlayerId: afterMatch.state.turnPlayerId,
+      deadlineAt: afterMatch.state.turnDeadlineAt,
+      matchDeadlineAt: afterMatch.state.matchDeadlineAt,
+      revealedSafeCount: afterMatch.state.stats.revealedSafeCount,
     });
+    expect(resumedSnapshot?.board[safe.row]?.[safe.col]?.revealed).toBe(true);
     expect(messagesOfType(resumed, 'action_result')).toHaveLength(0);
-    expect(room.manager.getRoom(room.roomId)?.seq).toBe(before.seq);
-    expect(room.manager.getRoom(room.roomId)?.deadlineAt).toBe(before.deadlineAt);
-    expect(room.manager.getMatch(room.roomId)).toBe(beforeMatch);
+    expect(room.manager.getRoom(room.roomId)?.seq).toBe(afterAction.seq);
+    expect(room.manager.getRoom(room.roomId)?.deadlineAt).toBe(afterAction.deadlineAt);
+    expect(room.manager.getMatch(room.roomId)).toBe(afterMatch);
 
     // A repeated join is idempotent: no new seat, no seq/deadline movement,
     // and still exactly one snapshot for the resuming seat.
@@ -1536,10 +1566,10 @@ describe('online room reconnect and presence', () => {
       'snapshot',
     ]);
     expect(duplicate.boundToken).toBe(room.guestToken);
-    expect(room.manager.getRoom(room.roomId)?.seq).toBe(before.seq);
-    expect(room.manager.getRoom(room.roomId)?.deadlineAt).toBe(before.deadlineAt);
+    expect(room.manager.getRoom(room.roomId)?.seq).toBe(afterAction.seq);
+    expect(room.manager.getRoom(room.roomId)?.deadlineAt).toBe(afterAction.deadlineAt);
     expect(room.manager.getRoom(room.roomId)?.seats).toHaveLength(ROOM_CAPACITY);
-    expect(room.manager.getMatch(room.roomId)).toBe(beforeMatch);
+    expect(room.manager.getMatch(room.roomId)).toBe(afterMatch);
   });
 
   it('keeps the host identity and the start guard across a lobby reconnect', () => {

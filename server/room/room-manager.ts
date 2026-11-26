@@ -829,9 +829,10 @@ export class InMemoryRoomManager implements MatchRoomManager, PresenceRoomManage
         return reject('deadline-passed', { roomId }, room);
       }
 
-      // Two sequential broadcasts need two sequence numbers: a client that
-      // applied the timeout at N+1 would drop a room_closed carrying the same
-      // seq. Once the record is removed no version at N+1 has to be readable.
+      // `timeout` and `room_closed` are two sequential lifecycle broadcasts,
+      // so they consume two consecutive sequence numbers. This is compatible
+      // with the equal-seq batch rule documented on `finishByTimer`; once the
+      // record is removed no version at N+1 has to be readable.
       const timeout: TimeoutMessage = {
         type: 'timeout',
         roomId: room.roomId,
@@ -956,6 +957,18 @@ export class InMemoryRoomManager implements MatchRoomManager, PresenceRoomManage
    * player, `match-timeout` ranks safe-cell counts), then `finishMatch` records
    * `playing → finished`. `timeout`, `end` and `room_state` all carry the same
    * finished sequence, so a retry cannot produce a second terminal result.
+   *
+   * Client rule for #486 (the design 4.3 "render seq >= applied" branch of the
+   * 4.3/5.4 conflict): treat every message carrying one seq as a batch.
+   * Deduplicate repeated copies of the same message type/identity, but do not
+   * drop a different message type merely because its seq equals the watermark
+   * just advanced — the timeout, end and finished room state all belong to
+   * this single terminal transition and all have to reach the UI. The
+   * action-terminal path (`action_result`, `snapshot`, `end`, `room_state`)
+   * follows the same rule. The "drop seq <= applied" rule of 5.4 only
+   * discards a duplicate of a message that was already applied. The
+   * join-timeout branch keeps its `timeout` and `room_closed` on consecutive
+   * seqs, which also satisfies this rule.
    */
   private finishByTimer(
     entry: RoomEntry,
