@@ -68,7 +68,6 @@ export function openOnlineRoute(
   options: OnlineRouteOptions = {},
 ): OnlineRouteHandle {
   const load = options.load ?? loadOnlineRoomClient;
-  const controller = new AbortController();
   let destroyed = options.signal?.aborted === true;
   let mounted: OnlineRoomHandle | null = null;
 
@@ -77,7 +76,6 @@ export function openOnlineRoute(
       return;
     }
     destroyed = true;
-    controller.abort();
     options.signal?.removeEventListener('abort', handleAbort);
     const handle = mounted;
     mounted = null;

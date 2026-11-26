@@ -18,7 +18,10 @@ interface FakeMount {
  * A deterministic stand-in for the lazily imported room client.
  *
  * The fake renders one marker so the shell test can count real mounts instead
- * of only trusting the loader call count.
+ * of only trusting the loader call count. Its `destroy` deliberately leaves
+ * the marker in place: only the shell is allowed to clear the mount point, so
+ * the "root is empty after leaving" assertions can fail when the shell stops
+ * clearing it.
  */
 function createFakeClient(): {
   module: OnlineRoomClientModule;
@@ -28,9 +31,7 @@ function createFakeClient(): {
   const module: OnlineRoomClientModule = {
     mountOnlineRoom(root, options) {
       root.innerHTML = '<div data-testid="fake-online-room">room</div>';
-      const destroy = vi.fn(() => {
-        root.replaceChildren();
-      });
+      const destroy = vi.fn();
       mounts.push({ root, options, destroy });
       return { destroy };
     },
@@ -161,6 +162,35 @@ describe('openOnlineRoute', () => {
 });
 
 describe('App online route wiring', () => {
+  it('shows the route loading status until the lazy room replaces it', async () => {
+    const { module, mounts } = createFakeClient();
+    let resolveClient: ((client: OnlineRoomClientModule) => void) | undefined;
+    const load = vi.fn(
+      () =>
+        new Promise<OnlineRoomClientModule>((resolve) => {
+          resolveClient = resolve;
+        }),
+    );
+    const { root } = startApp(load);
+
+    navigate('#/online/minesweeper?room=room_loading');
+
+    // The shell renders this synchronously, before the lazy import settles.
+    const status = root.querySelector<HTMLElement>('#view [role="status"]');
+    expect(status).not.toBeNull();
+    expect(status?.textContent).toContain('正在加载「联机扫雷」…');
+    expect(root.querySelector('#view [data-testid="fake-online-room"]')).toBeNull();
+
+    resolveClient?.(module);
+    await vi.waitFor(() => {
+      expect(mounts).toHaveLength(1);
+    });
+
+    expect(root.querySelector('#view [role="status"]')).toBeNull();
+    expect(root.querySelectorAll('#view [data-testid="fake-online-room"]')).toHaveLength(1);
+    expect(mounts[0]?.options).toEqual({ roomId: 'room_loading' });
+  });
+
   it('loads the online client only while the online route is active', async () => {
     const { module, mounts } = createFakeClient();
     const load = vi.fn(async (): Promise<OnlineRoomClientModule> => module);
