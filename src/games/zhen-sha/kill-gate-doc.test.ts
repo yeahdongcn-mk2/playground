@@ -59,23 +59,20 @@ function level3Section(heading: string): string {
 function parseCellNumber(cell: string): number {
   const raw = /\d[\d,]*/.exec(cell)?.[0];
   if (raw === undefined) {
-    throw new Error(`无法解析原型表格中的数字：${cell}`);
+    throw new Error(`无法解析表格中的数字：${cell}`);
   }
   return Number(raw.replaceAll(',', ''));
 }
 
-/** One `| 文件 | 行数 |` row of the prototype measurement table. */
-interface PrototypeRow {
+/** One `| 文件 | 行数 |` row of a size table. */
+interface SizeRow {
   name: string;
   lines: number;
 }
 
-/** Parse the prototype "实测" table, including its `合计` row. */
-function parsePrototypeTable(): { files: PrototypeRow[]; total: number } {
-  const subsection = section('### kill gate 原型生产规模（实测）');
-  const nextHeading = subsection.indexOf('\n### ');
-  const block = nextHeading === -1 ? subsection : subsection.slice(0, nextHeading);
-  const rows = block
+/** Cells of the `| … |` rows in one table block, trimmed. */
+function tableCells(block: string): string[][] {
+  return block
     .split('\n')
     .filter((line) => line.startsWith('|'))
     .map((line) =>
@@ -84,16 +81,25 @@ function parsePrototypeTable(): { files: PrototypeRow[]; total: number } {
         .slice(1, -1)
         .map((cell) => cell.trim()),
     );
-  const files: PrototypeRow[] = [];
+}
+
+/** A GFM table separator cell such as `---`, `:---` or `---:`. */
+function isSeparatorCell(cell: string): boolean {
+  return /^:?-{3,}:?$/.test(cell.replaceAll(' ', ''));
+}
+
+/** Parse a size table with a `合计` row into its rows and claimed total. */
+function parseSizeTable(block: string, missingTotal: string): { rows: SizeRow[]; total: number } {
+  const rows: SizeRow[] = [];
   let total: number | undefined;
 
-  for (const cells of rows) {
+  for (const cells of tableCells(block)) {
     const nameCell = cells[0];
     const linesCell = cells[1];
     if (nameCell === undefined || linesCell === undefined) {
-      throw new Error(`无法解析原型表格行：${cells.join(' | ')}`);
+      throw new Error(`无法解析表格行：${cells.join(' | ')}`);
     }
-    if (nameCell === '生产文件' || nameCell.startsWith('---')) {
+    if (nameCell === '生产文件' || isSeparatorCell(nameCell)) {
       continue;
     }
     const lines = parseCellNumber(linesCell);
@@ -101,17 +107,44 @@ function parsePrototypeTable(): { files: PrototypeRow[]; total: number } {
       total = lines;
       continue;
     }
-    files.push({ name: nameCell.replaceAll('`', '').trim(), lines });
+    rows.push({ name: nameCell.replaceAll('`', '').trim(), lines });
   }
 
   if (total === undefined) {
-    throw new Error('原型表格缺少「合计」行');
+    throw new Error(missingTotal);
   }
-  return { files, total };
+  return { rows, total };
 }
 
-/** A `原型 <number>` metric claimed by the conclusion's bullet list. */
-function conclusionPrototypeNumber(pattern: RegExp, label: string): number {
+/** Parse the prototype "实测" table, including its `合计` row. */
+function parsePrototypeTable(): { rows: SizeRow[]; total: number } {
+  return parseSizeTable(
+    level3Section('### kill gate 原型生产规模（实测）'),
+    '原型表格缺少「合计」行',
+  );
+}
+
+/**
+ * engine.ts as measured with `wc -l` on 2026-11-27 at commit `4ecc0ce`, the
+ * revision the #417 re-estimate was recorded against. A stable constant, not a
+ * read of the rolling `docs/zhen-sha-production-size.json` snapshot, so later
+ * engine growth cannot invalidate the historical estimate.
+ */
+const ENGINE_MEASURED_LINES = 678;
+
+/** Line ceiling of #250's M review band. */
+const M_LINE_CEILING = 2200;
+
+/** Parse the full-feature "估算" table, including its `合计` row. */
+function parseEstimateTable(): { rows: SizeRow[]; total: number } {
+  return parseSizeTable(
+    level3Section('### 完整特性规模估算'),
+    '完整特性估算表缺少「合计」行',
+  );
+}
+
+/** A number claimed by the conclusion's bullet list or prose. */
+function conclusionNumber(pattern: RegExp, label: string): number {
   const raw = pattern.exec(section('### 结论'))?.[1];
   if (raw === undefined) {
     throw new Error(`docs/zhen-sha-kill-gate.md 的结论段缺少可解析的「${label}」`);
@@ -150,8 +183,8 @@ describe('zhen-sha kill gate engineering assessment', () => {
 
   it('matches the documented prototype per-file table and total', () => {
     const table = parsePrototypeTable();
-    expect(table.files.map((row) => row.name).sort()).toEqual(PRODUCTION_FILES);
-    for (const row of table.files) {
+    expect(table.rows.map((row) => row.name).sort()).toEqual(PRODUCTION_FILES);
+    for (const row of table.rows) {
       const frozen = BASELINE_FILES.find((file) => file.name === row.name);
       expect(frozen, `原型表格中的 ${row.name} 必须属于 43c9ab1 冻结基线`).toBeDefined();
       expect(frozen?.lines, `原型表格中 ${row.name} 的行数应等于 43c9ab1 冻结值`).toBe(row.lines);
@@ -161,10 +194,10 @@ describe('zhen-sha kill gate engineering assessment', () => {
 
   it('matches the conclusion bullets to the measured prototype size', () => {
     expect(
-      conclusionPrototypeNumber(/文件数[：:]\s*原型\s*([\d,]+)\s*个/, '文件数'),
+      conclusionNumber(/文件数[：:]\s*原型\s*([\d,]+)\s*个/, '文件数'),
     ).toBe(PRODUCTION_FILES.length);
     expect(
-      conclusionPrototypeNumber(/行数[：:]\s*原型\s*([\d,]+)\s*行/, '行数'),
+      conclusionNumber(/行数[：:]\s*原型\s*([\d,]+)\s*行/, '行数'),
     ).toBe(PRODUCTION_LINES);
   });
 
@@ -191,9 +224,11 @@ describe('zhen-sha kill gate engineering assessment', () => {
     expect(progress).toMatch(/包含仅被测试引用的[^\n]*boss-chart-adapter\.ts/);
     expect(progress).toContain('43c9ab1');
     expect(progress).toContain('4 文件 / 1,416 行');
-    // #417 keeps tracking the over-band re-estimate; the L condition stays.
+    // #417 now records the completed over-band re-estimate and its L conclusion.
     expect(progress).toContain('https://github.com/yeahdongcn-mk2/playground/issues/417');
-    expect(progress).toMatch(/L 条件/);
+    expect(progress).toContain('重估已完成');
+    expect(progress).toMatch(/结论为 L/);
+    expect(progress).not.toContain('超限重估由');
     // No hand-maintained current numbers that change with every engine PR.
     expect(progress).not.toContain('3,375');
     expect(progress).not.toContain('1,175');
@@ -223,17 +258,78 @@ describe('zhen-sha kill gate engineering assessment', () => {
     expect(DOC).toContain('2 个新概念');
   });
 
-  it('keeps the full-feature estimate inside the M band when M is claimed', () => {
+  it('derives the full-feature estimate total from its rows', () => {
+    const table = parseEstimateTable();
+    expect(table.rows.length).toBeGreaterThan(0);
+    const sum = table.rows.reduce((total, row) => total + row.lines, 0);
+    expect(table.total).toBe(sum);
+  });
+
+  it('matches the full-feature estimate prose and conclusion to its table', () => {
+    const table = parseEstimateTable();
     const estimate = /完整特性[^\n]*?(\d+)\s*个生产文件[^\n]*?约\s*([\d,]+)\s*行/.exec(DOC);
     expect(estimate).not.toBeNull();
+    expect(Number(estimate?.[1])).toBe(table.rows.length);
+    expect(Number((estimate?.[2] ?? '').replaceAll(',', ''))).toBe(table.total);
+    // The conclusion's bullet and paragraph repeat the same numbers, so a stale
+    // 2,154 there cannot hide behind an updated table.
+    expect(
+      conclusionNumber(/完整特性估算约\s*([\d,]+)\s*行/, '完整特性估算行数'),
+    ).toBe(table.total);
+    expect(section('### 结论')).toContain(`完整特性估算 ${table.rows.length} 个`);
+  });
+
+  it('moves the boss-chart interface lines out of the bosses estimate', () => {
+    const table = parseEstimateTable();
+    const bosses = table.rows.find((row) => row.name === 'bosses.ts');
+    const bossChart = table.rows.find((row) => row.name === 'boss-chart.ts');
+    expect(bosses, '完整特性估算表必须列出 bosses.ts').toBeDefined();
+    expect(bossChart, '完整特性估算表必须列出 boss-chart.ts').toBeDefined();
+    // #407's 59 interface lines leave bosses.ts's 300-line estimate for the
+    // independently counted file; adding them to both would double count them.
+    expect((bosses?.lines ?? 0) + (bossChart?.lines ?? 0)).toBe(300);
+  });
+
+  it('keeps the engine estimate at or above the recorded measurement', () => {
+    // #417: the old 580-line estimate was below the measured engine (678 lines
+    // at 4ecc0ce), so it must not come back without new counter-evidence.
+    const engine = parseEstimateTable().rows.find((row) => row.name === 'engine.ts');
+    expect(engine, '完整特性估算表必须列出 engine.ts').toBeDefined();
+    expect(engine?.lines).toBeGreaterThanOrEqual(ENGINE_MEASURED_LINES);
+    // The document records the same value, date and commit the constant freezes.
+    expect(DOC).toContain(`${ENGINE_MEASURED_LINES} 行`);
+    expect(DOC).toContain('2026-11-27');
+    expect(DOC).toContain('4ecc0ce');
+  });
+
+  it('states a conclusion consistent with the 2,200-line ceiling', () => {
+    expect(['M', 'L']).toContain(CONCLUSION);
+    const table = parseEstimateTable();
     if (CONCLUSION === 'M') {
-      const files = Number(estimate?.[1]);
-      const lines = Number((estimate?.[2] ?? '').replaceAll(',', ''));
-      expect(files).toBeGreaterThanOrEqual(7);
-      expect(files).toBeLessThanOrEqual(9);
-      expect(lines).toBeGreaterThanOrEqual(1400);
-      expect(lines).toBeLessThanOrEqual(2200);
+      expect(table.rows.length).toBeGreaterThanOrEqual(7);
+      expect(table.rows.length).toBeLessThanOrEqual(9);
+      expect(table.total).toBeGreaterThanOrEqual(1400);
+      expect(table.total).toBeLessThanOrEqual(M_LINE_CEILING);
+    } else {
+      // This document still claims two concepts, so L must come from size.
+      expect(table.total).toBeGreaterThan(M_LINE_CEILING);
     }
+    // An L conclusion must not leave contradictory M prose behind.
+    if (CONCLUSION === 'L') {
+      expect(DOC).not.toMatch(/结论[：:]\s*\*{0,2}M\b/);
+      expect(DOC).not.toContain('按 M 规模继续');
+    }
+  });
+
+  it('dispositions merged and open follow-ups under the L conclusion', () => {
+    const conclusion = section('### 结论');
+    expect(conclusion).toContain('结论：L');
+    expect(conclusion).toContain('不进入后续卡');
+    expect(conclusion).toContain('#246–#249 不回退');
+    expect(conclusion).toContain('只回填真人验收记录');
+    expect(conclusion).toContain('不属于新的实现卡');
+    expect(conclusion).toContain('https://github.com/yeahdongcn-mk2/playground/issues/261');
+    expect(conclusion).toContain('https://github.com/yeahdongcn-mk2/playground/issues/401');
   });
 
   it('lists the two new concepts individually', () => {
