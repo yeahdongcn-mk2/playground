@@ -41,14 +41,19 @@ export const ONLINE_ROOM_HEALTH_URL = `${ONLINE_ROOM_SERVER_URL}/health`;
 /**
  * Deterministic room-manager settings for e2e runs.
  *
- * The windows are long enough for a real browser round trip under CI load but
- * far shorter than production, and the fixed seed makes a match replayable.
+ * The windows are shorter than production and the fixed seed makes a match
+ * replayable. The turn window still respects the server's ordered timing chain
+ * (`OFFLINE_DETECT_MS` 10 s < `RECONNECT_GRACE_MS` 15 s < turn < match), so an
+ * online/reconnect spec built on this launcher tests the real lifecycle rather
+ * than a turn forfeit that pre-empts presence. The presence windows themselves
+ * are not configurable through {@link RoomManagerOptions}.
+ *
  * They are exported so a spec can assert against the same values instead of
  * copying the numbers.
  */
 export const ONLINE_ROOM_MANAGER_OPTIONS = {
   joinTimeoutMs: 10_000,
-  turnTimeoutMs: 5_000,
+  turnTimeoutMs: 20_000,
   matchTimeoutMs: 120_000,
   createSeed: () => 0x5eed_5eed,
 } as const satisfies RoomManagerOptions;
