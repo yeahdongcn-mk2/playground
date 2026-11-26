@@ -33,6 +33,7 @@ import {
   type EndMessage,
   type JoinMessage,
   type LeaveMessage,
+  type PlayerPresence,
   type ProtocolErrorCode,
   type ReadyMessage,
   type RematchMessage,
@@ -1725,6 +1726,7 @@ describe('online room reconnect and presence', () => {
             })();
       const allTokens = [base.hostToken, base.guestToken];
       expect(base.manager.getRoom(base.roomId)?.state).toBe(lobbyState);
+      const before = snapshot(base.manager, base.roomId);
       expectOk(base.manager.setPresence(base.hostToken, 'offline'), allTokens);
 
       const expired = expectOk(base.manager.graceExpired(base.hostToken), allTokens);
@@ -1732,6 +1734,15 @@ describe('online room reconnect and presence', () => {
         'room_closed',
         'room_closed',
       ]);
+      // The client-visible reason distinguishes a host grace timeout from an
+      // explicit host leave, and the close carries the recorded final state.
+      for (const closed of messagesOfType(expired, 'room_closed')) {
+        expect(closed).toMatchObject({
+          reason: 'host-grace-expired',
+          finalState: 'dissolved',
+          seq: before.seq + 1,
+        });
+      }
       expect(base.manager.getRoom(base.roomId)).toBeUndefined();
       expectError(
         base.manager.join(connection(), joinMessage(base.roomId, { playerToken: base.hostToken })),
@@ -1740,6 +1751,81 @@ describe('online room reconnect and presence', () => {
       expectError(base.manager.graceExpired(base.guestToken), 'not-in-room');
       vi.useRealTimers();
     }
+  });
+
+  it('rejects a stale grace callback after the seat reconnected', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const room = playingRoom({ now: () => Date.now() });
+    const allTokens = [room.hostToken, room.guestToken];
+    const { hostId } = seatIds(room.manager, room.roomId);
+    // The host is on turn, so a grace callback that ignores presence would
+    // forfeit a player who is already back online.
+    expect(matchOf(room.manager, room.roomId).state.turnPlayerId).toBe(hostId);
+
+    expectOk(room.manager.setPresence(room.hostToken, 'offline'), allTokens);
+    expectOk(room.manager.setPresence(room.hostToken, 'online'), allTokens);
+    const before = snapshot(room.manager, room.roomId);
+    const beforeMatch = matchOf(room.manager, room.roomId);
+
+    // The grace callback arrived after the reconnect won the race, so it is a
+    // stale no-op instead of the second terminal transition.
+    expectError(room.manager.graceExpired(room.hostToken), 'invalid-state');
+    expect(room.manager.getRoom(room.roomId)).toEqual(before);
+    expect(room.manager.getRoom(room.roomId)?.state).toBe('playing');
+    expect(room.manager.getRoom(room.roomId)?.stateReason).not.toBe('turn-timeout');
+    expect(room.manager.getMatch(room.roomId)).toBe(beforeMatch);
+    expect(room.manager.getMatch(room.roomId)?.state.finished).toBe(false);
+    expect(room.manager.getMatch(room.roomId)?.state.end).toBeNull();
+
+    // The same late callback in a lobby must not release the online seat or
+    // dissolve the room for its online host.
+    const lobby = readyRoom({ now: () => Date.now() });
+    const lobbyTokens = [lobby.hostToken, lobby.guestToken];
+    expectOk(lobby.manager.setPresence(lobby.hostToken, 'offline'), lobbyTokens);
+    expectOk(lobby.manager.setPresence(lobby.hostToken, 'online'), lobbyTokens);
+    const beforeLobby = snapshot(lobby.manager, lobby.roomId);
+    expectError(lobby.manager.graceExpired(lobby.hostToken), 'invalid-state');
+    expect(lobby.manager.getRoom(lobby.roomId)).toEqual(beforeLobby);
+    expect(lobby.manager.getRoom(lobby.roomId)?.state).toBe('ready');
+    expect(lobby.manager.getRoom(lobby.roomId)?.seats).toHaveLength(ROOM_CAPACITY);
+  });
+
+  it('validates presence updates without moving the room sequence', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const room = readyRoom({ now: () => Date.now() });
+    const allTokens = [room.hostToken, room.guestToken];
+    const before = snapshot(room.manager, room.roomId);
+
+    // Unknown tokens and illegal values are command errors, never a silent
+    // success that would make the connection layer believe presence synced.
+    expectError(room.manager.setPresence('no-such-token', 'offline'), 'not-in-room');
+    expectError(room.manager.setPresence(room.guestToken, 'away' as PlayerPresence), 'bad-request');
+    expect(room.manager.getRoom(room.roomId)).toEqual(before);
+
+    // Every legal update rewrites only the seat's presence; the room sequence
+    // and both deadlines stay exactly where they were.
+    for (const presence of ['reconnecting', 'online'] as const) {
+      const updated = expectOk(room.manager.setPresence(room.guestToken, presence), allTokens);
+      expect(updated.deliveries.map((delivery) => delivery.message.type)).toEqual([
+        'room_state',
+        'room_state',
+      ]);
+      expect(room.manager.getRoom(room.roomId)?.seq).toBe(before.seq);
+      expect(room.manager.getRoom(room.roomId)?.deadlineAt).toBe(before.deadlineAt);
+      expect(room.manager.getRoom(room.roomId)?.joinDeadlineAt).toBe(before.joinDeadlineAt);
+      expect(
+        room.manager
+          .getRoom(room.roomId)
+          ?.seats.find((seat) => seat.playerToken === room.guestToken)?.presence,
+      ).toBe(presence);
+    }
+    expect(room.manager.getRoom(room.roomId)?.seats.map((seat) => seat.playerToken)).toEqual(
+      before.seats.map((seat) => seat.playerToken),
+    );
+    expect(room.manager.getRoom(room.roomId)?.state).toBe('ready');
+    expect(room.manager.getMatch(room.roomId)).toBeNull();
   });
 
   it('retains a finished result and lets a reconnected pair rematch', () => {
@@ -2019,6 +2105,18 @@ describe('online room turn and match timeouts', () => {
         seq: before.seq + 1,
       });
     }
+    // Symmetric with the turn case: the match timer records its own reason on
+    // the finished room, not the turn-forfeit one.
+    for (const state of messagesOfType(expired, 'room_state')) {
+      expect(state).toMatchObject({
+        state: 'finished',
+        seq: before.seq + 1,
+        turnPlayerId: null,
+        deadlineAt: null,
+        stateReason: 'match-timeout',
+      });
+    }
+    expect(room.manager.getRoom(room.roomId)?.stateReason).toBe('match-timeout');
     const after = snapshot(room.manager, room.roomId);
     expectRejectedWithoutChange(
       room.manager,
@@ -2049,6 +2147,7 @@ describe('online room turn and match timeouts', () => {
     // the complete committed mine layout.
     expect(countMines(end as EndMessage)).toBe(CONFIG.mines);
     expect(room.manager.getRoom(room.roomId)?.state).toBe('finished');
+    expect(room.manager.getRoom(room.roomId)?.stateReason).toBe('match-timeout');
   });
 
   it('forfeits an offline current player and reserves an offline non-current seat', () => {
