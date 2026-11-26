@@ -10,6 +10,7 @@ import {
   type OnlineRoomViewOptions,
 } from '../../src/games/minesweeper/online/client/room-view';
 import {
+  connectionClientError,
   createInitialRoomClientState,
   onlineRoomHref,
   ROOM_CLIENT_ERROR_TEXT,
@@ -30,6 +31,10 @@ import {
   type SeatSession,
   type TokenStore,
 } from '../../src/games/minesweeper/online/client/contracts';
+import {
+  createRoomClientStore,
+  roomSelectors,
+} from '../../src/games/minesweeper/online/client/store';
 import type {
   ActionMessage,
   ClientToServerMessage,
@@ -468,7 +473,14 @@ interface Harness {
   setNow(value: number): void;
 }
 
-function mountHarness(options: OnlineRoomViewOptions = {}): Harness {
+type HarnessOverrides = Partial<
+  Pick<OnlineRoomViewDependencies, 'createStore' | 'selectors'>
+>;
+
+function mountHarness(
+  options: OnlineRoomViewOptions = {},
+  overrides: HarnessOverrides = {},
+): Harness {
   const root = document.createElement('div');
   document.body.append(root);
 
@@ -477,7 +489,7 @@ function mountHarness(options: OnlineRoomViewOptions = {}): Harness {
   const renderers: TestRenderer[] = [];
   const tokens = new TestTokenStore();
   const navigations: string[] = [];
-  const selectors = makeSelectors();
+  const selectors = overrides.selectors ?? makeSelectors();
   let clock = NOW;
 
   const dependencies: OnlineRoomViewDependencies = {
@@ -502,6 +514,7 @@ function mountHarness(options: OnlineRoomViewOptions = {}): Harness {
     navigate: (href) => {
       navigations.push(href);
     },
+    ...overrides,
   };
 
   const handle = mountOnlineRoomView(root, dependencies, options);
@@ -1127,6 +1140,8 @@ describe('online room playing', () => {
     if (renderer === undefined) {
       throw new Error('the view did not create a board renderer');
     }
+    expect(renderer.views.at(-1)?.turnPlayerId).toBe(GUEST_ID);
+    expect(renderer.views.at(-1)?.selfId).toBe(HOST_ID);
     expect(byTestId<HTMLElement>(harness.root, 'turn-owner').textContent).toContain(
       '对手回合',
     );
@@ -1134,10 +1149,119 @@ describe('online room playing', () => {
       'false',
     );
 
+    // Both reveal and flag are disabled on the opponent turn: the view never
+    // submits either intent and explains the gate instead.
+    renderer.intent({ kind: 'reveal', row: 2, col: 2 });
+    expect(byTestId<HTMLElement>(harness.root, 'action-error').textContent).toContain(
+      '还没轮到你',
+    );
     renderer.intent({ kind: 'flag', row: 2, col: 2 });
     expect(transport.sent.some((message) => message.type === 'action')).toBe(false);
     expect(byTestId<HTMLElement>(harness.root, 'action-error').textContent).toContain(
       '还没轮到你',
+    );
+
+    harness.handle.destroy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Reconnect recovery
+// ---------------------------------------------------------------------------
+
+describe('online room reconnect recovery', () => {
+  it('renders the current-seq resync snapshot and never replays a submitted action', () => {
+    // This test wires the real reducer/selectors into the view so the visible
+    // board after a reconnect is the server's current-seq snapshot, not the
+    // board the player saw before the socket dropped.
+    const harness = mountHarness(
+      { roomId: null },
+      { createStore: createRoomClientStore, selectors: roomSelectors },
+    );
+    createHost(harness);
+    const transport = firstTransport(harness);
+
+    transport.emitMessage({ ...makeRoom({ seq: 1 }), playerToken: 'owner-token' });
+    transport.emitStatus('connected');
+    transport.emitMessage(
+      makeRoom({ seq: 9, state: 'playing', matchId: MATCH_ID, turnPlayerId: HOST_ID }),
+    );
+    transport.emitMessage(makeSnapshot({ seq: 9 }));
+
+    const renderer = harness.renderers[0];
+    if (renderer === undefined) {
+      throw new Error('the view did not create a board renderer');
+    }
+    expect(renderer.views.at(-1)).toMatchObject({ turnId: 2, turnPlayerId: HOST_ID });
+
+    renderer.intent({ kind: 'reveal', row: 1, col: 1 });
+    const submitted = transport.sent.filter((message) => message.type === 'action');
+    expect(submitted).toHaveLength(1);
+    expect(submitted[0]).toMatchObject({ seq: 9, turnId: 2, row: 1, col: 1 });
+
+    // The socket drops; the view keeps the last board visible under the banner.
+    transport.emitStatus('reconnecting');
+    expect(byTestId<HTMLElement>(harness.root, 'reconnect-banner').hidden).toBe(false);
+
+    // A queued snapshot from before the disconnect is older than `lastSeq` and
+    // must not replace the visible board.
+    transport.emitMessage(makeSnapshot({ seq: 8, turnId: 1 }));
+    expect(harness.handle.getState().lastSeq).toBe(9);
+    expect(harness.handle.getState().snapshot?.seq).toBe(9);
+    expect(byTestId<HTMLElement>(harness.root, 'turn-countdown').textContent).toBe('0:30');
+
+    // The server resyncs room state and a full redacted snapshot at its
+    // current seq; the view replaces the whole board instead of merging.
+    const resyncedBoard = makeRedactedBoard().map((row, rowIndex) =>
+      row.map((cell, colIndex) =>
+        rowIndex === 2 && colIndex === 2
+          ? { ...cell, revealed: true, flagged: false, adjacentMines: 0 }
+          : cell,
+      ),
+    );
+    transport.emitStatus('connected');
+    transport.emitMessage(
+      makeRoom({
+        seq: 12,
+        state: 'playing',
+        matchId: MATCH_ID,
+        turnPlayerId: HOST_ID,
+        deadlineAt: NOW + 40_000,
+      }),
+    );
+    transport.emitMessage(
+      makeSnapshot({
+        seq: 12,
+        turnId: 5,
+        remainingMines: 1,
+        deadlineAt: NOW + 40_000,
+        board: resyncedBoard,
+      }),
+    );
+
+    const state = harness.handle.getState();
+    expect(state.lastSeq).toBe(12);
+    expect(state.snapshot?.seq).toBe(12);
+
+    const view = renderer.views.at(-1);
+    expect(view).toMatchObject({ turnId: 5, turnPlayerId: HOST_ID, remainingMines: 1 });
+    expect(view?.cells[2]?.[2]?.revealed).toBe(true);
+    expect(
+      view?.cells
+        .flat()
+        .filter((cell) => !cell.revealed)
+        .every((cell) => !Object.hasOwn(cell, 'mine')),
+    ).toBe(true);
+    expect(byTestId<HTMLElement>(harness.root, 'remaining-mines').textContent).toBe('1');
+    expect(byTestId<HTMLElement>(harness.root, 'turn-countdown').textContent).toBe('0:40');
+    expect(byTestId<HTMLElement>(harness.root, 'online-board').dataset.actionsEnabled).toBe(
+      'true',
+    );
+    expect(byTestId<HTMLElement>(harness.root, 'reconnect-banner').hidden).toBe(true);
+
+    // Reconnecting and resyncing never re-send the action from before the drop.
+    expect(transport.sent.filter((message) => message.type === 'action')).toEqual(
+      submitted,
     );
 
     harness.handle.destroy();
@@ -1377,6 +1501,44 @@ describe('online room diagnostics', () => {
     expect(roomError.hidden).toBe(false);
     expect(roomError.dataset.code).toBe('room-not-found');
     expect(roomError.textContent).toBe(ROOM_CLIENT_ERROR_TEXT['room-not-found']);
+
+    harness.handle.destroy();
+  });
+
+  it('renders readable text for the room, session and stale-seq error codes', () => {
+    const harness = mountHarness({ roomId: null });
+    createHost(harness);
+    const store = firstStore(harness);
+    const errors = [
+      roomClientErrorFromWire({
+        type: 'error',
+        requestId: 'req-room',
+        roomId: ROOM_ID,
+        code: 'room-not-found',
+        message: 'room missing',
+        retryable: false,
+        currentSeq: null,
+      }),
+      roomClientErrorFromWire({
+        type: 'error',
+        requestId: 'req-seq',
+        roomId: ROOM_ID,
+        code: 'stale-state',
+        message: 'stale state; resync and retry',
+        retryable: true,
+        currentSeq: 4,
+      }),
+      connectionClientError('session-replaced'),
+    ];
+
+    for (const error of errors) {
+      store.push({ ...makeRoomViewState({ seq: 4 }), error });
+      const roomError = byTestId<HTMLElement>(harness.root, 'room-error');
+      expect(roomError.hidden).toBe(false);
+      expect(roomError.dataset.code).toBe(error.code);
+      expect(roomError.textContent).toBe(ROOM_CLIENT_ERROR_TEXT[error.code]);
+      expect(roomError.textContent).not.toContain(error.code);
+    }
 
     harness.handle.destroy();
   });
