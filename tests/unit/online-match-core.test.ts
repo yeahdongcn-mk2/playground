@@ -7,6 +7,7 @@ import {
   forfeitMatch,
   MATCH_PLAYER_COUNT,
   matchReplayRecord,
+  matchTimeout,
   projectMatchSnapshot,
   toActionResultMessage,
   toEndMessage,
@@ -679,6 +680,243 @@ describe('online match core: endings', () => {
     expect(turnTimeout.end.reason).toBe('turn-timeout');
     expect(turnTimeout.end.winnerId).toBe('guest');
     expect(turnTimeout.end.loserId).toBe('host');
+  });
+
+  it('tracks revealed safe cells per player without adding an actor to the replay log', () => {
+    const initial = start({ seed: 82 });
+    expect(initial.revealedSafeByPlayer).toEqual({ host: 0, guest: 0 });
+
+    const hostSafe = findHidden(initial);
+    if (hostSafe === null) {
+      throw new Error('expected a hidden cell for the first reveal');
+    }
+    const hostTurn = accepted(
+      act(
+        initial,
+        { actionId: 'host-reveal', row: hostSafe.row, col: hostSafe.col },
+        'host',
+        1_100,
+      ),
+    );
+    const hostCount = hostTurn.state.revealedSafeByPlayer['host'] ?? 0;
+    expect(hostCount).toBeGreaterThan(0);
+    expect(hostTurn.state.revealedSafeByPlayer['guest']).toBe(0);
+    expect(hostCount).toBe(hostTurn.state.stats.revealedSafeCount);
+    // The shared replay log stays actor-free; per-player ranking lives in the
+    // state instead of a non-deterministic field in `ReplayAction`.
+    expect(hostTurn.state.actions[0]).not.toHaveProperty('actorId');
+    expect(hostTurn.state.actions[0]).not.toHaveProperty('playerId');
+
+    const guestSafe = findHidden(hostTurn.state, (cell) => !cell.mine);
+    if (guestSafe === null) {
+      throw new Error('expected a hidden safe cell for the guest reveal');
+    }
+    const guestTurn = accepted(
+      act(
+        hostTurn.state,
+        { actionId: 'guest-reveal', row: guestSafe.row, col: guestSafe.col },
+        'guest',
+        1_200,
+      ),
+    );
+    const guestCount = guestTurn.state.revealedSafeByPlayer['guest'] ?? 0;
+    expect(guestTurn.state.revealedSafeByPlayer['host']).toBe(hostCount);
+    expect(guestCount).toBeGreaterThan(0);
+    expect(hostCount + guestCount).toBe(guestTurn.state.stats.revealedSafeCount);
+
+    // A flag consumes a turn but reveals no safe cell.
+    const flagTarget = findHidden(guestTurn.state, (cell) => !cell.mine);
+    if (flagTarget === null) {
+      throw new Error('expected a hidden cell to flag');
+    }
+    const flagged = accepted(
+      act(
+        guestTurn.state,
+        {
+          actionId: 'host-flag',
+          kind: 'flag',
+          row: flagTarget.row,
+          col: flagTarget.col,
+        },
+        'host',
+        1_300,
+      ),
+    );
+    expect(flagged.state.revealedSafeByPlayer).toEqual({
+      host: hostCount,
+      guest: guestCount,
+    });
+  });
+
+  it('accumulates each player\'s revealed safe cells across separate turns', () => {
+    const initial = start({ seed: 85 });
+    const hostFirst = findHidden(initial);
+    if (hostFirst === null) {
+      throw new Error('expected a hidden cell for the host first reveal');
+    }
+    const hostTurn1 = accepted(
+      act(
+        initial,
+        { actionId: 'host-reveal-1', row: hostFirst.row, col: hostFirst.col },
+        'host',
+        1_100,
+      ),
+    );
+    const hostFirstDelta =
+      hostTurn1.state.stats.revealedSafeCount - initial.stats.revealedSafeCount;
+    expect(hostFirstDelta).toBeGreaterThan(0);
+
+    const guestSafe = findHidden(
+      hostTurn1.state,
+      (cell) => !cell.mine && cell.adjacentMines > 0,
+    );
+    if (guestSafe === null) {
+      throw new Error('expected a hidden safe cell for the guest reveal');
+    }
+    const guestTurn = accepted(
+      act(
+        hostTurn1.state,
+        { actionId: 'guest-reveal', row: guestSafe.row, col: guestSafe.col },
+        'guest',
+        1_200,
+      ),
+    );
+    const guestDelta =
+      guestTurn.state.stats.revealedSafeCount - hostTurn1.state.stats.revealedSafeCount;
+    expect(guestDelta).toBeGreaterThan(0);
+
+    // Reveal a single non-zero cell so this turn cannot flood the board and
+    // makes the second positive increment for the same player explicit.
+    const hostSecondSafe = findHidden(
+      guestTurn.state,
+      (cell) => !cell.mine && cell.adjacentMines > 0,
+    );
+    if (hostSecondSafe === null) {
+      throw new Error('expected a hidden safe cell for the host second reveal');
+    }
+    const hostTurn2 = accepted(
+      act(
+        guestTurn.state,
+        { actionId: 'host-reveal-2', row: hostSecondSafe.row, col: hostSecondSafe.col },
+        'host',
+        1_300,
+      ),
+    );
+    const hostSecondDelta =
+      hostTurn2.state.stats.revealedSafeCount - guestTurn.state.stats.revealedSafeCount;
+    expect(hostSecondDelta).toBeGreaterThan(0);
+
+    // The per-player record is a running total, not the largest single-turn
+    // increment: the host's count is the sum of both host turns.
+    expect(hostTurn2.state.revealedSafeByPlayer).toEqual({
+      host: hostFirstDelta + hostSecondDelta,
+      guest: guestDelta,
+    });
+    expect(hostTurn2.state.stats.revealedSafeCount).toBe(
+      hostFirstDelta + guestDelta + hostSecondDelta,
+    );
+
+    const outcome = matchTimeout(hostTurn2.state, 1_400);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) {
+      throw new Error(`match timeout was rejected: ${outcome.code}`);
+    }
+    expect(outcome.end.winnerId).toBe('host');
+    expect(outcome.end.loserId).toBe('guest');
+  });
+
+  it('ranks a guest lead at match timeout', () => {
+    const state = start({ seed: 86 });
+    const flagTarget = findHidden(state);
+    if (flagTarget === null) {
+      throw new Error('expected a hidden cell for the host flag');
+    }
+    const flagged = accepted(
+      act(
+        state,
+        { actionId: 'host-flag', kind: 'flag', row: flagTarget.row, col: flagTarget.col },
+        'host',
+        1_100,
+      ),
+    );
+    expect(flagged.state.revealedSafeByPlayer).toEqual({ host: 0, guest: 0 });
+
+    const guestSafe = findHidden(flagged.state, (cell) => !cell.mine);
+    if (guestSafe === null) {
+      throw new Error('expected a hidden safe cell for the guest reveal');
+    }
+    const guestTurn = accepted(
+      act(
+        flagged.state,
+        { actionId: 'guest-reveal', row: guestSafe.row, col: guestSafe.col },
+        'guest',
+        1_200,
+      ),
+    );
+    expect(guestTurn.state.revealedSafeByPlayer['guest']).toBeGreaterThan(0);
+    expect(guestTurn.state.revealedSafeByPlayer['host']).toBe(0);
+
+    const outcome = matchTimeout(guestTurn.state, 1_300);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) {
+      throw new Error(`match timeout was rejected: ${outcome.code}`);
+    }
+    expect(outcome.end.reason).toBe('match-timeout');
+    expect(outcome.end.winnerId).toBe('guest');
+    expect(outcome.end.loserId).toBe('host');
+  });
+
+  it('ends by revealed-safe-cell ranking when the match timer expires', () => {
+    const state = start({ seed: 83 });
+    const safe = findHidden(state);
+    if (safe === null) {
+      throw new Error('expected a hidden cell for the host reveal');
+    }
+    const reveal = accepted(
+      act(state, { actionId: 'host-reveal', row: safe.row, col: safe.col }, 'host', 1_100),
+    );
+    expect(reveal.state.revealedSafeByPlayer['host']).toBeGreaterThan(0);
+
+    const outcome = matchTimeout(reveal.state, 2_000);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) {
+      throw new Error(`match timeout was rejected: ${outcome.code}`);
+    }
+    expect(outcome.end.reason).toBe('match-timeout');
+    expect(outcome.end.winnerId).toBe('host');
+    expect(outcome.end.loserId).toBe('guest');
+    expect(outcome.end.seed).toBe(83);
+    expect(outcome.end.stats.durationMs).toBe(1_000);
+    expect(outcome.state.finished).toBe(true);
+    expect(outcome.state.seq).toBe(reveal.state.seq + 1);
+    expect(outcome.state.end).toBe(outcome.end);
+    expect(outcome.snapshot.seq).toBe(outcome.state.seq);
+    expect(countMines(outcome.end.finalSnapshot)).toBe(CONFIG.mines);
+
+    const again = matchTimeout(outcome.state, 2_100);
+    expect(again.ok).toBe(false);
+    if (again.ok) {
+      throw new Error('a finished match produced a second match-timeout end');
+    }
+    expect(again.code).toBe('invalid-action');
+    expect(outcome.state.seq).toBe(reveal.state.seq + 1);
+  });
+
+  it('treats equal safe-cell counts at match timeout as a draw', () => {
+    const state = start({ seed: 84 });
+    const outcome = matchTimeout(state, 2_000);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) {
+      throw new Error(`match timeout was rejected: ${outcome.code}`);
+    }
+    expect(outcome.end.reason).toBe('match-timeout');
+    expect(outcome.end.winnerId).toBeNull();
+    expect(outcome.end.loserId).toBeNull();
+    // The engine never planted its mines, yet the published final board must
+    // still reveal the complete committed layout.
+    expect(countMines(outcome.end.finalSnapshot)).toBe(CONFIG.mines);
+    expect(outcome.end.finalSnapshot.flat().every((cell) => !cell.revealed)).toBe(true);
+    expect(outcome.state.seq).toBe(1);
   });
 
   it('rejects an unseated player and the unsupported match-timeout reason', () => {
