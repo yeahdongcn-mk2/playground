@@ -113,7 +113,7 @@ describe('openOnlineRoute', () => {
     expect(mounts[0]?.options).toEqual({ roomId: 'room_42' });
   });
 
-  it('destroys the mounted room once and ignores a late load', async () => {
+  it('ignores a load that settles after destroy', async () => {
     const { module, mounts } = createFakeClient();
     let resolveClient: ((client: OnlineRoomClientModule) => void) | undefined;
     const load = vi.fn(
@@ -133,6 +133,44 @@ describe('openOnlineRoute', () => {
     await route.ready;
 
     expect(mounts).toHaveLength(0);
+    expect(root.childNodes).toHaveLength(0);
+  });
+
+  it('destroys a mounted room once even when destroy is called again', async () => {
+    const { module, mounts } = createFakeClient();
+    const load = vi.fn(async (): Promise<OnlineRoomClientModule> => module);
+    const root = document.createElement('div');
+
+    const route = openOnlineRoute(root, 'room_mounted', { load });
+    await route.ready;
+    expect(mounts).toHaveLength(1);
+    expect(root.childNodes).toHaveLength(1);
+
+    route.destroy();
+    route.destroy();
+
+    expect(mounts[0]?.destroy).toHaveBeenCalledTimes(1);
+    expect(root.childNodes).toHaveLength(0);
+  });
+
+  it('rejects ready when mounting fails and clears the mount point on destroy', async () => {
+    const module: OnlineRoomClientModule = {
+      mountOnlineRoom(mountRoot) {
+        // Leave a partial render behind so destroy() has to clear it.
+        mountRoot.innerHTML = '<div data-testid="partial-online-room">partial</div>';
+        throw new Error('mount failed');
+      },
+    };
+    const load = vi.fn(async (): Promise<OnlineRoomClientModule> => module);
+    const root = document.createElement('div');
+
+    const route = openOnlineRoute(root, 'room_broken', { load });
+
+    await expect(route.ready).rejects.toThrow('mount failed');
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(root.querySelector('[data-testid="partial-online-room"]')).not.toBeNull();
+
+    route.destroy();
     expect(root.childNodes).toHaveLength(0);
   });
 
