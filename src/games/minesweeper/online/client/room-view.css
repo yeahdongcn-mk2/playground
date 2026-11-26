@@ -1,0 +1,327 @@
+/* Online Minesweeper room shell. Loaded with the online chunk only. */
+
+.online-room {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-bottom: 40px;
+}
+
+.online-room__banner,
+.online-room__error {
+  padding: 11px 15px;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: rgba(15, 26, 44, 0.86);
+  color: var(--text);
+  font-size: 0.92rem;
+}
+
+.online-room__banner {
+  border-color: rgba(34, 211, 238, 0.32);
+  background: rgba(34, 211, 238, 0.08);
+}
+
+.online-room__banner--presence {
+  border-color: rgba(240, 171, 252, 0.3);
+  background: rgba(240, 171, 252, 0.07);
+}
+
+.online-room__error {
+  border-color: rgba(248, 113, 113, 0.4);
+  background: rgba(127, 29, 29, 0.24);
+  color: #fecaca;
+}
+
+.online-room__card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 22px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background:
+    radial-gradient(circle at 8% 0%, rgba(34, 211, 238, 0.07), transparent 24rem),
+    var(--surface);
+  box-shadow: 0 30px 80px -60px rgba(2, 6, 12, 0.9);
+}
+
+/* The author `display: flex` above would otherwise beat the UA `[hidden]` rule. */
+.online-room__card[hidden] {
+  display: none;
+}
+
+.online-room__card h2 {
+  font-size: clamp(1.35rem, 2.6vw, 1.9rem);
+  letter-spacing: -0.02em;
+}
+
+.online-room__card h3 {
+  font-size: 1.05rem;
+}
+
+.online-room__hint {
+  max-width: 68ch;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.online-room__hint code,
+.online-room__hint a {
+  color: var(--cyan-bright);
+}
+
+.online-room__identity {
+  display: flex;
+  max-width: 420px;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.online-room__identity label,
+.online-room__form label {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.online-room input,
+.online-room select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: rgba(4, 7, 14, 0.7);
+  color: var(--text);
+  font: inherit;
+}
+
+.online-room input:focus-visible,
+.online-room select:focus-visible {
+  border-color: var(--cyan);
+}
+
+.online-room__forms {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  gap: 14px;
+}
+
+.online-room__form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(4, 7, 14, 0.34);
+}
+
+.online-room__form .button,
+.online-room__identity .button {
+  margin-top: 4px;
+}
+
+.online-room__share {
+  color: var(--muted);
+  font-size: 0.86rem;
+  overflow-wrap: anywhere;
+}
+
+.online-room__form-error {
+  color: #fca5a5;
+  font-size: 0.88rem;
+}
+
+.online-room__countdown {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+}
+
+.online-room__countdown strong {
+  color: var(--cyan-bright);
+  font-size: 1.5rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+.online-room__players {
+  display: grid;
+  gap: 8px;
+}
+
+.online-room__player {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 14px;
+  padding: 11px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(6, 11, 19, 0.6);
+}
+
+.online-room__player[data-self="true"] {
+  border-color: rgba(34, 211, 238, 0.35);
+  background: rgba(34, 211, 238, 0.06);
+}
+
+.online-room__player[data-presence="offline"] {
+  border-color: rgba(248, 113, 113, 0.35);
+}
+
+.online-room__player-name {
+  font-weight: 700;
+}
+
+.online-room__player-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.online-room__tag {
+  padding: 2px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.online-room__tag--ready[data-ready="true"] {
+  border-color: rgba(163, 230, 53, 0.4);
+  color: var(--lime);
+}
+
+.online-room__tag--presence {
+  color: var(--cyan-bright);
+}
+
+.online-room__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.online-room__actions .button {
+  min-height: 40px;
+}
+
+.online-room__actions .button:disabled,
+.online-room__form .button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.online-room__hud {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+}
+
+.online-room__stat {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 9px 13px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(6, 11, 19, 0.6);
+}
+
+.online-room__stat span {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.online-room__stat strong {
+  color: var(--text);
+  font-size: 1.22rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+.online-room__action-error {
+  color: #fca5a5;
+  font-size: 0.88rem;
+}
+
+.online-room__board {
+  min-height: 220px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background:
+    radial-gradient(circle at 50% 40%, rgba(34, 211, 238, 0.1), transparent 66%),
+    var(--bg-deep);
+  isolation: isolate;
+}
+
+/* The view gates every intent; the visual lock mirrors the disabled state. */
+.online-room__board[data-actions-enabled="false"] {
+  opacity: 0.82;
+  cursor: not-allowed;
+}
+
+.online-room__board[data-actions-enabled="false"] * {
+  pointer-events: none;
+}
+
+.online-room__reason {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.online-room__stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+}
+
+.online-room__stats div {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 9px 13px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(6, 11, 19, 0.6);
+}
+
+.online-room__stats dt {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.online-room__stats dd {
+  font-size: 1.1rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 560px) {
+  .online-room__card {
+    padding: 18px 15px;
+  }
+
+  .online-room__actions .button {
+    flex: 1 1 140px;
+  }
+}
