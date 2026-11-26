@@ -253,8 +253,8 @@ export function createDeadlineScheduler(
    *
    * The generation check makes duplicate wakeups and wakeups superseded by a
    * refresh inert. The room manager remains the adjudicator: a successful
-   * timeout is delivered and the room is re-read (it is now `finished` or was
-   * removed), an early `deadline-passed` is retried without touching the wire,
+   * timeout is terminal (the room is `finished` or removed) and is delivered
+   * as-is, an early `deadline-passed` is retried without touching the wire,
    * and a stale `invalid-state`/`room-not-found` is dropped so a second
    * terminal result can never be produced.
    */
@@ -272,10 +272,10 @@ export function createDeadlineScheduler(
     const result = manager.timeout(roomId, deadline.timer);
     if (result.ok) {
       deliver(result.deliveries);
-      // A timeout moves the room to `finished` or removes it, so this cancels
-      // rather than re-arms in practice; re-reading keeps the invariant local
-      // even if a future lifecycle transition leaves a running deadline.
-      refresh(roomId);
+      // A successful timeout is terminal: `timeout` only returns `ok` after
+      // moving the room to `finished` or dissolving it, so the room has no
+      // deadline left. `pending` was already emptied above and nothing here
+      // may arm another timer.
       return;
     }
     if (result.code === 'deadline-passed') {

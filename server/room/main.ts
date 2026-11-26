@@ -79,10 +79,17 @@ export interface RoomServerRuntimeOptions {
   /**
    * Pre-built manager satisfying every room-layer seam; mostly for tests.
    *
-   * A caller that passes both this and {@link clock} must build the manager
-   * with that same clock (`now: () => clock.now()`). The scheduler and the
-   * presence controller always use {@link clock}; a manager on a different
-   * clock would compare deadlines against a different epoch.
+   * A manager and the deadline scheduler must read the same clock. A caller
+   * that builds this manager on anything other than `Date.now` (a manual clock
+   * in a test, for example) must therefore also pass that clock as
+   * {@link clock} and build the manager with `now: () => clock.now()`.
+   *
+   * Without {@link clock} the scheduler falls back to `Date.now`, while the
+   * manager keeps stamping deadlines in its own epoch. A deadline that is in
+   * the future for the manager then looks overdue to the scheduler: it arms at
+   * zero delay, the manager rejects the wakeup with `deadline-passed`, and the
+   * 1 ms retry repeats forever because the injected clock never advances. A
+   * manager that uses the system clock needs no `clock` option.
    */
   readonly manager?: StandaloneRoomManager;
 }

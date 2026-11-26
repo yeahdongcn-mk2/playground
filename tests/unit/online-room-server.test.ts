@@ -2054,4 +2054,81 @@ describe('room deadline wiring', () => {
     expect(host.received.filter((message) => message.type === 'timeout')).toHaveLength(1);
     expect(host.received.filter((message) => message.type === 'end')).toHaveLength(1);
   });
+
+  it('keeps a delivered command result when the scheduler refresh throws', async () => {
+    const manager = new FakeRoomManager();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const refresh = vi.fn((): void => {
+      throw new Error('refresh exploded');
+    });
+    const scheduler: DeadlineScheduler = {
+      refresh,
+      cancel: () => undefined,
+      cancelAll: () => undefined,
+      scheduledRoomCount: 0,
+    };
+    const server = await startTestServer(manager, undefined, scheduler);
+
+    const host = await connect(server.port);
+    host.send(createMessage());
+    const created = await nextRoomState(host);
+
+    // The room_state reached the client even though the transport's scheduler
+    // seam threw, so a successful command did not turn into a protocol error.
+    expect(created.type).toBe('room_state');
+    expect(refresh).toHaveBeenCalledWith(created.roomId);
+    expect(host.received.filter((message) => message.type === 'error')).toHaveLength(0);
+    expect(errorSpy).toHaveBeenCalledWith(
+      `[room] deadline refresh failed for ${created.roomId}`,
+      expect.any(Error),
+    );
+  });
+
+  it('closes the listeners when presence and scheduler cleanup throws', async () => {
+    const manager = new FakeRoomManager();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const presence: PresenceController & { close(): void } = {
+      connectionOpened: () => undefined,
+      connectionClosed: () => undefined,
+      pongReceived: () => undefined,
+      tokenBound: () => undefined,
+      tokenUnbound: () => undefined,
+      close: () => {
+        throw new Error('presence close exploded');
+      },
+    };
+    const deadlines: DeadlineScheduler = {
+      refresh: () => undefined,
+      cancel: () => undefined,
+      cancelAll: () => {
+        throw new Error('cancelAll exploded');
+      },
+      scheduledRoomCount: 0,
+    };
+    const server = await startRoomServer({
+      manager,
+      presence,
+      deadlines,
+      host: '127.0.0.1',
+      port: 0,
+    });
+    servers.push(server);
+
+    const host = await connect(server.port);
+    const hostClosed = host.closed();
+    await expect(server.close()).resolves.toBeUndefined();
+    await hostClosed;
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[room] presence close failed',
+      expect.any(Error),
+    );
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[room] deadline cancelAll failed',
+      expect.any(Error),
+    );
+    await expect(
+      fetch(`http://127.0.0.1:${server.port}${ROOM_HEALTH_PATH}`),
+    ).rejects.toThrow();
+  });
 });

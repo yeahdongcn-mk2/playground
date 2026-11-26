@@ -482,6 +482,41 @@ describe('createDeadlineScheduler', () => {
     expect(harness.clock.timerCount).toBe(0);
   });
 
+  it('ignores a superseded callback after a refresh replaces the retry timer', () => {
+    const harness = createHarness();
+    const room = startRoom(harness.manager);
+    const timeoutSpy = vi.spyOn(harness.manager, 'timeout');
+
+    // Wake 100 ms early: the manager rejects the wakeup with `deadline-passed`
+    // and the scheduler arms a short retry timer for the remaining time.
+    harness.clock.earlyWakeCount = 1;
+    harness.clock.earlyWakeMs = 100;
+    harness.scheduler.refresh(room.roomId);
+    harness.clock.advance(TURN_TIMEOUT_MS - 100);
+    expect(timeoutSpy).toHaveBeenCalledTimes(1);
+    expect(harness.clock.timerCount).toBe(1);
+
+    // A refresh replaces that retry timer with a new generation. Replaying the
+    // superseded callback must be inert: if it fell through it would delete the
+    // current entry without clearing its handle and arm a second timer.
+    harness.scheduler.refresh(room.roomId);
+    expect(harness.clock.timerCount).toBe(1);
+    harness.clock.replayFired();
+
+    expect(timeoutSpy).toHaveBeenCalledTimes(1);
+    expect(harness.delivered).toHaveLength(0);
+    expect(harness.clock.timerCount).toBe(1);
+    expect(harness.scheduler.scheduledRoomCount).toBe(1);
+    expect(harness.manager.getRoom(room.roomId)?.state).toBe('playing');
+
+    // The surviving generation is still the one that reaches the deadline.
+    harness.clock.advance(100);
+    expect(timeoutSpy).toHaveBeenCalledTimes(2);
+    expect(messagesOfType(harness.delivered, 'timeout')).toHaveLength(2);
+    expect(harness.manager.getRoom(room.roomId)?.state).toBe('finished');
+    expect(harness.clock.timerCount).toBe(0);
+  });
+
   it('cancels a pending timer when the room finishes without the scheduler', () => {
     const harness = createHarness();
     const room = startRoom(harness.manager);
