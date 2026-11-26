@@ -1,7 +1,7 @@
 {
   "unitTests": 2379,
-  "entryGzipBytes": 12012,
-  "totalJsGzipBytes": 424940,
+  "entryGzipBytes": 12554,
+  "totalJsGzipBytes": 442378,
   "checks": {
     "lint": "pass",
     "check:budget": "pass",
