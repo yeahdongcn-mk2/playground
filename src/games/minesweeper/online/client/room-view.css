@@ -46,6 +46,11 @@
   box-shadow: 0 30px 80px -60px rgba(2, 6, 12, 0.9);
 }
 
+/* The author `display: flex` above would otherwise beat the UA `[hidden]` rule. */
+.online-room__card[hidden] {
+  display: none;
+}
+
 .online-room__card h2 {
   font-size: clamp(1.35rem, 2.6vw, 1.9rem);
   letter-spacing: -0.02em;

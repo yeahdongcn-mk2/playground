@@ -201,6 +201,10 @@ export function mountOnlineRoomView(
   let ticker: ReturnType<typeof setInterval> | null = null;
   let requestCounter = 0;
   let actionCounter = 0;
+  // The server deduplicates `actionId` per match across both seats, so the
+  // counter alone is not enough: every browsing context and every remount of
+  // the same seat must start from a different namespace.
+  const actionIdPrefix = createActionIdPrefix();
   let destroyed = false;
 
   function nextRequestId(kind: string): string {
@@ -210,7 +214,7 @@ export function mountOnlineRoomView(
 
   function nextActionId(): string {
     actionCounter += 1;
-    return `action-${actionCounter}`;
+    return `action-${actionIdPrefix}-${actionCounter}`;
   }
 
   function showFormError(message: string): void {
@@ -831,6 +835,20 @@ function resolveInitialRoomId(options: OnlineRoomViewOptions): string | null {
   const hash = typeof window === 'undefined' ? '' : window.location.hash;
   const route = parseOnlineRoomHref(hash);
   return route?.roomId ?? null;
+}
+
+/**
+ * Random prefix for one mount: `action-<prefix>-<n>` stays unique across the
+ * two seats and across a refreshed or remounted seat, while still being
+ * readable in protocol logs.
+ */
+function createActionIdPrefix(): string {
+  const bytes = new Uint8Array(8);
+  if (typeof globalThis.crypto?.getRandomValues === 'function') {
+    globalThis.crypto.getRandomValues(bytes);
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  }
+  return Math.random().toString(16).slice(2, 18).padEnd(16, '0');
 }
 
 function findPlayer(room: RoomClientRoom, playerId: string | null): PlayerView | null {

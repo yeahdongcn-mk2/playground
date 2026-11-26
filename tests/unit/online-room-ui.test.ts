@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DIFFICULTY_PRESETS } from '../../src/games/minesweeper/difficulty';
 import type { MinesweeperConfig } from '../../src/games/minesweeper/engine';
@@ -52,6 +54,10 @@ const ROOM_ID = 'room-ui-test';
 const MATCH_ID = 'match-ui-test';
 const HOST_ID = 'player_host';
 const GUEST_ID = 'player_guest';
+const ROOM_VIEW_CSS = readFileSync(
+  join(process.cwd(), 'src/games/minesweeper/online/client/room-view.css'),
+  'utf8',
+);
 const CONFIG: MinesweeperConfig = {
   rows: 3,
   cols: 3,
@@ -556,9 +562,46 @@ function createHost(harness: Harness, name = 'Ada'): void {
   submitForm(harness.root, 'create-form');
 }
 
+/** Drive the mounted seat into a playing state and return its board renderer. */
+function pushPlaying(harness: Harness): TestRenderer {
+  const store = firstStore(harness);
+  store.push(
+    Object.freeze({
+      phase: 'playing',
+      connection: 'connected' as RoomConnectionStatus,
+      lastSeq: 9,
+      role: 'host' as const,
+      selfId: HOST_ID,
+      room: makeRoom({
+        seq: 9,
+        state: 'playing',
+        matchId: MATCH_ID,
+        turnPlayerId: HOST_ID,
+      }),
+      snapshot: makeSnapshot(),
+      end: null,
+      error: null,
+    }),
+  );
+  const renderer = harness.renderers[0];
+  if (renderer === undefined) {
+    throw new Error('the view did not create a board renderer');
+  }
+  return renderer;
+}
+
+function lastActionId(harness: Harness): string {
+  const message = firstTransport(harness).sent.at(-1);
+  if (message?.type !== 'action') {
+    throw new Error('the view did not send an action');
+  }
+  return message.actionId;
+}
+
 afterEach(() => {
   vi.useRealTimers();
   document.body.replaceChildren();
+  window.location.hash = '';
 });
 
 // ---------------------------------------------------------------------------
@@ -584,6 +627,23 @@ describe('online room landing', () => {
     expect(options.map((option) => option.value)).toEqual(
       DIFFICULTY_PRESETS.map((preset) => preset.id),
     );
+
+    harness.handle.destroy();
+  });
+
+  it('falls back to the room id in the hash when no option is given', () => {
+    window.location.hash = '#/online/minesweeper?room=hash-room';
+
+    const harness = mountHarness();
+
+    expect(harness.handle.roomId).toBe('hash-room');
+    expect(byTestId<HTMLInputElement>(harness.root, 'join-room-id').value).toBe(
+      'hash-room',
+    );
+    const share = byTestId<HTMLAnchorElement>(harness.root, 'share-link');
+    expect(share.getAttribute('href')).toBe(onlineRoomHref('hash-room'));
+    expect(share.textContent).toContain('hash-room');
+    expect(byTestId<HTMLElement>(harness.root, 'share-prefill').hidden).toBe(false);
 
     harness.handle.destroy();
   });
@@ -614,6 +674,16 @@ describe('online room landing', () => {
     );
 
     harness.handle.destroy();
+  });
+});
+
+describe('online room stage cards', () => {
+  it('pins the author rule that hides inactive stages', () => {
+    // jsdom force-applies the UA `[hidden]` rule, so a computed-style unit test
+    // cannot catch this regression; the real-browser check lands with the e2e.
+    expect(ROOM_VIEW_CSS).toMatch(
+      /\.online-room__card\[hidden\]\s*\{\s*display:\s*none;/,
+    );
   });
 });
 
@@ -667,6 +737,34 @@ describe('online room create and join', () => {
       'room-ui-test',
     );
     expect(byTestId(harness.root, 'players').querySelectorAll('[data-testid="player"]')).toHaveLength(2);
+
+    harness.handle.destroy();
+  });
+
+  it('escapes hostile nicknames in the player list and the prefilled input', () => {
+    const hostile = '<b>A"da</b><img>';
+    const harness = mountHarness({ roomId: null, displayName: hostile });
+
+    expect(byTestId<HTMLInputElement>(harness.root, 'nickname').value).toBe(hostile);
+    expect(harness.root.querySelector('b, img')).toBeNull();
+
+    submitForm(harness.root, 'create-form');
+    const store = firstStore(harness);
+    store.push(
+      makeRoomViewState({
+        players: [
+          hostPlayer({ displayName: hostile }),
+          guestPlayer({ displayName: hostile }),
+        ],
+      }),
+    );
+
+    const players = byTestId<HTMLElement>(harness.root, 'players');
+    expect(players.querySelectorAll('b, img')).toHaveLength(0);
+    expect(players.textContent).toContain(hostile);
+    expect(players.querySelectorAll('.online-room__player-name')[0]?.textContent).toContain(
+      hostile,
+    );
 
     harness.handle.destroy();
   });
@@ -937,7 +1035,7 @@ describe('online room playing', () => {
       col: 1,
       clientTimeMs: NOW,
     });
-    expect(action.actionId).toMatch(/^action-\d+$/);
+    expect(action.actionId).toMatch(/^action-[0-9a-f]{16}-\d+$/);
 
     harness.setNow(NOW + 30_000);
     vi.advanceTimersByTime(250);
@@ -953,6 +1051,38 @@ describe('online room playing', () => {
     expect(harness.navigations).toEqual(['#/']);
 
     harness.handle.destroy();
+  });
+
+  it('keeps action ids unique across seats and remounts', () => {
+    const firstSeat = mountHarness({ roomId: null });
+    createHost(firstSeat);
+    const firstRenderer = pushPlaying(firstSeat);
+    firstRenderer.intent({ kind: 'reveal', row: 1, col: 1 });
+    const firstActionId = lastActionId(firstSeat);
+    expect(firstActionId).toMatch(/^action-[0-9a-f]{16}-1$/);
+
+    firstRenderer.intent({ kind: 'flag', row: 2, col: 2 });
+    const secondActionId = lastActionId(firstSeat);
+    expect(secondActionId).not.toBe(firstActionId);
+    expect(secondActionId).toMatch(/-2$/);
+
+    // The other seat is a separate mount in a separate browsing context.
+    const otherSeat = mountHarness({ roomId: null });
+    createHost(otherSeat, 'Grace');
+    const otherRenderer = pushPlaying(otherSeat);
+    otherRenderer.intent({ kind: 'reveal', row: 1, col: 1 });
+    expect(lastActionId(otherSeat)).not.toBe(firstActionId);
+
+    // Refreshing or remounting the same seat must not reuse the old ids.
+    firstSeat.handle.destroy();
+    const remount = mountHarness({ roomId: null });
+    createHost(remount);
+    const remountRenderer = pushPlaying(remount);
+    remountRenderer.intent({ kind: 'reveal', row: 1, col: 1 });
+    expect(lastActionId(remount)).not.toBe(firstActionId);
+
+    otherSeat.handle.destroy();
+    remount.handle.destroy();
   });
 
   it('locks the board when it is the opponent turn', () => {
@@ -1167,6 +1297,30 @@ describe('online room diagnostics', () => {
     expect(roomError.hidden).toBe(false);
     expect(roomError.dataset.code).toBe('room-not-found');
     expect(roomError.textContent).toBe(ROOM_CLIENT_ERROR_TEXT['room-not-found']);
+
+    harness.handle.destroy();
+  });
+
+  it('warns when the opponent is offline and labels the player row', () => {
+    const harness = mountHarness({ roomId: null });
+    createHost(harness);
+    const store = firstStore(harness);
+
+    store.push(
+      makeRoomViewState({
+        players: [hostPlayer(), guestPlayer({ presence: 'offline' })],
+      }),
+    );
+
+    const warning = byTestId<HTMLElement>(harness.root, 'presence-warning');
+    expect(warning.hidden).toBe(false);
+    expect(warning.textContent).toContain('Grace');
+    expect(warning.textContent).toContain('已离线');
+
+    const players = byTestId<HTMLElement>(harness.root, 'players');
+    expect(players.querySelectorAll('[data-presence="offline"]')).toHaveLength(1);
+    const presenceTags = players.querySelectorAll('[data-testid="player-presence"]');
+    expect(presenceTags[1]?.textContent).toBe('已离线');
 
     harness.handle.destroy();
   });
