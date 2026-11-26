@@ -1610,6 +1610,38 @@ describe('online room reconnect and presence', () => {
     expect(room.manager.getRoom(room.roomId)?.state).toBe('playing');
   });
 
+  it('rejects start while the guest seat is offline', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const room = readyRoom({ now: () => Date.now() });
+    const allTokens = [room.hostToken, room.guestToken];
+
+    // The requester is the online host, so a guard that only checks the
+    // requester accepts this start. The guest's presence must gate it too.
+    expectOk(room.manager.setPresence(room.guestToken, 'offline'), allTokens);
+    expectRejectedWithoutChange(
+      room.manager,
+      room.roomId,
+      () => room.manager.start(connection(room.hostToken), startMessage(room.roomId)),
+      'invalid-state',
+    );
+    expect(room.manager.getRoom(room.roomId)?.state).toBe('ready');
+    expect(room.manager.getMatch(room.roomId)).toBeNull();
+    expect(room.manager.getRoom(room.roomId)?.seats).toHaveLength(ROOM_CAPACITY);
+
+    // The same request is accepted once the guest reconnects.
+    expectOk(
+      room.manager.join(
+        connection(),
+        joinMessage(room.roomId, { playerToken: room.guestToken }),
+      ),
+      allTokens,
+    );
+    expectOk(room.manager.start(connection(room.hostToken), startMessage(room.roomId)), allTokens);
+    expect(room.manager.getRoom(room.roomId)?.state).toBe('playing');
+    expect(room.manager.getMatch(room.roomId)).not.toBeNull();
+  });
+
   it('releases a guest seat on grace expiry and invalidates its token', () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
@@ -1775,16 +1807,29 @@ describe('online room reconnect and presence', () => {
     const allTokens = [room.hostToken, room.guestToken];
     const { guestId } = seatIds(room.manager, room.roomId);
     expectOk(room.manager.forfeit(room.roomId, room.match.matchId, guestId));
-    expectOk(room.manager.setPresence(room.guestToken, 'offline'), allTokens);
 
-    expectOk(room.manager.rematch(connection(room.hostToken), rematchMessage(room.roomId, true)));
-    expect(room.manager.getRoom(room.roomId)?.state).toBe('finished');
-    expect(room.manager.getRoom(room.roomId)?.stateReason).toBe('rematch-pending');
-
-    // Even with both votes in, the transition waits for the offline seat.
+    // The guest votes while still online, then the host votes last while the
+    // guest is offline. Both votes are in but the transition must still wait:
+    // a guard that only checks the requesting seat would advance to `ready`
+    // here even though the guest cannot see it.
     expectOk(room.manager.rematch(connection(room.guestToken), rematchMessage(room.roomId, true)));
     expect(room.manager.getRoom(room.roomId)?.state).toBe('finished');
+    expect(room.manager.getRoom(room.roomId)?.stateReason).toBe('rematch-pending');
+    expectOk(room.manager.setPresence(room.guestToken, 'offline'), allTokens);
+    const pendingSeats = snapshot(room.manager, room.roomId).seats;
+
+    const blocked = expectOk(
+      room.manager.rematch(connection(room.hostToken), rematchMessage(room.roomId, true)),
+      allTokens,
+    );
+    expect(blocked.deliveries.map((delivery) => delivery.message.type)).toEqual([
+      'room_state',
+      'room_state',
+    ]);
+    expect(room.manager.getRoom(room.roomId)?.state).toBe('finished');
     expect(room.manager.getRoom(room.roomId)?.stateReason).toBe('rematch-waiting-online');
+    expect(room.manager.getRoom(room.roomId)?.matchId).toBe(room.match.matchId);
+    expect(room.manager.getRoom(room.roomId)?.seats).toEqual(pendingSeats);
 
     expectOk(
       room.manager.join(
@@ -1795,6 +1840,8 @@ describe('online room reconnect and presence', () => {
     );
     expectOk(room.manager.rematch(connection(room.guestToken), rematchMessage(room.roomId, true)));
     expect(room.manager.getRoom(room.roomId)?.state).toBe('ready');
+    expect(room.manager.getRoom(room.roomId)?.matchId).toBeNull();
+    expect(room.manager.getRoom(room.roomId)?.joinDeadlineAt).toBe(NOW + JOIN_TIMEOUT_MS);
   });
 });
 
@@ -1865,6 +1912,64 @@ describe('online room turn and match timeouts', () => {
       'invalid-state',
     );
     expect(room.manager.getRoom(room.roomId)).toEqual(after);
+  });
+
+  it('forfeits the guest once when the guest is the current player at turn timeout', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const room = playingRoom({ now: () => Date.now() });
+    const allTokens = [room.hostToken, room.guestToken];
+    const { hostId, guestId } = seatIds(room.manager, room.roomId);
+    const safe = firstHiddenSafeCell(room.manager, room.roomId);
+    expectOk(
+      room.manager.action(
+        connection(room.hostToken),
+        actionFor(room.manager, room.roomId, { row: safe.row, col: safe.col }),
+      ),
+      allTokens,
+    );
+    // The accepted reveal rotates the turn to the guest, so this timeout must
+    // forfeit the guest. A verdict that always picks the host seat would name
+    // the wrong subject/winner/loser below.
+    expect(matchOf(room.manager, room.roomId).state.turnPlayerId).toBe(guestId);
+    const before = snapshot(room.manager, room.roomId);
+
+    vi.advanceTimersByTime(TURN_TIMEOUT_MS);
+    const expired = expectOk(room.manager.timeout(room.roomId, 'turn'), allTokens);
+    expect(expired.deliveries.map((delivery) => delivery.message.type)).toEqual([
+      'timeout',
+      'timeout',
+      'end',
+      'end',
+      'room_state',
+      'room_state',
+    ]);
+    for (const timeout of messagesOfType(expired, 'timeout')) {
+      expect(timeout).toMatchObject({
+        timer: 'turn',
+        matchId: room.match.matchId,
+        subjectId: guestId,
+        deadlineAt: before.deadlineAt,
+        resultingState: 'finished',
+        reason: 'turn-timeout',
+        seq: before.seq + 1,
+      });
+    }
+    for (const end of messagesOfType(expired, 'end')) {
+      expect(end).toMatchObject({
+        reason: 'turn-timeout',
+        winnerId: hostId,
+        loserId: guestId,
+        seq: before.seq + 1,
+      });
+    }
+    expect(room.manager.getRoom(room.roomId)?.state).toBe('finished');
+    expect(room.manager.getRoom(room.roomId)?.stateReason).toBe('turn-timeout');
+    expect(room.manager.getMatch(room.roomId)?.state.end).toMatchObject({
+      reason: 'turn-timeout',
+      winnerId: hostId,
+      loserId: guestId,
+    });
   });
 
   it('ranks players by revealed safe cells when the match timer expires', () => {
@@ -1993,6 +2098,68 @@ describe('online room turn and match timeouts', () => {
       deliveries: [],
     });
     expect(room.manager.getRoom(room.roomId)).toEqual(finished);
+  });
+
+  it('forfeits an offline guest on its turn and reserves the offline host', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const room = playingRoom({ now: () => Date.now() });
+    const allTokens = [room.hostToken, room.guestToken];
+    const { hostId, guestId } = seatIds(room.manager, room.roomId);
+
+    // Host first reveal rotates the turn to the guest; the offline host is
+    // then the non-current seat, so its grace expiry must keep the seat.
+    const safe = firstHiddenSafeCell(room.manager, room.roomId);
+    expectOk(
+      room.manager.action(
+        connection(room.hostToken),
+        actionFor(room.manager, room.roomId, { row: safe.row, col: safe.col }),
+      ),
+      allTokens,
+    );
+    expect(matchOf(room.manager, room.roomId).state.turnPlayerId).toBe(guestId);
+
+    expectOk(room.manager.setPresence(room.hostToken, 'offline'), allTokens);
+    const beforeHostGrace = snapshot(room.manager, room.roomId);
+    expect(expectOk(room.manager.graceExpired(room.hostToken), allTokens)).toEqual({
+      ok: true,
+      deliveries: [],
+    });
+    expect(room.manager.getRoom(room.roomId)).toEqual(beforeHostGrace);
+    expect(room.manager.getRoom(room.roomId)?.seats).toHaveLength(ROOM_CAPACITY);
+
+    // The guest is the current player: its grace expiry forfeits exactly once
+    // and the host wins. A host-seat verdict would name the wrong loser.
+    expectOk(room.manager.setPresence(room.guestToken, 'offline'), allTokens);
+    const before = snapshot(room.manager, room.roomId);
+    const expired = expectOk(room.manager.graceExpired(room.guestToken), allTokens);
+    expect(expired.deliveries.map((delivery) => delivery.message.type)).toEqual([
+      'timeout',
+      'timeout',
+      'end',
+      'end',
+      'room_state',
+      'room_state',
+    ]);
+    expect(messagesOfType(expired, 'timeout')[0]).toMatchObject({
+      timer: 'turn',
+      matchId: room.match.matchId,
+      subjectId: guestId,
+      deadlineAt: before.deadlineAt,
+      reason: 'turn-timeout',
+    });
+    expect(messagesOfType(expired, 'end')[0]).toMatchObject({
+      reason: 'turn-timeout',
+      winnerId: hostId,
+      loserId: guestId,
+    });
+    expect(room.manager.getRoom(room.roomId)?.state).toBe('finished');
+    expect(room.manager.getRoom(room.roomId)?.stateReason).toBe('turn-timeout');
+    expect(room.manager.getMatch(room.roomId)?.state.end).toMatchObject({
+      reason: 'turn-timeout',
+      winnerId: hostId,
+      loserId: guestId,
+    });
   });
 });
 
