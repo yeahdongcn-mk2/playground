@@ -1,5 +1,6 @@
 import { defineConfig, devices } from '@playwright/test';
 import { DEFAULT_E2E_REPORT_PATH } from './scripts/lib/e2e-flakes.mjs';
+import { ONLINE_ROOM_SERVER_PORT } from './tests/e2e/online-room-constants';
 
 const PORT = 4173;
 
@@ -39,10 +40,30 @@ export default defineConfig({
       use: { ...devices['iPhone SE (3rd gen)'] },
     },
   ],
-  webServer: {
-    command: `npm run preview -- --host 127.0.0.1 --port ${PORT} --strictPort`,
-    url: `http://127.0.0.1:${PORT}`,
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-  },
+  // Both halves of the online e2e setup: the built preview site and the real
+  // room service it proxies `/ws` to. The room service is ready only when its
+  // health probe answers, and CI must never reuse a stale process on either
+  // port. `gracefulShutdown` lets the launcher release the port through its
+  // SIGTERM handler instead of being force-killed.
+  webServer: [
+    {
+      name: 'preview',
+      command: `npm run preview -- --host 127.0.0.1 --port ${PORT} --strictPort`,
+      url: `http://127.0.0.1:${PORT}`,
+      reuseExistingServer: !process.env.CI,
+      timeout: 120_000,
+      gracefulShutdown: { signal: 'SIGTERM', timeout: 10_000 },
+    },
+    {
+      name: 'room',
+      // Run the launcher directly: the room server is test-only, so it needs no
+      // package.json script. Its port comes from the shared constants module,
+      // which only reads local values and never starts a listener.
+      command: 'npx --no-install tsx tests/e2e/online-room-server.ts',
+      url: `http://127.0.0.1:${ONLINE_ROOM_SERVER_PORT}/health`,
+      reuseExistingServer: !process.env.CI,
+      timeout: 120_000,
+      gracefulShutdown: { signal: 'SIGTERM', timeout: 10_000 },
+    },
+  ],
 });
