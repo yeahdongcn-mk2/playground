@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
 import {
   broadcastToSeats,
@@ -9,10 +9,14 @@ import {
   roomErrorMessage,
   roomStateDeliveries,
   seatedCommandSuccess,
+  TURN_TIMEOUT_MS,
   type MatchCommandResult,
   type MatchRoomManager,
+  type PresenceController,
+  type PresenceSocket,
   type RoomCommandResult,
   type RoomConnection,
+  type RoomDelivery,
   type RoomErrorCode,
   type RoomRecord,
   type RoomSeat,
@@ -20,6 +24,7 @@ import {
 import {
   ROOM_HEALTH_PATH,
   ROOM_WS_PATH,
+  RoomSocketHub,
   startRoomServer,
   type RoomServer,
 } from '../../server/room/ws-server';
@@ -61,6 +66,7 @@ afterEach(async () => {
     client.terminate();
   }
   await Promise.all(servers.splice(0).map((server) => server.close()));
+  vi.restoreAllMocks();
 });
 
 function commandFailure(code: RoomErrorCode): RoomCommandResult {
@@ -86,8 +92,11 @@ function matchFailure(
  *
  * It follows the real delivery contract: `create`/`join` bind the requesting
  * connection to its seat token and every accepted command returns the
- * per-seat `room_state` deliveries built by `contracts.ts`. Lifecycle
- * correctness is covered by the room-manager tests, not here.
+ * per-seat `room_state` deliveries built by `contracts.ts`. It also carries a
+ * deliberately small token-resume path (seat restored in place, current
+ * `seq`/`deadlineAt`, optional playing snapshot) so the transport's rebinding
+ * and delivery order can be tested; real reconnect and lifecycle correctness
+ * stay in the room-manager tests.
  */
 class FakeRoomManager implements MatchRoomManager {
   readonly calls: string[] = [];
@@ -103,6 +112,8 @@ class FakeRoomManager implements MatchRoomManager {
   private seats: readonly RoomSeat[] = [];
   private matchId: string | null = null;
   private turnPlayerId: string | null = null;
+  private turnId = 0;
+  private deadlineAt: number | null = null;
   private readonly joinDeadlineAt = Date.now() + JOIN_TIMEOUT_MS;
 
   get room(): RoomRecord {
@@ -129,6 +140,16 @@ class FakeRoomManager implements MatchRoomManager {
     }
     if (this.roomId === '' || message.roomId !== this.roomId) {
       return commandFailure('room-not-found');
+    }
+    // A `join` carrying an existing token resumes that seat: no new seat, no
+    // seq/deadline movement, and a playing room also re-sends its snapshot.
+    if (message.playerToken !== undefined) {
+      const resumed = this.seats.find(
+        (seat) => seat.playerToken === message.playerToken,
+      );
+      if (resumed !== undefined) {
+        return this.resumeSeat(resumed);
+      }
     }
     if (this.seats.length >= ROOM_CAPACITY) {
       return commandFailure('room-full');
@@ -168,8 +189,7 @@ class FakeRoomManager implements MatchRoomManager {
     if (message.roomId !== this.roomId) {
       return commandFailure('room-not-found');
     }
-    this.state = 'playing';
-    this.seq += 1;
+    this.beginMatch();
     return { ok: true, deliveries: roomStateDeliveries(this.snapshot()) };
   }
 
@@ -183,7 +203,9 @@ class FakeRoomManager implements MatchRoomManager {
     this.state = 'playing';
     this.matchId = 'match_fake';
     this.seq += 1;
+    this.turnId += 1;
     this.turnPlayerId = this.seats.find((seat) => seat.isHost)?.playerId ?? null;
+    this.deadlineAt = Date.now() + TURN_TIMEOUT_MS;
   }
 
   action(connection: RoomConnection, message: ActionMessage): MatchCommandResult {
@@ -203,6 +225,7 @@ class FakeRoomManager implements MatchRoomManager {
     }
 
     this.seq += 1;
+    this.turnId += 1;
     const actionResult: ActionResultMessage = {
       type: 'action_result',
       roomId: this.roomId,
@@ -215,25 +238,9 @@ class FakeRoomManager implements MatchRoomManager {
       revealedCells: [],
       flaggedCell: null,
       turnPlayerId: seat.playerId,
-      deadlineAt: this.joinDeadlineAt,
+      deadlineAt: this.deadlineAt ?? this.joinDeadlineAt,
     };
-    const snapshot: SnapshotMessage = {
-      type: 'snapshot',
-      roomId: this.roomId,
-      matchId: this.matchId,
-      seq: this.seq,
-      turnPlayerId: seat.playerId,
-      turnId: message.turnId,
-      deadlineAt: this.joinDeadlineAt,
-      matchDeadlineAt: this.joinDeadlineAt,
-      seedHash: 'fake-seed-hash',
-      engineStatus: 'playing',
-      mineCount: this.config.mines,
-      remainingMines: this.config.mines,
-      revealedSafeCount: 1,
-      elapsedMs: 0,
-      board: [],
-    };
+    const snapshot = this.matchSnapshot(message.turnId);
     // Same delivery shape as the real manager: the verdict goes to the actor,
     // the snapshot is broadcast to every seat.
     return {
@@ -258,6 +265,23 @@ class FakeRoomManager implements MatchRoomManager {
     }
     this.seats = this.seats.filter((candidate) => candidate !== seat);
     this.seq += 1;
+    // A host leaving a lobby dissolves the room. The real manager builds its
+    // final broadcast before forgetting the seat, so the leaving socket still
+    // receives room_closed; mirror that so the transport's
+    // deliver-before-unbind order is actually covered.
+    if (seat.isHost) {
+      this.state = 'dissolved';
+      const closed: RoomClosedMessage = {
+        type: 'room_closed',
+        roomId: this.roomId,
+        seq: this.seq,
+        reason: 'host-left',
+        finalState: 'dissolved',
+      };
+      const deliveries: RoomDelivery[] = [...roomStateDeliveries(this.snapshot())];
+      deliveries.push({ playerToken: seat.playerToken, message: closed });
+      return { ok: true, deliveries };
+    }
     return { ok: true, deliveries: roomStateDeliveries(this.snapshot()) };
   }
 
@@ -274,6 +298,53 @@ class FakeRoomManager implements MatchRoomManager {
   timeout(_roomId: string, _timer: TimeoutTimer): RoomCommandResult {
     this.calls.push('timeout');
     return commandFailure('room-not-found');
+  }
+
+  /**
+   * Resume an existing seat in place, as the real manager does for a reconnect:
+   * no new seat, no `seq` change and no deadline movement. A playing match also
+   * re-sends the current full snapshot to every seat.
+   */
+  private resumeSeat(seat: RoomSeat): RoomCommandResult {
+    this.seats = this.seats.map((current) =>
+      current === seat ? { ...current, presence: 'online' } : current,
+    );
+    const deliveries: RoomDelivery[] = [...roomStateDeliveries(this.snapshot())];
+    if (this.state === 'playing') {
+      const snapshot = this.matchSnapshot(this.turnId);
+      for (const current of this.seats) {
+        deliveries.push({ playerToken: current.playerToken, message: snapshot });
+      }
+    }
+    return { ok: true, deliveries, boundToken: seat.playerToken };
+  }
+
+  /** Build the current playing snapshot, shared by `action` and reconnect. */
+  private matchSnapshot(turnId: number): SnapshotMessage {
+    if (this.matchId === null) {
+      throw new Error('fake room has no running match');
+    }
+    const turnPlayerId = this.turnPlayerId;
+    if (turnPlayerId === null) {
+      throw new Error('fake room has no current turn player');
+    }
+    return {
+      type: 'snapshot',
+      roomId: this.roomId,
+      matchId: this.matchId,
+      seq: this.seq,
+      turnPlayerId,
+      turnId,
+      deadlineAt: this.deadlineAt ?? this.joinDeadlineAt,
+      matchDeadlineAt: this.joinDeadlineAt,
+      seedHash: 'fake-seed-hash',
+      engineStatus: 'playing',
+      mineCount: this.config.mines,
+      remainingMines: this.config.mines,
+      revealedSafeCount: 1,
+      elapsedMs: 0,
+      board: [],
+    };
   }
 
   private makeSeat(displayName: string, isHost: boolean): RoomSeat {
@@ -300,7 +371,7 @@ class FakeRoomManager implements MatchRoomManager {
       matchId: this.matchId,
       turnPlayerId: this.turnPlayerId,
       joinDeadlineAt: this.joinDeadlineAt,
-      deadlineAt: null,
+      deadlineAt: this.deadlineAt,
       stateReason: null,
     };
   }
@@ -311,9 +382,15 @@ class TestClient {
   private readonly socket: WebSocket;
   private readonly queued: ServerToClientMessage[] = [];
   private readonly waiting: ((message: ServerToClientMessage) => void)[] = [];
+  private readonly closeInfo: Promise<{ readonly code: number; readonly reason: string }>;
 
   private constructor(socket: WebSocket) {
     this.socket = socket;
+    this.closeInfo = new Promise((resolve) => {
+      socket.once('close', (code, reason) => {
+        resolve({ code, reason: reason.toString() });
+      });
+    });
     socket.on('message', (data) => {
       const message = JSON.parse(data.toString()) as ServerToClientMessage;
       const waiter = this.waiting.shift();
@@ -356,15 +433,218 @@ class TestClient {
   }
 
   closed(): Promise<void> {
-    if (this.socket.readyState === WebSocket.CLOSED) {
-      return Promise.resolve();
-    }
-    return new Promise((resolve) => this.socket.once('close', () => resolve()));
+    return this.closeInfo.then(() => undefined);
+  }
+
+  /** Close code/reason of this socket, whether or not it has already closed. */
+  closedWith(): Promise<{ readonly code: number; readonly reason: string }> {
+    return this.closeInfo;
   }
 
   terminate(): void {
     this.socket.terminate();
   }
+}
+
+type FakeSocketListener = (...args: unknown[]) => void;
+
+/**
+ * Server-side socket double for driving {@link RoomSocketHub} directly.
+ *
+ * The transport only needs `on`, `send`, `ping`, `close`, `terminate` and
+ * `readyState`, so the fake records outgoing frames and close calls and lets a
+ * test emit `message` / `pong` events at a deterministic point in time — in
+ * particular after a replacement has closed the socket but before its `close`
+ * event would arrive.
+ */
+class FakeServerSocket {
+  readyState: number = WebSocket.OPEN;
+  readonly sent: ServerToClientMessage[] = [];
+  readonly closeCalls: { readonly code?: number; readonly reason?: string }[] = [];
+  private readonly listeners = new Map<string, FakeSocketListener[]>();
+
+  on(event: string, listener: FakeSocketListener): this {
+    const listeners = this.listeners.get(event) ?? [];
+    listeners.push(listener);
+    this.listeners.set(event, listeners);
+    return this;
+  }
+
+  emit(event: string, ...args: unknown[]): void {
+    for (const listener of this.listeners.get(event) ?? []) {
+      listener(...args);
+    }
+  }
+
+  send(payload: string): void {
+    this.sent.push(JSON.parse(payload) as ServerToClientMessage);
+  }
+
+  ping(): void {
+    // The hub's presence adapter pings; the fake has no network to ping.
+  }
+
+  close(code?: number, reason?: string): void {
+    this.closeCalls.push({ code, reason });
+    this.readyState = WebSocket.CLOSING;
+  }
+
+  terminate(): void {
+    this.readyState = WebSocket.CLOSED;
+  }
+}
+
+/** First `room_state` frame a fake server socket received. */
+function firstRoomState(socket: FakeServerSocket): RoomStateMessage {
+  const message = socket.sent.find((candidate) => candidate.type === 'room_state');
+  if (message === undefined || message.type !== 'room_state') {
+    throw new Error('expected a room_state frame');
+  }
+  return message;
+}
+
+interface PresenceEvent {
+  readonly kind: 'opened' | 'closed' | 'pong' | 'bound' | 'unbound';
+  readonly connectionId: string;
+  readonly playerToken: string | null;
+}
+
+/**
+ * Record the transport→controller hooks and keep the ping adapter handed to
+ * `connectionOpened`.
+ *
+ * The test drives one heartbeat round itself through `ping()` instead of
+ * owning a timer: the transport's ping adapter sends a real WebSocket ping,
+ * the `ws` client answers it automatically, and the server forwards the pong
+ * back as `pongReceived`. No 5 s wait is involved.
+ */
+class FakePresenceController implements PresenceController {
+  readonly events: PresenceEvent[] = [];
+  private readonly sockets = new Map<string, PresenceSocket>();
+  private readonly tokens = new Map<string, string>();
+
+  connectionOpened(connectionId: string, socket: PresenceSocket): void {
+    this.sockets.set(connectionId, socket);
+    this.events.push({ kind: 'opened', connectionId, playerToken: null });
+  }
+
+  connectionClosed(connectionId: string): void {
+    this.events.push({
+      kind: 'closed',
+      connectionId,
+      playerToken: this.tokens.get(connectionId) ?? null,
+    });
+    this.sockets.delete(connectionId);
+    this.tokens.delete(connectionId);
+  }
+
+  pongReceived(connectionId: string): void {
+    this.events.push({
+      kind: 'pong',
+      connectionId,
+      playerToken: this.tokens.get(connectionId) ?? null,
+    });
+  }
+
+  tokenBound(connectionId: string, playerToken: string): void {
+    this.tokens.set(connectionId, playerToken);
+    this.events.push({ kind: 'bound', connectionId, playerToken });
+  }
+
+  tokenUnbound(connectionId: string): void {
+    const playerToken = this.tokens.get(connectionId) ?? null;
+    this.tokens.delete(connectionId);
+    this.events.push({ kind: 'unbound', connectionId, playerToken });
+  }
+
+  /** Send one heartbeat ping through the adapter the transport handed over. */
+  ping(connectionId: string): void {
+    const socket = this.sockets.get(connectionId);
+    if (socket === undefined) {
+      throw new Error(`no presence socket for ${connectionId}`);
+    }
+    socket.ping();
+  }
+}
+
+/**
+ * Presence controller that throws from every hook.
+ *
+ * The transport promises that an observer fault cannot break socket
+ * bookkeeping, replacement, delivery or event-listener isolation; this fake
+ * makes each of those promises falsifiable. It still records the adapter and
+ * the hook calls so the test can drive a heartbeat round and prove that the
+ * throw happened at the transport boundary instead of never being invoked.
+ */
+class ThrowingPresenceController implements PresenceController {
+  readonly calls: string[] = [];
+  readonly openedIds: string[] = [];
+  readonly closedIds: string[] = [];
+  private readonly sockets = new Map<string, PresenceSocket>();
+
+  connectionOpened(connectionId: string, socket: PresenceSocket): void {
+    this.openedIds.push(connectionId);
+    this.sockets.set(connectionId, socket);
+    this.fail('connectionOpened');
+  }
+
+  connectionClosed(connectionId: string): void {
+    this.closedIds.push(connectionId);
+    this.fail('connectionClosed');
+  }
+
+  pongReceived(): void {
+    this.fail('pongReceived');
+  }
+
+  tokenBound(): void {
+    this.fail('tokenBound');
+  }
+
+  tokenUnbound(): void {
+    this.fail('tokenUnbound');
+  }
+
+  /** Send one heartbeat ping through the adapter stored before the throw. */
+  ping(connectionId: string): void {
+    this.sockets.get(connectionId)?.ping();
+  }
+
+  private fail(hook: string): never {
+    this.calls.push(hook);
+    throw new Error(`presence ${hook} threw`);
+  }
+}
+
+/** Wait for an asynchronous controller event without fixed sleeps. */
+async function waitForPresence(
+  controller: FakePresenceController,
+  predicate: (event: PresenceEvent) => boolean,
+  description: string,
+): Promise<void> {
+  await vi.waitFor(
+    () => {
+      if (!controller.events.some(predicate)) {
+        throw new Error(`timed out waiting for ${description}`);
+      }
+    },
+    { interval: 10, timeout: 2_000 },
+  );
+}
+
+/** Connection id the controller reported for a bound token. */
+function connectionIdForToken(
+  controller: FakePresenceController,
+  playerToken: string,
+): string {
+  const event = controller.events.find(
+    (candidate) =>
+      candidate.kind === 'bound' && candidate.playerToken === playerToken,
+  );
+  if (event === undefined) {
+    throw new Error(`no connection is bound to ${playerToken}`);
+  }
+  return event.connectionId;
 }
 
 function createMessage(overrides: Partial<CreateMessage> = {}): CreateMessage {
@@ -413,8 +693,16 @@ function actionMessage(
   };
 }
 
-async function startTestServer(manager: MatchRoomManager): Promise<RoomServer> {
-  const server = await startRoomServer({ manager, host: '127.0.0.1', port: 0 });
+async function startTestServer(
+  manager: MatchRoomManager,
+  presence?: PresenceController,
+): Promise<RoomServer> {
+  const server = await startRoomServer({
+    manager,
+    presence,
+    host: '127.0.0.1',
+    port: 0,
+  });
   servers.push(server);
   return server;
 }
@@ -448,8 +736,11 @@ interface SeatedRoom {
   readonly roomId: string;
 }
 
-async function createSeatedRoom(manager: FakeRoomManager): Promise<SeatedRoom> {
-  const server = await startTestServer(manager);
+async function createSeatedRoom(
+  manager: FakeRoomManager,
+  presence?: PresenceController,
+): Promise<SeatedRoom> {
+  const server = await startTestServer(manager, presence);
   const host = await connect(server.port);
   host.send(createMessage());
   const created = await nextRoomState(host);
@@ -774,6 +1065,403 @@ describe('room WebSocket/HTTP transport', () => {
 
     const received = await guest.next();
     expect(received).toEqual(marker);
+  });
+
+  it('forwards connection, pong and token bindings to the presence controller', async () => {
+    const manager = new FakeRoomManager();
+    const presence = new FakePresenceController();
+    const server = await startTestServer(manager, presence);
+    const client = await connect(server.port);
+
+    await waitForPresence(presence, (event) => event.kind === 'opened', 'connection opened');
+    const opened = presence.events.find((event) => event.kind === 'opened');
+    if (opened === undefined) {
+      throw new Error('missing opened event');
+    }
+    const connectionId = opened.connectionId;
+
+    client.send(createMessage());
+    const created = await nextRoomState(client);
+    const hostToken = requiredToken(created);
+    await waitForPresence(
+      presence,
+      (event) =>
+        event.kind === 'bound' &&
+        event.connectionId === connectionId &&
+        event.playerToken === hostToken,
+      'host token bound',
+    );
+
+    // One real heartbeat round: the controller pings through the adapter the
+    // transport handed it, the client answers, and the server forwards the pong.
+    presence.ping(connectionId);
+    await waitForPresence(
+      presence,
+      (event) => event.kind === 'pong' && event.connectionId === connectionId,
+      'pong forwarded',
+    );
+
+    // A successful host leave dissolves the room. The transport must send the
+    // result (including the final room_closed addressed to the leaving seat)
+    // before releasing the token, so that frame is observable here.
+    client.send({ type: 'leave', requestId: 'req-leave', roomId: created.roomId });
+    const finalFrame = await client.next();
+    expect(finalFrame).toMatchObject({
+      type: 'room_closed',
+      roomId: created.roomId,
+      reason: 'host-left',
+      finalState: 'dissolved',
+    });
+    await waitForPresence(
+      presence,
+      (event) => event.kind === 'unbound' && event.connectionId === connectionId,
+      'host token unbound',
+    );
+
+    const closed = client.closed();
+    client.terminate();
+    await closed;
+    await waitForPresence(
+      presence,
+      (event) => event.kind === 'closed' && event.connectionId === connectionId,
+      'connection closed',
+    );
+
+    expect(presence.events).toEqual([
+      { kind: 'opened', connectionId, playerToken: null },
+      { kind: 'bound', connectionId, playerToken: hostToken },
+      { kind: 'pong', connectionId, playerToken: hostToken },
+      { kind: 'unbound', connectionId, playerToken: hostToken },
+      { kind: 'closed', connectionId, playerToken: null },
+    ]);
+  });
+
+  it('reports a bound token on close instead of a separate unbind', async () => {
+    const manager = new FakeRoomManager();
+    const presence = new FakePresenceController();
+    const server = await startTestServer(manager, presence);
+    const client = await connect(server.port);
+
+    client.send(createMessage());
+    const created = await nextRoomState(client);
+    const hostToken = requiredToken(created);
+    await waitForPresence(
+      presence,
+      (event) => event.kind === 'bound' && event.playerToken === hostToken,
+      'host token bound',
+    );
+    const callsBefore = [...manager.calls];
+
+    const closed = client.closed();
+    client.terminate();
+    await closed;
+    await waitForPresence(
+      presence,
+      (event) => event.kind === 'closed' && event.playerToken === hostToken,
+      'bound connection closed',
+    );
+
+    // A socket close while the seat is still bound is reported through
+    // `connectionClosed` with the token attached; that is how the controller
+    // starts offline detection. A separate `tokenUnbound` would instead look
+    // like a deliberate release, so none may be emitted.
+    const connectionId = connectionIdForToken(presence, hostToken);
+    expect(presence.events.filter((event) => event.connectionId === connectionId)).toEqual([
+      { kind: 'opened', connectionId, playerToken: null },
+      { kind: 'bound', connectionId, playerToken: hostToken },
+      { kind: 'closed', connectionId, playerToken: hostToken },
+    ]);
+    expect(presence.events.some((event) => event.kind === 'unbound')).toBe(false);
+    expect(manager.calls).toEqual(callsBefore);
+  });
+
+  it('replaces the active socket for a token without moving room state or deadlines', async () => {
+    const manager = new FakeRoomManager();
+    const presence = new FakePresenceController();
+    const { server, guest, roomId } = await createSeatedRoom(manager, presence);
+
+    const hostSeat = manager.room.seats.find((seat) => seat.isHost);
+    const guestSeat = manager.room.seats.find((seat) => !seat.isHost);
+    if (hostSeat === undefined || guestSeat === undefined) {
+      throw new Error('seated room is missing a guest seat');
+    }
+    const hostToken = hostSeat.playerToken;
+    const guestToken = guestSeat.playerToken;
+    await waitForPresence(
+      presence,
+      (event) => event.kind === 'bound' && event.playerToken === hostToken,
+      'host bound',
+    );
+    await waitForPresence(
+      presence,
+      (event) => event.kind === 'bound' && event.playerToken === guestToken,
+      'guest bound',
+    );
+    const hostId = connectionIdForToken(presence, hostToken);
+    const guestId = connectionIdForToken(presence, guestToken);
+
+    manager.beginMatch();
+    const before = {
+      seq: manager.room.seq,
+      deadlineAt: manager.room.deadlineAt,
+      joinDeadlineAt: manager.room.joinDeadlineAt,
+    };
+    expect(before.deadlineAt).not.toBeNull();
+
+    const replacement = await connect(server.port);
+    await waitForPresence(
+      presence,
+      (event) =>
+        event.kind === 'opened' &&
+        event.connectionId !== hostId &&
+        event.connectionId !== guestId,
+      'replacement opened',
+    );
+    const replacementId = presence.events.find(
+      (event) =>
+        event.kind === 'opened' &&
+        event.connectionId !== hostId &&
+        event.connectionId !== guestId,
+    )?.connectionId;
+    if (replacementId === undefined) {
+      throw new Error('missing replacement connection id');
+    }
+
+    const oldClosed = guest.closedWith();
+    replacement.send(
+      joinMessage(roomId, { playerToken: guestToken, requestId: 'req-reconnect' }),
+    );
+
+    // The resumed socket first gets the room state, then the current full
+    // snapshot: no delta replay and no second seat.
+    const resumedState = await nextRoomState(replacement);
+    expect(resumedState.state).toBe('playing');
+    expect(resumedState.playerToken).toBe(guestToken);
+    const resumedSnapshot = await replacement.next();
+    expect(resumedSnapshot).toMatchObject({
+      type: 'snapshot',
+      roomId,
+      matchId: 'match_fake',
+      seq: before.seq,
+    });
+    if (resumedSnapshot.type !== 'snapshot') {
+      throw new Error(`expected snapshot, received ${resumedSnapshot.type}`);
+    }
+    expect(resumedSnapshot.deadlineAt).toBe(before.deadlineAt);
+    expect(resumedSnapshot.matchDeadlineAt).toBe(before.joinDeadlineAt);
+
+    // The replaced socket is closed with an observable application code so a
+    // client can tell a takeover from a network failure.
+    expect(await oldClosed).toEqual({ code: 4001, reason: 'session-replaced' });
+
+    // Swapping sockets is transport-only: the manager saw one more join and
+    // neither seq nor either deadline moved.
+    expect(manager.calls).toEqual(['create', 'join', 'join']);
+    expect(manager.room.seq).toBe(before.seq);
+    expect(manager.room.deadlineAt).toBe(before.deadlineAt);
+    expect(manager.room.joinDeadlineAt).toBe(before.joinDeadlineAt);
+    expect(manager.room.seats).toHaveLength(2);
+
+    // The old binding is released before its socket closes, so the token is
+    // never treated as newly offline: bind → unbind → bind, and then only the
+    // connection itself closes.
+    await waitForPresence(
+      presence,
+      (event) =>
+        event.kind === 'bound' &&
+        event.connectionId === replacementId &&
+        event.playerToken === guestToken,
+      'replacement bound',
+    );
+    await waitForPresence(
+      presence,
+      (event) => event.kind === 'closed' && event.connectionId === guestId,
+      'replaced socket closed',
+    );
+    expect(presence.events.filter((event) => event.playerToken === guestToken)).toEqual([
+      { kind: 'bound', connectionId: guestId, playerToken: guestToken },
+      { kind: 'unbound', connectionId: guestId, playerToken: guestToken },
+      { kind: 'bound', connectionId: replacementId, playerToken: guestToken },
+    ]);
+    expect(presence.events.filter((event) => event.connectionId === guestId)).toEqual([
+      { kind: 'opened', connectionId: guestId, playerToken: null },
+      { kind: 'bound', connectionId: guestId, playerToken: guestToken },
+      { kind: 'unbound', connectionId: guestId, playerToken: guestToken },
+      { kind: 'closed', connectionId: guestId, playerToken: null },
+    ]);
+
+    // Only the new socket holds the token now. The registry-level removal of
+    // the old socket is proven deterministically by the dedicated hub test
+    // below; this marker proves the token now routes to the replacement alone.
+    const marker: RoomClosedMessage = {
+      type: 'room_closed',
+      roomId,
+      seq: manager.room.seq,
+      reason: 'replacement delivery marker',
+      finalState: 'dissolved',
+    };
+    server.deliver([{ playerToken: guestToken, message: marker }]);
+    expect(await replacement.next()).toEqual(marker);
+  });
+
+  it('removes a replaced socket from the hub registry before its close event', () => {
+    const manager = new FakeRoomManager();
+    const presence = new FakePresenceController();
+    const hub = new RoomSocketHub(manager, presence);
+    const oldSocket = new FakeServerSocket();
+    const replacement = new FakeServerSocket();
+
+    hub.addConnection(oldSocket as unknown as WebSocket);
+    oldSocket.emit('message', JSON.stringify(createMessage()), false);
+    const created = firstRoomState(oldSocket);
+    const hostToken = requiredToken(created);
+    const oldConnectionId = presence.events.find(
+      (event) => event.kind === 'opened',
+    )?.connectionId;
+    if (oldConnectionId === undefined) {
+      throw new Error('missing opened event for the replaced socket');
+    }
+
+    hub.addConnection(replacement as unknown as WebSocket);
+    replacement.emit(
+      'message',
+      JSON.stringify(
+        joinMessage(created.roomId, {
+          playerToken: hostToken,
+          requestId: 'req-reconnect',
+        }),
+      ),
+      false,
+    );
+
+    expect(firstRoomState(replacement).playerToken).toBe(hostToken);
+    expect(oldSocket.closeCalls).toEqual([
+      { code: 4001, reason: 'session-replaced' },
+    ]);
+
+    // A frame that arrives while the replaced socket is still closing must not
+    // reach the room manager: the registry entry is deleted before the
+    // socket's `close` event, so its handlers are already inert.
+    const callsBefore = [...manager.calls];
+    oldSocket.emit(
+      'message',
+      JSON.stringify(readyMessage(created.roomId, true)),
+      false,
+    );
+    expect(manager.calls).toEqual(callsBefore);
+
+    // The same rule covers the late-pong guard: a pong from the replaced
+    // socket is not reported, while the replacement's pong still is.
+    const replacementConnectionId = presence.events.find(
+      (event) =>
+        event.kind === 'opened' && event.connectionId !== oldConnectionId,
+    )?.connectionId;
+    if (replacementConnectionId === undefined) {
+      throw new Error('missing opened event for the replacement socket');
+    }
+    oldSocket.emit('pong');
+    expect(
+      presence.events.some(
+        (event) =>
+          event.kind === 'pong' && event.connectionId === oldConnectionId,
+      ),
+    ).toBe(false);
+    replacement.emit('pong');
+    expect(
+      presence.events.some(
+        (event) =>
+          event.kind === 'pong' &&
+          event.connectionId === replacementConnectionId,
+      ),
+    ).toBe(true);
+
+    // Its later `close` event only clears an already-missing mapping.
+    oldSocket.emit('close');
+    expect(manager.calls).toEqual(callsBefore);
+  });
+
+  it('contains presence controller faults without breaking create, join, replacement or delivery', async () => {
+    const manager = new FakeRoomManager();
+    const presence = new ThrowingPresenceController();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { server, host, guest, roomId } = await createSeatedRoom(
+      manager,
+      presence,
+    );
+
+    // create/join already delivered room_state to both seats even though every
+    // connectionOpened/tokenBound hook threw.
+    expect(manager.calls).toEqual(['create', 'join']);
+
+    const guestSeat = manager.room.seats.find((seat) => !seat.isHost);
+    if (guestSeat === undefined) {
+      throw new Error('seated room is missing a guest seat');
+    }
+    const guestToken = guestSeat.playerToken;
+
+    const replacement = await connect(server.port);
+    const oldClosed = guest.closedWith();
+    replacement.send(
+      joinMessage(roomId, {
+        playerToken: guestToken,
+        requestId: 'req-reconnect',
+      }),
+    );
+
+    // Replacement still completes, closes the old socket with 4001 and delivers
+    // the resumed state even though tokenUnbound/tokenBound threw.
+    const resumed = await nextRoomState(replacement);
+    expect(resumed.playerToken).toBe(guestToken);
+    expect(await oldClosed).toEqual({ code: 4001, reason: 'session-replaced' });
+
+    // A heartbeat pong is forwarded, and its hook's throw stays inside the
+    // transport event listener instead of escaping.
+    const hostConnectionId = presence.openedIds[0];
+    if (hostConnectionId === undefined) {
+      throw new Error('no opened connection recorded');
+    }
+    presence.ping(hostConnectionId);
+    await vi.waitFor(
+      () => expect(presence.calls).toContain('pongReceived'),
+      { interval: 10, timeout: 2_000 },
+    );
+
+    // Server-initiated delivery to the new owner is not skipped after a
+    // throwing tokenBound.
+    const marker: RoomClosedMessage = {
+      type: 'room_closed',
+      roomId,
+      seq: manager.room.seq,
+      reason: 'fault isolation marker',
+      finalState: 'dissolved',
+    };
+    server.deliver([{ playerToken: guestToken, message: marker }]);
+    expect(await replacement.next()).toEqual(marker);
+
+    // The close listener is isolated too.
+    const hostClosed = host.closed();
+    host.terminate();
+    await hostClosed;
+    await vi.waitFor(
+      () => expect(presence.closedIds).toContain(hostConnectionId),
+      { interval: 10, timeout: 2_000 },
+    );
+
+    // Every hook was actually invoked and threw; the transport reported the
+    // fault instead of letting it corrupt bookkeeping or escape.
+    expect(presence.calls).toEqual(
+      expect.arrayContaining([
+        'connectionOpened',
+        'tokenBound',
+        'tokenUnbound',
+        'pongReceived',
+        'connectionClosed',
+      ]),
+    );
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[room] presence connectionOpened hook failed',
+      expect.any(Error),
+    );
   });
 
   it('closes cleanly and releases the listening port', async () => {
