@@ -10,4 +10,15 @@ export default defineConfig({
   server: {
     port: 5173,
   },
+  preview: {
+    // The browser always opens the room socket as same-origin `/ws` against
+    // the preview site; forward the upgrade to the local room service. This is
+    // test/dev infrastructure only and does not change the production build.
+    proxy: {
+      '/ws': {
+        target: 'http://127.0.0.1:4174',
+        ws: true,
+      },
+    },
+  },
 });

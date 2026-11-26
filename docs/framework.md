@@ -287,17 +287,17 @@ npm run test:unit    # Vitest：storage / input / router / dom 与六个游戏�
 npm run sync:zhen-sha-size # 刷新 docs/zhen-sha-production-size.json：统计 src/games/zhen-sha/ 下所有非测试源文件，历史评估表冻结于 43c9ab1
 npm run build        # 类型检查 + 生产构建
 npm run check:budget # 检查体积门禁：入口不含引擎标记（Phaser.Game/Scene/AUTO、THREE.）且 ≤50 KB gzip，dist/assets 全部 JS chunk 合计 ≤450 KB gzip，dist/assets/zhen-sha-view-*.js 合计 ≤35 KB gzip；0 个匹配视为失败并提示先 npm run build，多个匹配按合计判定，gzip 由 node:zlib 的 gzipSync 默认级别测得（Vite build 打印的 gzip 不是门禁输入）
-npm run test:e2e     # 先 build，再用 vite preview 跑 Chromium 桌面 / Pixel 7 与 mobile-webkit
+npm run test:e2e     # 先 build，再用 vite preview 与本地房间服务跑 Chromium 桌面 / Pixel 7 与 mobile-webkit
 npm run test:e2e:webkit # 先 build，只跑 mobile-webkit（iPhone SE (3rd gen)）
 ```
 
-当前提交本地通过：`typecheck`、`lint`、`build`、`check:budget` 通过；`npm run test:unit` 2379 passed；`npm run test:e2e` 168 passed（桌面 100 + 手机 36 + WebKit 32）。
+当前提交本地通过：`typecheck`、`lint`、`build`、`check:budget` 通过；`npm run test:unit` 2379 passed；`npm run test:e2e` 169 passed（桌面 101 + 手机 36 + WebKit 32）。
 
 - 镇煞生产规模分两份契约：`docs/zhen-sha-kill-gate.md` 的历史评估表冻结于 `43c9ab1`（4 个文件 / 1,416 行），不再随引擎 PR 回写；当前生产规模由 `docs/zhen-sha-production-size.json` 滚动跟踪，统计 `src/games/zhen-sha/` 下所有非测试源文件（含仅被测试引用的 `boss-chart-adapter.ts`，因此不等于历史基线口径），漂移时单测失败并提示运行 `npm run sync:zhen-sha-size`。
 
 - 单测只覆盖引擎无关逻辑；不要在 Node 里启动 Phaser。
 - 端到端使用 `data-testid`，覆盖进入 / 返回、最近游玩时间、键盘 / 鼠标 / 触屏、修饰键、重置、容器级缩放、未知路由、快速切换的晚到 mount、休眠时销毁和监听器清理；贪食蛇、俄罗斯方块、2048、打砖块与扫雷另有完整玩法用例（暂停 / 重开、计分 / 结束、窗口失焦暂停与恢复、手机端触屏按钮或拖动、像素绘制与监听器清理，扫雷另有左右键、固定雷盘、难度预设与自定义切换、非法自定义错误、格子可见文本、焦点迁移、畸形调试雷盘回退、胜利 / 踩雷与计时器 / 调试接缝清理）。
-- 端到端会先构建，`webServer` 启动 `npm run preview`，因此测试的是生产产物，而不是 dev server。需要固定状态时由游戏通过 hash 路由后的 `?debug=1`（例如 `/#/games/breakout?debug=1`）提供只读调试接缝，测试不依赖开发服务器。
+- 端到端会先构建，`webServer` 并行启动 `npm run preview` 与仅测试用的本地房间服务（`npm run server:room:e2e`，监听 127.0.0.1:4174，缩短 join / turn / match 时限并固定 seed），浏览器只走 preview 同源的 `/ws` 代理，因此测试的是生产产物与真实服务端，而不是 dev server 或 mock。需要固定状态时由游戏通过 hash 路由后的 `?debug=1`（例如 `/#/games/breakout?debug=1`）提供只读调试接缝，测试不依赖开发服务器。
 - 生产构建后可用 `npm run preview` 手工检查 `dist/`。
 - 截图由 `npm run screenshots`（通用页）与 `npm run screenshots:breakout` 等游戏专用脚本生成；游戏与界面截图脚本的 WebKit 模式（`--webkit` 与专用 `--webkit-narrow`，例如 `npm run screenshots:minesweeper:webkit`、`npm run screenshots:minesweeper:webkit-narrow`）用 iPhone SE (3rd gen) 设备模拟产出 WebKit 证据，来源、复现命令与引擎 / 视口 / 主题记录见 [screenshots/README.md](./screenshots/README.md)。
 

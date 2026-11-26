@@ -13,6 +13,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "server:room": "tsx server/room/main.ts",
+    "server:room:e2e": "tsx tests/e2e/online-room-server.ts",
     "test": "vitest run",
     "test:unit": "vitest run",
     "test:watch": "vitest",

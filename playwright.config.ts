@@ -2,6 +2,8 @@ import { defineConfig, devices } from '@playwright/test';
 import { DEFAULT_E2E_REPORT_PATH } from './scripts/lib/e2e-flakes.mjs';
 
 const PORT = 4173;
+/** Test room service port; keep in sync with tests/e2e/online-room-server.ts. */
+const ROOM_PORT = 4174;
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -39,10 +41,27 @@ export default defineConfig({
       use: { ...devices['iPhone SE (3rd gen)'] },
     },
   ],
-  webServer: {
-    command: `npm run preview -- --host 127.0.0.1 --port ${PORT} --strictPort`,
-    url: `http://127.0.0.1:${PORT}`,
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-  },
+  // Both halves of the online e2e setup: the built preview site and the real
+  // room service it proxies `/ws` to. The room service is ready only when its
+  // health probe answers, and CI must never reuse a stale process on either
+  // port. `gracefulShutdown` lets the launcher release the port through its
+  // SIGTERM handler instead of being force-killed.
+  webServer: [
+    {
+      name: 'preview',
+      command: `npm run preview -- --host 127.0.0.1 --port ${PORT} --strictPort`,
+      url: `http://127.0.0.1:${PORT}`,
+      reuseExistingServer: !process.env.CI,
+      timeout: 120_000,
+      gracefulShutdown: { signal: 'SIGTERM', timeout: 10_000 },
+    },
+    {
+      name: 'room',
+      command: 'npm run server:room:e2e',
+      url: `http://127.0.0.1:${ROOM_PORT}/health`,
+      reuseExistingServer: !process.env.CI,
+      timeout: 120_000,
+      gracefulShutdown: { signal: 'SIGTERM', timeout: 10_000 },
+    },
+  ],
 });
