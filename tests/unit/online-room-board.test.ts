@@ -439,6 +439,33 @@ describe('online board intents and input modes', () => {
     expect(harness.intents).toEqual([{ kind: 'flag', row: 1, col: 1 }]);
   });
 
+  it('never appends a long-press flag to a completed tap', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const harness = mount(makeView());
+    const target = cell(harness.container, 1, 1);
+
+    pointer(target, 'pointerdown', { clientX: 4, clientY: 4 });
+    pointer(target, 'pointerup', { clientX: 4, clientY: 4 });
+    click(target);
+    // Releasing a short tap must disarm the long-press timer: at the deadline
+    // the tap has already become exactly one reveal, not a reveal plus a flag.
+    vi.advanceTimersByTime(DEFAULT_LONG_PRESS_MS);
+
+    expect(harness.intents).toEqual([{ kind: 'reveal', row: 1, col: 1 }]);
+  });
+
+  it('cancels a pending long press when the pointer is cancelled', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const harness = mount(makeView());
+    const target = cell(harness.container, 1, 1);
+
+    pointer(target, 'pointerdown', { clientX: 4, clientY: 4 });
+    pointer(target, 'pointercancel', { clientX: 4, clientY: 4 });
+    vi.advanceTimersByTime(DEFAULT_LONG_PRESS_MS);
+
+    expect(harness.intents).toEqual([]);
+  });
+
   it('does not double-flag when the browser also emits a touch contextmenu', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const harness = mount(makeView());
@@ -513,6 +540,27 @@ describe('online board intents and input modes', () => {
     expect(harness.intents).toEqual([
       { kind: 'flag', row: 1, col: 1 },
       { kind: 'reveal', row: 0, col: 0 },
+    ]);
+  });
+
+  it('clears a leftover release-click token when the next gesture starts', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const harness = mount(makeView());
+    const target = cell(harness.container, 1, 1);
+
+    pointer(target, 'pointerdown', { clientX: 4, clientY: 4 });
+    vi.advanceTimersByTime(DEFAULT_LONG_PRESS_MS);
+    // Some browsers skip the release click after the native contextmenu, so
+    // this hold's suppression token is left behind. It must not swallow the
+    // next tap on the same cell.
+    expect(harness.intents).toEqual([{ kind: 'flag', row: 1, col: 1 }]);
+
+    pointer(target, 'pointerdown', { clientX: 4, clientY: 4 });
+    click(target);
+
+    expect(harness.intents).toEqual([
+      { kind: 'flag', row: 1, col: 1 },
+      { kind: 'reveal', row: 1, col: 1 },
     ]);
   });
 
