@@ -4,11 +4,23 @@ import type { GameHandle, GameServices } from '../core/game';
 import { createBrowserStorage } from '../core/storage';
 import { findGame, games } from '../games/registry';
 import { renderHub } from './hub';
+import {
+  loadOnlineRoomClient,
+  openOnlineRoute,
+  type OnlineRoomModuleLoader,
+  type OnlineRouteHandle,
+} from './online-route';
 import { PlayHistory } from './play-history';
 import { gameHref, parseRoute } from './router';
 
 const REPO_URL = 'https://github.com/yeahdongcn-mk2/playground';
 const FRAMEWORK_DOC_URL = `${REPO_URL}/blob/main/docs/framework.md`;
+
+/** Optional shell seams; production uses the real lazy online client. */
+export interface AppOptions {
+  /** Override the lazy online room loader, for deterministic shell tests. */
+  readonly loadOnlineRoom?: OnlineRoomModuleLoader;
+}
 
 const SOUND_ICON = `
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
@@ -83,15 +95,19 @@ export class App {
   private readonly reduceMotion: boolean;
   private readonly view: HTMLElement;
   private readonly soundButton: HTMLButtonElement;
+  private readonly loadOnlineRoom: OnlineRoomModuleLoader;
   private currentHandle: GameHandle | null = null;
   private currentController: AbortController | null = null;
+  private currentOnlineRoute: OnlineRouteHandle | null = null;
+  private currentOnlineController: AbortController | null = null;
   private renderToken = 0;
 
-  constructor(root: HTMLElement) {
+  constructor(root: HTMLElement, options: AppOptions = {}) {
     this.root = root;
     this.audio = new AudioService(this.storage);
     this.playHistory = new PlayHistory(this.storage);
     this.reduceMotion = prefersReducedMotion();
+    this.loadOnlineRoom = options.loadOnlineRoom ?? loadOnlineRoomClient;
     this.root.innerHTML = SHELL_HTML;
 
     this.view = query<HTMLElement>(this.root, '#view');
@@ -106,12 +122,19 @@ export class App {
     void this.renderRoute();
   }
 
+  /** Detach the shell listeners and destroy the active route. */
+  stop(): void {
+    window.removeEventListener('hashchange', this.handleHashChange);
+    window.removeEventListener('beforeunload', this.handleBeforeUnload);
+    this.destroyCurrentRoute();
+  }
+
   private readonly handleHashChange = (): void => {
     void this.renderRoute();
   };
 
   private readonly handleBeforeUnload = (): void => {
-    this.destroyCurrentGame();
+    this.destroyCurrentRoute();
   };
 
   private bindChrome(): void {
@@ -150,7 +173,7 @@ export class App {
 
   private async renderRoute(): Promise<void> {
     const token = (this.renderToken += 1);
-    this.destroyCurrentGame();
+    this.destroyCurrentRoute();
     window.scrollTo(0, 0);
 
     const route = parseRoute(window.location.hash);
@@ -170,9 +193,33 @@ export class App {
     }
 
     if (route.kind === 'online') {
-      // The online room page is wired by the entry task; keep a recoverable
-      // page instead of falling through to the single-player game route.
-      this.renderRouteError('联机房间入口尚未接入', '联机房间页面正在接入，请先返回大厅。', false);
+      this.view.className = 'view view--game';
+      this.view.innerHTML = renderRouteLoading('联机扫雷');
+      document.title = '联机扫雷 · Playground Arcade';
+
+      const controller = new AbortController();
+      this.currentOnlineController = controller;
+      const online = openOnlineRoute(this.view, route.roomId, {
+        load: this.loadOnlineRoom,
+        signal: controller.signal,
+      });
+      this.currentOnlineRoute = online;
+
+      try {
+        await online.ready;
+        if (token !== this.renderToken || controller.signal.aborted) {
+          return;
+        }
+        this.currentOnlineController = null;
+        this.view.focus({ preventScroll: true });
+      } catch (error) {
+        if (token !== this.renderToken || controller.signal.aborted) {
+          return;
+        }
+        this.destroyCurrentOnlineRoute();
+        console.error('Failed to mount the online room', error);
+        this.renderRouteError('联机房间加载失败', '请检查网络后重试，或先返回大厅。', true);
+      }
       return;
     }
 
@@ -247,18 +294,33 @@ export class App {
     });
   }
 
-  private destroyCurrentGame(): void {
+  private destroyCurrentRoute(): void {
     this.currentController?.abort();
     this.currentController = null;
-    if (!this.currentHandle) {
-      return;
-    }
     const handle = this.currentHandle;
     this.currentHandle = null;
+    if (handle !== null) {
+      try {
+        handle.destroy();
+      } catch (error) {
+        console.error('Failed to destroy the previous game', error);
+      }
+    }
+    this.destroyCurrentOnlineRoute();
+  }
+
+  private destroyCurrentOnlineRoute(): void {
+    const online = this.currentOnlineRoute;
+    this.currentOnlineRoute = null;
+    this.currentOnlineController?.abort();
+    this.currentOnlineController = null;
+    if (online === null) {
+      return;
+    }
     try {
-      handle.destroy();
+      online.destroy();
     } catch (error) {
-      console.error('Failed to destroy the previous game', error);
+      console.error('Failed to destroy the online room', error);
     }
   }
 }

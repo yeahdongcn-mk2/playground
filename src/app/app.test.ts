@@ -2,21 +2,30 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './app';
 
+const apps: App[] = [];
+
 /**
  * The shell reads `window.location.hash` on start, so each case pins the hash
  * before constructing the App and lets the first render settle.
  */
-async function startAt(hash: string): Promise<{ root: HTMLElement }> {
+async function startAt(hash: string): Promise<{ root: HTMLElement; app: App }> {
   window.history.replaceState({}, '', hash);
   const root = document.createElement('div');
   root.id = 'app';
   document.body.append(root);
   const app = new App(root);
+  apps.push(app);
   app.start();
   await vi.waitFor(() => {
     expect(root.querySelector('#view')).not.toBeNull();
   });
-  return { root };
+  return { root, app };
+}
+
+/** Drive one hash change exactly the way the browser shell observes it. */
+function navigate(hash: string): void {
+  window.history.replaceState({}, '', hash);
+  window.dispatchEvent(new Event('hashchange'));
 }
 
 function routeTitle(root: HTMLElement): string | null {
@@ -30,31 +39,61 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  for (const app of apps.splice(0)) {
+    app.stop();
+  }
   document.body.replaceChildren();
   window.history.replaceState({}, '', '/');
 });
 
 describe('App online route', () => {
-  it('renders a recoverable placeholder for the online entry', async () => {
+  it('mounts the real online room lazily and destroys it on leave', async () => {
     const { root } = await startAt('#/online/minesweeper');
 
+    await vi.waitFor(
+      () => {
+        expect(root.querySelector('#view [data-testid="online-room"]')).not.toBeNull();
+      },
+      { timeout: 10_000 },
+    );
     expect(root.dataset.route).toBe('online');
-    expect(routeTitle(root)).toBe('联机房间入口尚未接入');
-    expect(document.title).toBe('联机房间入口尚未接入 · Playground Arcade');
+    expect(document.title).toBe('联机扫雷 · Playground Arcade');
+    expect(root.querySelector('#view [data-testid="landing"]')).not.toBeNull();
+    expect(root.querySelector('#view [data-testid="create-form"]')).not.toBeNull();
 
-    const back = root.querySelector<HTMLAnchorElement>('#view .route-error-actions a');
-    expect(back?.getAttribute('href')).toBe('#/');
-    expect(back?.textContent).toBe('返回大厅');
-    // The placeholder is not retryable: it is not a load failure.
-    expect(root.querySelector('#view [data-action="retry"]')).toBeNull();
+    navigate('#/');
+    await vi.waitFor(() => {
+      expect(root.querySelector('#view [data-testid="online-room"]')).toBeNull();
+      expect(root.querySelector('#view #hero-title')).not.toBeNull();
+    });
+
+    // Re-entering mounts one fresh room, never a leftover second copy.
+    navigate('#/online/minesweeper?room=room_1');
+    await vi.waitFor(
+      () => {
+        expect(root.querySelectorAll('#view [data-testid="online-room"]')).toHaveLength(1);
+      },
+      { timeout: 10_000 },
+    );
+
+    const roomInput = root.querySelector<HTMLInputElement>('#view [data-testid="join-room-id"]');
+    expect(roomInput?.value).toBe('room_1');
+    const share = root.querySelector<HTMLAnchorElement>('#view [data-testid="share-link"]');
+    expect(share?.getAttribute('href')).toBe('#/online/minesweeper?room=room_1');
   });
 
-  it('renders the same placeholder when the room query is present', async () => {
-    const { root } = await startAt('#/online/minesweeper?room=room_1');
+  it('destroys a mounted online room on beforeunload', async () => {
+    const { root } = await startAt('#/online/minesweeper');
+    await vi.waitFor(
+      () => {
+        expect(root.querySelector('#view [data-testid="online-room"]')).not.toBeNull();
+      },
+      { timeout: 10_000 },
+    );
 
-    expect(root.dataset.route).toBe('online');
-    expect(routeTitle(root)).toBe('联机房间入口尚未接入');
-    expect(root.querySelector('#view .route-error-hint')).not.toBeNull();
+    window.dispatchEvent(new Event('beforeunload'));
+
+    expect(root.querySelector('#view [data-testid="online-room"]')).toBeNull();
   });
 
   it('keeps other unknown routes on the not-found page', async () => {
