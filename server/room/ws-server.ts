@@ -222,18 +222,44 @@ class RoomSocketHub {
       this.handleMessage(connection, data, isBinary);
     });
     socket.on('pong', () => {
-      this.presence?.pongReceived(connection.id);
+      // A replaced socket may still deliver a pong while it closes; the
+      // connection no longer owns an active entry, so do not report it.
+      if (this.connections.get(socket) === connection) {
+        this.notifyPresence((presence) => presence.pongReceived(connection.id));
+      }
     });
     socket.on('close', () => {
       this.removeConnection(connection);
-      this.presence?.connectionClosed(connection.id);
+      this.notifyPresence((presence) => presence.connectionClosed(connection.id));
     });
     socket.on('error', () => {
       // A transport error is followed by `close`, which cleans the mapping.
       socket.terminate();
     });
 
-    this.presence?.connectionOpened(connection.id, this.presenceSocket(socket));
+    this.notifyPresence((presence) =>
+      presence.connectionOpened(connection.id, this.presenceSocket(socket)),
+    );
+  }
+
+  /**
+   * Run one presence hook without letting a controller fault break transport
+   * bookkeeping.
+   *
+   * Presence is an observer of the socket layer: a throw from the controller
+   * must not prevent a replacement close, skip deliveries or leak an uncaught
+   * exception out of a WebSocket event listener.
+   */
+  private notifyPresence(hook: (presence: PresenceController) => void): void {
+    if (this.presence === null) {
+      return;
+    }
+    try {
+      hook(this.presence);
+    } catch {
+      // The controller is an internal collaborator; its failure is reported
+      // by its own tests, not by corrupting the transport's state machine.
+    }
   }
 
   /** Adapt the live socket to the ping-only surface the controller may use. */
@@ -374,10 +400,10 @@ class RoomSocketHub {
       return;
     }
     this.unbindToken(connection);
-    this.replaceTokenOwner(token, connection);
+    this.replaceTokenOwner(token);
     connection.playerToken = token;
     this.tokenConnections.set(token, connection);
-    this.presence?.tokenBound(connection.id, token);
+    this.notifyPresence((presence) => presence.tokenBound(connection.id, token));
   }
 
   /**
@@ -389,15 +415,13 @@ class RoomSocketHub {
    * observable, and this path never calls the room manager, so `seq` and the
    * `turn` / `match` deadlines stay exactly where they were.
    */
-  private replaceTokenOwner(token: PlayerToken, replacement: ClientConnection): void {
+  private replaceTokenOwner(token: PlayerToken): void {
     const existing = this.tokenConnections.get(token);
-    if (existing === undefined || existing === replacement) {
+    if (existing === undefined) {
       return;
     }
-    this.tokenConnections.delete(token);
-    existing.playerToken = null;
     this.connections.delete(existing.socket);
-    this.presence?.tokenUnbound(existing.id);
+    this.unbindToken(existing);
     existing.socket.close(SESSION_REPLACED_CLOSE_CODE, SESSION_REPLACED_REASON);
   }
 
@@ -411,7 +435,7 @@ class RoomSocketHub {
     if (this.tokenConnections.get(token) === connection) {
       this.tokenConnections.delete(token);
     }
-    this.presence?.tokenUnbound(connection.id);
+    this.notifyPresence((presence) => presence.tokenUnbound(connection.id));
   }
 
   /**

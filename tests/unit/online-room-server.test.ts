@@ -90,8 +90,11 @@ function matchFailure(
  *
  * It follows the real delivery contract: `create`/`join` bind the requesting
  * connection to its seat token and every accepted command returns the
- * per-seat `room_state` deliveries built by `contracts.ts`. Lifecycle
- * correctness is covered by the room-manager tests, not here.
+ * per-seat `room_state` deliveries built by `contracts.ts`. It also carries a
+ * deliberately small token-resume path (seat restored in place, current
+ * `seq`/`deadlineAt`, optional playing snapshot) so the transport's rebinding
+ * and delivery order can be tested; real reconnect and lifecycle correctness
+ * stay in the room-manager tests.
  */
 class FakeRoomManager implements MatchRoomManager {
   readonly calls: string[] = [];
@@ -184,8 +187,7 @@ class FakeRoomManager implements MatchRoomManager {
     if (message.roomId !== this.roomId) {
       return commandFailure('room-not-found');
     }
-    this.state = 'playing';
-    this.seq += 1;
+    this.beginMatch();
     return { ok: true, deliveries: roomStateDeliveries(this.snapshot()) };
   }
 
@@ -261,6 +263,23 @@ class FakeRoomManager implements MatchRoomManager {
     }
     this.seats = this.seats.filter((candidate) => candidate !== seat);
     this.seq += 1;
+    // A host leaving a lobby dissolves the room. The real manager builds its
+    // final broadcast before forgetting the seat, so the leaving socket still
+    // receives room_closed; mirror that so the transport's
+    // deliver-before-unbind order is actually covered.
+    if (seat.isHost) {
+      this.state = 'dissolved';
+      const closed: RoomClosedMessage = {
+        type: 'room_closed',
+        roomId: this.roomId,
+        seq: this.seq,
+        reason: 'host-left',
+        finalState: 'dissolved',
+      };
+      const deliveries: RoomDelivery[] = [...roomStateDeliveries(this.snapshot())];
+      deliveries.push({ playerToken: seat.playerToken, message: closed });
+      return { ok: true, deliveries };
+    }
     return { ok: true, deliveries: roomStateDeliveries(this.snapshot()) };
   }
 
@@ -412,10 +431,7 @@ class TestClient {
   }
 
   closed(): Promise<void> {
-    if (this.socket.readyState === WebSocket.CLOSED) {
-      return Promise.resolve();
-    }
-    return new Promise((resolve) => this.socket.once('close', () => resolve()));
+    return this.closeInfo.then(() => undefined);
   }
 
   /** Close code/reason of this socket, whether or not it has already closed. */
@@ -977,9 +993,17 @@ describe('room WebSocket/HTTP transport', () => {
       'pong forwarded',
     );
 
-    // A successful leave releases the seat while the socket stays open, so the
-    // transport reports the unbind before the socket itself closes.
+    // A successful host leave dissolves the room. The transport must send the
+    // result (including the final room_closed addressed to the leaving seat)
+    // before releasing the token, so that frame is observable here.
     client.send({ type: 'leave', requestId: 'req-leave', roomId: created.roomId });
+    const finalFrame = await client.next();
+    expect(finalFrame).toMatchObject({
+      type: 'room_closed',
+      roomId: created.roomId,
+      reason: 'host-left',
+      finalState: 'dissolved',
+    });
     await waitForPresence(
       presence,
       (event) => event.kind === 'unbound' && event.connectionId === connectionId,
@@ -1002,6 +1026,45 @@ describe('room WebSocket/HTTP transport', () => {
       { kind: 'unbound', connectionId, playerToken: hostToken },
       { kind: 'closed', connectionId, playerToken: null },
     ]);
+  });
+
+  it('reports a bound token on close instead of a separate unbind', async () => {
+    const manager = new FakeRoomManager();
+    const presence = new FakePresenceController();
+    const server = await startTestServer(manager, presence);
+    const client = await connect(server.port);
+
+    client.send(createMessage());
+    const created = await nextRoomState(client);
+    const hostToken = requiredToken(created);
+    await waitForPresence(
+      presence,
+      (event) => event.kind === 'bound' && event.playerToken === hostToken,
+      'host token bound',
+    );
+    const callsBefore = [...manager.calls];
+
+    const closed = client.closed();
+    client.terminate();
+    await closed;
+    await waitForPresence(
+      presence,
+      (event) => event.kind === 'closed' && event.playerToken === hostToken,
+      'bound connection closed',
+    );
+
+    // A socket close while the seat is still bound is reported through
+    // `connectionClosed` with the token attached; that is how the controller
+    // starts offline detection. A separate `tokenUnbound` would instead look
+    // like a deliberate release, so none may be emitted.
+    const connectionId = connectionIdForToken(presence, hostToken);
+    expect(presence.events.filter((event) => event.connectionId === connectionId)).toEqual([
+      { kind: 'opened', connectionId, playerToken: null },
+      { kind: 'bound', connectionId, playerToken: hostToken },
+      { kind: 'closed', connectionId, playerToken: hostToken },
+    ]);
+    expect(presence.events.some((event) => event.kind === 'unbound')).toBe(false);
+    expect(manager.calls).toEqual(callsBefore);
   });
 
   it('replaces the active socket for a token without moving room state or deadlines', async () => {
@@ -1077,6 +1140,7 @@ describe('room WebSocket/HTTP transport', () => {
       throw new Error(`expected snapshot, received ${resumedSnapshot.type}`);
     }
     expect(resumedSnapshot.deadlineAt).toBe(before.deadlineAt);
+    expect(resumedSnapshot.matchDeadlineAt).toBe(before.joinDeadlineAt);
 
     // The replaced socket is closed with an observable application code so a
     // client can tell a takeover from a network failure.
@@ -1118,7 +1182,10 @@ describe('room WebSocket/HTTP transport', () => {
       { kind: 'closed', connectionId: guestId, playerToken: null },
     ]);
 
-    // Only the new socket holds the token now.
+    // Only the new socket holds the token now. The old socket is already
+    // closing, so the 4001 close plus the unbound timeline above are the
+    // observable proof its mapping is gone; this marker proves the token now
+    // routes to the replacement alone.
     const marker: RoomClosedMessage = {
       type: 'room_closed',
       roomId,
