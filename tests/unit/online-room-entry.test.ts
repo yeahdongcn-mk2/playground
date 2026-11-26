@@ -15,6 +15,7 @@ import type { OnlineRoomViewOptions } from '../../src/games/minesweeper/online/c
 import { validateClientMessage } from '../../src/games/minesweeper/online/protocol';
 import { PROTOCOL_VERSION } from '../../src/games/minesweeper/online/types';
 import type {
+  ActionResultMessage,
   ActionMessage,
   ClientToServerMessage,
   CreateMessage,
@@ -101,6 +102,24 @@ function snapshot(overrides: Partial<SnapshotMessage> = {}): SnapshotMessage {
     remainingMines: CONFIG.mines,
     revealedSafeCount: 0,
     board: redactedBoard(CONFIG.rows, CONFIG.cols),
+    ...overrides,
+  };
+}
+
+function actionResult(overrides: Partial<ActionResultMessage> = {}): ActionResultMessage {
+  return {
+    type: 'action_result',
+    roomId: ROOM_ID,
+    matchId: MATCH_ID,
+    actionId: 'action-entry-test',
+    seq: 4,
+    turnId: 2,
+    accepted: true,
+    reason: null,
+    revealedCells: [{ row: 0, col: 0 }],
+    flaggedCell: null,
+    turnPlayerId: HOST_ID,
+    deadlineAt: NOW + 30_000,
     ...overrides,
   };
 }
@@ -348,6 +367,43 @@ describe('mountOnlineRoom composition root', () => {
       seq: 3,
       turnId: 2,
     });
+  });
+
+  it('locks the real board while an action waits for its snapshot', () => {
+    const harness = mountRoom();
+    const socket = createRoom(harness);
+
+    socket.receive(roomState({ playerToken: HOST_TOKEN, seq: 1 }));
+    socket.receive(
+      roomState({
+        playerToken: HOST_TOKEN,
+        seq: 2,
+        state: 'playing',
+        matchId: MATCH_ID,
+        turnPlayerId: HOST_ID,
+        deadlineAt: NOW + 30_000,
+      }),
+    );
+    socket.receive(snapshot({ seq: 3 }));
+
+    const boardMount = byTestId<HTMLElement>(harness.root, 'online-board');
+    const before = boardMount.querySelector<HTMLButtonElement>('button[data-cell]');
+    if (before === null) {
+      throw new Error('the real board renderer produced no cell');
+    }
+    expect(before.dataset['locked']).toBe('false');
+
+    // `action_result` advances the store's lastSeq before the paired snapshot
+    // arrives, so the snapshot is stale and the composed gate must keep the
+    // whole board locked until the server resync lands.
+    socket.receive(actionResult({ seq: 4 }));
+
+    const locked = boardMount.querySelector<HTMLButtonElement>('button[data-cell]');
+    if (locked === null) {
+      throw new Error('the real board renderer produced no cell after the action result');
+    }
+    expect(locked.dataset['locked']).toBe('true');
+    expect(locked.dataset['blockReason']).toBe('awaiting-server');
   });
 
   it('destroys the mounted room but keeps the seat resumable', () => {

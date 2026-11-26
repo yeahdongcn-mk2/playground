@@ -206,8 +206,13 @@ export function mountOnlineRoom(
 
   // The board renderer factory has no state argument, so the composition root
   // keeps the latest committed state from the store it created. The board's
-  // context closure reads this value at render time, which is what lets the end
-  // screen reveal mines while a snapshot still says `playing`.
+  // context closure reads this value at render time to give the real board the
+  // authoritative phase/turn/actionGate (the redacted view model alone cannot
+  // see, for example, that an `action_result` made the snapshot stale).
+  // `finalBoard` comes from the end message because the board context contract
+  // requires it: it is reserved for a result screen that renders the board in
+  // the `finished` phase. The current room view unmounts the board as soon as
+  // the phase leaves `playing`, so it does not display that value today.
   let latestState: RoomClientState = createInitialRoomClientState();
 
   const createTransport = createRoomTransportFactory({
