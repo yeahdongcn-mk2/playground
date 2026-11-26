@@ -178,10 +178,10 @@ npm run verify:doc-counts           # 校验三份文档计数（基线 unitTest
 npm run build                       # typecheck + vite build → dist/
 npm run check:budget                # 入口 chunk 无引擎 + gzip 预算
 npm run preview                     # 本地预览生产构建
-npm run test:e2e                    # 先 build；webServer 拉起 preview（在线 e2e 另起测试用房间服务）
+npm run test:e2e                    # 先 build；webServer 只拉起 preview
 ```
 
-上述 npm scripts（含 `lint`、`check:budget`）由 t2 落地时写入 `package.json`；`test:e2e` 前需先 `build`，Playwright `webServer` 启动 `preview`，在线 e2e 另起仅测试用的本地房间服务。端到端最低覆盖：进入/退出、暂停/重开、最高分持久化、快速切换不残留 canvas/RAF、触屏/移动视口、基本可访问性、用可控延迟的假 `GameModule` 覆盖 abort 后晚到 mount；e2e 覆盖 Chromium 桌面、Pixel 7 手机视口与 mobile-webkit（iPhone SE (3rd gen)），Firefox 暂不纳入 v1。
+上述 npm scripts（含 `lint`、`check:budget`）由 t2 落地时写入 `package.json`；`test:e2e` 前需先 `build`，Playwright `webServer` 只启动 `preview`。端到端最低覆盖：进入/退出、暂停/重开、最高分持久化、快速切换不残留 canvas/RAF、触屏/移动视口、基本可访问性、用可控延迟的假 `GameModule` 覆盖 abort 后晚到 mount；e2e 覆盖 Chromium 桌面、Pixel 7 手机视口与 mobile-webkit（iPhone SE (3rd gen)），Firefox 暂不纳入 v1。
 
 单测计数是生成产物：`npm run docs:counts:write` 只把实测 `numTotalTests` 写进 `README.md`、`docs/framework.md`、`docs/snake-design.md` 与 `docs/score-baseline.json` 的 `unitTests`，其余字节不变，重复跑无 diff；PR 只生成不提交，合入 main 后由 `doc-counts-sync` 提交这四个文件，子任务不再修改计数。`verify:doc-counts` 校验三份文档，`score` 继续对比基线且不运行 `--update`。
 

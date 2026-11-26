@@ -232,7 +232,7 @@ pre-commit 固定为 `4.7.0`，与 `.github/workflows/ci.yml` 的安装命令和
 | `npm run verify:doc-counts` | 校验三份文档记录的单测计数与 Vitest 实测 `numTotalTests` 一致；基线 `docs/score-baseline.json` 的 `unitTests` 由 `npm run score` 复核 |
 | `npm run sync:zhen-sha-size` | 重新生成 `docs/zhen-sha-production-size.json`：滚动快照统计 `src/games/zhen-sha/` 下所有非测试源文件（含仅被测试引用的 `boss-chart-adapter.ts`），漂移时 `npm run test:unit` 失败并提示重跑本命令；`docs/zhen-sha-kill-gate.md` 的历史评估表冻结于 `43c9ab1`（4 个文件 / 1,416 行），不随引擎 PR 回写，两者口径不同 |
 | `npm run score` | 运行 score 时先执行 `npm run build`（`check:budget` 读取 `dist/`，因此干净检出上无需手动预构建），再汇总六条校验并与 `docs/score-baseline.json` 对比：默认打印「指标 / 当前值 / 基线值 / 差值」表格，并在末尾输出一行 `SCORE_JSON <json>`；任一指标退化时退出 1，指标变好只报差值、不自动更新基线；`npm run score -- --update` 用当前值重建基线（快照不完整时拒绝写入并退出 2） |
-| `npm run test:e2e` | 先构建，再用 `vite preview` 跑全部 Playwright 项目（Chromium 桌面 / Pixel 7 + `mobile-webkit`）；`webServer` 同时拉起仅测试用的本地房间服务，浏览器经 preview 同源 `/ws` 访问真实服务端 |
+| `npm run test:e2e` | 先构建，再用 `vite preview` 跑全部 Playwright 项目（Chromium 桌面 / Pixel 7 + `mobile-webkit`） |
 | `npm run test:e2e:webkit` | 先构建，再只跑 `mobile-webkit` 项目（iPhone SE (3rd gen)）：framework 手机端、扫雷 WebKit 冒烟、触屏手势 / 触屏难度表单、贪食蛇 / 俄罗斯方块 / 2048 / 打砖块的手机端用例，2048 READY 两跑字节守卫，以及 320×640 / 360×640 / 375×667 / 412×839 窄屏契约 |
 | `npm run lint` | oxlint（覆盖 `src`、`tests`、`scripts` 与 `server`；error 与 warning 都会失败，warning 经 `--deny-warnings` 升级）+ `scripts/check-boundaries.mjs` 模块依赖方向检查（失败同样返回非 0） |
 | `npm run check:budget` | 检查体积门禁：入口不含引擎标记（Phaser.Game/Scene/AUTO、THREE.）且 ≤50 KB gzip，`dist/assets` 全部 JS chunk 合计 ≤450 KB gzip，`dist/assets/zhen-sha-view-*.js` 合计 ≤35 KB gzip。0 个匹配视为失败并提示先 `npm run build`，多个匹配按合计判定；所有 gzip 数字由 `node:zlib` 的 `gzipSync` 默认级别测得，Vite build 打印的 gzip 不是门禁输入 |
@@ -407,7 +407,7 @@ npm run check:budget # 通过，实际输出：
 # Zhen Sha view JS: zhen-sha-view-BTO-PZ2R.js 9.05 KB gzip (per-game budget 35 KB)
 # Budget check OK: shell is engine-free and within the 2D download budget.
 npm run score        # 通过（打印「指标 / 当前值 / 基线值 / 差值」表与末行 SCORE_JSON；退化退出 1，变好只报差值）
-npm run test:e2e     # 169 passed（桌面 101 + 手机 36 + WebKit 32）
+npm run test:e2e     # 170 passed（桌面 102 + 手机 36 + WebKit 32）
 ```
 
 CI 的 `verify` job 会在 `Bundle budget` 之后、`End-to-end tests` 之前运行 `npm run score`（见上文「CI 检查顺序」）。该步骤只与 `docs/score-baseline.json` 对比：不会运行 `npm run score -- --update`，因此 `verify` job 不会提交或更新基线（`Generate doc test counts` 只改写工作区的 `unitTests`，不提交）；基线退化或损坏时 job 直接失败。单测计数由 `npm run docs:counts:write` 生成，合入 main 后 `doc-counts-sync` 只提交 `README.md`、`docs/framework.md`、`docs/snake-design.md`、`docs/score-baseline.json` 四个计数文件（含基线）。score 内部的 `verify:doc-counts` 默认会再跑一次单测（见 [docs/framework.md](docs/framework.md) 第 13 节），这是它现有的采集语义。

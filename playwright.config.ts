@@ -1,9 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
 import { DEFAULT_E2E_REPORT_PATH } from './scripts/lib/e2e-flakes.mjs';
+import { ONLINE_ROOM_SERVER_PORT } from './tests/e2e/online-room-constants';
 
 const PORT = 4173;
-/** Test room service port; keep in sync with tests/e2e/online-room-server.ts. */
-const ROOM_PORT = 4174;
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -57,8 +56,11 @@ export default defineConfig({
     },
     {
       name: 'room',
-      command: 'npm run server:room:e2e',
-      url: `http://127.0.0.1:${ROOM_PORT}/health`,
+      // Run the launcher directly: the room server is test-only, so it needs no
+      // package.json script. Its port comes from the shared constants module,
+      // which only reads local values and never starts a listener.
+      command: 'npx --no-install tsx tests/e2e/online-room-server.ts',
+      url: `http://127.0.0.1:${ONLINE_ROOM_SERVER_PORT}/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
       gracefulShutdown: { signal: 'SIGTERM', timeout: 10_000 },

@@ -3,15 +3,16 @@
  *
  * The browser e2e suite talks to the real room service through the preview
  * site's same-origin `/ws` proxy; this process is the room half of that pair.
- * It reuses the production composition (`startRoomServerFromConfig`) and only
+ * It reuses the production startup (`main` from `server/room/main.ts`) and only
  * changes what a test needs:
  *
- * - a fixed loopback port (4174) so `vite preview` can proxy to it and
- *   Playwright can wait on `GET /health`;
- * - shortened join/turn/match windows and a fixed match seed, so a test never
- *   waits the design's 2 min / 30 s / 15 min deadlines and a replay is stable;
- * - one-shot `SIGTERM`/`SIGINT` handlers that close the server, so Playwright's
- *   `gracefulShutdown` leaves the port free instead of relying on `SIGKILL`.
+ * - a fixed loopback port from `online-room-constants.ts` so `vite preview` can
+ *   proxy to it and Playwright can wait on `GET /health`;
+ * - shortened join/match windows and a fixed match seed, so a test never waits
+ *   the design's 2 min / 15 min deadlines and a replay is stable; the turn
+ *   window keeps production's value so it still covers the presence chain;
+ * - the production SIGTERM/SIGINT handlers, so Playwright's `gracefulShutdown`
+ *   leaves the port free instead of relying on `SIGKILL`.
  *
  * This file is not a Playwright spec: it is launched from
  * `playwright.config.ts` as a `webServer` command. Importing it in a test is
@@ -19,94 +20,37 @@
  */
 
 import { pathToFileURL } from 'node:url';
-import {
-  startRoomServerFromConfig,
-  type RoomServerRuntimeOptions,
-} from '../../server/room/main';
+import { TURN_TIMEOUT_MS } from '../../server/room/contracts';
+import { main } from '../../server/room/main';
 import type { RoomManagerOptions } from '../../server/room/room-manager';
-import type { RoomServer } from '../../server/room/ws-server';
-
-/** Loopback host the test room service binds. */
-export const ONLINE_ROOM_SERVER_HOST = '127.0.0.1';
-
-/** Port the test room service binds; `vite preview` proxies `/ws` here. */
-export const ONLINE_ROOM_SERVER_PORT = 4174;
-
-/** Base URL of the test room service (health probe and WebSocket origin). */
-export const ONLINE_ROOM_SERVER_URL = `http://${ONLINE_ROOM_SERVER_HOST}:${ONLINE_ROOM_SERVER_PORT}`;
-
-/** Readiness URL Playwright polls before starting the browser tests. */
-export const ONLINE_ROOM_HEALTH_URL = `${ONLINE_ROOM_SERVER_URL}/health`;
+import {
+  ONLINE_ROOM_SERVER_HOST,
+  ONLINE_ROOM_SERVER_PORT,
+} from './online-room-constants';
 
 /**
  * Deterministic room-manager settings for e2e runs.
  *
- * The windows are shorter than production and the fixed seed makes a match
- * replayable. The turn window still respects the server's ordered timing chain
- * (`OFFLINE_DETECT_MS` 10 s < `RECONNECT_GRACE_MS` 15 s < turn < match), so an
- * online/reconnect spec built on this launcher tests the real lifecycle rather
- * than a turn forfeit that pre-empts presence. The presence windows themselves
- * are not configurable through {@link RoomManagerOptions}.
+ * The join and match windows are shorter than production and the fixed seed
+ * makes a match replayable. The turn window keeps production's value because
+ * the room manager's presence windows are not injectable through
+ * {@link RoomManagerOptions}, and it must sit after the whole presence chain:
+ * `RECONNECT_GRACE_MS` (15 s) starts only after `OFFLINE_DETECT_MS` (10 s)
+ * fires, so grace can last until 25 s. A shorter turn deadline would forfeit
+ * the match before the grace window resolves, so an online/reconnect spec built
+ * on this launcher would see a turn forfeit instead of the real lifecycle.
+ * `online-server-smoke.spec.ts` locks
+ * `OFFLINE_DETECT_MS + RECONNECT_GRACE_MS < turn < match`.
  *
  * They are exported so a spec can assert against the same values instead of
  * copying the numbers.
  */
 export const ONLINE_ROOM_MANAGER_OPTIONS = {
   joinTimeoutMs: 10_000,
-  turnTimeoutMs: 20_000,
+  turnTimeoutMs: TURN_TIMEOUT_MS,
   matchTimeoutMs: 120_000,
   createSeed: () => 0x5eed_5eed,
 } as const satisfies RoomManagerOptions;
-
-/**
- * Start the real room service on the test port.
- *
- * Extra runtime options are forwarded for tests that need a manual clock or a
- * pre-built manager; manager option defaults still apply unless overridden.
- */
-export async function startTestRoomServer(
-  options: RoomServerRuntimeOptions = {},
-): Promise<RoomServer> {
-  return startRoomServerFromConfig(
-    { host: ONLINE_ROOM_SERVER_HOST, port: ONLINE_ROOM_SERVER_PORT },
-    {
-      ...options,
-      managerOptions: { ...ONLINE_ROOM_MANAGER_OPTIONS, ...options.managerOptions },
-    },
-  );
-}
-
-/** Report an unknown thrown value without hiding a plain string. */
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-/**
- * Run the launcher as a long-lived web server until Playwright stops it.
- *
- * A startup failure sets a non-zero exit code so Playwright fails fast; the
- * shutdown handlers close the listener so the port is released before the
- * process exits.
- */
-async function main(): Promise<void> {
-  let server: RoomServer;
-  try {
-    server = await startTestRoomServer();
-  } catch (error) {
-    console.error(describeError(error));
-    process.exitCode = 1;
-    return;
-  }
-
-  const shutdown = (): void => {
-    void server.close().catch((error: unknown) => {
-      console.error(describeError(error));
-      process.exitCode = 1;
-    });
-  };
-  process.once('SIGTERM', shutdown);
-  process.once('SIGINT', shutdown);
-}
 
 /** True only when this module is the file Node/tsx was asked to run. */
 function isDirectExecution(): boolean {
@@ -122,5 +66,15 @@ function isDirectExecution(): boolean {
 }
 
 if (isDirectExecution()) {
-  void main();
+  // Reuse the production entry point: it owns startup errors, logging and the
+  // one-shot SIGTERM/SIGINT handlers. Only the test bind and manager options
+  // are overrides.
+  void main(
+    {
+      ...process.env,
+      HOST: ONLINE_ROOM_SERVER_HOST,
+      PORT: String(ONLINE_ROOM_SERVER_PORT),
+    },
+    { managerOptions: ONLINE_ROOM_MANAGER_OPTIONS },
+  );
 }
