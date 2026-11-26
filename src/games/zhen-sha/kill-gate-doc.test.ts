@@ -198,6 +198,10 @@ describe('zhen-sha kill gate engineering assessment', () => {
     expect(progress).not.toContain('3,375');
     expect(progress).not.toContain('1,175');
     expect(progress).not.toContain('8 个文件');
+    // The task also removes the 2,229 / 2,288 hand-calculated aggregations;
+    // adding either number back must fail this assertion.
+    expect(progress).not.toContain('2,229');
+    expect(progress).not.toContain('2,288');
     expect(progress).not.toMatch(
       /`[^`\n]+\.(?:ts|css)`[：:]\s*\d[\d,]*(?:\s*→\s*\d[\d,]*)?\s*行/,
     );
