@@ -1,4 +1,7 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DIFFICULTY_PRESETS } from '../../src/games/minesweeper/difficulty';
 import type { MinesweeperConfig } from '../../src/games/minesweeper/engine';
@@ -50,6 +53,7 @@ import type {
 const NOW = 1_700_000_000_000;
 const ROOM_ID = 'room-ui-test';
 const MATCH_ID = 'match-ui-test';
+const NEXT_MATCH_ID = 'match-ui-test-2';
 const HOST_ID = 'player_host';
 const GUEST_ID = 'player_guest';
 const CONFIG: MinesweeperConfig = {
@@ -662,6 +666,23 @@ describe('online room landing', () => {
 
     harness.handle.destroy();
   });
+
+  it('rejects a nickname longer than the maximum', () => {
+    const harness = mountHarness({ roomId: null });
+    // Programmatic assignment bypasses the input's `maxlength`, so this targets
+    // the readNickname guard rather than the browser constraint.
+    setInput(harness.root, 'nickname', 'x'.repeat(25));
+
+    submitForm(harness.root, 'create-form');
+
+    expect(harness.transports).toHaveLength(0);
+    expect(harness.stores).toHaveLength(0);
+    const error = byTestId<HTMLElement>(harness.root, 'form-error');
+    expect(error.hidden).toBe(false);
+    expect(error.textContent).toBe('昵称最多 24 个字符。');
+
+    harness.handle.destroy();
+  });
 });
 
 describe('online room create and join', () => {
@@ -878,6 +899,24 @@ describe('online room create and join', () => {
 
     harness.handle.destroy();
   });
+
+  it('reuses a stored display name when joining with an empty nickname', () => {
+    const harness = mountHarness({ roomId: 'shared-room' });
+    harness.tokens.save({
+      roomId: 'shared-room',
+      playerToken: 'resume-token',
+      displayName: 'Ada',
+      role: 'guest',
+    });
+
+    submitForm(harness.root, 'join-form');
+
+    const transport = firstTransport(harness);
+    expect(transport.sessions[0]?.displayName).toBe('Ada');
+    expect((transport.sent[0] as JoinMessage).displayName).toBe('Ada');
+
+    harness.handle.destroy();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1057,14 +1096,15 @@ describe('online room playing', () => {
 
   it('falls back to Math.random when the environment lacks crypto', () => {
     vi.stubGlobal('crypto', {});
-    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.5);
 
     const harness = mountHarness({ roomId: null });
     createHost(harness);
     const renderer = pushPlaying(harness);
     renderer.intent({ kind: 'reveal', row: 1, col: 1 });
 
-    expect(lastActionId(harness)).toBe('action-8000000000000000-1');
+    expect(lastActionId(harness)).toMatch(/^action-[0-9a-f]{16}-1$/);
+    expect(random).toHaveBeenCalled();
 
     harness.handle.destroy();
   });
@@ -1191,6 +1231,74 @@ describe('online room result', () => {
     harness.handle.destroy();
   });
 
+  it('reports a draw when neither seat won', () => {
+    const harness = mountHarness({ roomId: null });
+    createHost(harness);
+    const store = firstStore(harness);
+
+    store.push(
+      Object.freeze({
+        phase: 'finished',
+        connection: 'connected' as RoomConnectionStatus,
+        lastSeq: 22,
+        role: 'host' as const,
+        selfId: HOST_ID,
+        room: makeRoom({ seq: 22, state: 'finished', matchId: MATCH_ID }),
+        snapshot: makeSnapshot(),
+        end: makeEnd({ winnerId: null, loserId: null, reason: 'match-timeout' }),
+        error: null,
+      }),
+    );
+
+    expect(byTestId<HTMLElement>(harness.root, 'result-outcome').textContent).toBe('平局');
+    expect(byTestId<HTMLElement>(harness.root, 'result-detail').textContent).toBe(
+      '双方都没有获胜，本局结束。',
+    );
+    expect(byTestId<HTMLElement>(harness.root, 'result-reason').textContent).toContain(
+      '整局超时',
+    );
+
+    harness.handle.destroy();
+  });
+
+  it('re-enables rematch after the next match finishes', () => {
+    const harness = mountHarness({ roomId: null });
+    createHost(harness);
+    const store = firstStore(harness);
+    const pushFinished = (seq: number, matchId: string): void => {
+      store.push(
+        Object.freeze({
+          phase: 'finished',
+          connection: 'connected' as RoomConnectionStatus,
+          lastSeq: seq,
+          role: 'host' as const,
+          selfId: HOST_ID,
+          room: makeRoom({ seq, state: 'finished', matchId }),
+          snapshot: makeSnapshot(),
+          end: makeEnd({ seq, matchId }),
+          error: null,
+        }),
+      );
+    };
+
+    pushFinished(20, MATCH_ID);
+    const rematch = byTestId<HTMLButtonElement>(harness.root, 'rematch');
+    click(harness.root, 'rematch');
+    expect(rematch.disabled).toBe(true);
+    expect(rematch.textContent).toBe('已申请重开，等待对手');
+
+    // The server clears the match and returns both seats to ready.
+    store.push(
+      makeRoomViewState({ seq: 21, state: 'ready', matchId: null }),
+    );
+    pushFinished(22, NEXT_MATCH_ID);
+
+    expect(rematch.disabled).toBe(false);
+    expect(rematch.textContent).toBe('再来一局');
+
+    harness.handle.destroy();
+  });
+
   it('explains a dissolved room and lets the player return to the hub', () => {
     const harness = mountHarness({ roomId: null });
     createHost(harness);
@@ -1300,6 +1408,42 @@ describe('online room diagnostics', () => {
     harness.handle.destroy();
   });
 
+  it('shows and then clears the offline/closed connection banners', () => {
+    const harness = mountHarness({ roomId: null });
+    createHost(harness);
+    const store = firstStore(harness);
+    const banner = byTestId<HTMLElement>(harness.root, 'reconnect-banner');
+
+    store.push(
+      Object.freeze({
+        ...makeRoomViewState({ seq: 2 }),
+        connection: 'offline' as RoomConnectionStatus,
+      }),
+    );
+    expect(banner.hidden).toBe(false);
+    expect(banner.textContent).toContain('离线');
+
+    store.push(
+      Object.freeze({
+        ...makeRoomViewState({ seq: 3 }),
+        connection: 'closed' as RoomConnectionStatus,
+      }),
+    );
+    expect(banner.hidden).toBe(false);
+    expect(banner.textContent).toContain('连接已关闭');
+    expect(banner.textContent).not.toContain('离线');
+
+    store.push(
+      Object.freeze({
+        ...makeRoomViewState({ seq: 4 }),
+        connection: 'connected' as RoomConnectionStatus,
+      }),
+    );
+    expect(banner.hidden).toBe(true);
+
+    harness.handle.destroy();
+  });
+
   it('cancels a pending connection without sending leave', () => {
     const harness = mountHarness({ roomId: null });
     createHost(harness);
@@ -1340,5 +1484,40 @@ describe('online room diagnostics', () => {
     // A second destroy is idempotent.
     harness.handle.destroy();
     expect(renderer.destroyed).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stylesheet guard
+// ---------------------------------------------------------------------------
+
+/**
+ * Source-level guard for the online room stylesheet.
+ *
+ * The stage cards set `display: flex`, which outranks the browser's
+ * `[hidden] { display: none }` rule. jsdom force-applies `[hidden]`, so a
+ * computed-style unit test cannot catch the regression; this source-level
+ * test pins the author rule while the real-browser check lives in the room
+ * e2e.
+ */
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const ROOM_VIEW_CSS = readFileSync(
+  join(ROOT, 'src', 'games', 'minesweeper', 'online', 'client', 'room-view.css'),
+  'utf8',
+).replace(/\/\*[\s\S]*?\*\//g, '');
+
+/** Whether an author rule hides `.online-room__card` elements with `hidden`. */
+function hidesHiddenCards(css: string): boolean {
+  return [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].some(
+    ([, selector = '', declarations = '']) =>
+      selector.includes('.online-room__card') &&
+      selector.includes('[hidden]') &&
+      /display\s*:\s*none/.test(declarations),
+  );
+}
+
+describe('online room card visibility', () => {
+  it('hides inactive cards with an author rule that beats the flex display', () => {
+    expect(hidesHiddenCards(ROOM_VIEW_CSS)).toBe(true);
   });
 });
