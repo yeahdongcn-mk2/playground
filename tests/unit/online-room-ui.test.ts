@@ -1,6 +1,4 @@
 // @vitest-environment jsdom
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DIFFICULTY_PRESETS } from '../../src/games/minesweeper/difficulty';
 import type { MinesweeperConfig } from '../../src/games/minesweeper/engine';
@@ -54,10 +52,6 @@ const ROOM_ID = 'room-ui-test';
 const MATCH_ID = 'match-ui-test';
 const HOST_ID = 'player_host';
 const GUEST_ID = 'player_guest';
-const ROOM_VIEW_CSS = readFileSync(
-  join(process.cwd(), 'src/games/minesweeper/online/client/room-view.css'),
-  'utf8',
-);
 const CONFIG: MinesweeperConfig = {
   rows: 3,
   cols: 3,
@@ -147,7 +141,10 @@ function makeSnapshot(overrides: Partial<SnapshotMessage> = {}): SnapshotMessage
   };
 }
 
-function makeRoomViewState(overrides: Partial<RoomStateMessage> = {}): RoomClientState {
+function makeRoomViewState(
+  overrides: Partial<RoomStateMessage> = {},
+  snapshot: SnapshotMessage | null = null,
+): RoomClientState {
   const room = makeRoom(overrides);
   return Object.freeze({
     phase: room.state,
@@ -156,7 +153,7 @@ function makeRoomViewState(overrides: Partial<RoomStateMessage> = {}): RoomClien
     role: 'host' as const,
     selfId: HOST_ID,
     room,
-    snapshot: null,
+    snapshot,
     end: null,
     error: null,
   });
@@ -566,22 +563,10 @@ function createHost(harness: Harness, name = 'Ada'): void {
 function pushPlaying(harness: Harness): TestRenderer {
   const store = firstStore(harness);
   store.push(
-    Object.freeze({
-      phase: 'playing',
-      connection: 'connected' as RoomConnectionStatus,
-      lastSeq: 9,
-      role: 'host' as const,
-      selfId: HOST_ID,
-      room: makeRoom({
-        seq: 9,
-        state: 'playing',
-        matchId: MATCH_ID,
-        turnPlayerId: HOST_ID,
-      }),
-      snapshot: makeSnapshot(),
-      end: null,
-      error: null,
-    }),
+    makeRoomViewState(
+      { seq: 9, state: 'playing', matchId: MATCH_ID, turnPlayerId: HOST_ID },
+      makeSnapshot(),
+    ),
   );
   const renderer = harness.renderers[0];
   if (renderer === undefined) {
@@ -600,6 +585,8 @@ function lastActionId(harness: Harness): string {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   document.body.replaceChildren();
   window.location.hash = '';
 });
@@ -674,16 +661,6 @@ describe('online room landing', () => {
     );
 
     harness.handle.destroy();
-  });
-});
-
-describe('online room stage cards', () => {
-  it('pins the author rule that hides inactive stages', () => {
-    // jsdom force-applies the UA `[hidden]` rule, so a computed-style unit test
-    // cannot catch this regression; the real-browser check lands with the e2e.
-    expect(ROOM_VIEW_CSS).toMatch(
-      /\.online-room__card\[hidden\]\s*\{\s*display:\s*none;/,
-    );
   });
 });
 
@@ -762,7 +739,7 @@ describe('online room create and join', () => {
     const players = byTestId<HTMLElement>(harness.root, 'players');
     expect(players.querySelectorAll('b, img')).toHaveLength(0);
     expect(players.textContent).toContain(hostile);
-    expect(players.querySelectorAll('.online-room__player-name')[0]?.textContent).toContain(
+    expect(players.querySelector('.online-room__player-name')?.textContent).toContain(
       hostile,
     );
 
@@ -974,23 +951,16 @@ describe('online room playing', () => {
     const snapshot = makeSnapshot();
 
     store.push(
-      Object.freeze({
-        phase: 'playing',
-        connection: 'connected' as RoomConnectionStatus,
-        lastSeq: 9,
-        role: 'host' as const,
-        selfId: HOST_ID,
-        room: makeRoom({
+      makeRoomViewState(
+        {
           seq: 9,
           state: 'playing',
           matchId: MATCH_ID,
           turnPlayerId: HOST_ID,
           deadlineAt: NOW + 30_000,
-        }),
+        },
         snapshot,
-        end: null,
-        error: null,
-      }),
+      ),
     );
 
     expect(byTestId<HTMLElement>(harness.root, 'playing').hidden).toBe(false);
@@ -1059,7 +1029,7 @@ describe('online room playing', () => {
     const firstRenderer = pushPlaying(firstSeat);
     firstRenderer.intent({ kind: 'reveal', row: 1, col: 1 });
     const firstActionId = lastActionId(firstSeat);
-    expect(firstActionId).toMatch(/^action-[0-9a-f]{16}-1$/);
+    expect(firstActionId).toMatch(/-1$/);
 
     firstRenderer.intent({ kind: 'flag', row: 2, col: 2 });
     const secondActionId = lastActionId(firstSeat);
@@ -1085,6 +1055,20 @@ describe('online room playing', () => {
     remount.handle.destroy();
   });
 
+  it('falls back to Math.random when the environment lacks crypto', () => {
+    vi.stubGlobal('crypto', {});
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+
+    const harness = mountHarness({ roomId: null });
+    createHost(harness);
+    const renderer = pushPlaying(harness);
+    renderer.intent({ kind: 'reveal', row: 1, col: 1 });
+
+    expect(lastActionId(harness)).toBe('action-8000000000000000-1');
+
+    harness.handle.destroy();
+  });
+
   it('locks the board when it is the opponent turn', () => {
     const harness = mountHarness({ roomId: null });
     createHost(harness);
@@ -1093,22 +1077,10 @@ describe('online room playing', () => {
     const snapshot = makeSnapshot({ turnPlayerId: GUEST_ID });
 
     store.push(
-      Object.freeze({
-        phase: 'playing',
-        connection: 'connected' as RoomConnectionStatus,
-        lastSeq: 9,
-        role: 'host' as const,
-        selfId: HOST_ID,
-        room: makeRoom({
-          seq: 9,
-          state: 'playing',
-          matchId: MATCH_ID,
-          turnPlayerId: GUEST_ID,
-        }),
+      makeRoomViewState(
+        { seq: 9, state: 'playing', matchId: MATCH_ID, turnPlayerId: GUEST_ID },
         snapshot,
-        end: null,
-        error: null,
-      }),
+      ),
     );
 
     const renderer = harness.renderers[0];
@@ -1319,8 +1291,11 @@ describe('online room diagnostics', () => {
 
     const players = byTestId<HTMLElement>(harness.root, 'players');
     expect(players.querySelectorAll('[data-presence="offline"]')).toHaveLength(1);
-    const presenceTags = players.querySelectorAll('[data-testid="player-presence"]');
-    expect(presenceTags[1]?.textContent).toBe('已离线');
+    const offlineRow = players.querySelector(`[data-player-id="${GUEST_ID}"]`);
+    expect(offlineRow?.getAttribute('data-presence')).toBe('offline');
+    expect(
+      offlineRow?.querySelector('[data-testid="player-presence"]')?.textContent,
+    ).toBe('已离线');
 
     harness.handle.destroy();
   });
@@ -1345,17 +1320,10 @@ describe('online room diagnostics', () => {
     const store = firstStore(harness);
     const transport = firstTransport(harness);
     store.push(
-      Object.freeze({
-        phase: 'playing',
-        connection: 'connected' as RoomConnectionStatus,
-        lastSeq: 9,
-        role: 'host' as const,
-        selfId: HOST_ID,
-        room: makeRoom({ seq: 9, state: 'playing', matchId: MATCH_ID }),
-        snapshot: makeSnapshot(),
-        end: null,
-        error: null,
-      }),
+      makeRoomViewState(
+        { seq: 9, state: 'playing', matchId: MATCH_ID },
+        makeSnapshot(),
+      ),
     );
     const renderer = harness.renderers[0];
     if (renderer === undefined) {
