@@ -41,6 +41,20 @@ function section(heading: string): string {
   return DOC.slice(start, end === -1 ? undefined : end);
 }
 
+/** The text of one level-3 section, up to the next level-2 or level-3 heading. */
+function level3Section(heading: string): string {
+  const start = DOC.indexOf(heading);
+  if (start < 0) {
+    throw new Error(`missing section: ${heading}`);
+  }
+  const after = start + heading.length;
+  const ends = [DOC.indexOf('\n### ', after), DOC.indexOf('\n## ', after)].filter(
+    (offset) => offset !== -1,
+  );
+  const end = ends.length === 0 ? -1 : Math.min(...ends);
+  return DOC.slice(start, end === -1 ? undefined : end);
+}
+
 /** Parse a table cell holding a plain or bold number, e.g. `457` or `**1,416**`. */
 function parseCellNumber(cell: string): number {
   const raw = /\d[\d,]*/.exec(cell)?.[0];
@@ -163,6 +177,43 @@ describe('zhen-sha kill gate engineering assessment', () => {
     expect(DOC).toContain('### kill gate 原型生产规模（实测）');
     expect(DOC).toContain('### 完整特性规模估算');
     expect(DOC).toContain('### 结论');
+  });
+
+  it('points baseline-after progress at the rolling production size snapshot', () => {
+    const progress = level3Section('### 基线后进展');
+
+    // The only source of truth for the current size is the generated snapshot;
+    // the document must name the pointer and the command that refreshes it.
+    expect(progress).toContain('docs/zhen-sha-production-size.json');
+    expect(progress).toContain('npm run sync:zhen-sha-size');
+    expect(progress).toContain('tests/unit/zhen-sha-size.test.ts');
+    // The rolling caliber counts test-only sources, unlike the frozen table.
+    expect(progress).toMatch(/包含仅被测试引用的[^\n]*boss-chart-adapter\.ts/);
+    expect(progress).toContain('43c9ab1');
+    expect(progress).toContain('4 文件 / 1,416 行');
+    // #417 keeps tracking the over-band re-estimate; the L condition stays.
+    expect(progress).toContain('https://github.com/yeahdongcn-mk2/playground/issues/417');
+    expect(progress).toMatch(/L 条件/);
+    // No hand-maintained current numbers that change with every engine PR.
+    expect(progress).not.toContain('3,375');
+    expect(progress).not.toContain('1,175');
+    expect(progress).not.toContain('8 个文件');
+    // The task also removes the 2,229 / 2,288 hand-calculated aggregations;
+    // adding either number back must fail this assertion.
+    expect(progress).not.toContain('2,229');
+    expect(progress).not.toContain('2,288');
+    expect(progress).not.toMatch(
+      /`[^`\n]+\.(?:ts|css)`[：:]\s*\d[\d,]*(?:\s*→\s*\d[\d,]*)?\s*行/,
+    );
+    expect(progress).not.toContain('不计入当前生产规模');
+  });
+
+  it('qualifies the test-only exclusion caliber as frozen to 43c9ab1', () => {
+    const caliber = level3Section('### 评估口径');
+    expect(caliber).toContain('43c9ab1');
+    expect(caliber).toContain('docs/zhen-sha-production-size.json');
+    expect(caliber).toContain('npm run sync:zhen-sha-size');
+    expect(caliber).toMatch(/仅被测试引用的[^\n]*仍计入/);
   });
 
   it('states an explicit M or L conclusion against the M review band', () => {
