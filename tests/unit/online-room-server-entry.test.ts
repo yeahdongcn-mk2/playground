@@ -12,9 +12,22 @@ import {
   startRoomServerFromConfig,
   type RoomServerRuntimeOptions,
 } from '../../server/room/main';
-import type { PresenceClock, PresenceTimer } from '../../server/room/presence';
+import type {
+  PresenceClock,
+  PresenceControllerHandle,
+  PresenceControllerOptions,
+  PresenceTimer,
+} from '../../server/room/presence';
 import { createRoomManager } from '../../server/room/room-manager';
-import { ROOM_WS_PATH, type RoomServer } from '../../server/room/ws-server';
+import {
+  ROOM_WS_PATH,
+  type RoomServer,
+  type RoomServerOptions,
+} from '../../server/room/ws-server';
+import {
+  ONLINE_ROOM_SERVER_HOST,
+  ONLINE_ROOM_SERVER_PORT,
+} from '../e2e/online-room-constants';
 import {
   PROTOCOL_VERSION,
   type ClientToServerMessage,
@@ -38,6 +51,18 @@ afterEach(async () => {
     servers.splice(0).map((server) => server.close().catch(() => undefined)),
   );
 });
+
+/** Build a stand-in presence handle for tests that mock `createPresenceController`. */
+function fakePresenceController(): PresenceControllerHandle {
+  return {
+    connectionOpened: () => undefined,
+    connectionClosed: () => undefined,
+    pongReceived: () => undefined,
+    tokenBound: () => undefined,
+    tokenUnbound: () => undefined,
+    close: () => undefined,
+  };
+}
 
 /** Build a stand-in transport handle for tests that mock `startRoomServer`. */
 function fakeRoomServer(overrides: Partial<RoomServer> = {}): RoomServer {
@@ -245,6 +270,134 @@ describe('startRoomServerFromConfig', () => {
       await expectPortReleased(port);
     } finally {
       log.mockRestore();
+    }
+  });
+});
+
+describe('startRoomServerFromConfig presence windows', () => {
+  it('forwards presence overrides only when supplied, keeping production defaults', async () => {
+    const createPresenceController = vi.fn(
+      (_options: PresenceControllerOptions): PresenceControllerHandle =>
+        fakePresenceController(),
+    );
+    const startRoomServer = vi.fn(async () => fakeRoomServer());
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    vi.resetModules();
+    vi.doMock('../../server/room/presence', () => ({ createPresenceController }));
+    vi.doMock('../../server/room/ws-server', () => ({ startRoomServer }));
+
+    try {
+      const mod = await import('../../server/room/main');
+      const manager = createRoomManager({ createSeed: () => 7 });
+
+      // Production passes no presence windows: the entry must not invent
+      // values, so the controller falls back to the contract constants.
+      await mod.startRoomServerFromConfig({ host: '127.0.0.1', port: 0 }, { manager });
+      const defaults = createPresenceController.mock.calls[0]?.[0];
+      if (defaults === undefined) {
+        throw new Error('createPresenceController was not called without overrides');
+      }
+      expect(defaults).toMatchObject({ manager });
+      expect(defaults).not.toHaveProperty('heartbeatIntervalMs');
+      expect(defaults).not.toHaveProperty('missedBeatsThreshold');
+      expect(defaults).not.toHaveProperty('graceMs');
+
+      // The e2e launcher's shape: every shortened presence window reaches the
+      // controller unchanged, next to the forwarded manager and delivery sink.
+      await mod.startRoomServerFromConfig(
+        { host: '127.0.0.1', port: 0 },
+        {
+          manager,
+          heartbeatIntervalMs: 1_000,
+          missedBeatsThreshold: 3,
+          graceMs: 2_000,
+        },
+      );
+      const overridden = createPresenceController.mock.calls[1]?.[0];
+      if (overridden === undefined) {
+        throw new Error('createPresenceController was not called with overrides');
+      }
+      expect(overridden).toMatchObject({
+        manager,
+        heartbeatIntervalMs: 1_000,
+        missedBeatsThreshold: 3,
+        graceMs: 2_000,
+      });
+      expect(overridden.deliver).toBeTypeOf('function');
+      expect(startRoomServer).toHaveBeenCalledTimes(2);
+    } finally {
+      log.mockRestore();
+      vi.doUnmock('../../server/room/presence');
+      vi.doUnmock('../../server/room/ws-server');
+      vi.resetModules();
+    }
+  });
+});
+
+describe('online room e2e launcher wiring', () => {
+  it('starts the production entry with the shortened presence windows', async () => {
+    const createPresenceController = vi.fn(
+      (_options: PresenceControllerOptions): PresenceControllerHandle =>
+        fakePresenceController(),
+    );
+    const startRoomServer = vi.fn(
+      async (_options: RoomServerOptions): Promise<RoomServer> => fakeRoomServer(),
+    );
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    // `main` installs one-shot shutdown handlers; intercept the registration
+    // so this test never leaves a real SIGTERM/SIGINT listener behind.
+    const once = vi.spyOn(process, 'once').mockImplementation(() => process);
+
+    vi.resetModules();
+    vi.doMock('../../server/room/presence', () => ({ createPresenceController }));
+    vi.doMock('../../server/room/ws-server', () => ({ startRoomServer }));
+
+    try {
+      // Import the launcher after the mocks so its `main` import resolves to
+      // the fresh module graph; calling it exercises the exact composition the
+      // Playwright `webServer` command runs.
+      const launcher = await import('../e2e/online-room-server');
+      await launcher.startOnlineRoomServer({ PATH: '/usr/bin/node' });
+
+      // The launcher owns the test bind, even though the passed env predates
+      // HOST/PORT: dropping the env override would fall back to production's
+      // 8787 and change the port this real service listens on.
+      expect(startRoomServer).toHaveBeenCalledTimes(1);
+      const transportOptions = startRoomServer.mock.calls[0]?.[0];
+      expect(transportOptions).toMatchObject({
+        host: ONLINE_ROOM_SERVER_HOST,
+        port: ONLINE_ROOM_SERVER_PORT,
+      });
+
+      // This is the #538 t1 wiring: delete any of the three overrides from the
+      // launcher's `main` call and the running room service silently returns
+      // to the production 5 s / 2 / 15 s presence window, which would let a
+      // turn deadline pre-empt the reconnect grace the e2e suite exercises.
+      expect(createPresenceController).toHaveBeenCalledTimes(1);
+      const presenceOptions = createPresenceController.mock.calls[0]?.[0];
+      if (presenceOptions === undefined) {
+        throw new Error('the launcher did not reach createPresenceController');
+      }
+      expect(presenceOptions).toMatchObject({
+        heartbeatIntervalMs: launcher.ONLINE_ROOM_PRESENCE_OPTIONS.heartbeatIntervalMs,
+        missedBeatsThreshold:
+          launcher.ONLINE_ROOM_PRESENCE_OPTIONS.missedBeatsThreshold,
+        graceMs: launcher.ONLINE_ROOM_PRESENCE_OPTIONS.graceMs,
+      });
+      // Pin the concrete test window too, so the assertion above cannot pass
+      // by comparing a production value against itself.
+      expect(presenceOptions).toMatchObject({
+        heartbeatIntervalMs: 1_000,
+        missedBeatsThreshold: 2,
+        graceMs: 10_000,
+      });
+    } finally {
+      log.mockRestore();
+      once.mockRestore();
+      vi.doUnmock('../../server/room/presence');
+      vi.doUnmock('../../server/room/ws-server');
+      vi.resetModules();
     }
   });
 });
