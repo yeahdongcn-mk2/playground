@@ -183,6 +183,45 @@ export interface MatchEndPayload {
   readonly stats: MatchStats;
 }
 
+/**
+ * One completed round of a best-of-three series.
+ *
+ * `winnerId` and `loserId` mirror the single-match `end` payload and may be
+ * `null` for a drawn round; a draw is recorded in `history` but awards no win.
+ * `firstMoverId` records who opened that round so the alternation rule stays
+ * auditable after a reconnect.
+ */
+interface SeriesRoundResult {
+  readonly round: number;
+  readonly matchId: string;
+  readonly winnerId: string | null;
+  readonly loserId: string | null;
+  readonly reason: MatchEndReason;
+  readonly firstMoverId: string;
+}
+
+/**
+ * Cross-round best-of-three state carried by the optional
+ * `room_state.series` field.
+ *
+ * The contract is fixed by `design:series` but is not wired into the server or
+ * the UI yet: the room state machine stays `ready → playing → finished`, with
+ * `finished → ready` as the only rematch edge. `wins` is keyed by `playerId`;
+ * `firstMoverId` is the current round's first mover and alternates from the
+ * host in round 1. `history` lists completed rounds in round order.
+ */
+interface SeriesState {
+  readonly bestOf: number;
+  readonly winsRequired: number;
+  readonly maxRounds: number;
+  readonly round: number;
+  readonly wins: Readonly<Record<string, number>>;
+  readonly firstMoverId: string;
+  readonly decided: boolean;
+  readonly winnerId: string | null;
+  readonly history: readonly SeriesRoundResult[];
+}
+
 // ---------------------------------------------------------------------------
 // Protocol messages
 // ---------------------------------------------------------------------------
@@ -266,6 +305,8 @@ export interface RoomStateMessage {
   readonly joinDeadlineAt: number;
   readonly deadlineAt: number | null;
   readonly stateReason: string | null;
+  /** Best-of-three state; absent before the first round of a series starts. */
+  readonly series?: SeriesState;
 }
 
 /** Redacted board snapshot broadcast after every accepted action. */
@@ -488,6 +529,7 @@ export const MESSAGE_SPECS: readonly MessageSpec[] = [
       { name: 'joinDeadlineAt', type: 'integer', required: true },
       { name: 'deadlineAt', type: 'integer|null', required: true },
       { name: 'stateReason', type: 'string|null', required: true },
+      { name: 'series', type: 'SeriesState', required: false },
     ],
   },
   {

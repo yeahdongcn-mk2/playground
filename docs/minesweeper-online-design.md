@@ -86,7 +86,7 @@
 - **入口与路由不变**：单机扫雷的调试参数、难度选择与视图行为保持现状；联机使用独立路由/视图并按需加载，不进入大厅首屏包。
 - **自动检查继续覆盖单机**：`engine.test.ts`、`difficulty.test.ts`、`view.test.ts` 与现有 e2e 保持通过；现有 `npm run lint` 的边界检查只覆盖 `src/core/`、`src/app/` 与游戏入口的既有依赖方向，联机层落地时需扩展 `scripts/check-boundaries.mjs` 以禁止游戏模块反向依赖联机层（见 #81）。
 - **部署不回归**：静态产物仍是默认发布物；联机房间服务是可选新增单元，房间服务不可用时单机与大厅仍可正常加载。
-- **文档契约测试**：本文的五个 `design:*` JSON 块由 `tests/unit/minesweeper-online-design.test.ts` 校验，状态名、时限与承载选择的改动会在 CI 中暴露。
+- **文档契约测试**：本文的六个 `design:*` JSON 块由 `tests/unit/minesweeper-online-design.test.ts` 校验，状态名、时限、系列赛参数与承载选择的改动会在 CI 中暴露。
 
 ### 2.5 排行榜与自定义难度的后续接入
 
@@ -95,7 +95,8 @@
 - **自定义难度**：单机的 `parseCustomDifficulty()` 已复用 `validateConfig()` 校验行、列、雷数与首点安全容量；联机建房可直接调用同一个校验函数，只接受 `MIN_ROWS`–`MAX_ROWS`、`MIN_COLS`–`MAX_COLS` 范围内且通过雷数与安全区检查的配置。首版联机固定 `firstClickSafe: true`；后续若要开放自定义，把校验后的 `MinesweeperConfig` 连同规则版本写入 `create` 与重放记录即可。
 - **难度预设**：`src/games/minesweeper/difficulty.ts` 的初级/中级/高级仍是房间难度选项来源；自定义配置通过同一 `validateConfig` 校验，不另写一套边界。
 - **排行榜**：首版 `end` 已携带 `matchId`、`winnerId`、`finalSnapshot` 与 seed，服务端保留 replay 记录；后续排行榜应以服务端权威结果为准，按「规则版本 + 配置（行/列/雷数/首点策略）+ 模式」分组，不接受客户端上报成绩。排行字段可以新增在结算服务或 `end` 的扩展字段中，不需要改动房间状态机、同步协议或 `MinesweeperStatus`。
-- **范围边界**：以上两项都需要新的产品决策（排行维度、账号/匿名、自定义参数范围），因此不在本设计或实现 issue 清单的首版范围内，只确认为兼容方向。
+- **三局两胜系列赛**：`SeriesState` / `SeriesRoundResult` 与 `room_state.series` 的字段契约已在本设计固定（见 3.3 的 `design:series`），但服务端跨局记分、先手轮换执行与系列比分 UI 仍不在首版范围，系列赛尚不可玩；在服务端接入前 `room_state.series` 可以缺省，`finished` / `ready` 仍是唯一状态机。
+- **范围边界**：排行榜、自定义难度与系列赛服务端记分都需要新的产品/实现决策（排行维度、账号/匿名、自定义参数范围、跨局记分），因此不在本设计或实现 issue 清单的首版范围内，只确认为兼容方向或已锁定契约。
 
 ## 3. 房间生命周期
 
@@ -418,6 +419,47 @@ finished ──dissolve──▶ dissolved
 }
 ```
 
+系列赛（三局两胜）不新增房间状态：`finished` / `ready` 仍是唯一状态机，`rematch` 仍从 `finished` 回 `ready`。跨局比分、当前轮次与先手轮换只通过 `room_state.series` 表达。下方 `design:series` 固定三局两胜参数与 `room_state.series` 的字段映射：round 1 由 host 先手，之后每局轮换；任一方先到 2 胜即结束系列赛，否则最多打满 3 局；平局轮次计入 `history` 但不加分，打满 `maxRounds` 仍未到 2 胜时系列赛以 `winnerId: null` 结束；系列赛结束后 `rematch` 重置为新系列。该契约已定，但服务端记分与 UI 尚未实现，系列赛尚不可玩。
+
+<!-- design:series -->
+```json
+{
+  "version": 1,
+  "status": "contract-only",
+  "bestOf": 3,
+  "winsRequired": 2,
+  "maxRounds": 3,
+  "firstMover": "alternates",
+  "firstRoundFirstMover": "host",
+  "resetAfterDecision": true,
+  "roomStateSeries": {
+    "message": "room_state",
+    "field": "series",
+    "type": "SeriesState",
+    "required": false,
+    "fields": [
+      {"name": "bestOf", "type": "integer"},
+      {"name": "winsRequired", "type": "integer"},
+      {"name": "maxRounds", "type": "integer"},
+      {"name": "round", "type": "integer"},
+      {"name": "wins", "type": "Record<playerId, integer>"},
+      {"name": "firstMoverId", "type": "string"},
+      {"name": "decided", "type": "boolean"},
+      {"name": "winnerId", "type": "string|null"},
+      {"name": "history", "type": "SeriesRoundResult[]"}
+    ],
+    "roundResultFields": [
+      {"name": "round", "type": "integer"},
+      {"name": "matchId", "type": "string"},
+      {"name": "winnerId", "type": "string|null"},
+      {"name": "loserId", "type": "string|null"},
+      {"name": "reason", "type": "match-reason"},
+      {"name": "firstMoverId", "type": "string"}
+    ]
+  }
+}
+```
+
 ### 3.4 三种时限与超时处置
 
 | 时限 | 覆盖范围 | 默认值 | 起算 / 重置 | 到期处置 |
@@ -475,6 +517,8 @@ A/B: rematch ──────────▶ room_state(ready)
 ```
 
 方向约定：`client-to-server` 表示客户端意图，`server-to-client` 表示服务端权威结果或广播。所有成功改变状态的服务端消息都带单调递增的 `seq`；客户端只渲染 `seq` 不小于本地已应用值的消息。
+
+`room_state` 新增可选 `series` 字段承载跨局比分、当前轮次与系列赛赢家；`end` 仍只表达单局结果，不携带 `series`，也不新增 room state。系列赛契约由 3.3 的 `design:series` 固定，但服务端记分与客户端系列比分 UI 仍不在本设计范围（见第 2.5、9 节），系列赛尚不可玩。
 
 ### 4.4 契约 JSON
 
@@ -630,7 +674,8 @@ A/B: rematch ──────────▶ room_state(ready)
         {"name": "turnPlayerId", "type": "string|null", "required": true},
         {"name": "joinDeadlineAt", "type": "integer", "required": true},
         {"name": "deadlineAt", "type": "integer|null", "required": true},
-        {"name": "stateReason", "type": "string|null", "required": true}
+        {"name": "stateReason", "type": "string|null", "required": true},
+        {"name": "series", "type": "SeriesState", "required": false}
       ]
     },
     {
@@ -1274,13 +1319,14 @@ A 与 B 是本次需要决定的两种承载方式；C、D 作为已评估的替
 
 ## 7. 测试与验收
 
-新增/更新 `tests/unit/minesweeper-online-design.test.ts`，读取本文并解析五个标记块：
+新增/更新 `tests/unit/minesweeper-online-design.test.ts`，读取本文并解析六个标记块：
 
 - `design:room-lifecycle`：断言状态名唯一、初始态存在、每个转移的 `from`/`to` 都是已声明状态、所有状态从初始态可达、终态只允许重开/解散出边、创建/加入/就绪/开局/结束/超时六类事件都有转移、三种计时器都有对应超时转移。
 - `design:protocol`：断言同步模型为回合制、裁决为服务端、棋盘共享、seed 与首点安全约束、断线不直接改变房间状态；消息表中每条消息都有方向与非空字段，字段名唯一，且至少覆盖 `join`、`snapshot`、`action`、`end` 及完整房间生命周期消息。
 - `design:reconnect`：断言心跳检测 < 宽限 < 判负超时且三者均为正数、宽限值与 `design:protocol.disconnect.graceMs` 一致、判负超时与 `turn` 计时器一致；枚举的每个状态都在 `design:room-lifecycle` 中声明，重连/掉线/超时结局要么对应已有合法转移，要么停留在终态；恢复方式明确为全量快照或事件回放。
 - `design:hosting`：断言 `choice` 属于 `candidates`、每项候选 id 唯一、被否候选不在 `choice` 且都有非空理由、除 `choice` 外的候选都出现在 `rejected` 中；选型理由覆盖部署、成本、延迟、权威与反作弊、断线恢复、数据与隐私、可测试性、与静态部署的关系，每条理由都同时给出选用方案与被否方案；`references` 包含 `docs/tech-stack-decision.md` 与 `docs/framework.md`，演进阶段与重新评估条件非空，且 `choice` 的权威模型与 `design:protocol.hosting.requiresServer` 一致。
 - `design:implementation-plan`：断言版本与状态、任务 id 唯一、`title` / `detail` 非空、`acceptance` 是数组且每项非空、`depends_on` 与 `handles_events` 都是数组且只引用已声明成员、不存在依赖环、数组顺序满足依赖先后；每个 `design:room-lifecycle` 事件恰好有一个处理任务（`timeout` 由 `room-service` 与 `reconnect-timeout` 共同处理），且 `rematch` 归属 `room-service`；至少覆盖 `engine`、`protocol`、`hosting`、`reconnect`、`client-ui`、`e2e` 六类任务；`contracts.roomStates` ↔ `design:room-lifecycle`、`contracts.timersMs` ↔ `design:room-lifecycle.timers`、`contracts.hostingChoice` ↔ `design:hosting`、`contracts.protocolVersion` ↔ `design:protocol` 交叉一致。
+- `design:series`：断言 `bestOf` / `winsRequired` / `maxRounds` 固定为 3 / 2 / 3、先手轮换且 round 1 由 host 先手、`resetAfterDecision=true`；`roomStateSeries` 的消息名、字段名、类型与可选性和 `design:protocol` 的 `room_state.series` 一致，字段集合与 `SeriesState` / `SeriesRoundResult` 对齐。
 - **关系章节**：断言第 2 节正文出现 `MinesweeperConfig`、`createSeededRng`、`src/games/minesweeper/engine.ts`、`difficulty.ts` 与正确的 `new MinesweeperEngine({ config, rng: createSeededRng(seed) })` 构造示例，删除任一引用或写回错误构造签名测试即失败；同时确认该节说明单机不回归、排行榜与自定义难度的后续接入。
 - **索引与术语表**：断言第 0 节章节索引与第 10 节术语表存在；索引每一行的链接文本与 anchor 都从实际 `## N. 标题` 按 GitHub 标题 slug 规则（编号标题视为唯一）生成并逐项比较，重复编号、索引缺项或多出项都会失败；同时覆盖房间、协议、重连与规则引擎的关键术语。
 
@@ -1474,6 +1520,7 @@ engine-adapter
 - 不做「同一 seed 各自棋盘」的速度赛；若要做，应作为独立模式并重新评估实时同步、公平性与反作弊。
 - 首版不做多实例房间迁移、断线跨节点恢复与回放分享；服务重启即 `dissolved`。
 - 首版只支持 2 人；`capacity` 固定在协议中，扩展到多人需要重新评估回合顺序、棋盘共享粒度与胜负条件。
+- 不做系列赛的服务端记分、先手轮换执行与房间/对局页比分 UI；本设计只固定 `design:series` 契约，系列赛尚不可玩，`room_state.series` 在服务端接入前可以缺省。
 
 ## 10. 术语表
 
