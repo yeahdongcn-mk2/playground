@@ -1047,6 +1047,67 @@ describe('room WebSocket/HTTP transport', () => {
     expect(manager.calls).toEqual([]);
   });
 
+  it('rejects invalid custom configs on a real socket without sending room_state', async () => {
+    // Unlike the fake-manager transport tests above, this one runs the real
+    // `InMemoryRoomManager` behind the real WebSocket server, so the engine's
+    // `validateConfig` rules decide what reaches the table.
+    const manager = createRoomManager({
+      now: () => 1_700_000_000_000,
+      createSeed: () => 7,
+    });
+    const server = await startTestServer(manager);
+    const client = await connect(server.port);
+
+    const invalidConfigs: readonly {
+      readonly label: string;
+      readonly config: CreateMessage['config'];
+    }[] = [
+      { label: 'rows-below-min', config: { rows: 4, cols: 12, mines: 20, firstClickSafe: true } },
+      { label: 'rows-above-max', config: { rows: 31, cols: 12, mines: 20, firstClickSafe: true } },
+      { label: 'cols-below-min', config: { rows: 12, cols: 4, mines: 20, firstClickSafe: true } },
+      { label: 'cols-above-max', config: { rows: 12, cols: 31, mines: 20, firstClickSafe: true } },
+      { label: 'mines-equal-cells', config: { rows: 5, cols: 5, mines: 25, firstClickSafe: true } },
+      {
+        label: 'mines-above-safe-capacity',
+        config: { rows: 5, cols: 5, mines: 17, firstClickSafe: true },
+      },
+    ];
+
+    for (const { label, config } of invalidConfigs) {
+      const requestId = `req-invalid-${label}`;
+      client.send(createMessage({ requestId, config }));
+      const error = await client.next();
+      expect(error, label).toMatchObject({
+        type: 'error',
+        code: 'bad-request',
+        requestId,
+      });
+      expect(manager.roomCount, label).toBe(0);
+    }
+
+    // A rejected create must be silent about room state: the server has no
+    // room whose `seq`, seats or board it could publish.
+    expect(client.received.filter((message) => message.type === 'room_state')).toHaveLength(0);
+
+    // The same connection can still create a legal custom board; the wire
+    // config reaches the manager unchanged.
+    const customConfig: CreateMessage['config'] = {
+      rows: 12,
+      cols: 12,
+      mines: 20,
+      firstClickSafe: true,
+    };
+    client.send(createMessage({ requestId: 'req-valid-custom', config: customConfig }));
+    const created = await nextRoomState(client);
+    expect(created).toMatchObject({
+      type: 'room_state',
+      state: 'waiting',
+      config: customConfig,
+    });
+    expect(manager.roomCount).toBe(1);
+    expect(manager.getRoom(created.roomId)?.config).toStrictEqual(customConfig);
+  });
+
   it('forwards an action and delivers action_result only to the actor with a snapshot to both', async () => {
     const manager = new FakeRoomManager();
     const { host, guest, roomId } = await createSeatedRoom(manager);
