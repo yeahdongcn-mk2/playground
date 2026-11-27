@@ -306,6 +306,56 @@ function checkMatchStats(value: unknown, path: string): string | null {
   return checkObjectShape(value, path, MATCH_STATS_FIELDS);
 }
 
+function checkNullableString(value: unknown, path: string): string | null {
+  return value === null ? null : checkString(value, path);
+}
+
+const SERIES_ROUND_FIELDS: readonly ShapeField[] = [
+  { name: 'round', check: checkInteger },
+  { name: 'matchId', check: checkString },
+  { name: 'winnerId', check: checkNullableString },
+  { name: 'loserId', check: checkNullableString },
+  { name: 'reason', check: (value, path) => checkOneOf(MATCH_END_REASONS, value, path) },
+  { name: 'firstMoverId', check: checkString },
+];
+
+function checkSeriesRoundResult(value: unknown, path: string): string | null {
+  return checkObjectShape(value, path, SERIES_ROUND_FIELDS);
+}
+
+/** `wins` is a `playerId → win count` record; each count must be an integer. */
+function checkSeriesWins(value: unknown, path: string): string | null {
+  if (!isRecord(value)) {
+    return `${path} must be an object (got ${describeValue(value)})`;
+  }
+  for (const [playerId, wins] of Object.entries(value)) {
+    const problem = checkInteger(wins, `${path}.${playerId}`);
+    if (problem !== null) {
+      return problem;
+    }
+  }
+  return null;
+}
+
+const SERIES_FIELDS: readonly ShapeField[] = [
+  { name: 'bestOf', check: checkInteger },
+  { name: 'winsRequired', check: checkInteger },
+  { name: 'maxRounds', check: checkInteger },
+  { name: 'round', check: checkInteger },
+  { name: 'wins', check: checkSeriesWins },
+  { name: 'firstMoverId', check: checkString },
+  { name: 'decided', check: checkBoolean },
+  { name: 'winnerId', check: checkNullableString },
+  {
+    name: 'history',
+    check: (value, path) => checkArray(value, path, checkSeriesRoundResult),
+  },
+];
+
+function checkSeriesState(value: unknown, path: string): string | null {
+  return checkObjectShape(value, path, SERIES_FIELDS);
+}
+
 /** Validate one value against the nominal field type used by `MESSAGE_SPECS`. */
 function checkNominalType(type: string, value: unknown, path: string): string | null {
   switch (type) {
@@ -343,6 +393,8 @@ function checkNominalType(type: string, value: unknown, path: string): string | 
       return value === null ? null : checkCell(value, path);
     case 'MatchStats':
       return checkMatchStats(value, path);
+    case 'SeriesState':
+      return checkSeriesState(value, path);
     default:
       // Fail closed if `MESSAGE_SPECS` gains a type this validator cannot check.
       return `${path} uses unsupported field type "${type}"`;
