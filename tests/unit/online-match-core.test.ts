@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   applyMatchAction,
   createMatchState,
@@ -179,6 +179,34 @@ describe('online match core: start and redaction', () => {
       engineStatus: 'playing',
     });
     expectRedacted(state);
+  });
+
+  it('honours an explicit first turn and rejects a first mover outside the seats', () => {
+    const guestFirst = start({ firstTurnPlayerId: 'guest' });
+    expect(guestFirst.turnPlayerId).toBe('guest');
+    expect(guestFirst.snapshot.turnPlayerId).toBe('guest');
+    expect(guestFirst.seq).toBe(0);
+
+    // The host is not on turn, and rotation still follows seat order from the
+    // explicit first mover.
+    rejected(act(guestFirst, { actionId: 'host-too-early' }, 'host', 1_500), 'not-your-turn');
+    const opening = accepted(
+      act(guestFirst, { actionId: 'guest-opens' }, 'guest', 1_500),
+    );
+    expect(opening.state.turnPlayerId).toBe('host');
+    expect(opening.state.snapshot.turnPlayerId).toBe('host');
+
+    // The omitted value and an explicit host both keep the old behaviour.
+    expect(start().turnPlayerId).toBe('host');
+    expect(start({ firstTurnPlayerId: 'host' }).turnPlayerId).toBe('host');
+
+    // A non-seat or empty id throws before the engine (the match) is created.
+    const createSpy = vi.spyOn(engineAdapter, 'createMatch');
+    for (const firstTurnPlayerId of ['stranger', '']) {
+      expect(() => start({ firstTurnPlayerId })).toThrow(/firstTurnPlayerId/);
+    }
+    expect(createSpy).not.toHaveBeenCalled();
+    createSpy.mockRestore();
   });
 
   it('rejects a malformed seat list and invalid durations', () => {

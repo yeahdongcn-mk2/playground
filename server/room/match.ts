@@ -20,8 +20,9 @@
  *
  * Wire semantics implemented here (design 4.5 and 4.6):
  *
- * - the host moves first; after an action that does not end the match the turn
- *   passes to the next seat in seat order and the turn deadline is reset;
+ * - the host moves first by default; `createMatchState` may name another seat
+ *   as `firstTurnPlayerId`, and after an action that does not end the match
+ *   the turn passes to the next seat in seat order and the deadline resets;
  * - a client sends `seq` (its last applied broadcast seq) and `turnId`; both
  *   must equal the current state, and an action at/after `turnDeadlineAt` or
  *   `matchDeadlineAt` is rejected with `deadline-passed`;
@@ -89,6 +90,11 @@ export interface CreateMatchStateInput {
   readonly seed: number;
   /** Both seats in turn-rotation order; exactly one is the host. */
   readonly seats: readonly MatchSeat[];
+  /**
+   * Seat that takes the opening turn. Defaults to the host and must belong to
+   * `seats`; later turns still rotate in seat order.
+   */
+  readonly firstTurnPlayerId?: string;
   /** Clock used for deadlines and stats; no timer is created here. */
   readonly nowMs: number;
   /** Length of one turn; the deadline resets after every accepted action. */
@@ -176,7 +182,10 @@ export interface MatchState {
   readonly matchDurationMs: number;
   /** Retained `actionId` results; used by the bounded insertion-order cache. */
   readonly actionCacheLimit: number;
-  /** Seat ids in seat order; the host may sit anywhere and moves first. */
+  /**
+   * Seat ids in seat order. The host may sit anywhere and opens the match
+   * unless `firstTurnPlayerId` names another seat.
+   */
   readonly playerIds: readonly string[];
   /** Last broadcast seq; `initialSeq` after start, advanced by actions/forfeit. */
   readonly seq: number;
@@ -449,6 +458,22 @@ export function createMatchState(input: CreateMatchStateInput): MatchState {
     1,
   );
   const initialSeq = assertSafeInteger('initialSeq', input.initialSeq ?? 0, 0);
+  const host = seats.find((seat) => seat.isHost);
+  if (host === undefined) {
+    throw new TypeError('seats must contain a host.');
+  }
+  const playerIds = Object.freeze(seats.map((seat) => seat.playerId));
+  const firstTurnPlayerId = input.firstTurnPlayerId ?? host.playerId;
+  if (typeof firstTurnPlayerId !== 'string' || firstTurnPlayerId.length === 0) {
+    throw new TypeError('firstTurnPlayerId must be a non-empty string.');
+  }
+  if (!playerIds.includes(firstTurnPlayerId)) {
+    throw new RangeError(
+      `firstTurnPlayerId ${formatValue(firstTurnPlayerId)} is not one of the seated players.`,
+    );
+  }
+  // Validate the opening seat before creating the engine so a rejected input
+  // never leaves a match (or its seed commitment) behind.
   const engine = engineAdapter.createMatch({ matchId, config, seed: input.seed });
   const seedHash = hashSeed(input.seed);
   if (seedHash !== engine.seedHash) {
@@ -457,12 +482,6 @@ export function createMatchState(input: CreateMatchStateInput): MatchState {
 
   const matchDeadlineAt = startedAtMs + matchDurationMs;
   const turnDeadlineAt = Math.min(startedAtMs + turnDurationMs, matchDeadlineAt);
-  const host = seats.find((seat) => seat.isHost);
-  if (host === undefined) {
-    throw new TypeError('seats must contain a host.');
-  }
-
-  const playerIds = Object.freeze(seats.map((seat) => seat.playerId));
   const revealedSafeByPlayer: Record<string, number> = {};
   for (const playerId of playerIds) {
     revealedSafeByPlayer[playerId] = 0;
@@ -480,7 +499,7 @@ export function createMatchState(input: CreateMatchStateInput): MatchState {
     playerIds,
     seq: initialSeq,
     turnId: 0,
-    turnPlayerId: host.playerId,
+    turnPlayerId: firstTurnPlayerId,
     turnDeadlineAt,
     matchDeadlineAt,
     actions: Object.freeze([] as ReplayAction[]),
