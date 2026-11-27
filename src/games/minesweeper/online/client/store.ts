@@ -137,6 +137,9 @@ function stripPlayerToken(message: RoomStateMessage): RoomClientRoom {
     joinDeadlineAt: message.joinDeadlineAt,
     deadlineAt: message.deadlineAt,
     stateReason: message.stateReason,
+    // Keep `series` absent for an old server payload instead of materializing
+    // `series: undefined`; the view owns the 0:0 fallback.
+    ...(message.series === undefined ? {} : { series: message.series }),
   };
 }
 
@@ -150,10 +153,58 @@ function samePlayer(left: PlayerView, right: PlayerView): boolean {
   );
 }
 
+type RoomSeries = NonNullable<RoomClientRoom['series']>;
+type RoomSeriesRound = RoomSeries['history'][number];
+
+/** Compare a `wins` record by key and count without relying on key order. */
+function sameWins(
+  left: Readonly<Record<string, number>>,
+  right: Readonly<Record<string, number>>,
+): boolean {
+  const playerIds = Object.keys(left);
+  if (playerIds.length !== Object.keys(right).length) return false;
+  return playerIds.every((playerId) => right[playerId] === left[playerId]);
+}
+
+/** Compare one completed round of a best-of-three series field by field. */
+function sameSeriesRound(left: RoomSeriesRound, right: RoomSeriesRound): boolean {
+  return (
+    left.round === right.round &&
+    left.matchId === right.matchId &&
+    left.winnerId === right.winnerId &&
+    left.loserId === right.loserId &&
+    left.reason === right.reason &&
+    left.firstMoverId === right.firstMoverId
+  );
+}
+
+/**
+ * Compare optional series state field by field. `undefined` on both sides is
+ * equal; a series appearing or disappearing at the same seq is a real change.
+ */
+function sameSeries(left: RoomSeries | undefined, right: RoomSeries | undefined): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return (
+    left.bestOf === right.bestOf &&
+    left.winsRequired === right.winsRequired &&
+    left.maxRounds === right.maxRounds &&
+    left.round === right.round &&
+    left.firstMoverId === right.firstMoverId &&
+    left.decided === right.decided &&
+    left.winnerId === right.winnerId &&
+    sameWins(left.wins, right.wins) &&
+    left.history.length === right.history.length &&
+    left.history.every((round, index) => {
+      const other = right.history[index];
+      return other !== undefined && sameSeriesRound(round, other);
+    })
+  );
+}
+
 /**
  * Structural comparison used to ignore an identical `room_state` repeated at
- * the already-applied `seq`. Presence is part of the comparison, so a genuine
- * presence-only change still commits.
+ * the already-applied `seq`. Presence and series are part of the comparison,
+ * so a genuine presence-only or series-only change still commits.
  */
 function sameRoom(left: RoomClientRoom, right: RoomClientRoom | null): boolean {
   if (right === null) return false;
@@ -168,6 +219,7 @@ function sameRoom(left: RoomClientRoom, right: RoomClientRoom | null): boolean {
     left.joinDeadlineAt !== right.joinDeadlineAt ||
     left.deadlineAt !== right.deadlineAt ||
     left.stateReason !== right.stateReason ||
+    !sameSeries(left.series, right.series) ||
     left.players.length !== right.players.length ||
     left.config.rows !== right.config.rows ||
     left.config.cols !== right.config.cols ||
