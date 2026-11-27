@@ -1911,15 +1911,18 @@ const ROOM_VIEW_CSS = readFileSync(
   'utf8',
 ).replace(/\/\*[\s\S]*?\*\//g, '');
 
-/** Whether an author rule hides elements matching `selectorPart` with `hidden`. */
-function hidesHiddenElements(css: string, selectorPart: string): boolean {
-  const escaped = selectorPart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const classToken = new RegExp(`(?:^|[^\\w-])${escaped}(?![\\w-])`);
+/** Whether an author rule hides elements matching `classSelector` with `hidden`. */
+function hidesHiddenElements(css: string, classSelector: string): boolean {
+  const escaped = classSelector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // The lookarounds anchor the whole class token, so `...-bogus` is not the
+  // same class; the character class keeps `[hidden]` on the same compound
+  // selector instead of a descendant (`.group .child[hidden]` is not a match).
+  const rulePattern = new RegExp(
+    `(?:^|[^\\w-])${escaped}(?![\\w-])[^\\s,>+~]*\\[hidden\\]`,
+  );
   return [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].some(
     ([, selector = '', declarations = '']) =>
-      classToken.test(selector) &&
-      selector.includes('[hidden]') &&
-      /display\s*:\s*none/.test(declarations),
+      rulePattern.test(selector) && /display\s*:\s*none/.test(declarations),
   );
 }
 
