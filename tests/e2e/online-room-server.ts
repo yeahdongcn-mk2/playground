@@ -23,6 +23,7 @@ import { pathToFileURL } from 'node:url';
 import {
   main,
   type RoomServerPresenceOptions,
+  type RoomServerRuntimeOptions,
 } from '../../server/room/main';
 import type { RoomManagerOptions } from '../../server/room/room-manager';
 import {
@@ -82,6 +83,42 @@ export const ONLINE_ROOM_EFFECTIVE_TIMINGS = {
   matchTimeoutMs: ONLINE_ROOM_MANAGER_OPTIONS.matchTimeoutMs,
 } as const;
 
+/**
+ * Runtime options the launcher hands to the production entry point.
+ *
+ * This is the wiring the shortened windows depend on: the presence overrides
+ * are spread into the same object as the manager settings, so removing them
+ * silently sends the running room service back to the production 5 s / 2 /
+ * 15 s presence window. `online-room-server-entry.test.ts` starts the real
+ * entry through {@link startOnlineRoomServer} and asserts these values reach
+ * `createPresenceController`, which makes that regression fail a test instead
+ * of only slowing the e2e suite down.
+ */
+export const ONLINE_ROOM_SERVER_RUNTIME_OPTIONS = {
+  managerOptions: ONLINE_ROOM_MANAGER_OPTIONS,
+  ...ONLINE_ROOM_PRESENCE_OPTIONS,
+} as const satisfies RoomServerRuntimeOptions;
+
+/**
+ * Start the production room-server entry with the test bind and windows.
+ *
+ * Exported so a unit test can exercise the exact composition the Playwright
+ * `webServer` command runs, rather than re-deriving its options. `env` stays a
+ * parameter for that test; production/direct execution uses `process.env`.
+ */
+export function startOnlineRoomServer(
+  env: NodeJS.ProcessEnv = process.env,
+): ReturnType<typeof main> {
+  return main(
+    {
+      ...env,
+      HOST: ONLINE_ROOM_SERVER_HOST,
+      PORT: String(ONLINE_ROOM_SERVER_PORT),
+    },
+    ONLINE_ROOM_SERVER_RUNTIME_OPTIONS,
+  );
+}
+
 /** True only when this module is the file Node/tsx was asked to run. */
 function isDirectExecution(): boolean {
   const entry = process.argv[1];
@@ -99,15 +136,5 @@ if (isDirectExecution()) {
   // Reuse the production entry point: it owns startup errors, logging and the
   // one-shot SIGTERM/SIGINT handlers. Only the test bind, manager options and
   // presence windows are overrides.
-  void main(
-    {
-      ...process.env,
-      HOST: ONLINE_ROOM_SERVER_HOST,
-      PORT: String(ONLINE_ROOM_SERVER_PORT),
-    },
-    {
-      managerOptions: ONLINE_ROOM_MANAGER_OPTIONS,
-      ...ONLINE_ROOM_PRESENCE_OPTIONS,
-    },
-  );
+  void startOnlineRoomServer();
 }

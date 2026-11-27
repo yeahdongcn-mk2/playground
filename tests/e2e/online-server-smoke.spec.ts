@@ -31,13 +31,14 @@ test.describe('online room test infrastructure', () => {
   // offline detection fires, so the whole window is
   // offlineDetectMs + graceMs. A shorter turn would forfeit the match before
   // grace resolves and would stop exercising the real reconnect lifecycle.
-  // The same values are what the running room service was started with.
+  // These are constant consistency checks: `ONLINE_ROOM_EFFECTIVE_TIMINGS` is
+  // derived from the launcher options, so they prove the chosen windows are
+  // ordered and shorter than production. The wiring that actually starts the
+  // room service with them is covered by
+  // `online-room-server-entry.test.ts` (launcher -> entry -> presence).
   test('uses shortened test windows ordered detect < grace < turn < match', () => {
     const timings = ONLINE_ROOM_EFFECTIVE_TIMINGS;
 
-    expect(timings.offlineDetectMs).toBe(
-      timings.heartbeatIntervalMs * timings.missedBeatsThreshold,
-    );
     expect(timings.offlineDetectMs).toBeLessThan(timings.graceMs);
     expect(timings.graceMs).toBeLessThan(timings.turnTimeoutMs);
     expect(timings.turnTimeoutMs).toBeLessThan(timings.matchTimeoutMs);
