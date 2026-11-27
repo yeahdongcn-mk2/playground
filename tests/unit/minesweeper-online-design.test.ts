@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import type { RoomStateMessage } from '../../src/games/minesweeper/online/types';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const DESIGN_PATH = join(ROOT, 'docs', 'minesweeper-online-design.md');
@@ -131,6 +132,32 @@ interface ProtocolDesign {
   readonly disconnect: ProtocolDisconnect;
   readonly hosting: ProtocolHosting;
   readonly messages: readonly DesignMessage[];
+}
+
+interface SeriesFieldMapping {
+  readonly name: string;
+  readonly type: string;
+}
+
+interface SeriesRoomStateMapping {
+  readonly message: string;
+  readonly field: string;
+  readonly type: string;
+  readonly required: boolean;
+  readonly fields: readonly SeriesFieldMapping[];
+  readonly roundResultFields: readonly SeriesFieldMapping[];
+}
+
+interface SeriesDesign {
+  readonly version: number;
+  readonly status: string;
+  readonly bestOf: number;
+  readonly winsRequired: number;
+  readonly maxRounds: number;
+  readonly firstMover: string;
+  readonly firstRoundFirstMover: string;
+  readonly resetAfterDecision: boolean;
+  readonly roomStateSeries: SeriesRoomStateMapping;
 }
 
 interface ReconnectHeartbeat {
@@ -383,6 +410,65 @@ const protocol = readJsonBlock('design:protocol') as ProtocolDesign;
 const reconnect = readJsonBlock('design:reconnect') as ReconnectDesign;
 const hosting = readJsonBlock('design:hosting') as HostingDesign;
 const implementationPlan = readJsonBlock('design:implementation-plan') as ImplementationPlan;
+const series = readJsonBlock('design:series') as SeriesDesign;
+
+/** Compile-time check that a design field list matches the TS contract. */
+type Assert<T extends true> = T;
+type Equal<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+type RoomSeries = NonNullable<RoomStateMessage['series']>;
+type SeriesRound = RoomSeries['history'][number];
+
+const SERIES_FIELDS = [
+  'bestOf',
+  'winsRequired',
+  'maxRounds',
+  'round',
+  'wins',
+  'firstMoverId',
+  'decided',
+  'winnerId',
+  'history',
+] as const;
+type SeriesFieldListMatches = Assert<
+  Equal<(typeof SERIES_FIELDS)[number], keyof RoomSeries>
+>;
+
+const SERIES_ROUND_FIELDS = [
+  'round',
+  'matchId',
+  'winnerId',
+  'loserId',
+  'reason',
+  'firstMoverId',
+] as const;
+type SeriesRoundFieldListMatches = Assert<
+  Equal<(typeof SERIES_ROUND_FIELDS)[number], keyof SeriesRound>
+>;
+
+const EXPECTED_SERIES_FIELD_TYPES: Readonly<Record<keyof RoomSeries, string>> = {
+  bestOf: 'integer',
+  winsRequired: 'integer',
+  maxRounds: 'integer',
+  round: 'integer',
+  wins: 'Record<playerId, integer>',
+  firstMoverId: 'string',
+  decided: 'boolean',
+  winnerId: 'string|null',
+  history: 'SeriesRoundResult[]',
+};
+
+const EXPECTED_SERIES_ROUND_FIELD_TYPES: Readonly<Record<keyof SeriesRound, string>> = {
+  round: 'integer',
+  matchId: 'string',
+  winnerId: 'string|null',
+  loserId: 'string|null',
+  reason: 'match-reason',
+  firstMoverId: 'string',
+};
+
+const seriesFieldListMatches: SeriesFieldListMatches = true;
+const seriesRoundFieldListMatches: SeriesRoundFieldListMatches = true;
 
 const STATES = lifecycle.states.map((state) => state.name);
 const STATE_SET = new Set(STATES);
@@ -535,7 +621,7 @@ describe('minesweeper online room lifecycle design', () => {
 });
 
 describe('minesweeper online sync and adjudication protocol', () => {
-  it('fixes the turn-based, server-authoritative shared-board model', () => {
+  it('fixes the turn-based, server-authoritative shared-board model and series contract', () => {
     expect(protocol.version).toBe(1);
     expect(protocol.implementationStatus).toBe('design-only');
     expect(protocol.syncModel).toBe('turn-based');
@@ -549,6 +635,58 @@ describe('minesweeper online sync and adjudication protocol', () => {
     expect(protocol.adjudication.engine).toBe('MinesweeperEngine');
     expect(protocol.hosting.requiresServer).toBe(true);
     expect(protocol.hosting.staticHostingOnly).toBe(false);
+
+    // The best-of-three contract is fixed, but the series is not playable yet.
+    expect(series.version).toBe(1);
+    expect(series.status).toBe('contract-only');
+    expect(series.bestOf).toBe(3);
+    expect(series.winsRequired).toBe(2);
+    expect(series.maxRounds).toBe(3);
+    expect(series.firstMover).toBe('alternates');
+    expect(series.firstRoundFirstMover).toBe('host');
+    expect(series.resetAfterDecision).toBe(true);
+    expect(series.bestOf).toBe(series.maxRounds);
+    expect(series.winsRequired * 2 - 1).toBe(series.maxRounds);
+
+    expect(seriesFieldListMatches).toBe(true);
+    expect(seriesRoundFieldListMatches).toBe(true);
+    expect(series.roomStateSeries.message).toBe('room_state');
+    expect(series.roomStateSeries.field).toBe('series');
+    expect(series.roomStateSeries.type).toBe('SeriesState');
+    expect(series.roomStateSeries.required).toBe(false);
+    expect(series.roomStateSeries.fields.map((field) => field.name)).toEqual([
+      ...SERIES_FIELDS,
+    ]);
+    expect(
+      Object.fromEntries(
+        series.roomStateSeries.fields.map((field) => [field.name, field.type]),
+      ),
+    ).toEqual(EXPECTED_SERIES_FIELD_TYPES);
+    expect(series.roomStateSeries.roundResultFields.map((field) => field.name)).toEqual([
+      ...SERIES_ROUND_FIELDS,
+    ]);
+    expect(
+      Object.fromEntries(
+        series.roomStateSeries.roundResultFields.map((field) => [field.name, field.type]),
+      ),
+    ).toEqual(EXPECTED_SERIES_ROUND_FIELD_TYPES);
+
+    // Cross-check the mapping with design:protocol's room_state.series field.
+    const seriesMessage = protocol.messages.find(
+      (message) => message.type === series.roomStateSeries.message,
+    );
+    expect(seriesMessage, 'design:protocol must declare room_state').toBeDefined();
+    if (seriesMessage !== undefined) {
+      expect(seriesMessage.direction).toBe('server-to-client');
+      expect(
+        seriesMessage.fields.find((field) => field.name === series.roomStateSeries.field),
+        'design:protocol room_state.series must match design:series',
+      ).toEqual({
+        name: series.roomStateSeries.field,
+        type: series.roomStateSeries.type,
+        required: series.roomStateSeries.required,
+      });
+    }
   });
 
   it('locks deterministic seed and first-click safety', () => {
