@@ -291,7 +291,7 @@ npm run test:e2e     # 先 build，再用 vite preview 跑 Chromium 桌面 / Pix
 npm run test:e2e:webkit # 先 build，只跑 mobile-webkit（iPhone SE (3rd gen)）
 ```
 
-当前提交本地通过：`typecheck`、`lint`、`build`、`check:budget` 通过；`npm run test:unit` 2494 passed；`npm run test:e2e` 170 passed（桌面 102 + 手机 36 + WebKit 32）。
+当前提交本地通过：`typecheck`、`lint`、`build`、`check:budget` 通过；`npm run test:unit` 2506 passed；`npm run test:e2e` 170 passed（桌面 102 + 手机 36 + WebKit 32）。
 
 - 镇煞生产规模分两份契约：`docs/zhen-sha-kill-gate.md` 的历史评估表冻结于 `43c9ab1`（4 个文件 / 1,416 行），不再随引擎 PR 回写；当前生产规模由 `docs/zhen-sha-production-size.json` 滚动跟踪，统计 `src/games/zhen-sha/` 下所有非测试源文件（含仅被测试引用的 `boss-chart-adapter.ts`，因此不等于历史基线口径），漂移时单测失败并提示运行 `npm run sync:zhen-sha-size`。
 
