@@ -242,6 +242,14 @@ export interface RoomRecord {
   /** Absolute deadline of the current turn, or null outside a `.playing` match. */
   readonly deadlineAt: number | null;
   readonly stateReason: string | null;
+  /**
+   * Best-of-three state, absent until a series starts.
+   *
+   * The field reuses the `room_state.series` wire contract rather than a
+   * second DTO. `publicRoomState` projects it as-is; it carries only round
+   * results and score, never the match seed or the mine board.
+   */
+  readonly series?: NonNullable<RoomStateMessage['series']>;
 }
 
 /** Public projection of one seat: exactly the `PlayerView` wire shape. */
@@ -264,7 +272,13 @@ function publicPlayerView(seat: RoomSeat): PlayerView {
  */
 export type PublicRoomState = Omit<RoomStateMessage, 'playerToken'>;
 
-/** Project the client-safe part of a room; never includes a `playerToken`. */
+/**
+ * Project the client-safe part of a room; never includes a `playerToken`.
+ *
+ * `series` is optional on the record: when it is absent the key stays absent
+ * from the projection (and therefore from the JSON), so a room that has not
+ * started a series never grows the field. When present it is projected as-is.
+ */
 export function publicRoomState(room: RoomRecord): PublicRoomState {
   return {
     type: 'room_state',
@@ -280,6 +294,7 @@ export function publicRoomState(room: RoomRecord): PublicRoomState {
     joinDeadlineAt: room.joinDeadlineAt,
     deadlineAt: room.deadlineAt,
     stateReason: room.stateReason,
+    ...(room.series === undefined ? {} : { series: room.series }),
   };
 }
 

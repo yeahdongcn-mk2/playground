@@ -40,6 +40,7 @@ import type {
   ProtocolErrorCode,
   ReadyMessage,
   RematchMessage,
+  RoomStateMessage,
   StartMessage,
   TimeoutMessage,
 } from '../../src/games/minesweeper/online/index';
@@ -364,6 +365,41 @@ describe('online room identifiers', () => {
   });
 });
 
+/**
+ * The `room_state.series` shape, read through the exported wire DTO.
+ *
+ * `SeriesState` itself is private to the online types module; the room record
+ * reuses it through `NonNullable<RoomStateMessage['series']>`, so this alias
+ * pins that same contract without adding a test-local DTO.
+ */
+type SeriesState = NonNullable<RoomStateMessage['series']>;
+
+/**
+ * One open best-of-three series: the host already won round 1, so round 2 is
+ * in progress and the first mover has alternated to the guest. No seed or mine
+ * layout belongs here; only round metadata and the score.
+ */
+const SERIES_FIXTURE: SeriesState = {
+  bestOf: 3,
+  winsRequired: 2,
+  maxRounds: 3,
+  round: 2,
+  wins: { player_host: 1, player_guest: 0 },
+  firstMoverId: 'player_guest',
+  decided: false,
+  winnerId: null,
+  history: [
+    {
+      round: 1,
+      matchId: 'match_contract_1',
+      winnerId: 'player_host',
+      loserId: 'player_guest',
+      reason: 'mine-hit',
+      firstMoverId: 'player_host',
+    },
+  ],
+};
+
 describe('online room public state', () => {
   it('projects the client-safe room shape without a playerToken', () => {
     const room = makeRoom({ state: 'ready', stateReason: 'all-ready' });
@@ -423,6 +459,41 @@ describe('online room public state', () => {
     expect(state.players.map((player) => player.playerId)).toEqual(
       room.seats.map((seat) => seat.playerId),
     );
+  });
+
+  it('projects the record series unchanged when it is present', () => {
+    const room = makeRoom({ state: 'finished', series: SERIES_FIXTURE });
+    const state = publicRoomState(room);
+
+    expect(Object.hasOwn(state, 'series')).toBe(true);
+    expect(state.series).toBe(room.series);
+    expect(state.series).toEqual(SERIES_FIXTURE);
+
+    const roundTripped = JSON.parse(JSON.stringify(state)) as { series?: SeriesState };
+    expect(roundTripped.series).toEqual(SERIES_FIXTURE);
+  });
+
+  it('leaves the series field absent while the room has none', () => {
+    // `waiting` covers create/join, `ready` the readiness phase: neither may
+    // grow a series field before the first round starts.
+    for (const state of ['waiting', 'ready'] as const) {
+      const room = makeRoom({ state, stateReason: state === 'ready' ? 'all-ready' : null });
+      const projected = publicRoomState(room);
+
+      expect(Object.hasOwn(projected, 'series'), state).toBe(false);
+      expect(JSON.parse(JSON.stringify(projected)), state).not.toHaveProperty('series');
+    }
+  });
+
+  it('never serializes a seed, mine board or player token with the series', () => {
+    const room = makeRoom({ state: 'finished', series: SERIES_FIXTURE });
+    const json = JSON.stringify(publicRoomState(room));
+
+    expect(json).not.toMatch(/"(seed|seedHash|board|mineLayout|minePositions)"/);
+    expect(json).not.toContain('playerToken');
+    for (const seat of room.seats) {
+      expect(json).not.toContain(seat.playerToken);
+    }
   });
 });
 
