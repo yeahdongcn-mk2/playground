@@ -97,6 +97,40 @@ function makeRoomState(overrides: Partial<RoomStateMessage> = {}): RoomStateMess
   };
 }
 
+type RoomSeries = NonNullable<RoomStateMessage['series']>;
+type RoomSeriesRound = RoomSeries['history'][number];
+
+function makeSeriesRound(overrides: Partial<RoomSeriesRound> = {}): RoomSeriesRound {
+  return {
+    round: 1,
+    matchId: MATCH_ID,
+    winnerId: HOST_ID,
+    loserId: GUEST_ID,
+    reason: 'mine-hit',
+    firstMoverId: HOST_ID,
+    ...overrides,
+  };
+}
+
+function makeSeries(overrides: Partial<RoomSeries> = {}): RoomSeries {
+  return {
+    bestOf: 3,
+    winsRequired: 2,
+    maxRounds: 3,
+    round: 1,
+    wins: seriesWins(0, 0),
+    firstMoverId: HOST_ID,
+    decided: false,
+    winnerId: null,
+    history: [],
+    ...overrides,
+  };
+}
+
+function seriesWins(host: number, guest: number): Readonly<Record<string, number>> {
+  return { [HOST_ID]: host, [GUEST_ID]: guest };
+}
+
 function redactedCell(row: number, col: number): RedactedCell {
   return { row, col, revealed: false, flagged: false, adjacentMines: 0 };
 }
@@ -604,6 +638,361 @@ describe('room client store sequence merge', () => {
     expect(state.room).toBeNull();
     expect(state.snapshot).toBeNull();
   });
+});
+
+// ---------------------------------------------------------------------------
+// Best-of-three series projection
+// ---------------------------------------------------------------------------
+
+describe('room client store series', () => {
+  const round1 = makeSeriesRound({ round: 1, firstMoverId: HOST_ID });
+  const round2 = makeSeriesRound({
+    round: 2,
+    winnerId: GUEST_ID,
+    loserId: HOST_ID,
+    firstMoverId: GUEST_ID,
+  });
+  const round3 = makeSeriesRound({ round: 3, firstMoverId: HOST_ID });
+
+  it('projects the series through 1:0, 1:1 and 2:1 as rounds finish', () => {
+    const { store } = setup('host');
+
+    store.applyServerMessage(playingRoom({ seq: 3, series: makeSeries() }));
+    expect(store.getState().room?.series).toEqual(makeSeries());
+
+    // Round 1 finishes 1:0; the finished room_state carries history even
+    // though `end` itself stays series-less.
+    store.applyServerMessage(
+      makeRoomState({
+        seq: 4,
+        state: 'finished',
+        matchId: MATCH_ID,
+        turnPlayerId: null,
+        series: makeSeries({ wins: seriesWins(1, 0), history: [round1] }),
+      }),
+    );
+    let series = store.getState().room?.series;
+    expect(series?.wins).toEqual(seriesWins(1, 0));
+    expect(series?.round).toBe(1);
+    expect(series?.firstMoverId).toBe(HOST_ID);
+    expect(series?.history).toEqual([round1]);
+
+    // The rematch lobby opens round 2 with the first move alternating.
+    store.applyServerMessage(
+      makeRoomState({
+        seq: 5,
+        state: 'ready',
+        series: makeSeries({
+          round: 2,
+          wins: seriesWins(1, 0),
+          firstMoverId: GUEST_ID,
+          history: [round1],
+        }),
+      }),
+    );
+    series = store.getState().room?.series;
+    expect(series?.round).toBe(2);
+    expect(series?.firstMoverId).toBe(GUEST_ID);
+
+    // Round 2 starts and finishes 1:1.
+    store.applyServerMessage(
+      playingRoom({
+        seq: 6,
+        matchId: 'match_round_2',
+        turnPlayerId: GUEST_ID,
+        series: makeSeries({
+          round: 2,
+          wins: seriesWins(1, 0),
+          firstMoverId: GUEST_ID,
+          history: [round1],
+        }),
+      }),
+    );
+    store.applyServerMessage(
+      makeRoomState({
+        seq: 7,
+        state: 'finished',
+        matchId: 'match_round_2',
+        series: makeSeries({
+          round: 2,
+          wins: seriesWins(1, 1),
+          firstMoverId: GUEST_ID,
+          history: [round1, round2],
+        }),
+      }),
+    );
+    series = store.getState().room?.series;
+    expect(series?.wins).toEqual(seriesWins(1, 1));
+    expect(series?.history).toEqual([round1, round2]);
+
+    // Round 3 begins with the host again and decides the series 2:1.
+    store.applyServerMessage(
+      makeRoomState({
+        seq: 8,
+        state: 'ready',
+        series: makeSeries({
+          round: 3,
+          wins: seriesWins(1, 1),
+          firstMoverId: HOST_ID,
+          history: [round1, round2],
+        }),
+      }),
+    );
+    store.applyServerMessage(
+      makeRoomState({
+        seq: 9,
+        state: 'finished',
+        matchId: 'match_round_3',
+        series: makeSeries({
+          round: 3,
+          wins: seriesWins(2, 1),
+          firstMoverId: HOST_ID,
+          decided: true,
+          winnerId: HOST_ID,
+          history: [round1, round2, round3],
+        }),
+      }),
+    );
+    series = store.getState().room?.series;
+    expect(series?.wins).toEqual(seriesWins(2, 1));
+    expect(series?.round).toBe(3);
+    expect(series?.firstMoverId).toBe(HOST_ID);
+    expect(series?.decided).toBe(true);
+    expect(series?.winnerId).toBe(HOST_ID);
+    expect(series?.history).toEqual([round1, round2, round3]);
+  });
+
+  it('keeps the series from the finished room_state that shares end seq', () => {
+    const decided = makeSeries({
+      round: 3,
+      wins: seriesWins(2, 1),
+      decided: true,
+      winnerId: HOST_ID,
+      history: [round1, round2, round3],
+    });
+    const { store } = startPlaying({ seq: 2 });
+
+    store.applyServerMessage(makeEnd({ seq: 3 }));
+    store.applyServerMessage(
+      makeRoomState({
+        seq: 3,
+        state: 'finished',
+        matchId: MATCH_ID,
+        turnPlayerId: null,
+        series: decided,
+      }),
+    );
+
+    const state = store.getState();
+    expect(state.phase).toBe('finished');
+    expect(state.end).not.toBeNull();
+    expect(state.room?.series).toEqual(decided);
+  });
+
+  it('restores the series from the resync room_state after a reconnect', () => {
+    const { store, transport } = setup('host');
+    store.applyServerMessage(
+      playingRoom({
+        seq: 2,
+        matchId: 'match_round_1',
+        series: makeSeries({ history: [] }),
+      }),
+    );
+    store.applyServerMessage(makeSnapshot({ seq: 2, matchId: 'match_round_1' }));
+
+    transport.emitStatus('reconnecting');
+    expect(store.getState().room?.series?.wins).toEqual(seriesWins(0, 0));
+
+    const resynced = makeSeries({
+      round: 2,
+      wins: seriesWins(1, 0),
+      firstMoverId: GUEST_ID,
+      history: [round1],
+    });
+    store.applyServerMessage(
+      playingRoom({
+        seq: 9,
+        matchId: 'match_round_2',
+        turnPlayerId: GUEST_ID,
+        series: resynced,
+      }),
+    );
+    store.applyServerMessage(
+      makeSnapshot({
+        seq: 9,
+        matchId: 'match_round_2',
+        turnPlayerId: GUEST_ID,
+        turnId: 2,
+      }),
+    );
+
+    let state = store.getState();
+    expect(state.lastSeq).toBe(9);
+    expect(state.room?.seq).toBe(9);
+    expect(state.room?.series).toEqual(resynced);
+    expect(state.room?.series?.round).toBe(2);
+    expect(state.room?.series?.wins).toEqual(seriesWins(1, 0));
+
+    transport.emitStatus('connected');
+    state = store.getState();
+    expect(state.connection).toBe('connected');
+    expect(state.room?.series).toEqual(resynced);
+  });
+
+  it('keeps an absent series absent instead of fabricating a 0:0 score', () => {
+    const { store } = setup('host');
+    store.applyServerMessage(playingRoom({ seq: 2 }));
+
+    const room = store.getState().room;
+    expect(room).not.toBeNull();
+    expect(room?.series).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(room, 'series')).toBe(false);
+    expect(JSON.stringify(room)).not.toContain('"series"');
+  });
+
+  it('commits a same-seq series change without duplicating an identical repeat', () => {
+    const { store } = setup('host');
+    // An old server payload without series; the series appears later at the
+    // same seq, so the repeat must not be dropped as identical.
+    store.applyServerMessage(playingRoom({ seq: 5 }));
+
+    const seen: RoomClientState[] = [];
+    store.subscribe((state) => seen.push(state));
+
+    store.applyServerMessage(playingRoom({ seq: 5, series: makeSeries() }));
+    expect(seen).toHaveLength(1);
+    expect(store.getState().room?.series).toEqual(makeSeries());
+
+    // `wins` is a record, not an ordered list: reversing its keys is the same
+    // series and must not publish again.
+    store.applyServerMessage(
+      playingRoom({
+        seq: 5,
+        series: makeSeries({ wins: { [GUEST_ID]: 0, [HOST_ID]: 0 } }),
+      }),
+    );
+    expect(seen).toHaveLength(1);
+
+    // Only the series advanced at the applied seq: still a real state change.
+    const advanced = makeSeries({
+      round: 2,
+      wins: seriesWins(1, 0),
+      firstMoverId: GUEST_ID,
+      history: [round1],
+    });
+    store.applyServerMessage(playingRoom({ seq: 5, series: advanced }));
+    expect(seen).toHaveLength(2);
+    expect(store.getState().room?.series).toEqual(advanced);
+
+    // A presence-only repeat at the same seq keeps committing, with the
+    // series payload preserved.
+    store.applyServerMessage(
+      playingRoom({
+        seq: 5,
+        players: [{ ...HOST, presence: 'reconnecting' }, { ...GUEST, presence: 'online' }],
+        series: makeSeries({
+          round: 2,
+          wins: seriesWins(1, 0),
+          firstMoverId: GUEST_ID,
+          history: [round1],
+        }),
+      }),
+    );
+    expect(seen).toHaveLength(3);
+    expect(store.getState().room?.players[0]?.presence).toBe('reconnecting');
+    expect(store.getState().room?.series).toEqual(advanced);
+  });
+
+  // Each case below changes exactly one field compared by `sameSeries`, so
+  // deleting that comparison from the store cannot leave this suite green.
+  // Every case also re-sends the changed payload unchanged: an
+  // always-different comparison would publish again and fail the
+  // `toHaveLength(1)` assertion, keeping the "identical repeat is a no-op"
+  // direction honest too.
+  const seriesFieldCases: ReadonlyArray<{
+    readonly field: string;
+    readonly mutate: (series: RoomSeries) => RoomSeries;
+  }> = [
+    { field: 'bestOf', mutate: (series) => ({ ...series, bestOf: series.bestOf + 2 }) },
+    {
+      field: 'winsRequired',
+      mutate: (series) => ({ ...series, winsRequired: series.winsRequired + 1 }),
+    },
+    { field: 'maxRounds', mutate: (series) => ({ ...series, maxRounds: series.maxRounds + 1 }) },
+    { field: 'round', mutate: (series) => ({ ...series, round: series.round + 1 }) },
+    { field: 'firstMoverId', mutate: (series) => ({ ...series, firstMoverId: GUEST_ID }) },
+    { field: 'decided', mutate: (series) => ({ ...series, decided: true }) },
+    { field: 'winnerId', mutate: (series) => ({ ...series, winnerId: HOST_ID }) },
+    { field: 'wins value', mutate: (series) => ({ ...series, wins: seriesWins(1, 0) }) },
+    // Dropping a key exercises the `sameWins` key-count check: the `every`
+    // over the shorter left record alone would consider it unchanged.
+    {
+      field: 'wins keys',
+      mutate: (series) => ({ ...series, wins: { [HOST_ID]: series.wins[HOST_ID] ?? 0 } }),
+    },
+    // A shrinking history exercises the explicit length comparison; a longer
+    // one is already caught by the `other !== undefined` guard.
+    {
+      field: 'history length',
+      mutate: (series) => ({ ...series, history: series.history.slice(0, -1) }),
+    },
+  ];
+
+  it.each(seriesFieldCases)(
+    'commits a same-seq update when only series $field changes',
+    ({ mutate }) => {
+      const { store } = setup('host');
+      const base = makeSeries({ wins: seriesWins(0, 0), history: [round1] });
+      store.applyServerMessage(playingRoom({ seq: 5, series: base }));
+
+      const seen: RoomClientState[] = [];
+      store.subscribe((state) => seen.push(state));
+
+      const changed = mutate(base);
+      store.applyServerMessage(playingRoom({ seq: 5, series: changed }));
+      expect(seen).toHaveLength(1);
+      expect(store.getState().room?.series).toEqual(changed);
+
+      // The changed payload repeated at the same seq is genuinely identical.
+      store.applyServerMessage(playingRoom({ seq: 5, series: changed }));
+      expect(seen).toHaveLength(1);
+    },
+  );
+
+  // `sameSeries` also compares each completed round field by field; one
+  // single-field change inside the existing history entry must still commit.
+  const seriesRoundFieldCases: ReadonlyArray<{
+    readonly field: string;
+    readonly mutate: (round: RoomSeriesRound) => RoomSeriesRound;
+  }> = [
+    { field: 'round', mutate: (round) => ({ ...round, round: round.round + 1 }) },
+    { field: 'matchId', mutate: (round) => ({ ...round, matchId: 'match_round_2' }) },
+    { field: 'winnerId', mutate: (round) => ({ ...round, winnerId: null }) },
+    { field: 'loserId', mutate: (round) => ({ ...round, loserId: null }) },
+    { field: 'reason', mutate: (round) => ({ ...round, reason: 'turn-timeout' }) },
+    { field: 'firstMoverId', mutate: (round) => ({ ...round, firstMoverId: GUEST_ID }) },
+  ];
+
+  it.each(seriesRoundFieldCases)(
+    'commits a same-seq update when only series.history[0].$field changes',
+    ({ mutate }) => {
+      const { store } = setup('host');
+      const base = makeSeries({ history: [round1] });
+      store.applyServerMessage(playingRoom({ seq: 5, series: base }));
+
+      const seen: RoomClientState[] = [];
+      store.subscribe((state) => seen.push(state));
+
+      const changed = { ...base, history: [mutate(round1)] };
+      store.applyServerMessage(playingRoom({ seq: 5, series: changed }));
+      expect(seen).toHaveLength(1);
+      expect(store.getState().room?.series).toEqual(changed);
+
+      // The changed payload repeated at the same seq is genuinely identical.
+      store.applyServerMessage(playingRoom({ seq: 5, series: changed }));
+      expect(seen).toHaveLength(1);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
