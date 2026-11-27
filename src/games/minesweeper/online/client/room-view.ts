@@ -219,6 +219,10 @@ export function mountOnlineRoomView(
   // the same seat must start from a different namespace.
   const actionIdPrefix = createActionIdPrefix();
   let destroyed = false;
+  // Remember the last preset so entering 自定义 can start from its board, and
+  // keep the user's edited custom values when they toggle back to a preset.
+  let lastPresetId: DifficultyId = initialDifficulty;
+  let customEdited = false;
 
   function nextRequestId(kind: string): string {
     requestCounter += 1;
@@ -231,8 +235,10 @@ export function mountOnlineRoomView(
   }
 
   function showFormError(message: string): void {
-    formError.textContent = message;
+    // Unhide before filling the live region so assistive technology sees the
+    // alert appear with its text, matching the single-player difficulty form.
     formError.hidden = false;
+    formError.textContent = message;
   }
 
   function clearFormError(): void {
@@ -268,7 +274,7 @@ export function mountOnlineRoomView(
         showFormError(parsed.message);
         return null;
       }
-      return { ...parsed.config };
+      return parsed.config;
     }
     const preset =
       DIFFICULTY_PRESETS.find((candidate) => candidate.id === difficultySelect.value) ??
@@ -281,15 +287,43 @@ export function mountOnlineRoomView(
     };
   }
 
+  /** Fill the custom inputs with a preset board before they are edited. */
+  function seedCustomFieldsFromPreset(id: DifficultyId): void {
+    const preset = getDifficulty(id);
+    customRowsInput.value = String(preset.rows);
+    customColsInput.value = String(preset.cols);
+    customMinesInput.value = String(preset.mines);
+  }
+
   /** Show the custom fields only while the custom option is selected. */
   function syncCustomFieldsVisibility(): void {
     customFields.hidden = difficultySelect.value !== CUSTOM_DIFFICULTY_ID;
   }
 
-  difficultySelect.addEventListener('change', () => {
+  function handleDifficultyChange(): void {
+    const next = difficultySelect.value;
+    if (next === CUSTOM_DIFFICULTY_ID) {
+      // Entering 自定义 starts from the preset the user just left (高级 →
+      // 16×30×99) until they edit the fields; later re-entries keep their edits.
+      if (!customEdited) {
+        seedCustomFieldsFromPreset(lastPresetId);
+      }
+    } else {
+      const preset = DIFFICULTY_PRESETS.find((candidate) => candidate.id === next);
+      if (preset !== undefined) {
+        lastPresetId = preset.id;
+      }
+    }
     syncCustomFieldsVisibility();
     clearFormError();
-  });
+  }
+
+  difficultySelect.addEventListener('change', handleDifficultyChange);
+  for (const input of [customRowsInput, customColsInput, customMinesInput]) {
+    input.addEventListener('input', () => {
+      customEdited = true;
+    });
+  }
   syncCustomFieldsVisibility();
 
   function startTicker(): void {
@@ -933,9 +967,7 @@ function roomShellHtml(
     const selected = preset.id === initialDifficulty ? ' selected' : '';
     return `<option value="${preset.id}"${selected}>${preset.label} · ${preset.rows}×${preset.cols} · ${preset.mines} 雷</option>`;
   }).join('');
-  const initialPreset =
-    DIFFICULTY_PRESETS.find((preset) => preset.id === initialDifficulty) ??
-    getDifficulty(DEFAULT_DIFFICULTY_ID);
+  const initialPreset = getDifficulty(initialDifficulty);
 
   return `
   <section class="online-room" data-testid="online-room" data-phase="idle" data-connection="idle">
@@ -976,7 +1008,7 @@ function roomShellHtml(
             <option value="${CUSTOM_DIFFICULTY_ID}">自定义 · 行 / 列 / 雷数</option>
           </select>
           <div class="online-room__custom-fields" data-testid="custom-fields" role="group"
-            aria-label="自定义棋盘" aria-describedby="online-form-error" hidden>
+            aria-label="自定义棋盘" hidden>
             <div class="online-room__custom-field">
               <label for="online-custom-rows">行数</label>
               <input id="online-custom-rows" data-testid="custom-rows" name="rows"

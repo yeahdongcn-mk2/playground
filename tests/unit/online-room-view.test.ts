@@ -589,9 +589,16 @@ function fillCustomBoard(
   cols: string,
   mines: string,
 ): void {
-  setInput(harness.root, 'custom-rows', rows);
-  setInput(harness.root, 'custom-cols', cols);
-  setInput(harness.root, 'custom-mines', mines);
+  setCustomInput(harness, 'custom-rows', rows);
+  setCustomInput(harness, 'custom-cols', cols);
+  setCustomInput(harness, 'custom-mines', mines);
+}
+
+/** Type into a custom field the way the browser reports user edits. */
+function setCustomInput(harness: Harness, testId: string, value: string): void {
+  const input = byTestId<HTMLInputElement>(harness.root, testId);
+  input.value = value;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 /** Drive the mounted seat into a playing state and return its board renderer. */
@@ -776,7 +783,8 @@ describe('online room create and join', () => {
 
     const select = byTestId<HTMLSelectElement>(harness.root, 'difficulty');
     const customFields = byTestId<HTMLElement>(harness.root, 'custom-fields');
-    expect(select.options[select.options.length - 1]?.textContent).toContain('自定义');
+    const customOption = [...select.options].find((option) => option.value === 'custom');
+    expect(customOption?.textContent).toContain('自定义');
     expect(customFields.hidden).toBe(true);
 
     for (const testId of ['custom-rows', 'custom-cols', 'custom-mines']) {
@@ -796,6 +804,30 @@ describe('online room create and join', () => {
     select.value = 'beginner';
     select.dispatchEvent(new Event('change', { bubbles: true }));
     expect(customFields.hidden).toBe(true);
+
+    harness.handle.destroy();
+  });
+
+  it('seeds custom fields from the last preset and keeps the edited values', () => {
+    const harness = mountHarness({ roomId: null });
+    const select = byTestId<HTMLSelectElement>(harness.root, 'difficulty');
+
+    select.value = 'expert';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    selectCustomDifficulty(harness);
+
+    expect(byTestId<HTMLInputElement>(harness.root, 'custom-rows').value).toBe('16');
+    expect(byTestId<HTMLInputElement>(harness.root, 'custom-cols').value).toBe('30');
+    expect(byTestId<HTMLInputElement>(harness.root, 'custom-mines').value).toBe('99');
+
+    fillCustomBoard(harness, '12', '12', '20');
+    select.value = 'beginner';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    selectCustomDifficulty(harness);
+
+    expect(byTestId<HTMLInputElement>(harness.root, 'custom-rows').value).toBe('12');
+    expect(byTestId<HTMLInputElement>(harness.root, 'custom-cols').value).toBe('12');
+    expect(byTestId<HTMLInputElement>(harness.root, 'custom-mines').value).toBe('20');
 
     harness.handle.destroy();
   });
@@ -820,6 +852,29 @@ describe('online room create and join', () => {
     expect(byTestId<HTMLElement>(harness.root, 'form-error').hidden).toBe(true);
 
     harness.handle.destroy();
+  });
+
+  it('keeps every preset create config unchanged', () => {
+    for (const preset of DIFFICULTY_PRESETS) {
+      const harness = mountHarness({ roomId: null });
+      setInput(harness.root, 'nickname', 'Ada');
+      const select = byTestId<HTMLSelectElement>(harness.root, 'difficulty');
+      select.value = preset.id;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+
+      submitForm(harness.root, 'create-form');
+
+      expect(harness.transports).toHaveLength(1);
+      const create = firstTransport(harness).sent[0] as CreateMessage;
+      expect(create.config).toEqual({
+        rows: preset.rows,
+        cols: preset.cols,
+        mines: preset.mines,
+        firstClickSafe: true,
+      });
+
+      harness.handle.destroy();
+    }
   });
 
   it('rejects invalid custom boards with the parser reason and sends no create', () => {
@@ -879,6 +934,64 @@ describe('online room create and join', () => {
 
       harness.handle.destroy();
     }
+  });
+
+  it('clears a custom error and creates with the preset after switching back', () => {
+    const harness = mountHarness({ roomId: null });
+    setInput(harness.root, 'nickname', 'Ada');
+    selectCustomDifficulty(harness);
+    fillCustomBoard(harness, '4', '9', '10');
+    submitForm(harness.root, 'create-form');
+
+    const error = byTestId<HTMLElement>(harness.root, 'form-error');
+    expect(error.hidden).toBe(false);
+    expect(harness.transports).toHaveLength(0);
+
+    const select = byTestId<HTMLSelectElement>(harness.root, 'difficulty');
+    select.value = 'intermediate';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(error.hidden).toBe(true);
+
+    submitForm(harness.root, 'create-form');
+
+    expect(harness.transports).toHaveLength(1);
+    const create = firstTransport(harness).sent[0] as CreateMessage;
+    expect(create.config).toEqual({
+      rows: 16,
+      cols: 16,
+      mines: 40,
+      firstClickSafe: true,
+    });
+
+    harness.handle.destroy();
+  });
+
+  it('creates with a corrected custom board and clears the stale error', () => {
+    const harness = mountHarness({ roomId: null });
+    setInput(harness.root, 'nickname', 'Ada');
+    selectCustomDifficulty(harness);
+    fillCustomBoard(harness, '4', '9', '10');
+    submitForm(harness.root, 'create-form');
+
+    const error = byTestId<HTMLElement>(harness.root, 'form-error');
+    expect(error.hidden).toBe(false);
+    expect(harness.transports).toHaveLength(0);
+
+    fillCustomBoard(harness, '12', '12', '20');
+    submitForm(harness.root, 'create-form');
+
+    expect(harness.transports).toHaveLength(1);
+    const create = firstTransport(harness).sent[0] as CreateMessage;
+    expect(create.config).toEqual({
+      rows: 12,
+      cols: 12,
+      mines: 20,
+      firstClickSafe: true,
+    });
+    expect(error.hidden).toBe(true);
+    expect(error.textContent).toBe('');
+
+    harness.handle.destroy();
   });
 
   it('escapes hostile nicknames in the player list and the prefilled input', () => {
