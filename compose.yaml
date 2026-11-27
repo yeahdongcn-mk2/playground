@@ -1,0 +1,63 @@
+# One-command local online demo (#541): static site container + room service.
+#
+# `docker compose up -d --build` builds the site's `dist/` inside the web image
+# and serves it through nginx. nginx also proxies the browser's same-origin
+# `/ws` upgrade to the room container, so the client build never learns the
+# room service origin.
+#
+# Defaults mirror the shared contract in `scripts/lib/demo-config.mjs`: site
+# 8080, room 8787, proxy target `http://room:8787`.
+#
+# `DEMO_SITE_PORT` and `DEMO_ROOM_PORT` change the published host ports only;
+# the room service keeps listening on 8787 inside the compose network.
+# `DEMO_ROOM_URL` changes the web proxy target (for example to reuse a room
+# service that runs elsewhere) and must be an origin without a path.
+#
+# The stack has no volumes: `docker compose down` removes both containers and
+# `down -v` is just as clean. Publish on loopback so the demo is local by
+# default; the room service binds 0.0.0.0 only inside the compose network.
+services:
+  room:
+    build:
+      context: .
+      dockerfile: docker/demo/room.Dockerfile
+    environment:
+      # Reachable from the web container, not exposed directly by the network.
+      HOST: 0.0.0.0
+      PORT: "8787"
+    expose:
+      - "8787"
+    ports:
+      - "127.0.0.1:${DEMO_ROOM_PORT:-8787}:8787"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -q -O - http://127.0.0.1:8787/health | grep -q '"status":"ok"'
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/demo/web.Dockerfile
+    environment:
+      # The nginx template renders this into `proxy_pass`; the browser still
+      # opens `/ws` on the site origin.
+      DEMO_ROOM_URL: "${DEMO_ROOM_URL:-http://room:8787}"
+    ports:
+      - "127.0.0.1:${DEMO_SITE_PORT:-8080}:80"
+    depends_on:
+      room:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -q -O /dev/null http://127.0.0.1/
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
