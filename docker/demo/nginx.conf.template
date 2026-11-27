@@ -1,0 +1,38 @@
+# Rendered into /etc/nginx/conf.d/default.conf by the nginx image entrypoint.
+# Only DEMO_ROOM_URL is substituted (envsubst); nginx runtime variables such as
+# $host, $http_upgrade and $remote_addr are left for nginx itself.
+map $http_upgrade $demo_connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    listen 80;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Static site: serve files, and fall back to index.html for client-side
+    # routes so a refresh on a game route still loads the shell.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Same-origin room traffic. The browser always opens /ws on the site
+    # origin; this upstream is the only place that knows the room service
+    # origin. DEMO_ROOM_URL is normalized by docker/demo/web-entrypoint.sh to
+    # an origin without a trailing slash (proxy_pass would otherwise rewrite
+    # the request path).
+    location /ws {
+        proxy_pass ${DEMO_ROOM_URL};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $demo_connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+}

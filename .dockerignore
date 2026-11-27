@@ -1,0 +1,19 @@
+# Keep the demo build context to what the two images copy. Both Dockerfiles
+# use the repository root as context; the web image needs the site sources,
+# and the room image needs `server/` plus the shared `src/` modules it imports.
+.git
+.github
+.plan
+node_modules
+dist
+test-results
+playwright-report
+blob-report
+evidence
+docs
+tests
+scripts
+docker/capture
+README.md
+*.local
+.DS_Store
