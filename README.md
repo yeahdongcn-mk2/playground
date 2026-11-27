@@ -401,10 +401,10 @@ npm run lint         # 通过（oxlint 覆盖 src、tests、scripts 与 server�
 npm run test:unit    # 2413 passed（覆盖六个游戏规则 / 视图 / 调试、截图与证据契约、CI 工作流、lint 与文档契约等）
 npm run build        # 通过
 npm run check:budget # 通过，实际输出：
-# Entry JS: 35.66 KB (11.60 KB gzip)
-# All JS chunks: 414.85 KB gzip (2D game budget 450 KB)
+# Entry JS: 35.97 KB (11.73 KB gzip)
+# All JS chunks: 414.98 KB gzip (2D game budget 450 KB)
 # CSS: 15.52 KB gzip
-# Zhen Sha view JS: zhen-sha-view-BTO-PZ2R.js 9.05 KB gzip (per-game budget 35 KB)
+# Zhen Sha view JS: zhen-sha-view-fLVRQmdE.js 9.05 KB gzip (per-game budget 35 KB)
 # Budget check OK: shell is engine-free and within the 2D download budget.
 npm run score        # 通过（打印「指标 / 当前值 / 基线值 / 差值」表与末行 SCORE_JSON；退化退出 1，变好只报差值）
 npm run test:e2e     # 170 passed（桌面 102 + 手机 36 + WebKit 32）

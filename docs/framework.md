@@ -353,7 +353,7 @@ Node.js `^22.22.2 || ^24.15.0 || >=26.0.0`（受 jsdom 30 的 Node engines 约�
 ## 14. 性能与已知限制
 
 - 大厅首屏不包含 Phaser；Phaser 只在进入使用 Phaser 的 2D 游戏时加载（本地构建 chunk 约 1.3 MB / 357 KB gzip），扫雷等 DOM 游戏不加载它。
-- 入口 JS 约 11.60 KB gzip；`check:budget` 断言入口不含引擎标记（Phaser.Game/Scene/AUTO、THREE.）且 ≤50 KB gzip，全部 JS chunk 合计 ≤450 KB gzip（当前约 414.85 KB gzip），并匹配 `dist/assets/zhen-sha-view-*.js` 要求合计 ≤35 KB gzip（当前约 9.05 KB gzip）：0 个匹配视为失败并提示先 `npm run build`，多个匹配按合计而不是只取第一个；所有 gzip 数字统一由 `node:zlib` 的 `gzipSync` 默认级别测得，Vite build 输出的 gzip 列不是门禁输入。
+- 入口 JS 约 11.73 KB gzip；`check:budget` 断言入口不含引擎标记（Phaser.Game/Scene/AUTO、THREE.）且 ≤50 KB gzip，全部 JS chunk 合计 ≤450 KB gzip（当前约 414.98 KB gzip），并匹配 `dist/assets/zhen-sha-view-*.js` 要求合计 ≤35 KB gzip（当前约 9.05 KB gzip）：0 个匹配视为失败并提示先 `npm run build`，多个匹配按合计而不是只取第一个；所有 gzip 数字统一由 `node:zlib` 的 `gzipSync` 默认级别测得，Vite build 输出的 gzip 列不是门禁输入。
 - 3D 尚未实现，Three.js 只在文档与目录层面预留。
 - 空白示例只演示框架能力；`src/games/snake/`、`src/games/tetris/`、`src/games/2048/`、`src/games/breakout/`、`src/games/minesweeper/` 与 `src/games/zhen-sha/`（镇煞）是完整玩法参考（规则引擎、渲染器、响应式视图、测试）。扫雷与镇煞是 2 款纯 DOM 参考，其余四款使用 Phaser 场景。
 - 打砖块固定 480×720 逻辑球场与 10 列砖块，没有道具、多球或在线排行榜；难度曲线由砖块行数与球速控制。
