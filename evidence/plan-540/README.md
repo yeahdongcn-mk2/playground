@@ -37,6 +37,7 @@ Before 的难度控件只有初级/中级/高级三个预设；After 增加「�
 | `after-1440x1000.png` | After，桌面，自定义选中，12×12 / 20 雷输入可见 | 1440×1000 / 1440×1000 | `ddf03582dffc85b664e80c45414904070ec062b085b4f39921a373f20dfa25be` |
 | `before-320x640.png` | Before，窄屏，三档 select（表单滚动到页头下方） | 320×640 / 320×640 | `66351c010d6195e1d6b848d530c46c69062ee55850d17012f9949c2b067fb49f` |
 | `after-320x640.png` | After，窄屏，自定义三列输入 | 320×640 / 320×640 | `beef660946ae004dfa3d5eb18b41de6cc78ed5c4ba4131a864b5c815cb6c6354` |
+| `after-preset-1440x1000.png` | After 附加态：默认「初级」预设选中，自定义字段按 `[hidden]` 规则不显示（与 `before-1440x1000.png` 像素一致） | 1440×1000 / 1440×1000 | `3138c5cdbc12301bdd9951aad74a529a48522b4b36e03a19a85fb55bfcba5e46` |
 | `after-focus-1440x1000.png` | After 附加态：行数输入聚焦，显示 `box-shadow` 焦点环 | 1440×1000 / 1440×1000 | `ffa0ab2545239623957d2d0f77e2ad3ad72c2a16b24c6ff7bbacd83cd6e70ad3` |
 | `after-invalid-1440x1000.png` | After 附加态：行数填 4，form-error 显示「行数必须是 5 到 30 之间的整数。」且不建房 | 1440×1000 / 1440×1000 | `4fc296a2717ff7779c64abe7ee54baaef2366c9303b4c77dd1d68f69815bfbbc` |
 
@@ -45,14 +46,23 @@ Before 的难度控件只有初级/中级/高级三个预设；After 增加「�
 | 截图 | 页面 scrollY | 表单 top / width / height | selectedDifficulty | 自定义字段可见 | form-error |
 | --- | --- | --- | --- | --- | --- |
 | `before-1440x1000.png` | 0 | 465 / 666 / 226 | `beginner` | —（不存在） | 空 |
-| `after-1440x1000.png` | 0 | 465 / 666 / 299 | `custom` | true | 空 |
+| `after-1440x1000.png` | 0 | 465 / 666 / 299 | `custom` | true（`display: grid`） | 空 |
 | `before-320x640.png` | 393 | 79 / 264 / 221 | `beginner` | —（不存在） | 空 |
-| `after-320x640.png` | 393 | 79 / 264 / 299 | `custom` | true | 空 |
-| `after-invalid-1440x1000.png` | 0 | 465 / 666 / 299 | `custom` | true | 行数必须是 5 到 30 之间的整数。 |
+| `after-320x640.png` | 393 | 79 / 264 / 299 | `custom` | true（`display: grid`） | 空 |
+| `after-preset-1440x1000.png` | 0 | 465 / 666 / 226 | `beginner` | false（`display: none`，0×0） | 空 |
+| `after-invalid-1440x1000.png` | 0 | 465 / 666 / 299 | `custom` | true（`display: grid`） | 行数必须是 5 到 30 之间的整数。 |
 
 窄屏两张都先滚到建房表单、并让 sticky 页头不遮挡表单顶部；滚动量相同（393），
 两张截图内容区一致。320 宽下三个数字输入各 71px 宽，页面 `scrollWidth = clientWidth = 320`，
 无横向溢出。
+
+`after-preset-1440x1000.png` 与 `before-1440x1000.png` 像素一致（sha256 相同），
+说明 After 在预设选中时没有显示自定义字段。`capture-room-form.mjs` 会读取真实浏览器里的
+`getComputedStyle(...).display` 与元素盒尺寸并断言：预设态必须 `display: none` / 0×0，
+自定义态必须可见（`display: grid` 且盒高 > 0）。Vitest 的 jsdom 不加载 `room-view.css`，
+所以只断言 `customFields.hidden` 的单测发现不了
+`.online-room__custom-fields[hidden] { display: none; }` 被删除；这条浏览器断言补上了缺口：
+删掉该规则后，预设态会变成 `display: grid`、盒尺寸 632×70，脚本立即失败。
 
 ## PR 描述可用段落
 
@@ -64,6 +74,12 @@ Before 的难度控件只有初级/中级/高级三个预设；After 增加「�
 > Before/After 均为同视口（1440×1000、320×640）、深色主题、DPR 1：Before 为 `987bac9`
 > 的三档 select，After 为 `528402a` 的自定义选项与三个数字输入（另附聚焦与非法值状态）。
 > 截图与复现说明见 `evidence/plan-540/`。
+>
+> 视觉证据用
+> `https://raw.githubusercontent.com/yeahdongcn-mk2/playground/<head-sha>/evidence/plan-540/`
+> 下的文件固定到 PR 分支提交，至少嵌入 `before-1440x1000.png` /
+> `after-1440x1000.png`、`before-320x640.png` / `after-320x640.png`，并附
+> `after-preset-1440x1000.png` 证明预设选中时自定义字段不显示。
 
 ## 采集方式
 
@@ -73,7 +89,11 @@ Before 的难度控件只有初级/中级/高级三个预设；After 增加「�
 - `capture-room-form.mjs` 以 1440×1000、320×640 两个视口、`colorScheme: dark`、
   `reducedMotion: reduce`、DPR 1 打开同一证据页；After 通过真实 `change` 事件选择
   `custom` 并填入 12/12/20；截图前 `blur()`，窄屏滚动到表单顶部，等待 100ms 后截图。
-- 焦点与非法值两张附加图只用于展示新增焦点样式与中文错误，不参与 Before/After 对照。
+- 脚本在真实浏览器里断言自定义字段的可见性：自定义态必须 `display: grid` 且盒尺寸非零，
+  默认预设态必须 `display: none` / 0×0，否则捕获直接失败；`after-preset-1440x1000.png`
+  记录的就是预设态。
+- 焦点、预设与非法值三张附加图只用于展示新增焦点样式、隐藏态与中文错误，
+  不参与 Before/After 对照。
 
 ## 复现
 

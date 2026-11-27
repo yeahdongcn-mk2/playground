@@ -92,6 +92,14 @@ async function formMetrics(page) {
     const select = document.querySelector('[data-testid="difficulty"]');
     const fields = document.querySelector('[data-testid="custom-fields"]');
     const rect = form instanceof HTMLElement ? form.getBoundingClientRect() : null;
+    const fieldsStyle = fields instanceof HTMLElement ? getComputedStyle(fields) : null;
+    const fieldsRect = fields instanceof HTMLElement ? fields.getBoundingClientRect() : null;
+    // Read the laid-out box, not the `hidden` attribute: jsdom unit tests can
+    // only see the attribute, while a browser still paints a display:grid
+    // element whose [hidden] rule is missing (the UA [hidden] rule loses).
+    const customFieldsVisible = fieldsRect === null
+      ? null
+      : fieldsStyle.display !== 'none' && fieldsRect.width > 0 && fieldsRect.height > 0;
     return {
       scrollY: Math.round(window.scrollY),
       form: rect === null ? null : {
@@ -100,10 +108,25 @@ async function formMetrics(page) {
         height: Math.round(rect.height),
       },
       selectedDifficulty: select instanceof HTMLSelectElement ? select.value : null,
-      customFieldsVisible: fields instanceof HTMLElement ? !fields.hidden : null,
+      customFieldsDisplay: fieldsStyle?.display ?? null,
+      customFieldsVisible,
       error: document.querySelector('[data-testid="form-error"]')?.textContent ?? '',
     };
   });
+}
+
+/**
+ * Fail loudly when the browser disagrees with the expected visibility, so
+ * deleting `[hidden] { display: none }` breaks the capture instead of leaving
+ * the jsdom unit tests green. A browser is required: jsdom never loads the
+ * stylesheet that makes `hidden` win over the author `display: grid` rule.
+ */
+function assertCustomFieldsVisible(label, metrics, expected) {
+  if (metrics.customFieldsVisible !== expected) {
+    throw new Error(
+      `${label}: expected custom fields visible=${expected}, got ${JSON.stringify(metrics)}`,
+    );
+  }
 }
 
 async function shoot(page, name, viewport, metrics) {
@@ -133,12 +156,28 @@ try {
     await after.page.fill('[data-testid="custom-cols"]', '12');
     await after.page.fill('[data-testid="custom-mines"]', '20');
     await scrollCreateFormIntoView(after.page, viewport);
-    await shoot(after.page, `after-${label}.png`, viewport, await formMetrics(after.page));
+    const afterMetrics = await formMetrics(after.page);
+    assertCustomFieldsVisible(`after-${label}.png`, afterMetrics, true);
+    await shoot(after.page, `after-${label}.png`, viewport, afterMetrics);
     await closeHarness(after);
   }
 
   // Extra after-only states: the new focus ring and the shared error region.
   const desktop = VIEWPORTS[0];
+
+  // The default preset must keep the custom fields laid out as display:none;
+  // this is the browser-level check that makes the CSS [hidden] override
+  // falsifiable (the jsdom unit test can only read the hidden attribute).
+  const preset = await openHarness(args.after, desktop);
+  await scrollCreateFormIntoView(preset.page, desktop);
+  const presetMetrics = await formMetrics(preset.page);
+  if (presetMetrics.selectedDifficulty !== 'beginner') {
+    throw new Error(`expected the default preset, got ${JSON.stringify(presetMetrics)}`);
+  }
+  assertCustomFieldsVisible('after-preset-1440x1000.png', presetMetrics, false);
+  await shoot(preset.page, 'after-preset-1440x1000.png', desktop, presetMetrics);
+  await closeHarness(preset);
+
   const focus = await openHarness(args.after, desktop);
   await focus.page.selectOption('[data-testid="difficulty"]', 'custom');
   await focus.page.fill('[data-testid="custom-rows"]', '12');
