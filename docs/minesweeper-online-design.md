@@ -9,7 +9,7 @@
 | 章节 | 内容 |
 | --- | --- |
 | [1. 背景与范围](#1-背景与范围) | 现状、目标与不在范围内的内容 |
-| [2. 与现有单机玩法和规则引擎参数化的关系](#2-与现有单机玩法和规则引擎参数化的关系) | 复用什么、单机不回归的保障、排行榜与自定义难度的后续接入 |
+| [2. 与现有单机玩法和规则引擎参数化的关系](#2-与现有单机玩法和规则引擎参数化的关系) | 复用什么、单机不回归的保障、已支持的自定义难度与排行榜的后续接入 |
 | [3. 房间生命周期](#3-房间生命周期) | 状态、事件、转移、三种时限与 `design:room-lifecycle` 契约 |
 | [4. 状态同步与裁决协议](#4-状态同步与裁决协议) | 回合制、共享棋盘、服务端权威、消息与 `design:protocol` 契约 |
 | [5. 断线与重连](#5-断线与重连) | 心跳、宽限、席位、恢复、幂等与 `design:reconnect` 契约 |
@@ -88,14 +88,14 @@
 - **部署不回归**：静态产物仍是默认发布物；联机房间服务是可选新增单元，房间服务不可用时单机与大厅仍可正常加载。
 - **文档契约测试**：本文的五个 `design:*` JSON 块由 `tests/unit/minesweeper-online-design.test.ts` 校验，状态名、时限与承载选择的改动会在 CI 中暴露。
 
-### 2.5 排行榜与自定义难度的后续接入
+### 2.5 已支持自定义难度与排行榜的后续接入
 
-本设计不实现排行榜与自定义难度，但保留接入点，避免以后返工：
+联机建房已支持自定义难度；排行榜仍是后续方向，保留接入点，避免以后返工：
 
-- **自定义难度**：单机的 `parseCustomDifficulty()` 已复用 `validateConfig()` 校验行、列、雷数与首点安全容量；联机建房可直接调用同一个校验函数，只接受 `MIN_ROWS`–`MAX_ROWS`、`MIN_COLS`–`MAX_COLS` 范围内且通过雷数与安全区检查的配置。首版联机固定 `firstClickSafe: true`；后续若要开放自定义，把校验后的 `MinesweeperConfig` 连同规则版本写入 `create` 与重放记录即可。
+- **自定义难度（已支持）**：联机建房表单提供初级/中级/高级三档预设与「自定义」选项；自定义输入复用单机的 `parseCustomDifficulty()` 与 `validateConfig()` 校验行、列、雷数与首点安全容量，非法值显示中文错误且不发送 `create`。服务端对 `create` 携带的 `MinesweeperConfig` 再用同一个 `validateConfig()` 做权威校验，只接受 `MIN_ROWS`–`MAX_ROWS`、`MIN_COLS`–`MAX_COLS` 范围内且通过雷数与安全区检查的配置；非法配置返回 error 且不建房。合法的 `MinesweeperConfig` 写入房间与对局状态，并随重放记录（`ReplayRecord.config`）保存，因此 `create`、对局与重放使用同一配置。联机固定 `firstClickSafe: true`，不新增第二套棋盘规则或配置校验。
 - **难度预设**：`src/games/minesweeper/difficulty.ts` 的初级/中级/高级仍是房间难度选项来源；自定义配置通过同一 `validateConfig` 校验，不另写一套边界。
 - **排行榜**：首版 `end` 已携带 `matchId`、`winnerId`、`finalSnapshot` 与 seed，服务端保留 replay 记录；后续排行榜应以服务端权威结果为准，按「规则版本 + 配置（行/列/雷数/首点策略）+ 模式」分组，不接受客户端上报成绩。排行字段可以新增在结算服务或 `end` 的扩展字段中，不需要改动房间状态机、同步协议或 `MinesweeperStatus`。
-- **范围边界**：以上两项都需要新的产品决策（排行维度、账号/匿名、自定义参数范围），因此不在本设计或实现 issue 清单的首版范围内，只确认为兼容方向。
+- **范围边界**：排行榜需要新的产品决策（排行维度、账号/匿名），因此不在本设计或实现 issue 清单的首版范围内，只确认为兼容方向；自定义难度的参数范围已由现有 `validateConfig` 与联机建房表单确定。
 
 ## 3. 房间生命周期
 
@@ -1281,7 +1281,7 @@ A 与 B 是本次需要决定的两种承载方式；C、D 作为已评估的替
 - `design:reconnect`：断言心跳检测 < 宽限 < 判负超时且三者均为正数、宽限值与 `design:protocol.disconnect.graceMs` 一致、判负超时与 `turn` 计时器一致；枚举的每个状态都在 `design:room-lifecycle` 中声明，重连/掉线/超时结局要么对应已有合法转移，要么停留在终态；恢复方式明确为全量快照或事件回放。
 - `design:hosting`：断言 `choice` 属于 `candidates`、每项候选 id 唯一、被否候选不在 `choice` 且都有非空理由、除 `choice` 外的候选都出现在 `rejected` 中；选型理由覆盖部署、成本、延迟、权威与反作弊、断线恢复、数据与隐私、可测试性、与静态部署的关系，每条理由都同时给出选用方案与被否方案；`references` 包含 `docs/tech-stack-decision.md` 与 `docs/framework.md`，演进阶段与重新评估条件非空，且 `choice` 的权威模型与 `design:protocol.hosting.requiresServer` 一致。
 - `design:implementation-plan`：断言版本与状态、任务 id 唯一、`title` / `detail` 非空、`acceptance` 是数组且每项非空、`depends_on` 与 `handles_events` 都是数组且只引用已声明成员、不存在依赖环、数组顺序满足依赖先后；每个 `design:room-lifecycle` 事件恰好有一个处理任务（`timeout` 由 `room-service` 与 `reconnect-timeout` 共同处理），且 `rematch` 归属 `room-service`；至少覆盖 `engine`、`protocol`、`hosting`、`reconnect`、`client-ui`、`e2e` 六类任务；`contracts.roomStates` ↔ `design:room-lifecycle`、`contracts.timersMs` ↔ `design:room-lifecycle.timers`、`contracts.hostingChoice` ↔ `design:hosting`、`contracts.protocolVersion` ↔ `design:protocol` 交叉一致。
-- **关系章节**：断言第 2 节正文出现 `MinesweeperConfig`、`createSeededRng`、`src/games/minesweeper/engine.ts`、`difficulty.ts` 与正确的 `new MinesweeperEngine({ config, rng: createSeededRng(seed) })` 构造示例，删除任一引用或写回错误构造签名测试即失败；同时确认该节说明单机不回归、排行榜与自定义难度的后续接入。
+- **关系章节**：断言第 2 节正文出现 `MinesweeperConfig`、`createSeededRng`、`src/games/minesweeper/engine.ts`、`difficulty.ts`、`parseCustomDifficulty` 与正确的 `new MinesweeperEngine({ config, rng: createSeededRng(seed) })` 构造示例，删除任一引用或写回错误构造签名测试即失败；同时确认该节说明单机不回归、已支持自定义难度（校验、`create` 与重放记录写入）与排行榜的后续接入，并把第 9 节把自定义难度写回未实现/后续方向时测试失败。
 - **索引与术语表**：断言第 0 节章节索引与第 10 节术语表存在；索引每一行的链接文本与 anchor 都从实际 `## N. 标题` 按 GitHub 标题 slug 规则（编号标题视为唯一）生成并逐项比较，重复编号、索引缺项或多出项都会失败；同时覆盖房间、协议、重连与规则引擎的关键术语。
 
 删掉任一标记块、改错状态名、把某条转移指向未声明状态、让断线结局引用未声明的房间状态、把 `choice` 改成未列出的候选、让实现任务的依赖成环/引用未定义 id、让某个 lifecycle 事件没有归属任务或出现重复归属、把 `acceptance` 改成字符串，或改错索引链接与标题，测试就会失败。本子任务验收命令：
@@ -1297,7 +1297,7 @@ npm run build
 
 ## 8. 实现阶段 issue 清单
 
-本节把设计拆成可按依赖顺序建单的实现任务。id 是稳定标识，计划收口节点可直接用 id 建 issue 或写成任务图；范围只覆盖 MVP，不包含第 9 节与第 2.5 节列出的排行榜、自定义难度、观战等后续项。每个任务的 `handles_events` 数组声明它直接处理的 `design:room-lifecycle` 事件；除 `timeout` 由 `room-service`（join 超时）与 `reconnect-timeout`（turn/match 超时）共享外，每个事件恰好归属一个任务，测试会断言这一点与 `rematch` 归属 `room-service`。
+本节把设计拆成可按依赖顺序建单的实现任务。id 是稳定标识，计划收口节点可直接用 id 建 issue 或写成任务图；范围只覆盖 MVP，不包含第 9 节与第 2.5 节列出的排行榜、观战等后续项；自定义难度已随联机建房支持，见第 2.5 节。每个任务的 `handles_events` 数组声明它直接处理的 `design:room-lifecycle` 事件；除 `timeout` 由 `room-service`（join 超时）与 `reconnect-timeout`（turn/match 超时）共享外，每个事件恰好归属一个任务，测试会断言这一点与 `rematch` 归属 `room-service`。
 
 | id | 标题 | 范围 | 依赖 |
 | --- | --- | --- | --- |
@@ -1470,7 +1470,7 @@ engine-adapter
 
 ## 9. 非目标与后续风险
 
-- 不做账号、匹配队列、观战、聊天、排行榜与持久化；这些会改变房间/协议边界，需另立设计。排行榜与自定义难度的兼容方向见第 2.5 节。
+- 不做账号、匹配队列、观战、聊天、排行榜与持久化；这些会改变房间/协议边界，需另立设计。自定义难度已支持（见第 2.5 节）。排行榜仍是后续方向。
 - 不做「同一 seed 各自棋盘」的速度赛；若要做，应作为独立模式并重新评估实时同步、公平性与反作弊。
 - 首版不做多实例房间迁移、断线跨节点恢复与回放分享；服务重启即 `dissolved`。
 - 首版只支持 2 人；`capacity` 固定在协议中，扩展到多人需要重新评估回合顺序、棋盘共享粒度与胜负条件。

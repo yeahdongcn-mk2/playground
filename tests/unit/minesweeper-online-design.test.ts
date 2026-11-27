@@ -1029,6 +1029,7 @@ describe('minesweeper online single-player relationship and glossary', () => {
       'createSeededRng',
       'src/games/minesweeper/engine.ts',
       'difficulty.ts',
+      'parseCustomDifficulty',
       'validateConfig',
     ]) {
       expect(relationship).toContain(reference);
@@ -1040,6 +1041,19 @@ describe('minesweeper online single-player relationship and glossary', () => {
     for (const topic of ['不回归', '排行榜', '自定义难度']) {
       expect(relationship).toContain(topic);
     }
+    expect(relationship).toContain('已支持自定义难度');
+    expect(relationship).toContain('create');
+    expect(relationship).toContain('重放记录');
+    expect(relationship).toContain('ReplayRecord.config');
+  });
+
+  it('keeps custom difficulty out of the section 9 non-goals and follow-up directions', () => {
+    const nonGoals = sectionBetween('## 9. 非目标与后续风险', '## 10. 术语表');
+    expect(nonGoals).toContain('自定义难度已支持');
+    expect(nonGoals).not.toMatch(/(不实现|未实现|不做|后续)[^。\n]*自定义难度/);
+    expect(nonGoals).not.toMatch(
+      /自定义难度[^。\n]*(不实现|未实现|不做|兼容方向|后续)/,
+    );
   });
 
   it('provides a chapter index and a glossary', () => {
