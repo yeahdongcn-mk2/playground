@@ -1,6 +1,8 @@
+import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { fileURLToPath } from 'node:url';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_ROOM_PROXY_TARGET,
   resolveRoomProxyTarget,
@@ -9,6 +11,7 @@ import {
   createDemoPlan,
   DEMO_PROBE_INTERVAL_MS,
   DEMO_READY_TIMEOUT_MS,
+  main,
   runDemo,
   stopDemo,
   waitForDemoReady,
@@ -20,6 +23,10 @@ import {
 import type { DemoConfigEnv } from '../../scripts/lib/demo-config.mjs';
 
 const ROOT = '/repo';
+/** The real CLI file, executed as a child process by the entry-point test. */
+const RUN_DEMO_SCRIPT = fileURLToPath(
+  new URL('../../scripts/run-demo.mjs', import.meta.url),
+);
 const TSX_CLI = join(ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs');
 const VITE_CLI = join(ROOT, 'node_modules', 'vite', 'bin', 'vite.js');
 const NPM_COMMAND = process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -386,6 +393,44 @@ describe('runDemo', () => {
   });
 });
 
+describe('CLI entry point', () => {
+  it('reports a startup failure as { plan: null, code: 1 } and sets the exit code', async () => {
+    const previousExitCode = process.exitCode;
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      // An invalid port throws while resolving the plan, before any child is
+      // spawned, so this exercises main() without opening a port.
+      const result = await main({ DEMO_SITE_PORT: 'nope' });
+
+      expect(result).toEqual({ plan: null, code: 1 });
+      // The only way a failed start reaches the shell; removing it must fail
+      // this test rather than silently turning the failure into exit 0.
+      expect(process.exitCode).toBe(1);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('DEMO_SITE_PORT'),
+      );
+    } finally {
+      process.exitCode = previousExitCode;
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('exits non-zero when the script itself is executed with an invalid port', () => {
+    const result = spawnSync(process.execPath, [RUN_DEMO_SCRIPT], {
+      env: { ...process.env, DEMO_SITE_PORT: 'nope' },
+      encoding: 'utf8',
+      timeout: 30_000,
+    });
+
+    // This is the isDirectExecution + main wiring end to end: the script must
+    // run the CLI, fail before starting a server and propagate exit code 1.
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('DEMO_SITE_PORT');
+    expect(result.stdout).not.toContain('Starting');
+  });
+});
+
 describe('waitForDemoReady contract', () => {
   it('keeps the documented probe timing and overall timeout', () => {
     // Pinned so a change to the startup budget or probe cadence is visible in
@@ -454,6 +499,13 @@ describe('stopDemo', () => {
 });
 
 describe('vite preview proxy target', () => {
+  afterEach(() => {
+    // The config module reads process.env at import time, so both the stub and
+    // the module cache must be restored for the next test.
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
   it('keeps the e2e 4176 target unless DEMO_ROOM_URL is set', () => {
     expect(DEFAULT_ROOM_PROXY_TARGET).toBe('http://127.0.0.1:4176');
     expect(resolveRoomProxyTarget({})).toBe(DEFAULT_ROOM_PROXY_TARGET);
@@ -463,5 +515,43 @@ describe('vite preview proxy target', () => {
     expect(
       resolveRoomProxyTarget({ DEMO_ROOM_URL: 'http://127.0.0.1:8787' }),
     ).toBe('http://127.0.0.1:8787');
+  });
+
+  it('feeds DEMO_ROOM_URL into the preview /ws proxy target', async () => {
+    vi.stubEnv('DEMO_ROOM_URL', 'http://127.0.0.1:18787');
+    vi.resetModules();
+
+    const { default: config } = await import('../../vite.config');
+
+    // Guards the config wiring itself: hard-coding the target or dropping the
+    // proxy entry must fail here even though the resolver stays correct.
+    expect(config).toMatchObject({
+      preview: {
+        proxy: {
+          '/ws': { target: 'http://127.0.0.1:18787', ws: true },
+        },
+      },
+    });
+  });
+
+  it('keeps the default proxy target when DEMO_ROOM_URL is unset', async () => {
+    const configured = process.env.DEMO_ROOM_URL;
+    delete process.env.DEMO_ROOM_URL;
+    try {
+      vi.resetModules();
+      const {
+        default: config,
+        DEFAULT_ROOM_PROXY_TARGET: fallback,
+      } = await import('../../vite.config');
+
+      expect(fallback).toBe('http://127.0.0.1:4176');
+      expect(config).toMatchObject({
+        preview: { proxy: { '/ws': { target: fallback, ws: true } } },
+      });
+    } finally {
+      if (configured !== undefined) {
+        process.env.DEMO_ROOM_URL = configured;
+      }
+    }
   });
 });
