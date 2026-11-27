@@ -1898,11 +1898,12 @@ describe('online room diagnostics', () => {
 /**
  * Source-level guard for the online room stylesheet.
  *
- * The stage cards set `display: flex`, which outranks the browser's
+ * The stage cards set `display: flex` and the custom-fields group sets
+ * `display: grid`, both of which outrank the browser's
  * `[hidden] { display: none }` rule. jsdom force-applies `[hidden]`, so a
- * computed-style unit test cannot catch the regression; this source-level
- * test pins the author rule while the real-browser check lives in the room
- * e2e.
+ * computed-style unit test cannot catch a missing author rule; this
+ * source-level test pins it while `evidence/plan-540/capture-room-form.mjs`
+ * checks the laid-out visibility in a real browser.
  */
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const ROOM_VIEW_CSS = readFileSync(
@@ -1910,18 +1911,27 @@ const ROOM_VIEW_CSS = readFileSync(
   'utf8',
 ).replace(/\/\*[\s\S]*?\*\//g, '');
 
-/** Whether an author rule hides `.online-room__card` elements with `hidden`. */
-function hidesHiddenCards(css: string): boolean {
+/** Whether an author rule hides elements matching `classSelector` with `hidden`. */
+function hidesHiddenElements(css: string, classSelector: string): boolean {
+  const escaped = classSelector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // The lookarounds anchor the whole class token, so `...-bogus` is not the
+  // same class; the character class keeps `[hidden]` on the same compound
+  // selector instead of a descendant (`.group .child[hidden]` is not a match).
+  const rulePattern = new RegExp(
+    `(?:^|[^\\w-])${escaped}(?![\\w-])[^\\s,>+~]*\\[hidden\\]`,
+  );
   return [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].some(
     ([, selector = '', declarations = '']) =>
-      selector.includes('.online-room__card') &&
-      selector.includes('[hidden]') &&
-      /display\s*:\s*none/.test(declarations),
+      rulePattern.test(selector) && /display\s*:\s*none/.test(declarations),
   );
 }
 
-describe('online room card visibility', () => {
+describe('online room visibility rules', () => {
   it('hides inactive cards with an author rule that beats the flex display', () => {
-    expect(hidesHiddenCards(ROOM_VIEW_CSS)).toBe(true);
+    expect(hidesHiddenElements(ROOM_VIEW_CSS, '.online-room__card')).toBe(true);
+  });
+
+  it('hides custom fields with an author rule that beats the grid display', () => {
+    expect(hidesHiddenElements(ROOM_VIEW_CSS, '.online-room__custom-fields')).toBe(true);
   });
 });

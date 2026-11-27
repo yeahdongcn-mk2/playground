@@ -92,6 +92,17 @@ async function formMetrics(page) {
     const select = document.querySelector('[data-testid="difficulty"]');
     const fields = document.querySelector('[data-testid="custom-fields"]');
     const rect = form instanceof HTMLElement ? form.getBoundingClientRect() : null;
+    const fieldsStyle = fields instanceof HTMLElement ? getComputedStyle(fields) : null;
+    const fieldsRect = fields instanceof HTMLElement ? fields.getBoundingClientRect() : null;
+    // Read the laid-out box, not the `hidden` attribute: jsdom unit tests can
+    // only see the attribute, while a browser still paints a display:grid
+    // element whose [hidden] rule is missing (the UA [hidden] rule loses).
+    const customFieldsVisible = fieldsRect === null
+      ? null
+      : fieldsStyle.display !== 'none' && fieldsRect.width > 0 && fieldsRect.height > 0;
+    const customFieldsBox = fieldsRect === null
+      ? null
+      : { width: Math.round(fieldsRect.width), height: Math.round(fieldsRect.height) };
     return {
       scrollY: Math.round(window.scrollY),
       form: rect === null ? null : {
@@ -100,10 +111,32 @@ async function formMetrics(page) {
         height: Math.round(rect.height),
       },
       selectedDifficulty: select instanceof HTMLSelectElement ? select.value : null,
-      customFieldsVisible: fields instanceof HTMLElement ? !fields.hidden : null,
+      customFieldsDisplay: fieldsStyle?.display ?? null,
+      customFieldsBox,
+      customFieldsVisible,
       error: document.querySelector('[data-testid="form-error"]')?.textContent ?? '',
     };
   });
+}
+
+/**
+ * Fail loudly when the browser disagrees with the expected laid-out state, so
+ * deleting `[hidden] { display: none }` breaks the capture instead of leaving
+ * the jsdom unit tests green. The display value is asserted as well as the
+ * box, so a zero-size `display: grid` group does not count as hidden. A
+ * browser is required: jsdom never loads the stylesheet that makes `hidden`
+ * win over the author `display: grid` rule.
+ */
+function assertCustomFieldsState(label, metrics, expected) {
+  if (
+    metrics.customFieldsDisplay !== expected.display ||
+    metrics.customFieldsVisible !== expected.visible
+  ) {
+    throw new Error(
+      `${label}: expected custom fields display=${expected.display} visible=${expected.visible}, ` +
+        `got ${JSON.stringify(metrics)}`,
+    );
+  }
 }
 
 async function shoot(page, name, viewport, metrics) {
@@ -133,12 +166,34 @@ try {
     await after.page.fill('[data-testid="custom-cols"]', '12');
     await after.page.fill('[data-testid="custom-mines"]', '20');
     await scrollCreateFormIntoView(after.page, viewport);
-    await shoot(after.page, `after-${label}.png`, viewport, await formMetrics(after.page));
+    const afterMetrics = await formMetrics(after.page);
+    assertCustomFieldsState(`after-${label}.png`, afterMetrics, {
+      display: 'grid',
+      visible: true,
+    });
+    await shoot(after.page, `after-${label}.png`, viewport, afterMetrics);
     await closeHarness(after);
   }
 
   // Extra after-only states: the new focus ring and the shared error region.
   const desktop = VIEWPORTS[0];
+
+  // The default preset must keep the custom fields laid out as display:none;
+  // this is the browser-level check that makes the CSS [hidden] override
+  // falsifiable (the jsdom unit test can only read the hidden attribute).
+  const preset = await openHarness(args.after, desktop);
+  await scrollCreateFormIntoView(preset.page, desktop);
+  const presetMetrics = await formMetrics(preset.page);
+  if (presetMetrics.selectedDifficulty !== 'beginner') {
+    throw new Error(`expected the default preset, got ${JSON.stringify(presetMetrics)}`);
+  }
+  assertCustomFieldsState('after-preset-1440x1000.png', presetMetrics, {
+    display: 'none',
+    visible: false,
+  });
+  await shoot(preset.page, 'after-preset-1440x1000.png', desktop, presetMetrics);
+  await closeHarness(preset);
+
   const focus = await openHarness(args.after, desktop);
   await focus.page.selectOption('[data-testid="difficulty"]', 'custom');
   await focus.page.fill('[data-testid="custom-rows"]', '12');
