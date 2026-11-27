@@ -29,6 +29,7 @@ import type {
   ClientToServerMessage,
   MessageByType,
   RedactedBoard,
+  RoomStateMessage,
   ServerMessageType,
   ServerToClientMessage,
   SnapshotMessage,
@@ -130,6 +131,13 @@ function describeFrame(message: ServerToClientMessage): string {
 export interface WaitForServerMessageOptions {
   /** Override the bounded wait; defaults to 30 seconds. */
   readonly timeoutMs?: number;
+  /**
+   * Ignore frames already recorded when the wait starts: only messages at or
+   * after this index may match. Use it when a wait must observe a frame the
+   * next action produces (a new round or a reconnect) instead of matching an
+   * older frame that already satisfies the predicate.
+   */
+  readonly afterMessageCount?: number;
 }
 
 /** Options for waiting on the verdict of one submitted action. */
@@ -218,7 +226,8 @@ function waitForMessage(
   defaultTimeoutMs: number,
   options: WaitForServerMessageOptions = {},
 ): Promise<ServerToClientMessage> {
-  const existing = messages.find((message) => predicate(message));
+  const firstIndex = Math.max(0, options.afterMessageCount ?? 0);
+  const existing = messages.slice(firstIndex).find((message) => predicate(message));
   if (existing !== undefined) {
     return Promise.resolve(existing);
   }
@@ -376,6 +385,219 @@ export function createServerFrameRecorder(
     clear,
     dispose,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Series frames and page text
+// ---------------------------------------------------------------------------
+
+/**
+ * The wire `room_state.series` value.
+ *
+ * `SeriesState` is private to the protocol module, so the helper derives it
+ * from the exported `room_state` DTO exactly like `server/room/series.ts`
+ * does. `room_state.series` is optional until the first round starts, which is
+ * why every accessor below has a `null` case.
+ */
+export type SeriesFrameState = NonNullable<RoomStateMessage['series']>;
+
+/** One completed round carried in {@link SeriesFrameState.history}. */
+export type SeriesFrameRound = SeriesFrameState['history'][number];
+
+/** The two seats of a series; `wins` is keyed by these player ids. */
+export interface SeriesSeats {
+  readonly hostId: string;
+  readonly opponentId: string;
+}
+
+/** Host-first, comparable view of one `room_state.series` frame. */
+export interface SeriesFrameView {
+  readonly series: SeriesFrameState;
+  /** Current (or just finished) round, 1-based. */
+  readonly round: number;
+  readonly hostWins: number;
+  readonly opponentWins: number;
+  /** Host-first score, e.g. `1 : 0`. */
+  readonly score: string;
+  readonly firstMoverId: string;
+  readonly decided: boolean;
+  readonly winnerId: string | null;
+  readonly history: readonly SeriesFrameRound[];
+}
+
+/** Latest `room_state` in arrival order, or `null` before the first one. */
+export function latestRoomState(
+  messages: readonly ServerToClientMessage[],
+): RoomStateMessage | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.type === 'room_state') {
+      return message;
+    }
+  }
+  return null;
+}
+
+/** Sequence of the latest `room_state`, or `null` when none has arrived. */
+export function latestRoomStateSeq(
+  messages: readonly ServerToClientMessage[],
+): number | null {
+  return latestRoomState(messages)?.seq ?? null;
+}
+
+/**
+ * True when the latest `room_state` has reached `baselineSeq` or a newer
+ * sequence. A reconnecting seat uses this to prove it caught up with the state
+ * it saw before the connection dropped.
+ */
+export function roomStateReachedSeq(
+  messages: readonly ServerToClientMessage[],
+  baselineSeq: number,
+): boolean {
+  const seq = latestRoomStateSeq(messages);
+  return seq !== null && seq >= baselineSeq;
+}
+
+/** Latest `room_state.series`, or `null` when no room state carried one. */
+export function latestRoomStateSeries(
+  messages: readonly ServerToClientMessage[],
+): SeriesFrameState | null {
+  return latestRoomState(messages)?.series ?? null;
+}
+
+/** Wins recorded for `playerId`; a seat missing from the table has zero. */
+export function seriesWins(series: SeriesFrameState, playerId: string): number {
+  return series.wins[playerId] ?? 0;
+}
+
+/** Build the host-first view of one series frame. */
+export function seriesView(series: SeriesFrameState, seats: SeriesSeats): SeriesFrameView {
+  const hostWins = seriesWins(series, seats.hostId);
+  const opponentWins = seriesWins(series, seats.opponentId);
+  return {
+    series,
+    round: series.round,
+    hostWins,
+    opponentWins,
+    score: `${hostWins} : ${opponentWins}`,
+    firstMoverId: series.firstMoverId,
+    decided: series.decided,
+    winnerId: series.winnerId,
+    history: series.history,
+  };
+}
+
+/** Latest series frame as a host-first view, or `null` when absent. */
+export function latestSeriesView(
+  messages: readonly ServerToClientMessage[],
+  seats: SeriesSeats,
+): SeriesFrameView | null {
+  const series = latestRoomStateSeries(messages);
+  return series === null ? null : seriesView(series, seats);
+}
+
+/**
+ * First mover the alternation rule requires for `round` (1-based).
+ *
+ * The host opens round 1 and every odd round; the other seat opens every even
+ * round. `server/room/series.ts` owns the authoritative implementation; this
+ * mirrors its published rule so an e2e assertion can name the expected id.
+ */
+export function expectedFirstMoverId(round: number, seats: SeriesSeats): string {
+  if (!Number.isSafeInteger(round) || round < 1) {
+    throw new RangeError(`series round must be a positive integer, got ${String(round)}`);
+  }
+  return round % 2 === 1 ? seats.hostId : seats.opponentId;
+}
+
+/** Parsed `series-score` text, e.g. `你 1 : 0 对手`. */
+export interface SeriesScoreText {
+  readonly leftWins: number;
+  readonly rightWins: number;
+}
+
+/**
+ * Parse the two win counts from the rendered `series-score` text.
+ *
+ * The series block may label the counts relative to the viewer (`你 1 : 0
+ * 对手`) or render bare numbers (`1 : 1`); only the digits and the colon
+ * matter here. A full-width colon is accepted too. Returns `null` when the
+ * text carries no score instead of inventing `0 : 0`.
+ */
+export function parseSeriesScoreText(text: string): SeriesScoreText | null {
+  const match = /(\d+)\s*[:：]\s*(\d+)/.exec(text);
+  if (match === null) {
+    return null;
+  }
+  const left = match[1];
+  const right = match[2];
+  if (left === undefined || right === undefined) {
+    return null;
+  }
+  const leftWins = Number(left);
+  const rightWins = Number(right);
+  if (!Number.isSafeInteger(leftWins) || !Number.isSafeInteger(rightWins)) {
+    return null;
+  }
+  return { leftWins, rightWins };
+}
+
+/** Parsed `series-round` text, e.g. `第 2 局 / 三局两胜`. */
+export interface SeriesRoundText {
+  /** Current round, 1-based. */
+  readonly round: number;
+  /** `3` when the text names the best-of-three format, otherwise `null`. */
+  readonly bestOf: number | null;
+}
+
+/** Parse the current round (and the best-of count when named) from the DOM. */
+export function parseSeriesRoundText(text: string): SeriesRoundText | null {
+  const match = /第\s*(\d+)\s*局/.exec(text);
+  if (match === null) {
+    return null;
+  }
+  const rawRound = match[1];
+  if (rawRound === undefined) {
+    return null;
+  }
+  const round = Number(rawRound);
+  if (!Number.isSafeInteger(round) || round < 1) {
+    return null;
+  }
+  return { round, bestOf: text.includes('三局两胜') ? 3 : null };
+}
+
+/** True when `series-status` announces the series verdict. */
+export function isSeriesDecidedText(text: string): boolean {
+  return text.includes('系列赛结束');
+}
+
+/** Rematch button label categories the series UI exposes. */
+export type RematchTextKind = 'next-round' | 'new-series' | 'pending' | 'unknown';
+
+/**
+ * Classify the rematch button text.
+ *
+ * The pending label wins first because it can contain other words
+ * (`已申请重新开始，等待对手`); the decided label (`再来一轮系列赛`) is
+ * checked before the undecided one (`下一局`), and the pre-series
+ * `再来一局` stays accepted so an older baseline still classifies.
+ */
+export function classifyRematchText(text: string): RematchTextKind {
+  const normalized = text.trim();
+  if (normalized === '') {
+    return 'unknown';
+  }
+  if (normalized.includes('已申请')) {
+    return 'pending';
+  }
+  if (normalized.includes('再来一轮')) {
+    return 'new-series';
+  }
+  if (normalized.includes('下一局') || normalized.includes('再来一局')) {
+    return 'next-round';
+  }
+  return 'unknown';
 }
 
 // ---------------------------------------------------------------------------
@@ -813,14 +1035,32 @@ export async function fillNickname(page: Page, nickname: string): Promise<void> 
   await page.getByTestId('nickname').fill(nickname);
 }
 
+/** Phases the room shell publishes on `online-room[data-phase]`. */
+export type OnlineRoomPhase = 'waiting' | 'ready' | 'playing' | 'finished' | 'dissolved';
+
 /** Wait until the room shell reports `phase` (its `data-phase` attribute). */
-export async function waitForRoomPhase(
-  page: Page,
-  phase: 'waiting' | 'ready' | 'playing' | 'finished' | 'dissolved',
-): Promise<void> {
+export async function waitForRoomPhase(page: Page, phase: OnlineRoomPhase): Promise<void> {
   await page
     .locator(`[data-testid="online-room"][data-phase="${phase}"]`)
     .waitFor({ state: 'visible' });
+}
+
+/** Wait until the room shell reports one of `phases`, and return it. */
+async function waitForAnyRoomPhase(
+  page: Page,
+  phases: readonly OnlineRoomPhase[],
+  timeoutMs: number,
+): Promise<OnlineRoomPhase> {
+  const handle = await page.waitForFunction(
+    (allowed: readonly string[]) => {
+      const room = document.querySelector('[data-testid="online-room"]');
+      const phase = room?.getAttribute('data-phase') ?? '';
+      return allowed.includes(phase) ? phase : false;
+    },
+    [...phases],
+    { timeout: timeoutMs },
+  );
+  return (await handle.jsonValue()) as OnlineRoomPhase;
 }
 
 /** Wait until the server-published room id is non-empty. */
@@ -836,11 +1076,135 @@ export async function waitForRoomId(page: Page): Promise<string> {
   return roomId;
 }
 
+/** Options for one bounded DOM-text wait. */
+export interface WaitForPageTextOptions {
+  /** Override the bounded wait; defaults to 30 seconds. */
+  readonly timeoutMs?: number;
+}
+
+/**
+ * Wait until one test-id's trimmed text satisfies `mode` and return that text.
+ *
+ * The predicate runs in the browser through `waitForFunction`, so the wait is
+ * tied to the rendered DOM and never to a fixed sleep.
+ */
+async function waitForTestIdText(
+  page: Page,
+  testId: string,
+  expected: string,
+  mode: 'contains' | 'equals',
+  options: WaitForPageTextOptions = {},
+): Promise<string> {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS;
+  await page.waitForFunction(
+    (target: { readonly testId: string; readonly expected: string; readonly mode: string }) => {
+      const element = document.querySelector(`[data-testid="${target.testId}"]`);
+      const text = (element?.textContent ?? '').trim();
+      return target.mode === 'contains' ? text.includes(target.expected) : text === target.expected;
+    },
+    { testId, expected, mode },
+    { timeout: timeoutMs },
+  );
+  return (await page.getByTestId(testId).textContent())?.trim() ?? '';
+}
+
+/** Series state read from the room's rendered DOM. */
+export interface SeriesPageState {
+  readonly scoreText: string;
+  readonly score: SeriesScoreText | null;
+  readonly roundText: string;
+  readonly round: SeriesRoundText | null;
+  readonly statusText: string;
+  /** True when `series-status` contains `系列赛结束`. */
+  readonly decided: boolean;
+  readonly rematchText: string;
+  readonly rematchKind: RematchTextKind;
+}
+
+/**
+ * Read the series block, the series status and the rematch label together.
+ *
+ * Waits for `series-score` first: the three series elements are rendered as one
+ * block, so once the score is visible the round and status text are settled
+ * too. A missing status element reads as an empty string (undecided) instead
+ * of throwing.
+ */
+export async function readSeriesPage(page: Page): Promise<SeriesPageState> {
+  await page.getByTestId('series-score').waitFor({ state: 'visible' });
+  const texts = await page.evaluate(() => {
+    const read = (testId: string): string => {
+      const element = document.querySelector(`[data-testid="${testId}"]`);
+      return (element?.textContent ?? '').trim();
+    };
+    return {
+      scoreText: read('series-score'),
+      roundText: read('series-round'),
+      statusText: read('series-status'),
+      rematchText: read('rematch'),
+    };
+  });
+  return {
+    ...texts,
+    score: parseSeriesScoreText(texts.scoreText),
+    round: parseSeriesRoundText(texts.roundText),
+    decided: isSeriesDecidedText(texts.statusText),
+    rematchKind: classifyRematchText(texts.rematchText),
+  };
+}
+
+/** Wait until `series-score` contains `expected`, e.g. `1 : 1`. */
+export async function waitForSeriesScore(
+  page: Page,
+  expected: string,
+  options: WaitForPageTextOptions = {},
+): Promise<string> {
+  return waitForTestIdText(page, 'series-score', expected, 'contains', options);
+}
+
+/** Wait until `series-round` contains `expected`, e.g. `第 2 局`. */
+export async function waitForSeriesRound(
+  page: Page,
+  expected: string,
+  options: WaitForPageTextOptions = {},
+): Promise<string> {
+  return waitForTestIdText(page, 'series-round', expected, 'contains', options);
+}
+
+/** Wait until `series-status` announces the series verdict. */
+export async function waitForSeriesDecided(
+  page: Page,
+  options: WaitForPageTextOptions = {},
+): Promise<string> {
+  return waitForTestIdText(page, 'series-status', '系列赛结束', 'contains', options);
+}
+
+/** Wait until the rematch button text equals `expected` (trimmed). */
+export async function waitForRematchText(
+  page: Page,
+  expected: string,
+  options: WaitForPageTextOptions = {},
+): Promise<string> {
+  return waitForTestIdText(page, 'rematch', expected, 'equals', options);
+}
+
 /** Options for creating a room from the landing page. */
 export interface CreateOnlineRoomOptions {
   readonly nickname: string;
   /** Difficulty preset id; the page default is used when omitted. */
   readonly difficulty?: string;
+  /**
+   * Custom board dimensions. Selecting these switches the difficulty select to
+   * `custom`, reveals the custom fields and fills them before creating the
+   * room; it takes precedence over `difficulty`.
+   */
+  readonly customBoard?: OnlineRoomCustomBoard;
+}
+
+/** Rows / columns / mines for a custom create-room board. */
+export interface OnlineRoomCustomBoard {
+  readonly rows: number;
+  readonly cols: number;
+  readonly mines: number;
 }
 
 /** Fill the nickname, create a room and return the server-assigned room id. */
@@ -849,7 +1213,14 @@ export async function createOnlineRoom(
   options: CreateOnlineRoomOptions,
 ): Promise<string> {
   await fillNickname(page, options.nickname);
-  if (options.difficulty !== undefined) {
+  if (options.customBoard !== undefined) {
+    const board = options.customBoard;
+    await page.getByTestId('difficulty').selectOption('custom');
+    await page.getByTestId('custom-fields').waitFor({ state: 'visible' });
+    await page.getByTestId('custom-rows').fill(String(board.rows));
+    await page.getByTestId('custom-cols').fill(String(board.cols));
+    await page.getByTestId('custom-mines').fill(String(board.mines));
+  } else if (options.difficulty !== undefined) {
     await page.getByTestId('difficulty').selectOption(options.difficulty);
   }
   await page.getByTestId('create-room').click();
@@ -898,6 +1269,79 @@ export async function startOnlineMatch(page: Page): Promise<void> {
   await page.getByTestId('start-match').click();
   await waitForRoomPhase(page, 'playing');
   await page.getByTestId('online-cell-0-0').waitFor({ state: 'visible' });
+}
+
+/** Options for starting the round after a finished one. */
+export interface StartNextRoundOptions {
+  readonly recorder: ServerFrameRecorder;
+  /** Match id of the just-finished round; the next round must differ. */
+  readonly previousMatchId: string;
+  /** Override the bounded wait; defaults to 30 seconds. */
+  readonly timeoutMs?: number;
+}
+
+/**
+ * Click this seat's rematch control and wait for the next round to start.
+ *
+ * The room only leaves `finished` once both seats accept, so call this for both
+ * seats concurrently (`Promise.all`), or after the other seat already voted.
+ * The room then returns to `ready`; the host starts the next round exactly like
+ * the first one, while a guest's start control stays disabled. The helper
+ * clicks that start control on the host seat and resolves with the new match id
+ * once this page sees the matching `room_state` and a playable board.
+ */
+export async function startNextRound(
+  page: Page,
+  options: StartNextRoundOptions,
+): Promise<string> {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS;
+  const seen = options.recorder.messages.length;
+
+  const rematch = page.getByTestId('rematch');
+  await rematch.waitFor({ state: 'visible' });
+  await rematch.click();
+
+  const phase = await waitForAnyRoomPhase(page, ['ready', 'playing'], timeoutMs);
+  if (phase === 'ready') {
+    // A guest's start button is visible but permanently disabled; wait until
+    // either the host can start or the host's start already reached `playing`.
+    await page.waitForFunction(
+      () => {
+        const room = document.querySelector('[data-testid="online-room"]');
+        if (room?.getAttribute('data-phase') === 'playing') {
+          return true;
+        }
+        const start = document.querySelector('[data-testid="start-match"]');
+        return start instanceof HTMLButtonElement && !start.disabled;
+      },
+      undefined,
+      { timeout: timeoutMs },
+    );
+    const stillReady = await page
+      .getByTestId('online-room')
+      .evaluate((element) => element.getAttribute('data-phase') === 'ready');
+    if (stillReady) {
+      const start = page.getByTestId('start-match');
+      if (await start.isEnabled()) {
+        await start.click();
+      }
+    }
+  }
+
+  const nextRound = await options.recorder.waitForServerMessage(
+    (message) =>
+      message.type === 'room_state' &&
+      message.state === 'playing' &&
+      message.matchId !== null &&
+      message.matchId !== options.previousMatchId,
+    { timeoutMs, afterMessageCount: seen },
+  );
+  await waitForRoomPhase(page, 'playing');
+  await page.getByTestId('online-cell-0-0').waitFor({ state: 'visible' });
+  if (nextRound.type !== 'room_state' || nextRound.matchId === null) {
+    throw new Error('startNextRound did not observe the next round room_state');
+  }
+  return nextRound.matchId;
 }
 
 /** Wait until the server snapshot makes it this seat's turn. */
@@ -949,4 +1393,84 @@ export async function flagCell(page: Page, row: number, col: number): Promise<vo
 /** Wait for the result screen after a completed match. */
 export async function waitForMatchEnd(page: Page): Promise<void> {
   await page.getByTestId('finished').waitFor({ state: 'visible' });
+}
+
+/** How {@link reconnectSeat} drops the live socket before resuming the seat. */
+export type SeatReconnectMode = 'reload' | 'offline';
+
+/** Options for dropping and resuming one seat's connection. */
+export interface ReconnectSeatOptions {
+  readonly recorder: ServerFrameRecorder;
+  /**
+   * `reload` (default) refreshes the page; `offline` leaves the room while the
+   * browser network is offline and reopens the same URL afterwards.
+   */
+  readonly mode?: SeatReconnectMode;
+  /**
+   * Phase the reconnected page must reach; defaults to `playing`, the phase a
+   * reconnect during a round has to resume.
+   */
+  readonly expectedPhase?: OnlineRoomPhase;
+  /** Override the bounded wait; defaults to 30 seconds. */
+  readonly timeoutMs?: number;
+}
+
+/** Evidence collected while one seat reconnects. */
+export interface ReconnectSeatResult {
+  readonly mode: SeatReconnectMode;
+  /** Latest `room_state.seq` observed before the connection dropped. */
+  readonly beforeSeq: number;
+  /** `room_state.seq` of the frame recorded after the drop. */
+  readonly afterSeq: number;
+  readonly phase: OnlineRoomPhase;
+}
+
+/**
+ * Drop one seat's socket and wait until it resumed the same room.
+ *
+ * `reload` is the deterministic default: a refresh tears down the page's
+ * WebSocket, and the deep link re-joins with the seat token kept in
+ * `sessionStorage`. `offline` navigates to `about:blank` while the browser
+ * network is offline, then restores the network and reopens the room URL;
+ * Playwright's `context.setOffline` alone does not close an existing
+ * WebSocket, so leaving the room is what actually drops it.
+ *
+ * Recovery is proven by a `room_state` recorded *after* the drop whose seq is at
+ * least the seq observed before it, plus the room returning to
+ * `expectedPhase`. The real room service is never mocked or restarted.
+ */
+export async function reconnectSeat(
+  page: Page,
+  options: ReconnectSeatOptions,
+): Promise<ReconnectSeatResult> {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS;
+  const mode = options.mode ?? 'reload';
+  const expectedPhase = options.expectedPhase ?? 'playing';
+  const recorder = options.recorder;
+  const beforeSeq = latestRoomStateSeq(recorder.messages);
+  if (beforeSeq === null) {
+    throw new Error('reconnectSeat needs a room_state before the connection is dropped');
+  }
+  const seen = recorder.messages.length;
+  const roomUrl = page.url();
+
+  if (mode === 'reload') {
+    await page.reload();
+  } else {
+    const context = page.context();
+    await context.setOffline(true);
+    await page.goto('about:blank');
+    await context.setOffline(false);
+    await page.goto(roomUrl);
+  }
+
+  const recovered = await recorder.waitForServerMessage(
+    (message) => message.type === 'room_state' && message.seq >= beforeSeq,
+    { timeoutMs, afterMessageCount: seen },
+  );
+  await waitForRoomPhase(page, expectedPhase);
+  if (recovered.type !== 'room_state') {
+    throw new Error('reconnectSeat did not observe a room_state after reconnecting');
+  }
+  return { mode, beforeSeq, afterSeq: recovered.seq, phase: expectedPhase };
 }
