@@ -189,6 +189,29 @@ const ROOM_STATE_MESSAGE: ServerToClientMessage = {
   stateReason: null,
 };
 
+/** One completed round as carried by `room_state.series.history`. */
+const SERIES_ROUND = {
+  round: 1,
+  matchId: 'match-1',
+  winnerId: 'p1',
+  loserId: 'p2',
+  reason: 'mine-hit',
+  firstMoverId: 'p1',
+} as const;
+
+/** In-progress best-of-three state: p1 won round 1, round 2 is about to start. */
+const SERIES_STATE = {
+  bestOf: 3,
+  winsRequired: 2,
+  maxRounds: 3,
+  round: 2,
+  wins: { p1: 1, p2: 0 },
+  firstMoverId: 'p1',
+  decided: false,
+  winnerId: null,
+  history: [SERIES_ROUND],
+} as const;
+
 const SNAPSHOT_MESSAGE: ServerToClientMessage = {
   type: 'snapshot',
   roomId: 'room-1',
@@ -378,6 +401,106 @@ describe('online protocol message validation', () => {
     expect(
       validateServerMessage({ ...ROOM_STATE_MESSAGE, playerToken: 'token-1' }).ok,
     ).toBe(true);
+  });
+
+  it('accepts a room_state whose optional series is fully well typed', () => {
+    expect(
+      validateServerMessage({ ...ROOM_STATE_MESSAGE, series: SERIES_STATE }).ok,
+    ).toBe(true);
+
+    // A decided series: drawn rounds keep both ids null and award no win.
+    const decidedSeries = {
+      ...SERIES_STATE,
+      round: 3,
+      wins: { p1: 2, p2: 0 },
+      decided: true,
+      winnerId: 'p1',
+      history: [
+        SERIES_ROUND,
+        {
+          ...SERIES_ROUND,
+          round: 2,
+          matchId: 'match-2',
+          winnerId: null,
+          loserId: null,
+          reason: 'match-timeout',
+          firstMoverId: 'p2',
+        },
+        { ...SERIES_ROUND, round: 3, matchId: 'match-3' },
+      ],
+    };
+    expect(
+      validateServerMessage({ ...ROOM_STATE_MESSAGE, series: decidedSeries }).ok,
+    ).toBe(true);
+
+    for (const reason of ALL_MATCH_END_REASONS) {
+      expect(
+        validateServerMessage({
+          ...ROOM_STATE_MESSAGE,
+          series: { ...SERIES_STATE, history: [{ ...SERIES_ROUND, reason }] },
+        }).ok,
+        `series.history[0].reason=${reason}`,
+      ).toBe(true);
+    }
+
+    // `series` stays optional, so an older server without it remains valid.
+    expect(validateServerMessage(ROOM_STATE_MESSAGE).ok).toBe(true);
+  });
+
+  it('rejects a malformed series and names the exact failing path', () => {
+    const missingDecided: Record<string, unknown> = { ...SERIES_STATE };
+    delete missingDecided.decided;
+    const missing = expectFailure(
+      validateServerMessage({ ...ROOM_STATE_MESSAGE, series: missingDecided }),
+    );
+    expect(missing.code).toBe('bad-request');
+    expect(missing.message).toContain('room_state.series.decided');
+    expect(missing.message).toContain('required');
+
+    const cases: readonly (readonly [string, unknown, string])[] = [
+      ['bestOf', { ...SERIES_STATE, bestOf: '3' }, 'room_state.series.bestOf'],
+      ['round', { ...SERIES_STATE, round: 1.5 }, 'room_state.series.round'],
+      ['firstMoverId', { ...SERIES_STATE, firstMoverId: 7 }, 'room_state.series.firstMoverId'],
+      ['decided', { ...SERIES_STATE, decided: 'yes' }, 'room_state.series.decided'],
+      ['winnerId', { ...SERIES_STATE, winnerId: 7 }, 'room_state.series.winnerId'],
+      ['wins value', { ...SERIES_STATE, wins: { p1: '1' } }, 'room_state.series.wins.p1'],
+      ['wins container', { ...SERIES_STATE, wins: ['1'] }, 'room_state.series.wins'],
+      ['history container', { ...SERIES_STATE, history: {} }, 'room_state.series.history'],
+      [
+        'history winnerId',
+        { ...SERIES_STATE, history: [{ ...SERIES_ROUND, winnerId: 7 }] },
+        'room_state.series.history[0].winnerId',
+      ],
+      [
+        'history loserId',
+        { ...SERIES_STATE, history: [{ ...SERIES_ROUND, loserId: 7 }] },
+        'room_state.series.history[0].loserId',
+      ],
+      [
+        'history missing field',
+        { ...SERIES_STATE, history: [{ ...SERIES_ROUND, matchId: undefined }] },
+        'room_state.series.history[0].matchId',
+      ],
+    ];
+    for (const [label, series, failedPath] of cases) {
+      const result = expectFailure(
+        validateServerMessage({ ...ROOM_STATE_MESSAGE, series }),
+      );
+      expect(result.code, label).toBe('bad-request');
+      expect(result.message, label).toContain(failedPath);
+      expect(result.message, label).not.toContain('unsupported field type');
+    }
+
+    const badReason = expectFailure(
+      validateServerMessage({
+        ...ROOM_STATE_MESSAGE,
+        series: { ...SERIES_STATE, history: [{ ...SERIES_ROUND, reason: 'bogus' }] },
+      }),
+    );
+    expect(badReason.code).toBe('bad-request');
+    expect(badReason.message).toContain('room_state.series.history[0].reason');
+    expect(badReason.message).toContain('mine-hit');
+    expect(badReason.message).not.toContain('unsupported field type');
   });
 
   it('rejects non-object input and unknown or non-string types', () => {
