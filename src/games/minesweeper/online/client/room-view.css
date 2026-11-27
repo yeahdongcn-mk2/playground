@@ -101,6 +101,7 @@
 .online-room input:focus-visible,
 .online-room select:focus-visible {
   border-color: var(--cyan);
+  box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.18);
 }
 
 .online-room__forms {
@@ -122,6 +123,24 @@
 .online-room__form .button,
 .online-room__identity .button {
   margin-top: 4px;
+}
+
+.online-room__custom-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+/* The author `display: grid` above would otherwise beat the UA `[hidden]` rule. */
+.online-room__custom-fields[hidden] {
+  display: none;
+}
+
+.online-room__custom-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
 }
 
 .online-room__share {

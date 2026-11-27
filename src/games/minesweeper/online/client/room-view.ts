@@ -28,9 +28,16 @@ import {
   DEFAULT_DIFFICULTY_ID,
   DIFFICULTY_PRESETS,
   getDifficulty,
+  parseCustomDifficulty,
   type DifficultyId,
 } from '../../difficulty';
-import type { MinesweeperConfig } from '../../engine';
+import {
+  MAX_COLS,
+  MAX_ROWS,
+  MIN_COLS,
+  MIN_ROWS,
+  type MinesweeperConfig,
+} from '../../engine';
 import {
   createInitialRoomClientState,
   onlineRoomHref,
@@ -73,6 +80,8 @@ const CLOCK_INTERVAL_MS = 250;
 const MAX_NICKNAME_LENGTH = 24;
 /** Hub route used by every "back to lobby" control. */
 const HUB_HREF = '#/';
+/** Select value that reveals the custom rows/columns/mines fields. */
+const CUSTOM_DIFFICULTY_ID = 'custom';
 
 const PRESENCE_LABELS: Readonly<Record<PlayerPresence, string>> = Object.freeze({
   online: '在线',
@@ -140,6 +149,10 @@ export function mountOnlineRoomView(
 
   const nicknameInput = query<HTMLInputElement>(root, '[data-testid="nickname"]');
   const difficultySelect = query<HTMLSelectElement>(root, '[data-testid="difficulty"]');
+  const customFields = query<HTMLElement>(root, '[data-testid="custom-fields"]');
+  const customRowsInput = query<HTMLInputElement>(root, '[data-testid="custom-rows"]');
+  const customColsInput = query<HTMLInputElement>(root, '[data-testid="custom-cols"]');
+  const customMinesInput = query<HTMLInputElement>(root, '[data-testid="custom-mines"]');
   const createForm = query<HTMLFormElement>(root, '[data-testid="create-form"]');
   const joinForm = query<HTMLFormElement>(root, '[data-testid="join-form"]');
   const joinRoomInput = query<HTMLInputElement>(root, '[data-testid="join-room-id"]');
@@ -241,7 +254,22 @@ export function mountOnlineRoomView(
     return name;
   }
 
-  function selectedConfig(): MinesweeperConfig {
+  function selectedConfig(): MinesweeperConfig | null {
+    if (difficultySelect.value === CUSTOM_DIFFICULTY_ID) {
+      // The single-player parser owns the integer, bounds, mine-count and
+      // first-click-safe rules; the form only shows its Chinese reason and
+      // never sends an invalid `create`.
+      const parsed = parseCustomDifficulty(
+        customRowsInput.value,
+        customColsInput.value,
+        customMinesInput.value,
+      );
+      if (!parsed.ok) {
+        showFormError(parsed.message);
+        return null;
+      }
+      return { ...parsed.config };
+    }
     const preset =
       DIFFICULTY_PRESETS.find((candidate) => candidate.id === difficultySelect.value) ??
       getDifficulty(DEFAULT_DIFFICULTY_ID);
@@ -252,6 +280,17 @@ export function mountOnlineRoomView(
       firstClickSafe: true,
     };
   }
+
+  /** Show the custom fields only while the custom option is selected. */
+  function syncCustomFieldsVisibility(): void {
+    customFields.hidden = difficultySelect.value !== CUSTOM_DIFFICULTY_ID;
+  }
+
+  difficultySelect.addEventListener('change', () => {
+    syncCustomFieldsVisibility();
+    clearFormError();
+  });
+  syncCustomFieldsVisibility();
 
   function startTicker(): void {
     if (ticker !== null) {
@@ -693,6 +732,10 @@ export function mountOnlineRoomView(
     if (displayName === null) {
       return;
     }
+    const config = selectedConfig();
+    if (config === null) {
+      return;
+    }
     const session: SeatSession = {
       roomId: '',
       playerToken: null,
@@ -703,7 +746,7 @@ export function mountOnlineRoomView(
       type: 'create',
       requestId: nextRequestId('create'),
       protocolVersion: PROTOCOL_VERSION,
-      config: selectedConfig(),
+      config,
       displayName,
     };
     openSeat(session, create, `${displayName} · 正在创建房间…`);
@@ -890,6 +933,9 @@ function roomShellHtml(
     const selected = preset.id === initialDifficulty ? ' selected' : '';
     return `<option value="${preset.id}"${selected}>${preset.label} · ${preset.rows}×${preset.cols} · ${preset.mines} 雷</option>`;
   }).join('');
+  const initialPreset =
+    DIFFICULTY_PRESETS.find((preset) => preset.id === initialDifficulty) ??
+    getDifficulty(DEFAULT_DIFFICULTY_ID);
 
   return `
   <section class="online-room" data-testid="online-room" data-phase="idle" data-connection="idle">
@@ -927,7 +973,29 @@ function roomShellHtml(
           <label for="online-difficulty">难度</label>
           <select id="online-difficulty" data-testid="difficulty" name="difficulty">
             ${presetOptions}
+            <option value="${CUSTOM_DIFFICULTY_ID}">自定义 · 行 / 列 / 雷数</option>
           </select>
+          <div class="online-room__custom-fields" data-testid="custom-fields" role="group"
+            aria-label="自定义棋盘" aria-describedby="online-form-error" hidden>
+            <div class="online-room__custom-field">
+              <label for="online-custom-rows">行数</label>
+              <input id="online-custom-rows" data-testid="custom-rows" name="rows"
+                type="number" inputmode="numeric" min="${MIN_ROWS}" max="${MAX_ROWS}"
+                step="1" value="${initialPreset.rows}">
+            </div>
+            <div class="online-room__custom-field">
+              <label for="online-custom-cols">列数</label>
+              <input id="online-custom-cols" data-testid="custom-cols" name="cols"
+                type="number" inputmode="numeric" min="${MIN_COLS}" max="${MAX_COLS}"
+                step="1" value="${initialPreset.cols}">
+            </div>
+            <div class="online-room__custom-field">
+              <label for="online-custom-mines">雷数</label>
+              <input id="online-custom-mines" data-testid="custom-mines" name="mines"
+                type="number" inputmode="numeric" min="1" step="1"
+                value="${initialPreset.mines}">
+            </div>
+          </div>
           <button class="button button--primary" type="submit" data-testid="create-room">创建房间</button>
         </form>
 
@@ -945,7 +1013,8 @@ function roomShellHtml(
       <p class="online-room__share" data-testid="share-prefill" hidden>
         邀请链接：<a data-testid="share-link" href="#/online/minesweeper"></a>
       </p>
-      <p class="online-room__form-error" data-testid="form-error" role="alert" hidden></p>
+      <p class="online-room__form-error" id="online-form-error" data-testid="form-error"
+        role="alert" hidden></p>
     </section>
 
     <section class="online-room__card" data-testid="connecting" aria-live="polite" hidden>

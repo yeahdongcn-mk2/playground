@@ -576,6 +576,24 @@ function createHost(harness: Harness, name = 'Ada'): void {
   submitForm(harness.root, 'create-form');
 }
 
+/** Choose the custom-difficulty option the same way a user's change event does. */
+function selectCustomDifficulty(harness: Harness): void {
+  const select = byTestId<HTMLSelectElement>(harness.root, 'difficulty');
+  select.value = 'custom';
+  select.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+function fillCustomBoard(
+  harness: Harness,
+  rows: string,
+  cols: string,
+  mines: string,
+): void {
+  setInput(harness.root, 'custom-rows', rows);
+  setInput(harness.root, 'custom-cols', cols);
+  setInput(harness.root, 'custom-mines', mines);
+}
+
 /** Drive the mounted seat into a playing state and return its board renderer. */
 function pushPlaying(harness: Harness): TestRenderer {
   const store = firstStore(harness);
@@ -628,9 +646,10 @@ describe('online room landing', () => {
     expect(share.textContent).toContain('shared-room');
 
     const options = [...byTestId<HTMLSelectElement>(harness.root, 'difficulty').options];
-    expect(options.map((option) => option.value)).toEqual(
-      DIFFICULTY_PRESETS.map((preset) => preset.id),
-    );
+    expect(options.map((option) => option.value)).toEqual([
+      ...DIFFICULTY_PRESETS.map((preset) => preset.id),
+      'custom',
+    ]);
 
     harness.handle.destroy();
   });
@@ -750,6 +769,116 @@ describe('online room create and join', () => {
     expect(byTestId(harness.root, 'players').querySelectorAll('[data-testid="player"]')).toHaveLength(2);
 
     harness.handle.destroy();
+  });
+
+  it('shows custom rows/columns/mines only for the custom option with accessible labels', () => {
+    const harness = mountHarness({ roomId: null });
+
+    const select = byTestId<HTMLSelectElement>(harness.root, 'difficulty');
+    const customFields = byTestId<HTMLElement>(harness.root, 'custom-fields');
+    expect(select.options[select.options.length - 1]?.textContent).toContain('自定义');
+    expect(customFields.hidden).toBe(true);
+
+    for (const testId of ['custom-rows', 'custom-cols', 'custom-mines']) {
+      const input = byTestId<HTMLInputElement>(harness.root, testId);
+      expect(input.type).toBe('number');
+      const label = harness.root.querySelector<HTMLLabelElement>(
+        `label[for="${input.id}"]`,
+      );
+      expect(label).not.toBeNull();
+      expect(label?.htmlFor).toBe(input.id);
+      expect(input.labels?.[0]).toBe(label);
+    }
+
+    selectCustomDifficulty(harness);
+    expect(customFields.hidden).toBe(false);
+
+    select.value = 'beginner';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(customFields.hidden).toBe(true);
+
+    harness.handle.destroy();
+  });
+
+  it('sends a valid custom board as the create config', () => {
+    const harness = mountHarness({ roomId: null });
+    setInput(harness.root, 'nickname', 'Ada');
+    selectCustomDifficulty(harness);
+    fillCustomBoard(harness, '12', '12', '20');
+
+    submitForm(harness.root, 'create-form');
+
+    expect(harness.transports).toHaveLength(1);
+    const create = firstTransport(harness).sent[0] as CreateMessage;
+    expect(create.type).toBe('create');
+    expect(create.config).toEqual({
+      rows: 12,
+      cols: 12,
+      mines: 20,
+      firstClickSafe: true,
+    });
+    expect(byTestId<HTMLElement>(harness.root, 'form-error').hidden).toBe(true);
+
+    harness.handle.destroy();
+  });
+
+  it('rejects invalid custom boards with the parser reason and sends no create', () => {
+    const cases = [
+      {
+        rows: '4',
+        cols: '9',
+        mines: '10',
+        message: '行数必须是 5 到 30 之间的整数。',
+      },
+      {
+        rows: '9',
+        cols: '31',
+        mines: '10',
+        message: '列数必须是 5 到 30 之间的整数。',
+      },
+      {
+        rows: '9',
+        cols: '9',
+        mines: '81',
+        message: '雷数必须小于格子总数（81）。',
+      },
+      {
+        rows: '5',
+        cols: '5',
+        mines: '17',
+        message: '雷数过多：首点安全区占 9 格，最多只能放 16 颗雷。',
+      },
+      {
+        rows: '9.5',
+        cols: '9',
+        mines: '10',
+        message: '行数必须是整数。',
+      },
+      {
+        rows: '',
+        cols: '9',
+        mines: '10',
+        message: '行数不能为空。',
+      },
+    ];
+
+    for (const scenario of cases) {
+      const harness = mountHarness({ roomId: null });
+      setInput(harness.root, 'nickname', 'Ada');
+      selectCustomDifficulty(harness);
+      fillCustomBoard(harness, scenario.rows, scenario.cols, scenario.mines);
+
+      submitForm(harness.root, 'create-form');
+
+      expect(harness.transports).toHaveLength(0);
+      expect(harness.stores).toHaveLength(0);
+      const error = byTestId<HTMLElement>(harness.root, 'form-error');
+      expect(error.hidden).toBe(false);
+      expect(error.textContent).toBe(scenario.message);
+      expect(byTestId<HTMLElement>(harness.root, 'landing').hidden).toBe(false);
+
+      harness.handle.destroy();
+    }
   });
 
   it('escapes hostile nicknames in the player list and the prefilled input', () => {
