@@ -100,6 +100,9 @@ async function formMetrics(page) {
     const customFieldsVisible = fieldsRect === null
       ? null
       : fieldsStyle.display !== 'none' && fieldsRect.width > 0 && fieldsRect.height > 0;
+    const customFieldsBox = fieldsRect === null
+      ? null
+      : { width: Math.round(fieldsRect.width), height: Math.round(fieldsRect.height) };
     return {
       scrollY: Math.round(window.scrollY),
       form: rect === null ? null : {
@@ -109,6 +112,7 @@ async function formMetrics(page) {
       },
       selectedDifficulty: select instanceof HTMLSelectElement ? select.value : null,
       customFieldsDisplay: fieldsStyle?.display ?? null,
+      customFieldsBox,
       customFieldsVisible,
       error: document.querySelector('[data-testid="form-error"]')?.textContent ?? '',
     };
@@ -116,15 +120,21 @@ async function formMetrics(page) {
 }
 
 /**
- * Fail loudly when the browser disagrees with the expected visibility, so
+ * Fail loudly when the browser disagrees with the expected laid-out state, so
  * deleting `[hidden] { display: none }` breaks the capture instead of leaving
- * the jsdom unit tests green. A browser is required: jsdom never loads the
- * stylesheet that makes `hidden` win over the author `display: grid` rule.
+ * the jsdom unit tests green. The display value is asserted as well as the
+ * box, so a zero-size `display: grid` group does not count as hidden. A
+ * browser is required: jsdom never loads the stylesheet that makes `hidden`
+ * win over the author `display: grid` rule.
  */
-function assertCustomFieldsVisible(label, metrics, expected) {
-  if (metrics.customFieldsVisible !== expected) {
+function assertCustomFieldsState(label, metrics, expected) {
+  if (
+    metrics.customFieldsDisplay !== expected.display ||
+    metrics.customFieldsVisible !== expected.visible
+  ) {
     throw new Error(
-      `${label}: expected custom fields visible=${expected}, got ${JSON.stringify(metrics)}`,
+      `${label}: expected custom fields display=${expected.display} visible=${expected.visible}, ` +
+        `got ${JSON.stringify(metrics)}`,
     );
   }
 }
@@ -157,7 +167,10 @@ try {
     await after.page.fill('[data-testid="custom-mines"]', '20');
     await scrollCreateFormIntoView(after.page, viewport);
     const afterMetrics = await formMetrics(after.page);
-    assertCustomFieldsVisible(`after-${label}.png`, afterMetrics, true);
+    assertCustomFieldsState(`after-${label}.png`, afterMetrics, {
+      display: 'grid',
+      visible: true,
+    });
     await shoot(after.page, `after-${label}.png`, viewport, afterMetrics);
     await closeHarness(after);
   }
@@ -174,7 +187,10 @@ try {
   if (presetMetrics.selectedDifficulty !== 'beginner') {
     throw new Error(`expected the default preset, got ${JSON.stringify(presetMetrics)}`);
   }
-  assertCustomFieldsVisible('after-preset-1440x1000.png', presetMetrics, false);
+  assertCustomFieldsState('after-preset-1440x1000.png', presetMetrics, {
+    display: 'none',
+    visible: false,
+  });
   await shoot(preset.page, 'after-preset-1440x1000.png', desktop, presetMetrics);
   await closeHarness(preset);
 

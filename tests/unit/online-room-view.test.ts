@@ -1913,9 +1913,11 @@ const ROOM_VIEW_CSS = readFileSync(
 
 /** Whether an author rule hides elements matching `selectorPart` with `hidden`. */
 function hidesHiddenElements(css: string, selectorPart: string): boolean {
+  const escaped = selectorPart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const classToken = new RegExp(`(?:^|[^\\w-])${escaped}(?![\\w-])`);
   return [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].some(
     ([, selector = '', declarations = '']) =>
-      selector.includes(selectorPart) &&
+      classToken.test(selector) &&
       selector.includes('[hidden]') &&
       /display\s*:\s*none/.test(declarations),
   );

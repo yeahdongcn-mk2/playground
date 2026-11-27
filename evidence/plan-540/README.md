@@ -58,11 +58,15 @@ Before 的难度控件只有初级/中级/高级三个预设；After 增加「�
 
 `after-preset-1440x1000.png` 与 `before-1440x1000.png` 像素一致（sha256 相同），
 说明 After 在预设选中时没有显示自定义字段。`capture-room-form.mjs` 会读取真实浏览器里的
-`getComputedStyle(...).display` 与元素盒尺寸并断言：预设态必须 `display: none` / 0×0，
-自定义态必须可见（`display: grid` 且盒高 > 0）。Vitest 的 jsdom 不加载 `room-view.css`，
-所以只断言 `customFields.hidden` 的单测发现不了
+`getComputedStyle(...).display` 与元素盒尺寸并断言：预设态必须 `display: none`（盒 0×0），
+自定义态必须 `display: grid` 且盒 632×70 / 230×70（桌面 / 窄屏）。脚本输出里的
+`customFieldsDisplay` / `customFieldsBox` / `customFieldsVisible` 就是这三项实测值。
+Vitest 的 jsdom 不加载 `room-view.css`，所以只断言 `customFields.hidden` 的单测发现不了
 `.online-room__custom-fields[hidden] { display: none; }` 被删除；这条浏览器断言补上了缺口：
 删掉该规则后，预设态会变成 `display: grid`、盒尺寸 632×70，脚本立即失败。
+单测侧的回归守卫是 `tests/unit/online-room-view.test.ts` 的样式表检查，它按完整类名
+匹配 `.online-room__custom-fields[hidden] { display: none; }`，规则被删除、改名或改成
+非 `none` 的 display 都会失败。
 
 ## PR 描述可用段落
 
