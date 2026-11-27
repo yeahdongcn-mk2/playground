@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
+    "demo": "node scripts/run-demo.mjs",
     "server:room": "tsx server/room/main.ts",
     "test": "vitest run",
     "test:unit": "vitest run",
