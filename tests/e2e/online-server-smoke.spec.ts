@@ -1,7 +1,12 @@
-import { OFFLINE_DETECT_MS, RECONNECT_GRACE_MS } from '../../server/room/contracts';
+import {
+  HEARTBEAT_INTERVAL_MS,
+  MATCH_TIMEOUT_MS,
+  RECONNECT_GRACE_MS,
+  TURN_TIMEOUT_MS,
+} from '../../server/room/contracts';
 import { expect, test } from './fixtures';
 import { ONLINE_ROOM_HEALTH_URL } from './online-room-constants';
-import { ONLINE_ROOM_MANAGER_OPTIONS } from './online-room-server';
+import { ONLINE_ROOM_EFFECTIVE_TIMINGS } from './online-room-server';
 
 /** How long a browser-side socket may take to open, send and receive. */
 const SOCKET_TIMEOUT_MS = 10_000;
@@ -21,17 +26,31 @@ interface UpgradeProbe {
  * rather than at a game rule.
  */
 test.describe('online room test infrastructure', () => {
-  // The launcher shortens the join/match windows but must keep the turn
-  // deadline behind the presence chain. Grace starts only when offline
-  // detection fires, so the whole window is OFFLINE_DETECT_MS +
-  // RECONNECT_GRACE_MS; a shorter turn would forfeit the match before grace
-  // resolves and would stop exercising the real reconnect lifecycle.
-  test('keeps the turn deadline after offline detection plus reconnect grace', () => {
-    const presenceWindowMs = OFFLINE_DETECT_MS + RECONNECT_GRACE_MS;
-    expect(ONLINE_ROOM_MANAGER_OPTIONS.turnTimeoutMs).toBeGreaterThan(presenceWindowMs);
-    expect(ONLINE_ROOM_MANAGER_OPTIONS.turnTimeoutMs).toBeLessThan(
-      ONLINE_ROOM_MANAGER_OPTIONS.matchTimeoutMs,
+  // The launcher shortens the join, turn and presence windows but must keep
+  // the turn deadline behind the presence chain: grace starts only when
+  // offline detection fires, so the whole window is
+  // offlineDetectMs + graceMs. A shorter turn would forfeit the match before
+  // grace resolves and would stop exercising the real reconnect lifecycle.
+  // The same values are what the running room service was started with.
+  test('uses shortened test windows ordered detect < grace < turn < match', () => {
+    const timings = ONLINE_ROOM_EFFECTIVE_TIMINGS;
+
+    expect(timings.offlineDetectMs).toBe(
+      timings.heartbeatIntervalMs * timings.missedBeatsThreshold,
     );
+    expect(timings.offlineDetectMs).toBeLessThan(timings.graceMs);
+    expect(timings.graceMs).toBeLessThan(timings.turnTimeoutMs);
+    expect(timings.turnTimeoutMs).toBeLessThan(timings.matchTimeoutMs);
+    expect(timings.offlineDetectMs + timings.graceMs).toBeLessThan(
+      timings.turnTimeoutMs,
+    );
+
+    // Every window the launcher overrides is shorter than production, while
+    // the production constants themselves stay untouched.
+    expect(timings.heartbeatIntervalMs).toBeLessThan(HEARTBEAT_INTERVAL_MS);
+    expect(timings.graceMs).toBeLessThan(RECONNECT_GRACE_MS);
+    expect(timings.turnTimeoutMs).toBeLessThan(TURN_TIMEOUT_MS);
+    expect(timings.matchTimeoutMs).toBeLessThan(MATCH_TIMEOUT_MS);
   });
 
   test('serves health, the preview site and a browser /ws upgrade through the proxy', async ({

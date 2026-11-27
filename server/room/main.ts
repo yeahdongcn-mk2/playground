@@ -58,14 +58,33 @@ export type StandaloneRoomManager = MatchRoomManager &
   DeadlineRoomManager;
 
 /**
+ * Presence-window overrides forwarded to `createPresenceController`.
+ *
+ * Every field is optional and an omitted field keeps the matching constant in
+ * `contracts.ts`, so production passes none of them and still runs the
+ * design's 5 s heartbeat, 2 missed beats and 15 s grace window. A test launcher
+ * passes a shortened, still ordered set so it can drive offline detection,
+ * reconnect and the turn deadline without waiting the production windows.
+ */
+export interface RoomServerPresenceOptions {
+  /** Application-level ping cadence in milliseconds; defaults to 5 s. */
+  readonly heartbeatIntervalMs?: number;
+  /** Unanswered beats that mark a seat offline; defaults to 2. */
+  readonly missedBeatsThreshold?: number;
+  /** Reconnect window in milliseconds; defaults to 15 s. */
+  readonly graceMs?: number;
+}
+
+/**
  * Optional composition hooks for {@link startRoomServerFromConfig}.
  *
  * Production passes nothing and gets `Date.now`, the design's heartbeat /
  * grace windows and the default room timings. A test passes a manual clock (to
- * drive heartbeat, grace, turn and match deadlines without sleeping) and/or a
- * pre-built manager whose state it can inspect.
+ * drive heartbeat, grace, turn and match deadlines without sleeping), a
+ * pre-built manager whose state it can inspect, and/or shortened presence
+ * windows through {@link RoomServerPresenceOptions}.
  */
-export interface RoomServerRuntimeOptions {
+export interface RoomServerRuntimeOptions extends RoomServerPresenceOptions {
   /**
    * Clock shared by room deadlines, presence heartbeat/grace and the deadline
    * scheduler. When set it also becomes the manager's `now`.
@@ -143,10 +162,12 @@ export function resolveRoomServerConfig(env: NodeJS.ProcessEnv = process.env): R
  * and the deadline scheduler, both of which only reach the transport through
  * `server.deliver`. The transport is started last and its handle installed in
  * the sink; the scheduler shares the manager's clock so a deadline and the
- * timer that adjudicates it never disagree. Once listening, it reports the
- * actual bind address (which differs from the request when `port: 0` was used)
- * and returns the transport handle, whose `close()` releases the presence and
- * deadline timers as well as the sockets.
+ * timer that adjudicates it never disagree. Presence window overrides are
+ * forwarded only when supplied; an omitted window keeps its `contracts.ts`
+ * default, so production configuration is unchanged. Once listening, it reports
+ * the actual bind address (which differs from the request when `port: 0` was
+ * used) and returns the transport handle, whose `close()` releases the presence
+ * and deadline timers as well as the sockets.
  */
 export async function startRoomServerFromConfig(
   config: RoomServerConfig,
@@ -165,7 +186,21 @@ export async function startRoomServerFromConfig(
     server?.deliver(deliveries);
   };
   const deadlines = createDeadlineScheduler({ manager, deliver, clock });
-  const presence = createPresenceController({ manager, deliver, clock });
+  const presenceOverrides = {
+    ...(options.heartbeatIntervalMs === undefined
+      ? {}
+      : { heartbeatIntervalMs: options.heartbeatIntervalMs }),
+    ...(options.missedBeatsThreshold === undefined
+      ? {}
+      : { missedBeatsThreshold: options.missedBeatsThreshold }),
+    ...(options.graceMs === undefined ? {} : { graceMs: options.graceMs }),
+  };
+  const presence = createPresenceController({
+    manager,
+    deliver,
+    clock,
+    ...presenceOverrides,
+  });
 
   server = await startRoomServer({
     manager,
