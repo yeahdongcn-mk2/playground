@@ -8,6 +8,11 @@ export interface DocCountsSource {
   text: string;
 }
 
+export type RemoveDirectory = (
+  path: string,
+  options: { recursive: boolean; force: boolean },
+) => void;
+
 export interface VitestReportCounts {
   numTotalTests: number;
   numFailedTests: number;
@@ -73,3 +78,4 @@ export function verifyDocCounts(options: VerifyDocCountsOptions): DocCountsVerif
 export function rewriteDocumentedCount(text: string, total: number, file?: string): string;
 export function rewriteBaselineUnitTests(text: string, total: number, source?: string): string;
 export function planDocCountWrites(options: PlanDocCountWritesOptions): DocCountWritesPlan;
+export function cleanupTempDirs(dirs: string[], remove?: RemoveDirectory): void;

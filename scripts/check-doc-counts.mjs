@@ -1,11 +1,12 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
   DOC_COUNT_PATHS,
   DocCountsError,
   TEST_COMMAND,
+  cleanupTempDirs,
   verifyDocCounts,
 } from './lib/doc-counts.mjs';
 
@@ -101,7 +102,14 @@ function main(argv) {
     if (options.report !== null) {
       reportPath = resolve(options.report);
     } else {
-      const dir = mkdtempSync(join(tmpdir(), 'doc-counts-'));
+      let dir;
+      try {
+        dir = mkdtempSync(join(tmpdir(), 'doc-counts-'));
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        console.error(`error: 无法创建临时目录：${detail}`);
+        return 2;
+      }
       tempDirs.push(dir);
       reportPath = join(dir, 'vitest-report.json');
       console.log(`Running ${TEST_COMMAND} to measure numTotalTests...`);
@@ -143,9 +151,7 @@ function main(argv) {
     console.error(`error: ${detail}`);
     return error instanceof DocCountsError ? 2 : 1;
   } finally {
-    for (const dir of tempDirs) {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    cleanupTempDirs(tempDirs);
   }
 }
 

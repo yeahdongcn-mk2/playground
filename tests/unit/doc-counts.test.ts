@@ -1,5 +1,13 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,6 +16,7 @@ import {
   BASELINE_RELATIVE_PATH,
   DOC_COUNT_PATHS,
   DocCountsError,
+  cleanupTempDirs,
   parseDocumentedCount,
   parseVitestReport,
   planDocCountWrites,
@@ -76,11 +85,15 @@ function writeReport(text: string): string {
   return file;
 }
 
-function runCli(args: string[]): { status: number | null; stdout: string; stderr: string } {
+function runCli(
+  args: string[],
+  env?: Record<string, string>,
+): { status: number | null; stdout: string; stderr: string } {
   const result = spawnSync(process.execPath, [CLI, ...args], {
     cwd: ROOT,
     encoding: 'utf8',
     timeout: 30_000,
+    env: env === undefined ? process.env : { ...process.env, ...env },
   });
   return {
     status: result.status,
@@ -400,6 +413,81 @@ describe('check-doc-counts CLI', () => {
     const missing = runCli(['--report']);
     expect(missing.status).toBe(2);
     expect(missing.stderr).toContain('--report needs a value');
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'exits 2 with an error, not an uncaught stack, when the temporary directory cannot be created',
+    () => {
+      const missingTmp = join(makeTempDir(), 'missing', 'tmp');
+
+      const { status, stdout, stderr } = runCli([], { TMPDIR: missingTmp });
+
+      expect(status).toBe(2);
+      expect(stdout).toBe('');
+      expect(stderr).toMatch(/^error: 无法创建临时目录：/);
+      expect(stderr).not.toMatch(/\n\s+at /);
+      expect(stderr).not.toContain('node:internal');
+    },
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'does not create a temporary directory on the --report path',
+    () => {
+      const count = committedCount();
+      const report = writeReport(reportJson(count));
+      const missingTmp = join(makeTempDir(), 'missing', 'tmp');
+
+      const { status, stdout, stderr } = runCli(['--report', report], { TMPDIR: missingTmp });
+
+      expect(stderr).toBe('');
+      expect(status).toBe(0);
+      expect(stdout).toContain('OK:');
+    },
+  );
+});
+
+describe('cleanupTempDirs', () => {
+  it('removes every directory recursively and forcefully', () => {
+    const calls: Array<[string, { recursive: boolean; force: boolean }]> = [];
+
+    cleanupTempDirs(['/tmp/doc-counts-a', '/tmp/doc-counts-b'], (path, options) => {
+      calls.push([path, options]);
+    });
+
+    expect(calls).toEqual([
+      ['/tmp/doc-counts-a', { recursive: true, force: true }],
+      ['/tmp/doc-counts-b', { recursive: true, force: true }],
+    ]);
+  });
+
+  it('removes a real directory with rmSync by default', () => {
+    const dir = makeTempDir();
+    const nested = join(dir, 'nested');
+    mkdirSync(nested);
+    writeFileSync(join(nested, 'vitest-report.json'), '{}');
+
+    cleanupTempDirs([dir]);
+
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  it('swallows a failing removal so cleanup cannot overwrite the exit code', () => {
+    const attempted: string[] = [];
+    let exitCode = 0;
+
+    try {
+      cleanupTempDirs(['/tmp/doc-counts-a', '/tmp/doc-counts-b'], (path) => {
+        attempted.push(path);
+        throw new Error('EACCES: permission denied');
+      });
+    } catch {
+      exitCode = 1;
+    }
+
+    // The finally block keeps running after the first failure, and a cleanup
+    // error never escapes to replace the code main already chose.
+    expect(attempted).toEqual(['/tmp/doc-counts-a', '/tmp/doc-counts-b']);
+    expect(exitCode).toBe(0);
   });
 });
 
