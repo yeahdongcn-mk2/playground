@@ -1,3 +1,5 @@
+import { rmSync } from 'node:fs';
+
 /**
  * Cross-check and rewrite the unit-test counts recorded in the repository
  * docs against the `numTotalTests` field of a Vitest JSON report.
@@ -7,7 +9,8 @@
  * `全仓 N 个用例`; docs/score-baseline.json stores the same number in its
  * `unitTests` field. Parsing and rewriting stay in this module so the check
  * and write CLIs and the unit tests share the same rules; nothing here runs
- * the test suite or touches the files on disk.
+ * the test suite. The only file-system work is `cleanupTempDirs`, which
+ * removes temporary directories the caller already created.
  */
 
 export const TEST_COMMAND = 'npm run test:unit';
@@ -420,4 +423,28 @@ export function verifyDocCounts({
     documented,
     problems,
   };
+}
+
+/**
+ * Remove temporary directories created by a CLI, swallowing every removal
+ * error.
+ *
+ * Cleanup runs from a `finally` block, so an error thrown here would escape
+ * `main` and replace the exit code the command had already chosen (for
+ * example turning a clean 0 into Node's default 1). Each directory is
+ * attempted even when an earlier removal fails, and `remove` is injectable so
+ * tests can exercise a failing delete without relying on file-system
+ * permissions.
+ *
+ * @param {string[]} dirs
+ * @param {(path: string, options: { recursive: boolean, force: boolean }) => void} [remove]
+ */
+export function cleanupTempDirs(dirs, remove = rmSync) {
+  for (const dir of dirs) {
+    try {
+      remove(dir, { recursive: true, force: true });
+    } catch {
+      // Cleanup must never override the command's own exit code.
+    }
+  }
 }
