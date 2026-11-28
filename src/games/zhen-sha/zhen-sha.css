@@ -553,12 +553,6 @@
   letter-spacing: -0.02em;
 }
 
-.zhen-sha-overlay-body {
-  margin-bottom: 10px;
-  color: var(--muted);
-  font-size: 0.86rem;
-}
-
 /*
  * The result is a "battle seal": one 3:4 sheet of paper pressed with the
  * cinnabar stamp, the duel readout and the deterministic blade trail. It is
