@@ -682,9 +682,12 @@ describe('zhen-sha procedural motion layer', () => {
       '.zhen-sha-note',
       '.zhen-sha-overlay',
       '.zhen-sha-overlay[hidden]',
-      '.zhen-sha-overlay-body',
       '.zhen-sha-overlay-card',
       '.zhen-sha-overlay-card h2',
+      '.zhen-sha-settlement',
+      '.zhen-sha-settlement-canvas',
+      '.zhen-sha-settlement-stats',
+      '.zhen-sha-overlay-actions',
     ]) {
       const bodies = ruleBodies(selector);
       expect(bodies.length, `${selector} 应至少有一条规则`).toBeGreaterThan(0);
