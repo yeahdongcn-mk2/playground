@@ -403,8 +403,8 @@ npm run build        # 通过
 npm run check:budget # 通过，实际输出：
 # Entry JS: 35.97 KB (11.73 KB gzip)
 # All JS chunks: 414.98 KB gzip (2D game budget 450 KB)
-# CSS: 15.52 KB gzip
-# Zhen Sha view JS: zhen-sha-view-fLVRQmdE.js 9.05 KB gzip (per-game budget 35 KB)
+# CSS: 15.49 KB gzip
+# Zhen Sha view JS: zhen-sha-view-D-1Dvzpr.js 9.05 KB gzip (per-game budget 35 KB)
 # Budget check OK: shell is engine-free and within the 2D download budget.
 npm run score        # 通过（打印「指标 / 当前值 / 基线值 / 差值」表与末行 SCORE_JSON；退化退出 1，变好只报差值）
 npm run test:e2e     # 170 passed（桌面 102 + 手机 36 + WebKit 32）
