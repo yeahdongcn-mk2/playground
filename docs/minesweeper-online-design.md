@@ -77,6 +77,8 @@
 - 第一手翻开和后续所有行动都按 `seq` 记录，重放时按相同顺序喂给引擎；
 - 开局时服务端先公布 seed 的哈希承诺，结束后再公布 seed，便于事后审计。
 
+引擎仍为 `ready`（尚未发生第一次翻开）就结束的比赛——`forfeit`、`turn-timeout` 与 `match-timeout` 终局——没有可重放的首次翻开，因此 `end.finalSnapshot` 的雷位另有固定规则，由 `design:protocol.seed.unplayedEndProbe` 契约给出：用同一 seed 与 config 在临时探针引擎上对 `(0, 0)` 做一次首次 reveal，只取雷位与相邻数；探针不写入 replay 记录、不推进真实引擎，真实棋盘的 `revealed` / `flagged` 原样保留。审计方以 `end.seed` 加棋盘尺寸与 `mineCount`（联机 `firstClickSafe` 固定为 `true`）按同一规则复算该雷盘，不需要额外的服务端记录。
+
 ### 2.4 单机玩法不回归的保障
 
 联机是新增的独立入口与视图，单机扫雷继续走现有路径：
@@ -557,7 +559,12 @@ A/B: rematch ──────────▶ room_state(ready)
     "firstClickSafe": true,
     "clientMayChooseSeed": false,
     "commitment": "sha256(seed)",
-    "replayRecord": ["seed", "config", "orderedActions"]
+    "replayRecord": ["seed", "config", "orderedActions"],
+    "unplayedEndProbe": {
+      "firstReveal": [0, 0],
+      "inReplayRecord": false,
+      "auditInputs": ["seed", "config"]
+    }
   },
   "ordering": {
     "mode": "server-serialized",
@@ -788,6 +795,7 @@ A/B: rematch ──────────▶ room_state(ready)
 - **乐观更新受限**：客户端可以对「待确认」格子显示 pending 样式，但不得在服务端确认前翻开雷或改变 HUD 的权威计数；一切以 `snapshot` / `action_result` 为准。
 - **重连**：首次 `join` 成功时，服务端只在发给该玩家的 `room_state` 副本中签发 `playerToken`，广播副本不含该字段；重连时客户端带 `playerToken` 重新 `join`，服务端校验 token 与房间，若对局仍在则下发当前 `snapshot`（当前 `seq`、`seedHash`）与 `room_state`，不要求客户端重放离线期间的行动。若房间已 `finished`，下发 `end` 结果；若 `dissolved`，返回 `room-not-found`。
 - **重放**：服务端记录 `matchId`、`config`、`seed`、按 `seq` 排序的已接受行动（含第一次翻开）以及每步结果。重放时用同一 `createSeededRng(seed)`、同一 `firstClickSafe` 配置和同一行动顺序重新运行引擎，逐步比对快照摘要。开局时 `snapshot.seedHash` 公布 seed 的哈希承诺，`end` 时才随结果公布 seed 本身，防止客户端提前算雷。
+- **未开局终局与审计**：引擎仍为 `ready` 就结束的比赛（`forfeit`、`turn-timeout`、`match-timeout`）没有已执行的首次翻开，replay 记录中也没有探针 action；这类终局的 `end.finalSnapshot` 雷位按 2.3 与 `design:protocol.seed.unplayedEndProbe` 的固定规则给出：用同一 `seed` + `config` 在临时探针引擎上对 `(0,0)` 做一次首次 reveal，只取雷位与相邻数，探针不写入 replay 记录、不推进真实引擎，真实棋盘的 `revealed` / `flagged` 保持原值。审计方用 `end.seed` 与棋盘尺寸、`mineCount`（联机 `firstClickSafe` 固定为 `true`）按同一规则复算，即可核对 `end.finalSnapshot`。
 - **审计边界**：客户端只拿到脱敏快照，无法据此复原未翻开雷位；服务端日志是唯一事实来源。
 
 ### 4.7 断线超时的状态边界（同步协议与断线语义的分界）

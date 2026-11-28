@@ -75,6 +75,12 @@ interface ProtocolAdjudication {
   readonly serverValidates: readonly string[];
 }
 
+interface ProtocolUnplayedEndProbe {
+  readonly firstReveal: readonly [number, number];
+  readonly inReplayRecord: boolean;
+  readonly auditInputs: readonly string[];
+}
+
 interface ProtocolSeed {
   readonly source: string;
   readonly algorithm: string;
@@ -82,6 +88,7 @@ interface ProtocolSeed {
   readonly clientMayChooseSeed: boolean;
   readonly commitment: string;
   readonly replayRecord: readonly string[];
+  readonly unplayedEndProbe: ProtocolUnplayedEndProbe;
 }
 
 interface ProtocolOrdering {
@@ -696,6 +703,9 @@ describe('minesweeper online sync and adjudication protocol', () => {
     expect(protocol.seed.clientMayChooseSeed).toBe(false);
     expect(protocol.seed.commitment).toBe('sha256(seed)');
     expect(protocol.seed.replayRecord).toEqual(['seed', 'config', 'orderedActions']);
+    expect(protocol.seed.unplayedEndProbe.firstReveal).toEqual([0, 0]);
+    expect(protocol.seed.unplayedEndProbe.inReplayRecord).toBe(false);
+    expect(protocol.seed.unplayedEndProbe.auditInputs).toEqual(['seed', 'config']);
   });
 
   it('serializes actions and rejects stale or duplicate input', () => {

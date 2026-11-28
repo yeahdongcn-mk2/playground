@@ -399,6 +399,13 @@ function buildEnd(
  * flags placed before the first reveal are public actions and consume turns,
  * so every cell keeps the real `revealed`/`flagged` values (the match never
  * revealed anything, so the published board is still fully hidden).
+ *
+ * The probe follows `design:protocol.seed.unplayedEndProbe` in
+ * `docs/minesweeper-online-design.md` (audit rule in 2.3, replay boundary in
+ * 4.6): `firstReveal: [0, 0]`, `inReplayRecord: false`,
+ * `auditInputs: ["seed", "config"]`. It is not recorded in the replay log and
+ * does not advance the real engine; an auditor recomputes the same layout from
+ * `end.seed` plus the board size and `mineCount` with `firstClickSafe: true`.
  */
 function unplayedEndBoard(state: MatchState): RevealedBoard {
   const probe = engineAdapter.createMatch({
